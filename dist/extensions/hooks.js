@@ -1,0 +1,213 @@
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { MmpConfigError } from "../errors.js";
+import { MMP_TASK_HOOK_CHANNEL, isTaskHookBridgeRequest, } from "../hook-events.js";
+import { HooksRuntime } from "../hooks-runtime.js";
+import { loadTaskAgents } from "../task-agents.js";
+function failureMessage(error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return `MMP hook handler failed: ${detail}`;
+}
+function notifyFailure(context, error) {
+    context.ui.notify(failureMessage(error), "error");
+}
+function taskPayload(event) {
+    if (event.type === "task_start") {
+        return {
+            type: event.type,
+            cwd: event.cwd,
+            agent: event.agent,
+            task: event.task,
+        };
+    }
+    return {
+        type: event.type,
+        cwd: event.job.cwd,
+        job: event.job,
+        agent: event.job.agent,
+        status: event.job.status,
+    };
+}
+function sessionStartPayload(event, context) {
+    return {
+        type: event.type,
+        cwd: context.cwd,
+        reason: event.reason,
+        ...(event.previousSessionFile === undefined
+            ? {}
+            : { previousSessionFile: event.previousSessionFile }),
+    };
+}
+function sessionShutdownPayload(event, context) {
+    return {
+        type: event.type,
+        cwd: context.cwd,
+        reason: event.reason,
+        ...(event.targetSessionFile === undefined
+            ? {}
+            : { targetSessionFile: event.targetSessionFile }),
+    };
+}
+function inputPayload(event, context) {
+    return {
+        type: "user_prompt",
+        cwd: context.cwd,
+        text: event.text,
+        source: event.source,
+        imageCount: event.images?.length ?? 0,
+        ...(event.streamingBehavior === undefined
+            ? {}
+            : { streamingBehavior: event.streamingBehavior }),
+    };
+}
+function toolCallPayload(event, context) {
+    return {
+        type: event.type,
+        cwd: context.cwd,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        input: event.input,
+    };
+}
+function toolResultPayload(event, context) {
+    return {
+        type: event.type,
+        cwd: context.cwd,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        input: event.input,
+        content: event.content.map((block) => block.type === "text"
+            ? block
+            : { type: "image", mimeType: block.mimeType }),
+        details: event.details,
+        isError: event.isError,
+    };
+}
+function compactPayload(event, context) {
+    return {
+        type: "before_compact",
+        cwd: context.cwd,
+        reason: event.reason,
+        willRetry: event.willRetry,
+        branchEntryCount: event.branchEntries.length,
+        ...(event.customInstructions === undefined
+            ? {}
+            : { customInstructions: event.customInstructions }),
+    };
+}
+function blockReason(decision) {
+    return decision.reason ?? "Blocked by MMP hook";
+}
+export function createHooksInlineExtension(options) {
+    const agents = loadTaskAgents({
+        globalAgentsDir: join(options.mmpHome, "agents"),
+        projectAgentsDir: options.projectAgentsDir,
+    });
+    const agentNames = new Set(agents.map((agent) => agent.name));
+    for (const hook of options.hooks) {
+        for (const handler of hook.handlers) {
+            if (handler.type === "agent" && !agentNames.has(handler.agent)) {
+                throw new MmpConfigError(`${hook.declaredIn}: hook references unknown agent ${JSON.stringify(handler.agent)}`);
+            }
+        }
+    }
+    const workerPath = options.workerPath ?? fileURLToPath(new URL("../worker.js", import.meta.url));
+    return {
+        name: "mmp:hooks",
+        factory: (pi) => {
+            const runtime = new HooksRuntime({
+                hooks: options.hooks,
+                agentDir: options.agentDir,
+                agents,
+                workerPath,
+                capsuleRoot: join(options.mmpHome, "runtime", "hooks-task"),
+                artifactRoot: join(options.mmpHome, "artifacts", "hooks-task"),
+            });
+            const unsubscribeTaskHooks = pi.events.on(MMP_TASK_HOOK_CHANNEL, (value) => {
+                if (!isTaskHookBridgeRequest(value)) {
+                    return;
+                }
+                value.run = () => runtime.run(taskPayload(value.event), value.context);
+            });
+            pi.on("session_start", async (event, context) => {
+                try {
+                    await runtime.run(sessionStartPayload(event, context), context);
+                }
+                catch (error) {
+                    notifyFailure(context, error);
+                }
+            });
+            pi.on("input", async (event, context) => {
+                try {
+                    const decision = await runtime.run(inputPayload(event, context), context);
+                    if (decision.action === "transform") {
+                        return { action: "transform", text: decision.text ?? "" };
+                    }
+                    if (decision.action === "block" || decision.action === "cancel") {
+                        return { action: "handled" };
+                    }
+                    return { action: "continue" };
+                }
+                catch (error) {
+                    notifyFailure(context, error);
+                    return { action: "handled" };
+                }
+            });
+            pi.on("tool_call", async (event, context) => {
+                try {
+                    const decision = await runtime.run(toolCallPayload(event, context), context);
+                    return decision.action === "block" || decision.action === "cancel"
+                        ? { block: true, reason: blockReason(decision) }
+                        : undefined;
+                }
+                catch (error) {
+                    return { block: true, reason: failureMessage(error) };
+                }
+            });
+            pi.on("tool_result", async (event, context) => {
+                try {
+                    const decision = await runtime.run(toolResultPayload(event, context), context);
+                    if (decision.action !== "replace") {
+                        return undefined;
+                    }
+                    return {
+                        content: [{ type: "text", text: decision.text ?? "" }],
+                        isError: decision.isError ?? false,
+                    };
+                }
+                catch (error) {
+                    return {
+                        content: [{ type: "text", text: failureMessage(error) }],
+                        isError: true,
+                    };
+                }
+            });
+            pi.on("session_before_compact", async (event, context) => {
+                try {
+                    const decision = await runtime.run(compactPayload(event, context), context);
+                    return decision.action === "block" || decision.action === "cancel"
+                        ? { cancel: true }
+                        : undefined;
+                }
+                catch (error) {
+                    notifyFailure(context, error);
+                    return { cancel: true };
+                }
+            });
+            pi.on("session_shutdown", async (event, context) => {
+                runtime.abortActive();
+                try {
+                    await runtime.run(sessionShutdownPayload(event, context), context, { ignoreSessionAbort: true });
+                }
+                catch (error) {
+                    notifyFailure(context, error);
+                }
+                finally {
+                    unsubscribeTaskHooks();
+                    await runtime.close();
+                }
+            });
+        },
+    };
+}
+//# sourceMappingURL=hooks.js.map

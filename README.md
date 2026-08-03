@@ -19,7 +19,7 @@ npm install --global github:RoacherM/mmp
 mmp --version
 ```
 
-Git 安装会通过 package `prepare` 生命周期自动安装构建依赖并生成 `dist/`，不要求 PATH 中存在全局 `pi`。
+Git 安装直接使用仓库中与源码同步提交的 `dist/`，只安装运行时依赖；不要求本机预装 TypeScript，也不要求 PATH 中存在全局 `pi`。
 
 从源码开发或修改 MMP：
 

@@ -1,0 +1,1 @@
+{"version":3,"file":"mcp.d.ts","sourceRoot":"","sources":["../../src/extensions/mcp.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAEV,eAAe,EAChB,MAAM,iCAAiC,CAAC;AACzC,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,kBAAkB,CAAC;AAGlD,UAAU,iBAAiB;IACzB,MAAM,CAAC,EAAE,SAAS,CAAC;IACnB,UAAU,CAAC,EAAE,MAAM,CAAC;CACrB;AAaD,wBAAgB,qBAAqB,CACnC,OAAO,EAAE,iBAAiB,GACzB,eAAe,CAQjB"}

@@ -1,6 +1,5 @@
-# Dependencies and build output
+# Dependencies and local-only output
 node_modules/
-dist/
 coverage/
 
 # Local runtime configuration and credentials
