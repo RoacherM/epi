@@ -18,9 +18,17 @@ export function createMmpRuntimeExtension(
         if (context.mode !== "tui") {
           return;
         }
+        const model = context.model;
+        const pageOptions = model === undefined
+          ? {}
+          : {
+              modelName: model.name,
+              modelProvider: model.provider,
+              modelId: model.id,
+            };
         context.ui.setHeader((_tui, theme) => ({
           render(width) {
-            return renderMmpStartupPage(identity, theme, width);
+            return renderMmpStartupPage(identity, theme, width, pageOptions);
           },
           invalidate() {},
         }));

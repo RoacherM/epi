@@ -152,7 +152,7 @@ export function renderMmpRuntimePrompt(
   const report = createMmpRuntimeReport(identity, loadedSkills);
   return [
     "# MMP Runtime Contract",
-    "You are hosted by MMP (My Minimal Pi), an SDK harness embedding Pi. When asked which runtime or harness you are using, identify it as MMP on Pi, not as stock Pi alone.",
+    "You are hosted by MMP (Make My Pi), an SDK harness embedding Pi. When asked which runtime or harness you are using, identify it as MMP on Pi, not as stock Pi alone.",
     "Upstream Pi documentation describes engine features and stock discovery paths. MMP overrides resource discovery: the inventory below is authoritative for this run.",
     "Only `loadedSkills` are loaded skills. A file or skill found elsewhere on disk is not an MMP-loaded capability unless it appears in this inventory.",
     "When asked which skills, rules, or extensions are available, answer from this inventory. Do not scan ambient ~/.pi, ~/.agents, ~/.claude, ~/.codex, .pi, or .agents directories to infer loaded resources.",

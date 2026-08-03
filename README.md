@@ -1,6 +1,8 @@
-# MMP
+# Make My Pi
 
-MMP (My Minimal Pi) 是基于固定版本 Pi SDK 的显式、最小 Harness。它复用 Pi 的 Agent Loop、模型、认证、Session、TUI、基础工具和 Auto Compact；MMP 只负责配置装配、项目信任、Task、MCP 与 Hooks。
+> Compose Pi your way.
+
+MMP (Make My Pi) 是基于固定版本 Pi SDK 的显式、确定性 Harness。它复用 Pi 的 Agent Loop、模型、认证、Session、TUI、基础工具和 Auto Compact；MMP 只负责配置装配、项目信任、Task、MCP 与 Hooks。
 
 当前固定版本：
 
@@ -16,7 +18,7 @@ MMP 不调用 PATH 中的 `pi`，也不自动读取 `~/.pi/agent`、`.pi/`、`.a
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/RoacherM/mmp/releases/download/v0.1.2/install.sh | sh
+  https://github.com/RoacherM/mmp/releases/download/v0.1.3/install.sh | sh
 ```
 
 安装器检查 Node.js/npm，验证发行包的 SHA-256 后再执行全局安装，不会自动使用 `sudo`。不希望把脚本直接交给 shell 时，可以先下载并审阅 `install.sh`。
@@ -25,7 +27,7 @@ curl --proto '=https' --tlsv1.2 -fsSL \
 
 ```bash
 npm install --global \
-  https://github.com/RoacherM/mmp/releases/download/v0.1.2/mmp-0.1.2.tgz
+  https://github.com/RoacherM/mmp/releases/download/v0.1.3/mmp-0.1.3.tgz
 mmp --version
 ```
 
@@ -45,7 +47,7 @@ npm link
 版本检查应输出：
 
 ```text
-mmp 0.1.2
+mmp 0.1.3
 pi 0.83.0
 ```
 

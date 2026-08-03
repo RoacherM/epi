@@ -24,7 +24,7 @@ function fixture() {
     externalExtensions: [],
   };
   const identity = createMmpRuntimeIdentity({
-    mmpVersion: "0.1.2",
+    mmpVersion: "0.1.3",
     piVersion: "0.83.0",
     mmpHome: "/fixture/mmp",
     assembly,
@@ -84,7 +84,7 @@ test("MMP runtime identity injects authoritative loaded skills", async () => {
   });
 
   assert.match(result.systemPrompt, /^PI BASE PROMPT\n\n# MMP Runtime Contract/);
-  assert.match(result.systemPrompt, /hosted by MMP \(My Minimal Pi\)/);
+  assert.match(result.systemPrompt, /hosted by MMP \(Make My Pi\)/);
   assert.match(result.systemPrompt, /not as stock Pi alone/);
   assert.match(result.systemPrompt, /"ambientResourceDirectoriesLoaded": false/);
   assert.match(result.systemPrompt, /"name": "fixture-skill"/);

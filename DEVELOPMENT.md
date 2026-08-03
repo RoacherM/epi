@@ -1,6 +1,6 @@
-# MMP 开发文档
+# Make My Pi 开发文档
 
-- 项目：MMP（My Minimal Pi）
+- 项目：MMP（Make My Pi）
 - 状态：阶段 A-E、Benchmark adapter 与 benchmark-ready 契约测试已完成
 - 目标目录：`~/Desktop/Projects/Devs/mmp`
 - 目标依赖：`@earendil-works/pi-coding-agent@0.83.0`；Node.js `>=22.19.0`
@@ -599,7 +599,7 @@ const extensionFactories: InlineExtension[] = [
 
 ```json
 {
-  "mmpVersion": "0.1.2",
+  "mmpVersion": "0.1.3",
   "piVersion": "0.83.0",
   "sdkEntry": "@earendil-works/pi-coding-agent/main",
   "agentDir": "/Users/byron/.mmp/pi",
@@ -898,7 +898,7 @@ MMP_OK
 另外必须证明：
 
 - 临时移除 PATH 中的全局 `pi` 后，`mmp --print` 仍成功；
-- `mmp --version` 同时输出 MMP `0.1.2` 和 Pi `0.83.0`；
+- `mmp --version` 同时输出 MMP `0.1.3` 和 Pi `0.83.0`；
 - 进程树中没有第二个 Pi 主进程。
 
 ### 阶段 B：Manifest 与 Project Trust

@@ -16,7 +16,7 @@ import {
 } from "./runtime-identity.js";
 import type { ResolvedResource } from "./manifest.js";
 
-export const MMP_VERSION = "0.1.2";
+export const MMP_VERSION = "0.1.3";
 export const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
 
 export const MMP_HELP = `MMP options:

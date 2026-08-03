@@ -9,12 +9,13 @@ import { renderMmpStartupPage } from "../dist/startup-page.js";
 const theme = {
   bold: (text) => text,
   fg: (_color, text) => text,
+  italic: (text) => text,
 };
 
 const identity = {
   runtime: {
     name: "MMP",
-    version: "0.1.2",
+    version: "0.1.3",
     engine: "Pi",
     engineVersion: "0.83.0",
   },
@@ -56,21 +57,28 @@ function assertFits(lines, width) {
   }
 }
 
-test("wide startup page exposes identity, status, and core configuration", () => {
-  const lines = renderMmpStartupPage(identity, theme, 120);
+test("wide startup page presents the Make My Pi brand and assembly controls", () => {
+  const lines = renderMmpStartupPage(identity, theme, 120, {
+    modelName: "MoonshotAI: Kimi K2.5",
+    modelProvider: "openrouter",
+    modelId: "moonshotai/kimi-k2.5",
+  });
   const output = lines.join("\n");
 
-  assertFits(lines, 96);
-  assert.match(output, /MMP 0\.1\.2/);
-  assert.match(output, /Pi 0\.83\.0 agent runtime/);
+  assertFits(lines, 108);
+  assert.match(output, /mmp v0\.1\.3/);
+  assert.match(output, /Make My Pi/);
+  assert.match(output, /Compose Pi your way\./);
+  assert.match(output, /MoonshotAI: Kimi K2\.5/);
+  assert.match(output, /openrouter · Pi 0\.83\.0/);
+  assert.match(output, /ASSEMBLY/);
+  assert.match(output, /COMPOSITION/);
+  assert.match(output, /rules \+ skills \+ extensions/);
+  assert.match(output, /MMP ──▶ Pi/);
   assert.match(output, /manifest\s+not configured/);
-  assert.match(output, /\$MMP_HOME\/mmp\.json/);
-  assert.match(output, /"rules"/);
-  assert.match(output, /"skills"/);
-  assert.match(output, /"extensions"/);
-  assert.match(output, /Only Manifest-declared resources load/);
+  assert.match(output, /\/fixture\/\.mmp\/mmp\.json/);
+  assert.match(output, /\/mmp inspect · \/login authenticate/);
   assert.match(output, /mmp --approve/);
-  assert.match(output, /\/mmp.*restart after edits.*\/login/);
 });
 
 test("narrow startup page remains within the terminal width", () => {
@@ -78,9 +86,9 @@ test("narrow startup page remains within the terminal width", () => {
   const output = lines.join("\n");
 
   assertFits(lines, 44);
-  assert.match(output, /RUNTIME/);
+  assert.match(output, /Make My Pi/);
+  assert.match(output, /ASSEMBLY/);
   assert.match(output, /CONFIGURE/);
-  assert.match(output, /MMP resources → Pi 0\.83\.0 runtime/);
 });
 
 test("runtime extension installs the startup page only in TUI mode", async () => {
@@ -112,12 +120,18 @@ test("runtime extension installs the startup page only in TUI mode", async () =>
   await sessionStart({ type: "session_start", reason: "startup" }, {
     mode: "tui",
     ui,
+    model: {
+      name: "Fixture Model",
+      provider: "fixture-provider",
+      id: "fixture-model",
+    },
   });
   assert.equal(typeof headerFactory, "function");
 
   const component = headerFactory({}, theme);
   const lines = component.render(80);
   assertFits(lines, 80);
-  assert.match(lines.join("\n"), /MMP policy \+ resources/);
+  assert.match(lines.join("\n"), /Make My Pi/);
+  assert.match(lines.join("\n"), /Fixture Model/);
   assert.equal(typeof component.invalidate, "function");
 });

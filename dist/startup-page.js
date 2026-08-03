@@ -1,13 +1,26 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-const MAX_PANEL_WIDTH = 96;
-const WIDE_LAYOUT_WIDTH = 76;
+const MAX_PANEL_WIDTH = 108;
+const SPLIT_LAYOUT_WIDTH = 84;
+const HERO_WIDTH = 36;
+const MMP_LOGO = [
+    ["███   ███", "███   ███", "██████ "],
+    ["████ ████", "████ ████", "██   ██"],
+    ["██ ███ ██", "██ ███ ██", "██████ "],
+    ["██  █  ██", "██  █  ██", "██     "],
+    ["██     ██", "██     ██", "██     "],
+];
 function fit(text, width) {
     return truncateToWidth(text, Math.max(0, width), "…", true);
 }
+function center(text, width) {
+    const fitted = truncateToWidth(text, Math.max(0, width), "…");
+    const padding = Math.max(0, width - visibleWidth(fitted));
+    const left = Math.floor(padding / 2);
+    return `${" ".repeat(left)}${fitted}${" ".repeat(padding - left)}`;
+}
 function topBorder(identity, theme, width) {
-    const title = theme.bold(theme.fg("accent", ` MMP ${identity.runtime.version} `));
-    const titleWidth = visibleWidth(title);
-    const fillWidth = Math.max(0, width - titleWidth - 3);
+    const title = theme.fg("muted", ` mmp v${identity.runtime.version} `);
+    const fillWidth = Math.max(0, width - visibleWidth(title) - 3);
     return [
         theme.fg("borderAccent", "╭─"),
         title,
@@ -21,21 +34,45 @@ function bottomBorder(theme, width) {
     return theme.fg("borderAccent", `╰${"─".repeat(Math.max(0, width - 2))}╯`);
 }
 function framed(content, theme, width) {
-    const innerWidth = Math.max(0, width - 4);
     return [
         theme.fg("borderMuted", "│"),
         " ",
-        fit(content, innerWidth),
+        fit(content, Math.max(0, width - 4)),
         " ",
         theme.fg("borderMuted", "│"),
     ].join("");
 }
-function columns(left, right, theme, width) {
-    const innerWidth = Math.max(0, width - 4);
-    const available = Math.max(0, innerWidth - 3);
-    const leftWidth = Math.floor(available * 0.43);
-    const rightWidth = available - leftWidth;
-    return framed(`${fit(left, leftWidth)}${theme.fg("borderMuted", " │ ")}${fit(right, rightWidth)}`, theme, width);
+function splitWidths(width) {
+    const available = Math.max(0, width - 7);
+    const left = Math.min(HERO_WIDTH, Math.floor(available * 0.4));
+    return { left, right: available - left };
+}
+function splitLine(left, right, theme, width) {
+    const columns = splitWidths(width);
+    return [
+        theme.fg("borderMuted", "│"),
+        " ",
+        fit(left, columns.left),
+        " ",
+        theme.fg("borderMuted", "│"),
+        " ",
+        fit(right, columns.right),
+        " ",
+        theme.fg("borderMuted", "│"),
+    ].join("");
+}
+function splitBottom(theme, width) {
+    const columns = splitWidths(width);
+    return theme.fg("borderAccent", `╰${"─".repeat(columns.left + 2)}┴${"─".repeat(columns.right + 2)}╯`);
+}
+function logoRows(theme) {
+    return MMP_LOGO.map(([firstM, secondM, p]) => [
+        theme.fg("syntaxKeyword", firstM),
+        "  ",
+        theme.fg("accent", secondM),
+        "  ",
+        theme.fg("syntaxFunction", p),
+    ].join(""));
 }
 function projectState(identity) {
     const project = identity.manifests.project;
@@ -46,97 +83,118 @@ function projectState(identity) {
         return "loaded";
     }
     if (project.path !== null && project.trusted === false) {
-        return "ignored; approval required";
+        return "waiting for approval";
     }
     return "none found";
 }
 function manifestState(identity, theme) {
-    if (identity.manifests.global.loaded) {
-        return theme.fg("success", "loaded");
-    }
-    return theme.fg("warning", "not configured");
+    return identity.manifests.global.loaded
+        ? theme.fg("success", "loaded")
+        : theme.fg("warning", "not configured");
 }
-function label(text, theme) {
+function dataLabel(text, theme) {
     return theme.fg("dim", text.padEnd(10, " "));
 }
-function statusRows(identity, theme) {
-    const resources = identity.declaredResources;
-    const extensionCount = resources.inlineExtensions.length + resources.externalExtensions.length;
-    return [
-        `${label("identity", theme)}${theme.fg("success", "mmp:runtime active")}`,
-        `${label("manifest", theme)}${manifestState(identity, theme)}`,
-        `${label("MMP_HOME", theme)}${identity.paths.mmpHome}`,
-        `${label("project", theme)}${projectState(identity)}`,
-        `${label("declared", theme)}rules ${resources.rules.length} · roots ${resources.skillRoots.length} · ext ${extensionCount}`,
-    ];
-}
-function configRows(theme) {
-    const code = (text) => theme.fg("mdCode", text);
-    return [
-        code("$MMP_HOME/mmp.json"),
-        code('{"version": 1,'),
-        code(' "rules": ["./RULES.md"],'),
-        code(' "skills": ["./skills"],'),
-        code(' "extensions": ["mmp:task"]}'),
-    ];
-}
-function footerRows(theme) {
-    const footerLabel = (text) => theme.fg("dim", text.padEnd(10, " "));
-    return [
-        `${theme.bold(theme.fg("accent", "EXPLICIT"))}  Only Manifest-declared resources load; ambient directories stay off.`,
-        `${footerLabel("PROJECT")}<repo>/.mmp/mmp.json · approve with ${theme.fg("mdCode", "mmp --approve")}`,
-        `${footerLabel("COMMANDS")}${theme.fg("mdCode", "/mmp")} inspect · restart after edits · ${theme.fg("mdCode", "/login")} authenticate`,
-        `${footerLabel("CONTROLS")}/ commands · ! shell · ctrl+o details · esc interrupt`,
-    ];
-}
-function renderWide(identity, theme, width) {
-    const status = statusRows(identity, theme);
-    const config = configRows(theme);
-    const lines = [
-        topBorder(identity, theme, width),
-        framed(`${theme.bold("MMP policy + resources")}  ${theme.fg("accent", "──▶")}  Pi ${identity.runtime.engineVersion} agent runtime`, theme, width),
-        divider(theme, width),
-        columns(theme.bold(theme.fg("accent", "RUNTIME")), theme.bold(theme.fg("accent", "CONFIGURE")), theme, width),
-    ];
-    for (let index = 0; index < Math.max(status.length, config.length); index += 1) {
-        lines.push(columns(status[index] ?? "", config[index] ?? "", theme, width));
-    }
-    lines.push(divider(theme, width));
-    for (const row of footerRows(theme)) {
-        lines.push(framed(row, theme, width));
-    }
-    lines.push(bottomBorder(theme, width), "");
-    return lines;
-}
-function sectionHeading(text, theme) {
+function heading(text, theme) {
     return theme.bold(theme.fg("accent", text));
 }
-function renderNarrow(identity, theme, width) {
-    const lines = [
-        topBorder(identity, theme, width),
-        framed(`MMP resources ${theme.fg("accent", "→")} Pi ${identity.runtime.engineVersion} runtime`, theme, width),
-        divider(theme, width),
-        framed(sectionHeading("RUNTIME", theme), theme, width),
-        ...statusRows(identity, theme).map((row) => framed(row, theme, width)),
-        divider(theme, width),
-        framed(sectionHeading("CONFIGURE", theme), theme, width),
-        ...configRows(theme).map((row) => framed(row, theme, width)),
-        divider(theme, width),
-        ...footerRows(theme).map((row) => framed(row, theme, width)),
-        bottomBorder(theme, width),
+function assemblyRows(identity, theme, width) {
+    const resources = identity.declaredResources;
+    const extensionCount = resources.inlineExtensions.length + resources.externalExtensions.length;
+    const rule = theme.fg("borderMuted", "─".repeat(width));
+    return [
+        heading("ASSEMBLY", theme),
+        `${dataLabel("runtime", theme)}Pi ${identity.runtime.engineVersion}`,
+        `${dataLabel("identity", theme)}${theme.fg("success", "mmp:runtime active")}`,
+        `${dataLabel("manifest", theme)}${manifestState(identity, theme)}`,
+        `${dataLabel("project", theme)}${projectState(identity)}`,
+        `${dataLabel("declared", theme)}rules ${resources.rules.length} · roots ${resources.skillRoots.length} · ext ${extensionCount}`,
+        rule,
+        heading("COMPOSITION", theme),
+        `${theme.fg("mdCode", "rules + skills + extensions")}`,
+        `${theme.fg("dim", "                 └──▶ ")}${theme.bold(theme.fg("accent", "MMP"))}${theme.fg("dim", " ──▶ ")}${theme.bold("Pi")}`,
+        rule,
+        heading("CONFIGURE", theme),
+        theme.fg("mdCode", identity.manifests.global.path),
+        `${theme.fg("mdCode", "/mmp")} inspect · ${theme.fg("mdCode", "/login")} authenticate`,
+        `${theme.fg("mdCode", "mmp --approve")} project manifest`,
+        `${theme.fg("dim", "restart MMP after Manifest edits")}`,
+    ];
+}
+function modelMeta(identity, options) {
+    const provider = options.modelProvider;
+    return provider === undefined
+        ? `Pi ${identity.runtime.engineVersion}`
+        : `${provider} · Pi ${identity.runtime.engineVersion}`;
+}
+function heroRows(identity, theme, options) {
+    return [
+        theme.bold("Welcome back"),
+        "",
+        ...logoRows(theme),
+        "",
+        theme.bold(theme.fg("text", "Make My Pi")),
+        theme.italic(theme.fg("muted", "Compose Pi your way.")),
+        "",
+        theme.fg("text", options.modelName ?? options.modelId ?? "No model selected"),
+        theme.fg("dim", modelMeta(identity, options)),
+        "",
+        theme.fg("dim", "manifest-only · deterministic"),
         "",
     ];
+}
+function startupTip(identity, theme, width) {
+    const prefix = theme.italic(theme.fg("warning", "Tip:"));
+    const content = identity.manifests.global.loaded
+        ? "Only Manifest-declared resources load. Restart MMP after edits."
+        : `Create ${identity.manifests.global.path}, then restart MMP.`;
+    return truncateToWidth(`${prefix} ${theme.italic(theme.fg("muted", content))}`, width, "…");
+}
+function renderSplit(identity, theme, width, options) {
+    const columns = splitWidths(width);
+    const left = heroRows(identity, theme, options);
+    const right = assemblyRows(identity, theme, columns.right);
+    const rowCount = Math.max(left.length, right.length);
+    const lines = [topBorder(identity, theme, width)];
+    for (let index = 0; index < rowCount; index += 1) {
+        lines.push(splitLine(center(left[index] ?? "", columns.left), right[index] ?? "", theme, width));
+    }
+    lines.push(splitBottom(theme, width));
+    lines.push(startupTip(identity, theme, width), "");
     return lines;
 }
-export function renderMmpStartupPage(identity, theme, terminalWidth) {
+function renderNarrow(identity, theme, width, options) {
+    const innerWidth = Math.max(0, width - 4);
+    const hero = heroRows(identity, theme, options);
+    const visibleHero = innerWidth >= 31
+        ? hero
+        : [
+            theme.bold("Welcome back"),
+            "",
+            theme.bold(theme.fg("accent", "MMP")),
+            theme.bold("Make My Pi"),
+            theme.italic(theme.fg("muted", "Compose Pi your way.")),
+            "",
+        ];
+    const lines = [topBorder(identity, theme, width)];
+    for (const row of visibleHero) {
+        lines.push(framed(center(row, innerWidth), theme, width));
+    }
+    lines.push(divider(theme, width));
+    for (const row of assemblyRows(identity, theme, innerWidth)) {
+        lines.push(framed(row, theme, width));
+    }
+    lines.push(bottomBorder(theme, width));
+    lines.push(startupTip(identity, theme, width), "");
+    return lines;
+}
+export function renderMmpStartupPage(identity, theme, terminalWidth, options = {}) {
     const width = Math.max(1, Math.min(MAX_PANEL_WIDTH, Math.floor(terminalWidth)));
     if (width < 12) {
-        return [
-            truncateToWidth(`MMP ${identity.runtime.version} on Pi ${identity.runtime.engineVersion}`, width, "…"),
-        ];
+        return [truncateToWidth(`MMP · Make My Pi`, width, "…")];
     }
-    return width >= WIDE_LAYOUT_WIDTH
-        ? renderWide(identity, theme, width)
-        : renderNarrow(identity, theme, width);
+    return width >= SPLIT_LAYOUT_WIDTH
+        ? renderSplit(identity, theme, width, options)
+        : renderNarrow(identity, theme, width, options);
 }
 //# sourceMappingURL=startup-page.js.map
