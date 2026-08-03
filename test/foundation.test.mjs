@@ -122,7 +122,7 @@ test("version reports both pinned components", () => {
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, "mmp 0.1.0\npi 0.83.0\n");
+  assert.equal(result.stdout, "mmp 0.1.1\npi 0.83.0\n");
   assert.equal(result.stderr, "");
 });
 
@@ -154,7 +154,7 @@ test("dry-run is JSON-only and does not create MMP_HOME", () => {
   assert.equal(result.stderr, "");
   assert.equal(existsSync(mmpHome), false);
   assert.deepEqual(JSON.parse(result.stdout), {
-    mmpVersion: "0.1.0",
+    mmpVersion: "0.1.1",
     piVersion: "0.83.0",
     sdkEntry: "@earendil-works/pi-coding-agent#main",
     mmpHome,

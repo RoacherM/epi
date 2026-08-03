@@ -12,11 +12,20 @@ MMP 不调用 PATH 中的 `pi`，也不自动读取 `~/.pi/agent`、`.pi/`、`.a
 
 ## 安装
 
-要求 Node.js `>=22.19.0`。当前通过 GitHub Release 安装，尚未发布到 npm registry：
+要求 Node.js `>=22.19.0`。推荐使用版本固定的安装器：
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/RoacherM/mmp/releases/download/v0.1.1/install.sh | sh
+```
+
+安装器检查 Node.js/npm，验证发行包的 SHA-256 后再执行全局安装，不会自动使用 `sudo`。不希望把脚本直接交给 shell 时，可以先下载并审阅 `install.sh`。
+
+也可以直接通过 npm 安装同一个 GitHub Release：
 
 ```bash
 npm install --global \
-  https://github.com/RoacherM/mmp/releases/download/v0.1.0/mmp-0.1.0.tgz
+  https://github.com/RoacherM/mmp/releases/download/v0.1.1/mmp-0.1.1.tgz
 mmp --version
 ```
 
@@ -36,7 +45,7 @@ npm link
 版本检查应输出：
 
 ```text
-mmp 0.1.0
+mmp 0.1.1
 pi 0.83.0
 ```
 

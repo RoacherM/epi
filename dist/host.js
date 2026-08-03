@@ -3,7 +3,7 @@ import { resolveAssembly, } from "./assembly.js";
 import { parseMmpArgs } from "./args.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { resolveMmpPaths } from "./paths.js";
-export const MMP_VERSION = "0.1.0";
+export const MMP_VERSION = "0.1.1";
 export const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
 export const MMP_HELP = `MMP options:
   --dry-run       Resolve and validate configuration, print JSON, do not start Pi
