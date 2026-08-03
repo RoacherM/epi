@@ -12,21 +12,34 @@ MMP 不调用 PATH 中的 `pi`，也不自动读取 `~/.pi/agent`、`.pi/`、`.a
 
 ## 安装
 
+要求 Node.js `>=22.19.0`。当前从 GitHub 安装，尚未发布到 npm registry：
+
 ```bash
-npm install
-npm run build
-npm link
+npm install --global github:RoacherM/mmp
 mmp --version
 ```
 
-预期版本输出：
+Git 安装会通过 package `prepare` 生命周期自动安装构建依赖并生成 `dist/`，不要求 PATH 中存在全局 `pi`。
+
+从源码开发或修改 MMP：
+
+```bash
+git clone https://github.com/RoacherM/mmp.git
+cd mmp
+npm ci
+npm run build
+npm test
+npm link
+```
+
+版本检查应输出：
 
 ```text
 mmp 0.1.0
 pi 0.83.0
 ```
 
-MMP 使用独立 Pi 运行目录 `~/.mmp/pi`。认证可通过 Pi 支持的 provider 环境变量提供；也可以启动 `mmp` 后使用 Pi 的 `/login`。认证、settings、sessions 与 project trust 都不会从 `~/.pi/agent` 自动继承。
+首次安装不要求创建 Manifest；`mmp --no-project --dry-run` 可以空配置启动。MMP 使用独立 Pi 运行目录 `~/.mmp/pi`。认证可通过 Pi 支持的 provider 环境变量提供；也可以启动 `mmp` 后使用 Pi 的 `/login`。认证、settings、sessions 与 project trust 都不会从 `~/.pi/agent` 自动继承。
 
 ## 最小使用
 
