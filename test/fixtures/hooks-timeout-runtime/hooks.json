@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "hooks": [
+    {
+      "event": "tool_call",
+      "match": {
+        "toolName": "bash"
+      },
+      "handlers": [
+        {
+          "type": "command",
+          "command": "node",
+          "args": ["test/fixtures/fake-hook-handler.mjs"],
+          "env": {
+            "HOOK_MODE": "sleep"
+          },
+          "timeoutMs": 100
+        }
+      ]
+    }
+  ]
+}

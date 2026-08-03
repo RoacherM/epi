@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "hooks": [
+    {
+      "event": "user_prompt",
+      "match": {
+        "text": "TRIGGER_AGENT_HOOK"
+      },
+      "handlers": [
+        {
+          "type": "agent",
+          "agent": "hook-decider",
+          "prompt": "Decide this hook event according to your system instructions.",
+          "timeoutMs": 60000
+        }
+      ]
+    }
+  ]
+}

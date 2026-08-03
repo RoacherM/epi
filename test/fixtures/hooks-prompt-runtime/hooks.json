@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "hooks": [
+    {
+      "event": "user_prompt",
+      "match": {
+        "text": "TRIGGER_PROMPT_HOOK"
+      },
+      "handlers": [
+        {
+          "type": "prompt",
+          "model": "openai/gpt-4o-mini",
+          "prompt": "Return exactly this JSON object: {\"action\":\"transform\",\"text\":\"Reply exactly: PROMPT_HANDLER_OK\"}",
+          "timeoutMs": 30000
+        }
+      ]
+    }
+  ]
+}

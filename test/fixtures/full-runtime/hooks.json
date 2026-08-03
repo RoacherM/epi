@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "hooks": [
+    {
+      "event": "session_start",
+      "handlers": [{
+        "type": "command",
+        "command": "node",
+        "args": ["test/fixtures/fake-hook-handler.mjs"],
+        "env": { "HOOK_MODE": "record", "HOOK_LOG_PATH": "${HOOK_ACCEPTANCE_LOG}" }
+      }]
+    },
+    {
+      "event": "user_prompt",
+      "handlers": [{
+        "type": "command",
+        "command": "node",
+        "args": ["test/fixtures/fake-hook-handler.mjs"],
+        "env": { "HOOK_MODE": "record", "HOOK_LOG_PATH": "${HOOK_ACCEPTANCE_LOG}" }
+      }]
+    },
+    {
+      "event": "tool_call",
+      "handlers": [{
+        "type": "command",
+        "command": "node",
+        "args": ["test/fixtures/fake-hook-handler.mjs"],
+        "env": { "HOOK_MODE": "record", "HOOK_LOG_PATH": "${HOOK_ACCEPTANCE_LOG}" }
+      }]
+    },
+    {
+      "event": "tool_call",
+      "match": { "toolName": "bash" },
+      "handlers": [{
+        "type": "command",
+        "command": "node",
+        "args": ["test/fixtures/fake-hook-handler.mjs"],
+        "env": { "HOOK_MODE": "block" }
+      }]
+    },
+    {
+      "event": "tool_result",
+      "handlers": [{
+        "type": "command",
+        "command": "node",
+        "args": ["test/fixtures/fake-hook-handler.mjs"],
+        "env": { "HOOK_MODE": "record", "HOOK_LOG_PATH": "${HOOK_ACCEPTANCE_LOG}" }
+      }]
+    },
+    {
+      "event": "before_compact",
+      "handlers": [{
+        "type": "command",
+        "command": "node",
+        "args": ["test/fixtures/fake-hook-handler.mjs"],
+        "env": { "HOOK_MODE": "record", "HOOK_LOG_PATH": "${HOOK_ACCEPTANCE_LOG}" }
+      }]
+    },
+    {
+      "event": "task_start",
+      "handlers": [{
+        "type": "command",
+        "command": "node",
+        "args": ["test/fixtures/fake-hook-handler.mjs"],
+        "env": { "HOOK_MODE": "record", "HOOK_LOG_PATH": "${HOOK_ACCEPTANCE_LOG}" }
+      }]
+    },
+    {
+      "event": "task_stop",
+      "handlers": [{
+        "type": "command",
+        "command": "node",
+        "args": ["test/fixtures/fake-hook-handler.mjs"],
+        "env": { "HOOK_MODE": "record", "HOOK_LOG_PATH": "${HOOK_ACCEPTANCE_LOG}" }
+      }]
+    },
+    {
+      "event": "session_shutdown",
+      "handlers": [{
+        "type": "command",
+        "command": "node",
+        "args": ["test/fixtures/fake-hook-handler.mjs"],
+        "env": { "HOOK_MODE": "record", "HOOK_LOG_PATH": "${HOOK_ACCEPTANCE_LOG}" }
+      }]
+    }
+  ]
+}

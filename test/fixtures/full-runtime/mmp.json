@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "rules": ["./RULES.md"],
+  "skills": ["./skills"],
+  "extensions": ["mmp:task", "mmp:mcp", "mmp:hooks"]
+}

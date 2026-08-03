@@ -1,0 +1,29 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# Local runtime configuration and credentials
+.env
+.env.*
+!.env.example
+.pi/
+.mmp/
+
+# Agent-local context
+.agents/
+
+# Generated benchmark output
+reports/
+
+# Runtime files generated inside acceptance fixtures
+test/fixtures/**/runtime/
+test/fixtures/**/pi/auth.json
+test/fixtures/**/pi/trust.json
+test/fixtures/**/pi/sessions/
+test/fixtures/**/pi/models-store.json
+test/fixtures/**/pi/mcp-cache.json
+
+# Logs and operating-system metadata
+*.log
+.DS_Store

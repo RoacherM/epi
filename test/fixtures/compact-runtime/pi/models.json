@@ -1,0 +1,11 @@
+{
+  "providers": {
+    "openrouter": {
+      "modelOverrides": {
+        "openai/gpt-4o-mini": {
+          "contextWindow": 24000
+        }
+      }
+    }
+  }
+}

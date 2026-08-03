@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "hooks": [
+    {
+      "event": "session_start",
+      "handlers": [
+        {
+          "type": "agent",
+          "agent": "missing-agent",
+          "prompt": "Return a decision."
+        }
+      ]
+    }
+  ]
+}
