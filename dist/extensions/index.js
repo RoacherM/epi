@@ -3,9 +3,12 @@ import { resolveEffectiveHooks } from "../hooks-config.js";
 import { resolveEffectiveMcpConfig } from "../mcp-config.js";
 import { createHooksInlineExtension } from "./hooks.js";
 import { createTaskInlineExtension } from "./task.js";
+import { createMmpRuntimeExtension } from "./runtime.js";
 import { createMmpMcpExtension } from "./mcp.js";
-export function buildInlineExtensions(assembly, mmpHome) {
-    const extensions = [];
+export function buildInlineExtensions(assembly, mmpHome, runtimeIdentity) {
+    const extensions = [
+        createMmpRuntimeExtension(runtimeIdentity),
+    ];
     for (const extension of assembly.inlineExtensions) {
         switch (extension.name) {
             case "mmp:task":

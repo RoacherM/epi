@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 
-MMP_VERSION="0.1.1"
+MMP_VERSION="0.1.2"
 DEFAULT_DOWNLOAD_URL="https://github.com/RoacherM/mmp/releases/download/v${MMP_VERSION}/mmp-${MMP_VERSION}.tgz"
-DEFAULT_PACKAGE_SHA256="1d05c7c92120bb88b36e479b1203e8d18af1bc89e933bea974dc16b6ffb71906"
+DEFAULT_PACKAGE_SHA256="d92c3c9a097da6ff53658d49715ed4dddf2be8ead0f961afe9199b12a7521fe9"
 
 die() {
   printf 'mmp installer: %s\n' "$*" >&2

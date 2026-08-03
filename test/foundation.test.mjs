@@ -122,7 +122,7 @@ test("version reports both pinned components", () => {
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, "mmp 0.1.1\npi 0.83.0\n");
+  assert.equal(result.stdout, "mmp 0.1.2\npi 0.83.0\n");
   assert.equal(result.stderr, "");
 });
 
@@ -154,7 +154,7 @@ test("dry-run is JSON-only and does not create MMP_HOME", () => {
   assert.equal(result.stderr, "");
   assert.equal(existsSync(mmpHome), false);
   assert.deepEqual(JSON.parse(result.stdout), {
-    mmpVersion: "0.1.1",
+    mmpVersion: "0.1.2",
     piVersion: "0.83.0",
     sdkEntry: "@earendil-works/pi-coding-agent#main",
     mmpHome,
@@ -163,6 +163,41 @@ test("dry-run is JSON-only and does not create MMP_HOME", () => {
     globalManifestLoaded: false,
     projectDiscovery: "none",
     projectManifest: null,
+    runtimeIdentity: {
+      runtime: {
+        name: "MMP",
+        version: "0.1.2",
+        engine: "Pi",
+        engineVersion: "0.83.0",
+      },
+      paths: {
+        mmpHome,
+        agentDir: join(mmpHome, "pi"),
+      },
+      manifests: {
+        global: {
+          path: join(mmpHome, "mmp.json"),
+          loaded: false,
+        },
+        project: {
+          discovery: "none",
+          path: null,
+          trusted: null,
+          loaded: false,
+        },
+      },
+      resourcePolicy: {
+        discovery: "manifest-only",
+        relativePaths: "declaring-manifest-directory",
+        ambientResourceDirectoriesLoaded: false,
+      },
+      declaredResources: {
+        rules: [],
+        skillRoots: [],
+        inlineExtensions: [],
+        externalExtensions: [],
+      },
+    },
     piResourceArgs: [...BASE_PI_RESOURCE_ARGS],
     rules: [],
     skills: [],

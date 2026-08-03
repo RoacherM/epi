@@ -3,7 +3,8 @@ import { resolveAssembly, } from "./assembly.js";
 import { parseMmpArgs } from "./args.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { resolveMmpPaths } from "./paths.js";
-export const MMP_VERSION = "0.1.1";
+import { createMmpRuntimeIdentity, } from "./runtime-identity.js";
+export const MMP_VERSION = "0.1.2";
 export const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
 export const MMP_HELP = `MMP options:
   --dry-run       Resolve and validate configuration, print JSON, do not start Pi
@@ -51,11 +52,18 @@ function prepareParsedMmpRun(args, environment, cwd) {
         noProject: args.noProject,
         projectTrustOverride: args.projectTrustOverride,
     });
+    const runtimeIdentity = createMmpRuntimeIdentity({
+        mmpVersion: MMP_VERSION,
+        piVersion: PI_VERSION,
+        mmpHome: paths.mmpHome,
+        assembly,
+    });
     return {
         args,
         mmpHome: paths.mmpHome,
         agentDir: paths.agentDir,
         assembly,
+        runtimeIdentity,
         piArgs: buildPiArgs(assembly, args.passthrough),
     };
 }
@@ -77,7 +85,7 @@ export async function runMmp(argv) {
         return;
     }
     const prepared = prepareParsedMmpRun(args, process.env, process.cwd());
-    const extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome);
+    const extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity);
     if (prepared.args.dryRun) {
         const output = {
             mmpVersion: MMP_VERSION,
@@ -89,6 +97,7 @@ export async function runMmp(argv) {
             globalManifestLoaded: prepared.assembly.globalManifestLoaded,
             projectDiscovery: prepared.assembly.projectDiscovery,
             projectManifest: prepared.assembly.projectManifest ?? null,
+            runtimeIdentity: prepared.runtimeIdentity,
             piResourceArgs: [...BASE_PI_RESOURCE_ARGS],
             rules: prepared.assembly.rules,
             skills: prepared.assembly.skills,

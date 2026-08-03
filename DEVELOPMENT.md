@@ -22,7 +22,7 @@ Extension  owns capability
 ```
 
 - Pi Core 负责 Agent Loop、ModelRuntime、认证、Session 格式与管理、TUI 实现、Print/RPC 模式、基础工具和 Auto Compact。
-- MMP 负责自己的 CLI、Pi 版本锁定、Manifest、Project Trust、资源选择、provenance、首批能力装配和启动失败语义。
+- MMP 负责自己的 CLI、Pi 版本锁定、运行时身份、Manifest、Project Trust、资源选择、provenance、首批能力装配和启动失败语义。
 - 独立 Extension 负责 Task、MCP、Hooks 等具体能力。
 
 MMP v0 使用 Pi 公开的：
@@ -44,6 +44,8 @@ runRpcMode()
 
 首版不为“看起来更像自己的 Harness”而提前复制这些实现。
 
+MMP 始终注入内置 `mmp:runtime` Extension。它用 `ctx.ui.setHeader()` 在 TUI 启动页展示身份、Manifest 状态与核心配置入口；在每轮 `before_agent_start` 中结合 `ResolvedAssembly` 与 Pi 的 `systemPromptOptions.skills` 生成权威 runtime inventory，明确区分“MMP 已加载资源”和“宿主机上存在的文件”。`/mmp` 向用户显示同一份清单。Print、JSON/RPC、dry-run 和 benchmark 不渲染启动页。
+
 ## 2. 核心架构
 
 ```text
@@ -54,7 +56,7 @@ mmp CLI
   +-- 依据 Pi ProjectTrustStore 决定是否读取 <repo>/.mmp/mmp.json
   +-- 解析并校验 Rules / Skills / Extensions
   +-- 生成 ResolvedAssembly 与 provenance
-  +-- 创建 mmp:task / mmp:mcp / mmp:hooks InlineExtension factories
+  +-- 创建固定 mmp:runtime 与 Manifest 声明的 Task / MCP / Hooks factories
   +-- 生成受控的 Pi argv
   +-- await piMain(piArgs, { extensionFactories })
          |
@@ -597,7 +599,7 @@ const extensionFactories: InlineExtension[] = [
 
 ```json
 {
-  "mmpVersion": "0.1.1",
+  "mmpVersion": "0.1.2",
   "piVersion": "0.83.0",
   "sdkEntry": "@earendil-works/pi-coding-agent/main",
   "agentDir": "/Users/byron/.mmp/pi",
@@ -896,7 +898,7 @@ MMP_OK
 另外必须证明：
 
 - 临时移除 PATH 中的全局 `pi` 后，`mmp --print` 仍成功；
-- `mmp --version` 同时输出 MMP `0.1.1` 和 Pi `0.83.0`；
+- `mmp --version` 同时输出 MMP `0.1.2` 和 Pi `0.83.0`；
 - 进程树中没有第二个 Pi 主进程。
 
 ### 阶段 B：Manifest 与 Project Trust

@@ -10,9 +10,13 @@ import {
 import { parseMmpArgs, type MmpArgs } from "./args.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { resolveMmpPaths } from "./paths.js";
+import {
+  createMmpRuntimeIdentity,
+  type MmpRuntimeIdentity,
+} from "./runtime-identity.js";
 import type { ResolvedResource } from "./manifest.js";
 
-export const MMP_VERSION = "0.1.1";
+export const MMP_VERSION = "0.1.2";
 export const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
 
 export const MMP_HELP = `MMP options:
@@ -69,6 +73,7 @@ export interface PreparedMmpRun {
   mmpHome: string;
   agentDir: string;
   assembly: ResolvedAssembly;
+  runtimeIdentity: MmpRuntimeIdentity;
   piArgs: string[];
 }
 
@@ -85,12 +90,19 @@ function prepareParsedMmpRun(
     noProject: args.noProject,
     projectTrustOverride: args.projectTrustOverride,
   });
+  const runtimeIdentity = createMmpRuntimeIdentity({
+    mmpVersion: MMP_VERSION,
+    piVersion: PI_VERSION,
+    mmpHome: paths.mmpHome,
+    assembly,
+  });
 
   return {
     args,
     mmpHome: paths.mmpHome,
     agentDir: paths.agentDir,
     assembly,
+    runtimeIdentity,
     piArgs: buildPiArgs(assembly, args.passthrough),
   };
 }
@@ -123,6 +135,7 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
   const extensionFactories = buildInlineExtensions(
     prepared.assembly,
     prepared.mmpHome,
+    prepared.runtimeIdentity,
   );
 
   if (prepared.args.dryRun) {
@@ -136,6 +149,7 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
       globalManifestLoaded: prepared.assembly.globalManifestLoaded,
       projectDiscovery: prepared.assembly.projectDiscovery,
       projectManifest: prepared.assembly.projectManifest ?? null,
+      runtimeIdentity: prepared.runtimeIdentity,
       piResourceArgs: [...BASE_PI_RESOURCE_ARGS],
       rules: prepared.assembly.rules,
       skills: prepared.assembly.skills,

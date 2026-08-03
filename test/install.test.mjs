@@ -22,7 +22,7 @@ function createFixture() {
   const root = mkdtempSync(join(tmpdir(), "mmp-installer-test-"));
   const fakeBin = join(root, "bin");
   const installPrefix = join(root, "prefix");
-  const packagePath = join(root, "mmp-0.1.1.tgz");
+  const packagePath = join(root, "mmp-0.1.2.tgz");
   const npmLog = join(root, "npm.log");
   const packageContent = Buffer.from("fixture mmp package\n");
 
@@ -38,7 +38,7 @@ printf '%s\\n' "$*" > "$NPM_LOG"
 mkdir -p "$MMP_PREFIX/bin"
 cat > "$MMP_PREFIX/bin/mmp" <<'EOF'
 #!/bin/sh
-printf 'mmp 0.1.1\\npi 0.83.0\\n'
+printf 'mmp 0.1.2\\npi 0.83.0\\n'
 EOF
 chmod +x "$MMP_PREFIX/bin/mmp"
 `,
@@ -76,13 +76,13 @@ test("curl installer verifies and installs the requested package", () => {
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stderr, "");
-    assert.match(result.stdout, /Downloading MMP 0\.1\.1/);
+    assert.match(result.stdout, /Downloading MMP 0\.1\.2/);
     assert.match(result.stdout, /Installed MMP at .*\/bin\/mmp/);
-    assert.match(result.stdout, /mmp 0\.1\.1\npi 0\.83\.0/);
+    assert.match(result.stdout, /mmp 0\.1\.2\npi 0\.83\.0/);
     assert.match(
       readFileSync(fixture.npmLog, "utf8"),
       new RegExp(
-        `^install --global --prefix ${fixture.installPrefix} --no-audit --no-fund .*mmp-0\\.1\\.1\\.tgz\\n$`,
+        `^install --global --prefix ${fixture.installPrefix} --no-audit --no-fund .*mmp-0\\.1\\.2\\.tgz\\n$`,
       ),
     );
     assert.equal(existsSync(join(fixture.installPrefix, "bin", "mmp")), true);
@@ -97,7 +97,7 @@ test("curl installer rejects a package with the wrong checksum", () => {
     const result = runInstaller(fixture, "0".repeat(64));
 
     assert.equal(result.status, 1);
-    assert.equal(result.stdout, "Downloading MMP 0.1.1...\n");
+    assert.equal(result.stdout, "Downloading MMP 0.1.2...\n");
     assert.match(result.stderr, /package checksum mismatch/);
     assert.equal(existsSync(fixture.npmLog), false);
     assert.equal(existsSync(join(fixture.installPrefix, "bin", "mmp")), false);

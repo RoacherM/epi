@@ -7,13 +7,18 @@ import { resolveEffectiveHooks } from "../hooks-config.js";
 import { resolveEffectiveMcpConfig } from "../mcp-config.js";
 import { createHooksInlineExtension } from "./hooks.js";
 import { createTaskInlineExtension } from "./task.js";
+import { createMmpRuntimeExtension } from "./runtime.js";
+import type { MmpRuntimeIdentity } from "../runtime-identity.js";
 import { createMmpMcpExtension } from "./mcp.js";
 
 export function buildInlineExtensions(
   assembly: ResolvedAssembly,
   mmpHome: string,
+  runtimeIdentity: MmpRuntimeIdentity,
 ): InlineExtension[] {
-  const extensions: InlineExtension[] = [];
+  const extensions: InlineExtension[] = [
+    createMmpRuntimeExtension(runtimeIdentity),
+  ];
   for (const extension of assembly.inlineExtensions) {
     switch (extension.name) {
       case "mmp:task":

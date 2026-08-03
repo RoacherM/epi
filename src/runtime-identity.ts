@@ -1,0 +1,165 @@
+import type { ResolvedAssembly } from "./assembly.js";
+import type {
+  ResolvedInlineExtension,
+  ResolvedResource,
+} from "./manifest.js";
+
+export interface MmpRuntimeResource {
+  kind: ResolvedResource["kind"];
+  value: string;
+  source: ResolvedResource["source"];
+  declaredIn: string;
+}
+
+export interface MmpRuntimeExtension {
+  name: string;
+  source: ResolvedInlineExtension["source"];
+  declaredIn: string;
+}
+
+export interface MmpLoadedSkill {
+  name: string;
+  description: string;
+  filePath: string;
+  modelInvocable: boolean;
+}
+
+export interface MmpRuntimeIdentity {
+  runtime: {
+    name: "MMP";
+    version: string;
+    engine: "Pi";
+    engineVersion: string;
+  };
+  paths: {
+    mmpHome: string;
+    agentDir: string;
+  };
+  manifests: {
+    global: {
+      path: string;
+      loaded: boolean;
+    };
+    project: {
+      discovery: ResolvedAssembly["projectDiscovery"];
+      path: string | null;
+      trusted: boolean | null;
+      loaded: boolean;
+    };
+  };
+  resourcePolicy: {
+    discovery: "manifest-only";
+    relativePaths: "declaring-manifest-directory";
+    ambientResourceDirectoriesLoaded: false;
+  };
+  declaredResources: {
+    rules: MmpRuntimeResource[];
+    skillRoots: MmpRuntimeResource[];
+    inlineExtensions: MmpRuntimeExtension[];
+    externalExtensions: MmpRuntimeResource[];
+  };
+}
+
+interface LoadedSkillLike {
+  name: string;
+  description: string;
+  filePath: string;
+  disableModelInvocation: boolean;
+}
+
+function copyResource(resource: ResolvedResource): MmpRuntimeResource {
+  return {
+    kind: resource.kind,
+    value: resource.value,
+    source: resource.source,
+    declaredIn: resource.declaredIn,
+  };
+}
+
+export function createMmpRuntimeIdentity(options: {
+  mmpVersion: string;
+  piVersion: string;
+  mmpHome: string;
+  assembly: ResolvedAssembly;
+}): MmpRuntimeIdentity {
+  const project = options.assembly.projectManifest;
+  return {
+    runtime: {
+      name: "MMP",
+      version: options.mmpVersion,
+      engine: "Pi",
+      engineVersion: options.piVersion,
+    },
+    paths: {
+      mmpHome: options.mmpHome,
+      agentDir: options.assembly.agentDir,
+    },
+    manifests: {
+      global: {
+        path: options.assembly.globalManifest,
+        loaded: options.assembly.globalManifestLoaded,
+      },
+      project: {
+        discovery: options.assembly.projectDiscovery,
+        path: project?.path ?? null,
+        trusted: project?.trusted ?? null,
+        loaded: project?.loaded ?? false,
+      },
+    },
+    resourcePolicy: {
+      discovery: "manifest-only",
+      relativePaths: "declaring-manifest-directory",
+      ambientResourceDirectoriesLoaded: false,
+    },
+    declaredResources: {
+      rules: options.assembly.rules.map(copyResource),
+      skillRoots: options.assembly.skills.map(copyResource),
+      inlineExtensions: options.assembly.inlineExtensions.map((extension) => ({
+        name: extension.name,
+        source: extension.source,
+        declaredIn: extension.declaredIn,
+      })),
+      externalExtensions: options.assembly.externalExtensions.map(copyResource),
+    },
+  };
+}
+
+export function normalizeLoadedSkills(
+  skills: readonly LoadedSkillLike[] | undefined,
+): MmpLoadedSkill[] {
+  return (skills ?? []).map((skill) => ({
+    name: skill.name,
+    description: skill.description,
+    filePath: skill.filePath,
+    modelInvocable: !skill.disableModelInvocation,
+  }));
+}
+
+export function createMmpRuntimeReport(
+  identity: MmpRuntimeIdentity,
+  loadedSkills: readonly MmpLoadedSkill[],
+): MmpRuntimeIdentity & { loadedSkills: MmpLoadedSkill[] } {
+  return {
+    ...identity,
+    loadedSkills: loadedSkills.map((skill) => ({ ...skill })),
+  };
+}
+
+export function renderMmpRuntimePrompt(
+  identity: MmpRuntimeIdentity,
+  loadedSkills: readonly MmpLoadedSkill[],
+): string {
+  const report = createMmpRuntimeReport(identity, loadedSkills);
+  return [
+    "# MMP Runtime Contract",
+    "You are hosted by MMP (My Minimal Pi), an SDK harness embedding Pi. When asked which runtime or harness you are using, identify it as MMP on Pi, not as stock Pi alone.",
+    "Upstream Pi documentation describes engine features and stock discovery paths. MMP overrides resource discovery: the inventory below is authoritative for this run.",
+    "Only `loadedSkills` are loaded skills. A file or skill found elsewhere on disk is not an MMP-loaded capability unless it appears in this inventory.",
+    "When asked which skills, rules, or extensions are available, answer from this inventory. Do not scan ambient ~/.pi, ~/.agents, ~/.claude, ~/.codex, .pi, or .agents directories to infer loaded resources.",
+    "If the user explicitly asks to inspect an arbitrary directory, you may inspect it, but describe discovered files as files—not as loaded MMP resources.",
+    "Manifest-relative resource paths resolve from the directory containing the declaring mmp.json. The MMP agentDir stores Pi auth, settings, sessions, and model catalog state; it is not an ambient skills root.",
+    "<mmp_runtime_inventory>",
+    JSON.stringify(report, null, 2),
+    "</mmp_runtime_inventory>",
+  ].join("\n\n");
+}

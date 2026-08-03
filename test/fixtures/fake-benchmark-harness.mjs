@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 const args = process.argv.slice(2);
 if (args.includes("--dry-run")) {
   process.stdout.write(`${JSON.stringify({
-    mmpVersion: "0.1.1",
+    mmpVersion: "0.1.2",
     piVersion: "0.83.0",
     mmpHome: process.env.MMP_HOME,
     agentDir: `${process.env.MMP_HOME}/pi`,
