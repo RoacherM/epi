@@ -12,14 +12,15 @@ MMP 不调用 PATH 中的 `pi`，也不自动读取 `~/.pi/agent`、`.pi/`、`.a
 
 ## 安装
 
-要求 Node.js `>=22.19.0`。当前从 GitHub 安装，尚未发布到 npm registry：
+要求 Node.js `>=22.19.0`。当前通过 GitHub Release 安装，尚未发布到 npm registry：
 
 ```bash
-npm install --global github:RoacherM/mmp
+npm install --global \
+  https://github.com/RoacherM/mmp/releases/download/v0.1.0/mmp-0.1.0.tgz
 mmp --version
 ```
 
-Git 安装直接使用仓库中与源码同步提交的 `dist/`，只安装运行时依赖；不要求本机预装 TypeScript，也不要求 PATH 中存在全局 `pi`。
+Release 包含已构建的 `dist/`，安装时只获取运行时依赖；不要求本机预装 TypeScript，也不要求 PATH 中存在全局 `pi`。
 
 从源码开发或修改 MMP：
 
