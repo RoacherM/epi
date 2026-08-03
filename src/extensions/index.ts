@@ -15,9 +15,10 @@ export function buildInlineExtensions(
   assembly: ResolvedAssembly,
   mmpHome: string,
   runtimeIdentity: MmpRuntimeIdentity,
+  resolveAssembly: () => ResolvedAssembly = () => assembly,
 ): InlineExtension[] {
   const extensions: InlineExtension[] = [
-    createMmpRuntimeExtension(runtimeIdentity),
+    createMmpRuntimeExtension(runtimeIdentity, assembly, resolveAssembly),
   ];
   for (const extension of assembly.inlineExtensions) {
     switch (extension.name) {

@@ -1,6 +1,6 @@
 {
   "name": "mmp",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "Make My Pi — compose Pi your way with an explicit deterministic harness",
   "type": "module",

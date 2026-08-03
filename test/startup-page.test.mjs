@@ -15,7 +15,7 @@ const theme = {
 const identity = {
   runtime: {
     name: "MMP",
-    version: "0.1.3",
+    version: "0.1.4",
     engine: "Pi",
     engineVersion: "0.83.0",
   },
@@ -48,6 +48,19 @@ const identity = {
   },
 };
 
+const assembly = {
+  agentDir: "/fixture/.mmp/pi",
+  globalManifest: "/fixture/.mmp/mmp.json",
+  globalManifestLoaded: false,
+  projectDiscovery: "none",
+  projectManifest: undefined,
+  rules: [],
+  rulesText: "",
+  skills: [],
+  inlineExtensions: [],
+  externalExtensions: [],
+};
+
 function assertFits(lines, width) {
   for (const line of lines) {
     assert.ok(
@@ -66,7 +79,7 @@ test("wide startup page presents the Make My Pi brand and assembly controls", ()
   const output = lines.join("\n");
 
   assertFits(lines, 108);
-  assert.match(output, /mmp v0\.1\.3/);
+  assert.match(output, /mmp v0\.1\.4/);
   assert.match(output, /Make My Pi/);
   assert.match(output, /Compose Pi your way\./);
   assert.match(output, /MoonshotAI: Kimi K2\.5/);
@@ -93,7 +106,7 @@ test("narrow startup page remains within the terminal width", () => {
 
 test("runtime extension installs the startup page only in TUI mode", async () => {
   const handlers = new Map();
-  const extension = createMmpRuntimeExtension(identity);
+  const extension = createMmpRuntimeExtension(identity, assembly);
   extension.factory({
     on(event, handler) {
       handlers.set(event, handler);

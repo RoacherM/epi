@@ -118,7 +118,7 @@ function assemblyRows(identity, theme, width) {
         theme.fg("mdCode", identity.manifests.global.path),
         `${theme.fg("mdCode", "/mmp")} inspect · ${theme.fg("mdCode", "/login")} authenticate`,
         `${theme.fg("mdCode", "mmp --approve")} project manifest`,
-        `${theme.fg("dim", "restart MMP after Manifest edits")}`,
+        `${theme.fg("dim", "/reload Rules + Skills · restart Extensions")}`,
     ];
 }
 function modelMeta(identity, options) {
@@ -146,8 +146,8 @@ function heroRows(identity, theme, options) {
 function startupTip(identity, theme, width) {
     const prefix = theme.italic(theme.fg("warning", "Tip:"));
     const content = identity.manifests.global.loaded
-        ? "Only Manifest-declared resources load. Restart MMP after edits."
-        : `Create ${identity.manifests.global.path}, then restart MMP.`;
+        ? "Use /reload after Rule or Skill edits; restart for Extensions."
+        : `Create ${identity.manifests.global.path}, then use /reload.`;
     return truncateToWidth(`${prefix} ${theme.italic(theme.fg("muted", content))}`, width, "…");
 }
 function renderSplit(identity, theme, width, options) {

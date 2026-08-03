@@ -72,6 +72,8 @@ export function renderMmpRuntimePrompt(identity, loadedSkills) {
         "When asked which skills, rules, or extensions are available, answer from this inventory. Do not scan ambient ~/.pi, ~/.agents, ~/.claude, ~/.codex, .pi, or .agents directories to infer loaded resources.",
         "If the user explicitly asks to inspect an arbitrary directory, you may inspect it, but describe discovered files as files—not as loaded MMP resources.",
         "Manifest-relative resource paths resolve from the directory containing the declaring mmp.json. The MMP agentDir stores Pi auth, settings, sessions, and model catalog state; it is not an ambient skills root.",
+        "The Manifest input schema is exactly `{ \"version\": 1, \"rules\": [], \"skills\": [], \"extensions\": [] }`. Inventory fields such as `skillRoots` and `declaredResources` are report-only and must not be written to mmp.json.",
+        "After Manifest edits, `/reload` re-resolves Rules and Skills. Extension selection or configuration changes require restarting MMP.",
         "<mmp_runtime_inventory>",
         JSON.stringify(report, null, 2),
         "</mmp_runtime_inventory>",

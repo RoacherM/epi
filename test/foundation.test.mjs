@@ -122,7 +122,7 @@ test("version reports both pinned components", () => {
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, "mmp 0.1.3\npi 0.83.0\n");
+  assert.equal(result.stdout, "mmp 0.1.4\npi 0.83.0\n");
   assert.equal(result.stderr, "");
 });
 
@@ -144,7 +144,10 @@ test("help documents MMP flags before pinned Pi options without loading config",
 
 test("dry-run is JSON-only and does not create MMP_HOME", () => {
   const mmpHome = join(tmpdir(), `mmp-dry-${randomUUID()}`);
-  const result = spawnSync(process.execPath, [cliPath.pathname, "--dry-run"], {
+  const result = spawnSync(
+    process.execPath,
+    [cliPath.pathname, "--dry-run", "--no-project"],
+    {
     cwd: projectRoot,
     encoding: "utf8",
     env: { ...process.env, MMP_HOME: mmpHome },
@@ -154,19 +157,19 @@ test("dry-run is JSON-only and does not create MMP_HOME", () => {
   assert.equal(result.stderr, "");
   assert.equal(existsSync(mmpHome), false);
   assert.deepEqual(JSON.parse(result.stdout), {
-    mmpVersion: "0.1.3",
+    mmpVersion: "0.1.4",
     piVersion: "0.83.0",
     sdkEntry: "@earendil-works/pi-coding-agent#main",
     mmpHome,
     agentDir: join(mmpHome, "pi"),
     globalManifest: join(mmpHome, "mmp.json"),
     globalManifestLoaded: false,
-    projectDiscovery: "none",
+    projectDiscovery: "disabled",
     projectManifest: null,
     runtimeIdentity: {
       runtime: {
         name: "MMP",
-        version: "0.1.3",
+        version: "0.1.4",
         engine: "Pi",
         engineVersion: "0.83.0",
       },
@@ -180,7 +183,7 @@ test("dry-run is JSON-only and does not create MMP_HOME", () => {
           loaded: false,
         },
         project: {
-          discovery: "none",
+          discovery: "disabled",
           path: null,
           trusted: null,
           loaded: false,

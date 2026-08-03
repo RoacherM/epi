@@ -18,7 +18,7 @@ MMP 不调用 PATH 中的 `pi`，也不自动读取 `~/.pi/agent`、`.pi/`、`.a
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/RoacherM/mmp/releases/download/v0.1.3/install.sh | sh
+  https://github.com/RoacherM/mmp/releases/download/v0.1.4/install.sh | sh
 ```
 
 安装器检查 Node.js/npm，验证发行包的 SHA-256 后再执行全局安装，不会自动使用 `sudo`。不希望把脚本直接交给 shell 时，可以先下载并审阅 `install.sh`。
@@ -27,7 +27,7 @@ curl --proto '=https' --tlsv1.2 -fsSL \
 
 ```bash
 npm install --global \
-  https://github.com/RoacherM/mmp/releases/download/v0.1.3/mmp-0.1.3.tgz
+  https://github.com/RoacherM/mmp/releases/download/v0.1.4/mmp-0.1.4.tgz
 mmp --version
 ```
 
@@ -47,7 +47,7 @@ npm link
 版本检查应输出：
 
 ```text
-mmp 0.1.3
+mmp 0.1.4
 pi 0.83.0
 ```
 
@@ -145,6 +145,12 @@ MMP_HOME=/absolute/path/to/mmp-home mmp --dry-run
 - 外部 Extension 可使用本地路径、`npm:` 或 `git:` source；MMP 仍关闭 Pi 的 ambient discovery。
 
 Rules 按装配顺序拼接到 Pi system prompt。Skills 使用 Pi 0.83 的 `SKILL.md` 格式，并通过绝对路径显式加载。
+
+Manifest 修改后：
+
+- `/reload` 会重新解析并严格校验 Manifest，然后在当前进程中重新加载 Rules 与 Skills；即使启动时尚未创建 `mmp.json`，创建后执行 `/reload` 也会生效。
+- Extension 的选择与配置在进程启动时装配；修改 `extensions` 或 MCP/Hooks/Task 配置后必须重启 MMP。
+- `/mmp` 显示当前实际生效的资源清单。Manifest 输入字段只有 `version`、`rules`、`skills`、`extensions`；`skillRoots`、`declaredResources` 等仅为运行时报告字段。
 
 ## Task
 

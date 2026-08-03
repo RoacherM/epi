@@ -16,7 +16,7 @@ const fixtureRoot = fileURLToPath(
 );
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 
-test("Rules and Skills become explicit Pi arguments in provenance order", () => {
+test("Rules and Skills stay in MMP assembly instead of fixed Pi arguments", () => {
   const prepared = prepareMmpRun(
     ["--no-project", "--print", "acceptance"],
     { MMP_HOME: fixtureRoot },
@@ -28,13 +28,10 @@ test("Rules and Skills become explicit Pi arguments in provenance order", () => 
   assert.equal(prepared.assembly.rulesText, `# MMP Rules\n\n${ruleText}`);
   assert.deepEqual(prepared.piArgs, [
     ...BASE_PI_RESOURCE_ARGS,
-    "--append-system-prompt",
-    `# MMP Rules\n\n${ruleText}`,
-    "--skill",
-    skillPath,
     "--print",
     "acceptance",
   ]);
+  assert.equal(prepared.assembly.skills[0].value, skillPath);
 });
 
 test("dry-run reports resource paths but never Rules content", () => {

@@ -4,7 +4,7 @@ import { parseMmpArgs } from "./args.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { resolveMmpPaths } from "./paths.js";
 import { createMmpRuntimeIdentity, } from "./runtime-identity.js";
-export const MMP_VERSION = "0.1.3";
+export const MMP_VERSION = "0.1.4";
 export const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
 export const MMP_HELP = `MMP options:
   --dry-run       Resolve and validate configuration, print JSON, do not start Pi
@@ -31,12 +31,6 @@ export const BASE_PI_RESOURCE_ARGS = [
 ];
 export function buildPiArgs(resources, passthrough) {
     const args = [...BASE_PI_RESOURCE_ARGS];
-    if (resources.rulesText.length > 0) {
-        args.push("--append-system-prompt", resources.rulesText);
-    }
-    for (const skill of resources.skills) {
-        args.push("--skill", skill.value);
-    }
     for (const extension of resources.externalExtensions) {
         args.push("--extension", extension.value);
     }
@@ -45,13 +39,14 @@ export function buildPiArgs(resources, passthrough) {
 }
 function prepareParsedMmpRun(args, environment, cwd) {
     const paths = resolveMmpPaths(environment);
-    const assembly = resolveAssembly({
+    const resolveCurrentAssembly = () => resolveAssembly({
         agentDir: paths.agentDir,
         globalManifestPath: paths.globalManifest,
         cwd,
         noProject: args.noProject,
         projectTrustOverride: args.projectTrustOverride,
     });
+    const assembly = resolveCurrentAssembly();
     const runtimeIdentity = createMmpRuntimeIdentity({
         mmpVersion: MMP_VERSION,
         piVersion: PI_VERSION,
@@ -64,6 +59,7 @@ function prepareParsedMmpRun(args, environment, cwd) {
         agentDir: paths.agentDir,
         assembly,
         runtimeIdentity,
+        resolveAssembly: resolveCurrentAssembly,
         piArgs: buildPiArgs(assembly, args.passthrough),
     };
 }
@@ -85,7 +81,7 @@ export async function runMmp(argv) {
         return;
     }
     const prepared = prepareParsedMmpRun(args, process.env, process.cwd());
-    const extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity);
+    const extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly);
     if (prepared.args.dryRun) {
         const output = {
             mmpVersion: MMP_VERSION,

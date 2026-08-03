@@ -24,7 +24,7 @@ function fixture() {
     externalExtensions: [],
   };
   const identity = createMmpRuntimeIdentity({
-    mmpVersion: "0.1.3",
+    mmpVersion: "0.1.4",
     piVersion: "0.83.0",
     mmpHome: "/fixture/mmp",
     assembly,
@@ -53,11 +53,11 @@ test("MMP runtime identity is always installed before manifest extensions", () =
 });
 
 test("MMP runtime identity injects authoritative loaded skills", async () => {
-  const { identity } = fixture();
+  const { assembly, identity } = fixture();
   const handlers = new Map();
   const commands = new Map();
   const messages = [];
-  const extension = createMmpRuntimeExtension(identity);
+  const extension = createMmpRuntimeExtension(identity, assembly);
 
   extension.factory({
     on(event, handler) {
@@ -115,10 +115,121 @@ test("MMP runtime identity injects authoritative loaded skills", async () => {
   }]);
 });
 
+test("MMP reload re-resolves Rules and Skill roots", async () => {
+  const { assembly, identity } = fixture();
+  const handlers = new Map();
+  const notifications = [];
+  const reloadedAssembly = {
+    ...assembly,
+    rules: [{
+      kind: "rule",
+      value: "/fixture/mmp/RELOADED.md",
+      source: "global",
+      declaredIn: "/fixture/mmp/mmp.json",
+    }],
+    rulesText: "# Reloaded Rules",
+    skills: [{
+      kind: "skill",
+      value: "/fixture/mmp/reloaded-skills",
+      source: "global",
+      declaredIn: "/fixture/mmp/mmp.json",
+    }],
+  };
+  createMmpRuntimeExtension(
+    identity,
+    assembly,
+    () => reloadedAssembly,
+  ).factory({
+    on(event, handler) {
+      handlers.set(event, handler);
+    },
+    registerCommand() {},
+  });
+
+  await handlers.get("session_start")(
+    { type: "session_start", reason: "reload" },
+    {
+      mode: "print",
+      ui: {
+        notify(message, level) {
+          notifications.push({ message, level });
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(
+    await handlers.get("resources_discover")({
+      type: "resources_discover",
+      reason: "reload",
+      cwd: "/fixture/work",
+    }),
+    { skillPaths: ["/fixture/mmp/reloaded-skills"] },
+  );
+  const result = await handlers.get("before_agent_start")({
+    type: "before_agent_start",
+    prompt: "Use the reloaded configuration",
+    systemPrompt: "PI BASE PROMPT",
+    systemPromptOptions: { cwd: "/fixture/work", skills: [] },
+  });
+  assert.match(
+    result.systemPrompt,
+    /^PI BASE PROMPT\n\n# Reloaded Rules\n\n# MMP Runtime Contract/,
+  );
+  assert.match(result.systemPrompt, /reloaded-skills/);
+  assert.deepEqual(notifications, [{
+    message: "MMP reloaded 1 rule files and 1 skill roots.",
+    level: "info",
+  }]);
+});
+
+test("failed MMP reload preserves the last valid resource assembly", async () => {
+  const { assembly, identity } = fixture();
+  const handlers = new Map();
+  const notifications = [];
+  createMmpRuntimeExtension(
+    identity,
+    assembly,
+    () => {
+      throw new Error("unknown field \"skillRoots\"");
+    },
+  ).factory({
+    on(event, handler) {
+      handlers.set(event, handler);
+    },
+    registerCommand() {},
+  });
+
+  await handlers.get("session_start")(
+    { type: "session_start", reason: "reload" },
+    {
+      mode: "print",
+      ui: {
+        notify(message, level) {
+          notifications.push({ message, level });
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(
+    await handlers.get("resources_discover")({
+      type: "resources_discover",
+      reason: "reload",
+      cwd: "/fixture/work",
+    }),
+    { skillPaths: ["/fixture/mmp/skills"] },
+  );
+  assert.deepEqual(notifications, [{
+    message: "MMP Manifest reload failed: unknown field \"skillRoots\"",
+    level: "error",
+  }]);
+});
+
 test("MMP runtime identity states explicitly when no skills are loaded", async () => {
-  const { identity } = fixture();
+  const { assembly, identity } = fixture();
   let beforeAgentStart;
-  createMmpRuntimeExtension(identity).factory({
+  createMmpRuntimeExtension(identity, assembly).factory({
     on(event, handler) {
       if (event === "before_agent_start") beforeAgentStart = handler;
     },

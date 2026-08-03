@@ -16,7 +16,7 @@ import {
 } from "./runtime-identity.js";
 import type { ResolvedResource } from "./manifest.js";
 
-export const MMP_VERSION = "0.1.3";
+export const MMP_VERSION = "0.1.4";
 export const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
 
 export const MMP_HELP = `MMP options:
@@ -45,8 +45,6 @@ export const BASE_PI_RESOURCE_ARGS = [
 ] as const;
 
 export interface PiArgumentResources {
-  rulesText: string;
-  skills: readonly ResolvedResource[];
   externalExtensions: readonly ResolvedResource[];
 }
 
@@ -55,12 +53,6 @@ export function buildPiArgs(
   passthrough: readonly string[],
 ): string[] {
   const args: string[] = [...BASE_PI_RESOURCE_ARGS];
-  if (resources.rulesText.length > 0) {
-    args.push("--append-system-prompt", resources.rulesText);
-  }
-  for (const skill of resources.skills) {
-    args.push("--skill", skill.value);
-  }
   for (const extension of resources.externalExtensions) {
     args.push("--extension", extension.value);
   }
@@ -74,6 +66,7 @@ export interface PreparedMmpRun {
   agentDir: string;
   assembly: ResolvedAssembly;
   runtimeIdentity: MmpRuntimeIdentity;
+  resolveAssembly: () => ResolvedAssembly;
   piArgs: string[];
 }
 
@@ -83,13 +76,14 @@ function prepareParsedMmpRun(
   cwd: string,
 ): PreparedMmpRun {
   const paths = resolveMmpPaths(environment);
-  const assembly = resolveAssembly({
+  const resolveCurrentAssembly = () => resolveAssembly({
     agentDir: paths.agentDir,
     globalManifestPath: paths.globalManifest,
     cwd,
     noProject: args.noProject,
     projectTrustOverride: args.projectTrustOverride,
   });
+  const assembly = resolveCurrentAssembly();
   const runtimeIdentity = createMmpRuntimeIdentity({
     mmpVersion: MMP_VERSION,
     piVersion: PI_VERSION,
@@ -103,6 +97,7 @@ function prepareParsedMmpRun(
     agentDir: paths.agentDir,
     assembly,
     runtimeIdentity,
+    resolveAssembly: resolveCurrentAssembly,
     piArgs: buildPiArgs(assembly, args.passthrough),
   };
 }
@@ -136,6 +131,7 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
     prepared.assembly,
     prepared.mmpHome,
     prepared.runtimeIdentity,
+    prepared.resolveAssembly,
   );
 
   if (prepared.args.dryRun) {

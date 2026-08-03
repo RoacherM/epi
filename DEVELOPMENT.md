@@ -518,10 +518,6 @@ function buildPiArgs(
     "--no-prompt-templates",
     "--no-themes",
     "--no-context-files",
-    ...(resolved.rulesText
-      ? ["--append-system-prompt", resolved.rulesText]
-      : []),
-    ...resolved.skills.flatMap(resource => ["--skill", resource.value]),
     ...resolved.externalExtensions.flatMap(resource => [
       "--extension",
       resource.value,
@@ -531,7 +527,7 @@ function buildPiArgs(
 }
 ```
 
-Rules 按声明顺序读入并在内存中拼接为一个字符串。因为调用 `piMain()` 不经过 OS exec，所以该字符串不会作为另一个进程的命令行暴露，也不需要生成 `rules.md` 临时文件。
+Rules 与 Skills 不冻结在 Pi argv 中。`mmp:runtime` 在 `before_agent_start` 注入当前 Rules，并通过 `resources_discover` 返回当前 Skill roots；Pi 的 `/reload` 重建 Extension 后，MMP 会先重新解析 Manifest，再让 Pi 扫描更新后的 Skills。解析失败时保留上一份有效装配并显示错误。Extension factory、外部 Extension 以及 MCP/Hooks/Task 配置仍是启动期能力，修改后必须重启 MMP。
 
 ### 9.4 运行约束
 
@@ -599,7 +595,7 @@ const extensionFactories: InlineExtension[] = [
 
 ```json
 {
-  "mmpVersion": "0.1.3",
+  "mmpVersion": "0.1.4",
   "piVersion": "0.83.0",
   "sdkEntry": "@earendil-works/pi-coding-agent/main",
   "agentDir": "/Users/byron/.mmp/pi",
@@ -898,7 +894,7 @@ MMP_OK
 另外必须证明：
 
 - 临时移除 PATH 中的全局 `pi` 后，`mmp --print` 仍成功；
-- `mmp --version` 同时输出 MMP `0.1.3` 和 Pi `0.83.0`；
+- `mmp --version` 同时输出 MMP `0.1.4` 和 Pi `0.83.0`；
 - 进程树中没有第二个 Pi 主进程。
 
 ### 阶段 B：Manifest 与 Project Trust
