@@ -122,16 +122,17 @@ export function createMmpRuntimeExtension(
         if (event.reason === "startup") {
           showUpdateNotice(context);
         }
-        const model = context.model;
-        const pageOptions = model === undefined
-          ? {}
-          : {
-              modelName: model.name,
-              modelProvider: model.provider,
-              modelId: model.id,
-            };
         context.ui.setHeader((_tui, theme) => ({
           render(width) {
+            // Read the model at render time so /login and /model show up on the page.
+            const model = context.model;
+            const pageOptions = model === undefined
+              ? {}
+              : {
+                  modelName: model.name,
+                  modelProvider: model.provider,
+                  modelId: model.id,
+                };
             return renderMmpStartupPage(
               activeIdentity,
               theme,

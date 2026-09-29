@@ -5,10 +5,11 @@ export declare class Transcript {
     private readonly theme;
     private readonly cwd;
     private session;
-    /** Scrolled content: extension header first, then messages. */
+    /** Scrolled content: the welcome page (extension header) until the first message, then messages. */
     readonly root: Container;
     readonly header: Container;
     private readonly messages;
+    private messageCount;
     private readonly tools;
     private streaming;
     private toolsExpanded;
@@ -18,6 +19,7 @@ export declare class Transcript {
     setToolsExpanded(expanded: boolean): void;
     notice(text: string, tone?: "info" | "warning" | "error"): void;
     handle(event: AgentSessionEvent): void;
+    /** `gap: false` for components that already start with a blank row (Pi's assistant and tool components). */
     private add;
     private assistant;
     private addFinishedMessage;

@@ -7,7 +7,7 @@ import { runTuiApp } from "../../dist/tui/app.js";
 import { createRuntimeFromPrepared } from "../../dist/tui/start.js";
 import { detectAppearance, installMmpTheme } from "../../dist/tui/theme.js";
 
-const KEYS = { enter: "\r", esc: "\x1b", "ctrl+c": "\x03", "ctrl+d": "\x04", down: "\x1b[B" };
+const KEYS = { enter: "\r", esc: "\x1b", "ctrl+c": "\x03", "ctrl+d": "\x04", down: "\x1b[B", up: "\x1b[A" };
 const { steps } = JSON.parse(process.env.MMP_TUI_HARNESS);
 
 let output = "";
@@ -39,5 +39,5 @@ for (const [kind, value] of steps) {
   else if (kind === "key") { onInput(KEYS[value]); await sleep(50); }
 }
 const code = await Promise.race([running, sleep(5000).then(() => "did not exit")]);
-process.stdout.write(JSON.stringify({ exit: code, marks, output: strip(output) }));
-process.exit(0);
+// Writes to a pipe are asynchronous; exiting before the callback truncates large outputs.
+process.stdout.write(JSON.stringify({ exit: code, marks, output: strip(output) }), () => process.exit(0));

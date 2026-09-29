@@ -1,5 +1,8 @@
-// MMP TUI v0 (milestone M2): fullscreen layout, transcript, prompt, extension host, lifecycle.
-// Layout and data flow follow docs/tui-design.md 2.2 and 4.1; grok visuals arrive in M4.
+// MMP TUI v2: fullscreen grok-build layout, transcript, prompt, extension host, lifecycle.
+// Layout and data flow follow docs/tui-design.md 2.2 and 4.1.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
 import {
   type AgentSession,
   type AgentSessionEvent,
@@ -9,12 +12,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteProvider, Component, Container, Editor, Terminal } from "@earendil-works/pi-tui";
 
+import { headerBar, PromptFrame, type Shortcut, shortcutsBar, type TurnState, TurnStatus } from "./chrome.js";
+import { type CommandHost, runLogin, runLogout, runModel } from "./commands.js";
 import { createExtensionUIContext, type HostSurface } from "./ext-host.js";
 import { piTui } from "./pi-tui.js";
 import { Transcript } from "./transcript.js";
 
 // Pi's built-in slash commands are implemented inside its own interactive mode, which MMP replaces.
-// v0 handles /quit and /new; the rest arrive in M3 (tui-design 4.6).
+// MMP implements /quit, /new, /login, /logout and /model; the rest arrive in M3 (tui-design 4.6).
 const PI_BUILTIN_COMMANDS = new Set([
   "settings", "model", "tree", "thinking", "scoped-models", "export", "import", "share", "bug", "copy",
   "name", "session", "changelog", "hotkeys", "fork", "clone", "trust", "login", "logout", "new",
@@ -29,8 +34,26 @@ export interface TuiAppOptions {
   terminal?: Terminal;
 }
 
-function lineComponent(render: (width: number) => string): Component {
-  return { render: (width) => [render(width)], invalidate() {} };
+// One instance per layout slot: the layout engine keys slots by component identity.
+const blank = (): Component => ({ render: () => [""], invalidate() {} });
+
+/** grok's horizontal margin: two columns on each side. */
+function inset(component: Component, columns = 2): Component {
+  return {
+    render: (width) => component.render(Math.max(1, width - columns * 2)).map((line) => `${" ".repeat(columns)}${line}`),
+    invalidate: () => component.invalidate(),
+  };
+}
+
+function readGitBranch(cwd: string): string | undefined {
+  for (let dir = cwd; ; dir = dirname(dir)) {
+    try {
+      const head = readFileSync(join(dir, ".git", "HEAD"), "utf8").trim();
+      return head.startsWith("ref: refs/heads/") ? head.slice("ref: refs/heads/".length) : head.slice(0, 7);
+    } catch {
+      if (dirname(dir) === dir) return undefined;
+    }
+  }
 }
 
 export async function runTuiApp(options: TuiAppOptions): Promise<number> {
@@ -45,14 +68,13 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   const statuses = new Map<string, string>();
   const widgets = { aboveEditor: new Map<string, Component>(), belowEditor: new Map<string, Component>() };
   let toolsExpanded = false;
-  let working = false;
+  let turn: TurnState | undefined;
   let workingMessage: string | undefined;
   let workingVisible = true;
-  let loader: InstanceType<typeof piTui.Loader> | undefined;
   let lastCtrlC = 0;
+  let branch = readGitBranch(cwd);
 
-  // ── layout ────────────────────────────────────────────────────────────────
-  const statusSlot: Container = new piTui.Container();
+  // ── layout (grok notes 2.2): header, transcript, turn status, prompt, shortcuts ──
   const widgetsAbove: Container = new piTui.Container();
   const editorSlot: Container = new piTui.Container();
   const widgetsBelow: Container = new piTui.Container();
@@ -61,37 +83,45 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     borderColor: (text) => theme.fg("border", text),
     selectList: getSelectListTheme(),
   });
-  editorSlot.addChild(editor);
-
-  const defaultFooter = lineComponent((width) => {
+  const prompt = new PromptFrame(theme, editor, () => {
     const model = session.model;
-    const usage = session.getContextUsage();
-    // Without credentials Pi keeps a placeholder model; /login is still classic-only until M3.
     const hasModel = model !== undefined && runtime.services.modelRuntime.getAvailableSnapshot().length > 0;
-    const left = [
-      hasModel ? `${model.provider}/${model.id}` : "no model available · log in once with classic mmp (/login)",
-      session.thinkingLevel,
-      usage?.percent == null ? undefined : `ctx ${Math.round(usage.percent)}%`,
-      ...statuses.values(),
-    ].filter((part) => part !== undefined).join(" · ");
-    const right = working ? "esc stop" : "ctrl+d quit";
-    const gap = Math.max(1, width - piTui.visibleWidth(left) - piTui.visibleWidth(right));
-    return piTui.truncateToWidth(theme.fg("muted", `${left}${" ".repeat(gap)}${right}`), width);
+    return hasModel ? `${model.name ?? model.id} (${session.thinkingLevel})` : "no model · /login";
+  }, () => (text) => theme.fg(turn === undefined ? "border" : "borderAccent", text));
+  editorSlot.addChild(prompt);
+
+  const header = headerBar(theme, () => {
+    const usage = session.getContextUsage();
+    return { branch, cwd, contextTokens: usage?.tokens ?? undefined, contextWindow: usage?.contextWindow };
+  });
+  const turnStatus = new TurnStatus(
+    theme,
+    () => (turn === undefined || !workingVisible ? undefined : { ...turn, activity: workingMessage ?? turn.activity }),
+    () => tui.requestRender(),
+  );
+  const defaultFooter = shortcutsBar(theme, () => {
+    const shortcuts: Shortcut[] = turn === undefined
+      ? [{ key: "Shift+Tab", label: "thinking" }, { key: "Ctrl+o", label: "tools" }, { key: "/", label: "commands" }, { key: "Ctrl+d", label: "quit" }]
+      : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "tools" }];
+    return { shortcuts, right: theme.fg("muted", [...statuses.values()].join(" · ")) };
   });
   footerSlot.addChild(defaultFooter);
 
-  const scroll = new piTui.ScrollView(transcript.root, { follow: "end", primary: true, scrollbar: "auto" });
-  const dock = new piTui.VStack([
-    { component: statusSlot, shrink: 1, minSize: 0 },
-    { component: widgetsAbove, shrink: 1, minSize: 0 },
-    { component: editorSlot, shrink: 1, minSize: 3 },
-    { component: widgetsBelow, shrink: 1, minSize: 0 },
-    { component: footerSlot, shrink: 1, minSize: 0 },
-  ]);
-  // Fullscreen layout: the transcript scrolls, the dock stays at the bottom.
+  const scroll = new piTui.ScrollView(inset(transcript.root), { follow: "end", primary: true, scrollbar: "auto" });
+  const turnGap: Component = { render: () => (turn === undefined ? [] : [""]), invalidate() {} };
   tui.setLayoutRoot(new piTui.VStack([
+    { component: blank(), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: inset(header), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: blank(), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
     { component: scroll, basis: 0, grow: 1, shrink: 1, minSize: 1 },
-    { component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+    { component: turnGap, basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: inset(turnStatus), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: blank(), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: inset(widgetsAbove), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: inset(editorSlot), basis: "auto", grow: 0, shrink: 1, minSize: 3 },
+    { component: inset(widgetsBelow), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: inset(footerSlot), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: blank(), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
   ]));
 
   function rebuildWidgets(): void {
@@ -101,15 +131,10 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     for (const component of widgets.belowEditor.values()) widgetsBelow.addChild(component);
   }
 
-  function renderWorking(): void {
-    statusSlot.clear();
-    loader?.stop();
-    loader = undefined;
-    if (working && workingVisible) {
-      loader = new piTui.Loader(tui, (text) => theme.fg("accent", text), (text) => theme.fg("muted", text), workingMessage ?? "Working…");
-      loader.start();
-      statusSlot.addChild(loader);
-    }
+  /** Activity label shown on the turn status row; the phase timer restarts when it changes. */
+  function setActivity(activity: string): void {
+    if (turn === undefined || turn.activity === activity) return;
+    turn = { ...turn, activity, phaseStartedAt: Date.now() };
     tui.requestRender();
   }
 
@@ -119,6 +144,9 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     const commands = [
       { name: "quit", description: "Quit MMP" },
       { name: "new", description: "Start a new session" },
+      { name: "login", description: "Log in to a model provider" },
+      { name: "logout", description: "Remove stored credentials" },
+      { name: "model", description: "Select a model" },
       ...session.extensionRunner.getRegisteredCommands().map((command) => ({
         name: command.invocationName,
         ...(command.description === undefined ? {} : { description: command.description }),
@@ -139,7 +167,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       tui.requestRender();
       return () => {
         editorSlot.clear();
-        editorSlot.addChild(editor);
+        editorSlot.addChild(prompt);
         tui.setFocus(editor);
         tui.requestRender();
       };
@@ -169,7 +197,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     setWorking(change) {
       if ("message" in change) workingMessage = change.message;
       if (change.visible !== undefined) workingVisible = change.visible;
-      renderWorking();
+      tui.requestRender();
     },
     setTitle: (title) => terminal.setTitle(title),
     getEditorText: () => editor.getText(),
@@ -191,6 +219,12 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     notify: (message, tone) => transcript.notice(message, tone),
   };
   const uiContext = createExtensionUIContext(surface);
+  const commandHost: CommandHost = {
+    tui,
+    session: () => session,
+    takeEditorSlot: (component) => surface.takeEditorSlot(component),
+    notice: (text, tone) => transcript.notice(text, tone ?? "info"),
+  };
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
   let exiting = false;
@@ -202,7 +236,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   async function exit(code = 0): Promise<void> {
     if (exiting) return;
     exiting = true;
-    loader?.stop();
+    turnStatus.stop();
     tui.stop();
     try {
       await runtime.dispose();
@@ -227,19 +261,44 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   let unsubscribe: (() => void) | undefined;
 
   function onEvent(event: AgentSessionEvent): void {
-    if (event.type === "agent_start") {
-      working = true;
-      renderWorking();
-    } else if (event.type === "agent_end") {
-      working = false;
-      workingMessage = undefined;
-      renderWorking();
+    const now = Date.now();
+    switch (event.type) {
+      case "agent_start":
+        turn = { startedAt: now, phaseStartedAt: now, activity: "Waiting for response…", outputTokens: 0, estimated: false };
+        break;
+      case "agent_end":
+        turn = undefined;
+        workingMessage = undefined;
+        break;
+      case "message_update": {
+        const kind = event.assistantMessageEvent.type;
+        setActivity(kind.startsWith("thinking") ? "Thinking…" : kind.startsWith("toolcall") ? "Preparing tool call…" : "Responding…");
+        if (turn !== undefined && event.message.role === "assistant") {
+          const reported = event.message.usage?.output ?? 0;
+          // Providers often report usage only at the end; estimate from streamed text until then.
+          const streamed = event.message.content.reduce((sum, part) =>
+            sum + (part.type === "text" ? part.text.length : part.type === "thinking" ? part.thinking.length : 0), 0);
+          turn = reported > 0
+            ? { ...turn, outputTokens: reported, estimated: false }
+            : { ...turn, outputTokens: Math.round(streamed / 4), estimated: true };
+        }
+        break;
+      }
+      case "tool_execution_start":
+        setActivity(`Running ${event.toolName}…`);
+        break;
+      case "tool_execution_end":
+        setActivity("Waiting for response…");
+        break;
+      default:
+        break;
     }
     transcript.handle(event);
   }
 
   async function bind(next: AgentSession): Promise<void> {
     session = next;
+    branch = readGitBranch(session.sessionManager.getCwd());
     unsubscribe?.();
     unsubscribe = session.subscribe(onEvent);
     transcript.reset(session);
@@ -287,7 +346,10 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       await runtime.newSession();
       return;
     }
-    const command = /^\/([^\s]+)/.exec(trimmed)?.[1];
+    const [, command, commandArgs = ""] = /^\/(\S+)\s*([\s\S]*)$/.exec(trimmed) ?? [];
+    if (command === "login") return runLogin(commandHost, commandArgs);
+    if (command === "logout") return runLogout(commandHost);
+    if (command === "model") return runModel(commandHost, commandArgs);
     const isExtensionCommand = command !== undefined &&
       session.extensionRunner.getRegisteredCommands().some((registered) => registered.invocationName === command);
     if (command !== undefined && !isExtensionCommand && PI_BUILTIN_COMMANDS.has(command)) {
@@ -327,6 +389,15 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
         transcript.notice("Press Ctrl+C again to quit.");
       }
       tui.requestRender();
+      return { consume: true };
+    }
+    if (piTui.matchesKey(data, "shift+tab") && turn === undefined) {
+      session.cycleThinkingLevel();
+      tui.requestRender();
+      return { consume: true };
+    }
+    if (piTui.matchesKey(data, "ctrl+o")) {
+      surface.setToolsExpanded(!toolsExpanded);
       return { consume: true };
     }
     if (piTui.matchesKey(data, "ctrl+d") && editor.getText() === "") {

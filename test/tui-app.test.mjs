@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +9,7 @@ import test from "node:test";
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
-function runApp(t, extensions, steps) {
+function runApp(t, extensions, steps, inspect) {
   const root = mkdtempSync(join(tmpdir(), "mmp-tui-app-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
@@ -29,6 +29,7 @@ function runApp(t, extensions, steps) {
   });
   assert.equal(result.status, 0, result.stderr);
   const parsed = JSON.parse(result.stdout);
+  inspect?.(home);
   return { ...parsed, text: `EXIT=${parsed.exit}\n${parsed.output}` };
 }
 
@@ -57,8 +58,10 @@ test("TUI v2 runs a built-in tool call", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-bash-tool.mjs")], [
     ["wait", 2500], ["type", "run"], ["key", "enter"], ["wait", 2500], ["key", "ctrl+d"],
   ]);
-  assert.match(out, /TOOL-RAN-42/);
-  assert.match(out, /TOOL-DONE/);
+  // The shell really ran ($((40+2)) evaluated), and the card is MMP's collapsed bash renderer.
+  assert.match(out, /TOOL-DONE saw TOOL-RAN-42/);
+  assert.match(out, /\$ echo TOOL-RAN/);
+  assert.match(out, /exit 0/);
 });
 
 test("TUI v2 hosts extension custom() and select() dialogs", (t) => {
@@ -77,10 +80,10 @@ test("TUI v2 hosts extension custom() and select() dialogs", (t) => {
 
 test("TUI v2 refuses Pi built-in commands it does not implement yet, keeping the text", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["type", "/model"], ["key", "enter"], ["wait", 800], ["key", "ctrl+c"], ["wait", 200],
+    ["wait", 2500], ["type", "/tree"], ["key", "enter"], ["wait", 800], ["key", "ctrl+c"], ["wait", 200],
     ["key", "ctrl+d"],
   ]);
-  assert.match(out, /\/model is not in MMP TUI v2 yet/);
+  assert.match(out, /\/tree is not in MMP TUI v2 yet/);
   assert.match(out, /EXIT=0/);
 });
 
@@ -93,4 +96,43 @@ test("TUI v2 keeps the editor when custom() finishes before mounting", (t) => {
   // The editor still works afterwards: a second command runs and its dialog resolves.
   assert.match(out, /select result: alpha/);
   assert.match(out, /EXIT=0/);
+});
+
+test("TUI v2 logs in with an API key, then asks for a model and uses it", (t) => {
+  let auth;
+  const { marks } = runApp(t, [], [
+    ["wait", 2500], ["type", "/login"], ["key", "enter"], ["wait", 800], ["mark", "method"],
+    ["key", "down"], ["wait", 200], ["key", "enter"], ["wait", 800], ["mark", "providers"],
+    ["type", "openai"], ["wait", 500], ["key", "enter"], ["wait", 800], ["mark", "keyPrompt"],
+    ["type", "sk-test-123"], ["key", "enter"], ["wait", 2500], ["mark", "modelPicker"],
+    ["key", "enter"], ["wait", 1500], ["mark", "done"],
+    ["type", "/model gpt-4o-mini"], ["key", "enter"], ["wait", 1000], ["mark", "switched"],
+    ["type", "/logout"], ["key", "enter"], ["wait", 800], ["key", "enter"], ["wait", 1000], ["mark", "loggedOut"],
+    ["key", "ctrl+d"],
+  ], (home) => {
+    auth = JSON.parse(readFileSync(join(home, ".mmp", "pi", "auth.json"), "utf8"));
+  });
+  assert.match(marks.method, /Select authentication method/);
+  assert.match(marks.method, /Sign in with an API key/);
+  assert.match(marks.providers, /Select provider to configure/);
+  // After choosing "API key", subscription-only entries are gone from the list.
+  assert.doesNotMatch(marks.providers.slice(marks.method.length), /\[subscription\]/);
+  assert.match(marks.keyPrompt, /Enter OpenAI API key/);
+  assert.match(marks.modelPicker, /Saved API key for OpenAI\. Pick a model:/);
+  assert.equal(marks.modelPicker.match(/Saved API key for OpenAI/g).length, 1);
+  assert.match(marks.done, /Default model: openai\//);
+  assert.match(marks.switched, /Model: openai\/gpt-4o-mini/);
+  assert.match(marks.loggedOut, /Removed stored API key for OpenAI/);
+  // Credentials live in MMP's own agent dir, and /logout removed them.
+  assert.equal(auth.openai, undefined);
+});
+
+test("TUI v2 draws built-in tools with MMP's grok renderers instead of Pi's own", (t) => {
+  const { marks } = runApp(t, [fixture("faux-read-tool.mjs")], [
+    ["wait", 2500], ["type", "read it"], ["key", "enter"], ["wait", 2500], ["mark", "after"], ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.after, /READ-DONE/);
+  assert.match(marks.after, /read \S*faux-read-tool\.mjs/);
+  // MMP's collapsed read result states the line count; Pi's own renderer shows no such line.
+  assert.match(marks.after, /faux-read-tool\.mjs \(\d+ lines\)/);
 });

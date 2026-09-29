@@ -8,11 +8,13 @@ import {
   getMarkdownTheme,
   type Theme,
   ToolExecutionComponent,
-  UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, Container, TUI } from "@earendil-works/pi-tui";
 
+import { UserMessageBlock } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
+import { toolBlock } from "./tools/block.js";
+import { builtInToolRenderers } from "./tools/index.js";
 
 type AgentMessage = AgentSession["messages"][number];
 
@@ -25,11 +27,15 @@ function messageText(content: unknown): string {
     .join("");
 }
 
+// grok block layout: a 1-column rail plus 2 columns of padding before block content.
+const CONTENT_PAD = 3;
+
 export class Transcript {
-  /** Scrolled content: extension header first, then messages. */
+  /** Scrolled content: the welcome page (extension header) until the first message, then messages. */
   readonly root: Container = new piTui.Container();
   readonly header: Container = new piTui.Container();
   private readonly messages: Container = new piTui.Container();
+  private messageCount = 0;
   private readonly tools = new Map<string, ToolExecutionComponent>();
   private streaming: AssistantMessageComponent | undefined;
   private toolsExpanded = false;
@@ -40,7 +46,10 @@ export class Transcript {
     private readonly cwd: string,
     private session: AgentSession,
   ) {
-    this.root.addChild(this.header);
+    this.root.addChild({
+      render: (width) => (this.messageCount === 0 ? this.header.render(width) : []),
+      invalidate: () => this.header.invalidate(),
+    });
     this.root.addChild(this.messages);
   }
 
@@ -48,6 +57,7 @@ export class Transcript {
   reset(session: AgentSession): void {
     this.session = session;
     this.messages.clear();
+    this.messageCount = 0;
     this.tools.clear();
     this.streaming = undefined;
     for (const message of session.messages) {
@@ -116,9 +126,11 @@ export class Transcript {
     this.tui.requestRender();
   }
 
-  private add(component: Component): void {
-    this.messages.addChild(new piTui.Spacer(1));
+  /** `gap: false` for components that already start with a blank row (Pi's assistant and tool components). */
+  private add(component: Component, gap = true): void {
+    if (gap && this.messageCount > 0) this.messages.addChild(new piTui.Spacer(1));
     this.messages.addChild(component);
+    this.messageCount += 1;
   }
 
   private assistant(message: Extract<AgentMessage, { role: "assistant" }>, streaming: boolean): AssistantMessageComponent {
@@ -127,18 +139,18 @@ export class Transcript {
       false,
       getMarkdownTheme(),
       undefined,
-      undefined,
+      CONTENT_PAD,
       this.session.extensionRunner.getMarkdownTransformers(),
     );
     component.updateContent(message, streaming);
-    this.add(component);
+    this.add(component, false);
     return component;
   }
 
   private addFinishedMessage(message: AgentMessage): void {
     switch (message.role) {
       case "user":
-        this.add(new UserMessageComponent(messageText(message.content), getMarkdownTheme()));
+        this.add(new UserMessageBlock(this.theme, messageText(message.content), new Date(message.timestamp ?? Date.now())));
         break;
       case "assistant":
         this.assistant(message, false);
@@ -175,19 +187,24 @@ export class Transcript {
       if (args !== undefined) existing.updateArgs(args);
       return existing;
     }
-    // Built-in tool renderers are not exported by Pi; they get the generic card until M4.
+    // Pi's built-in tools come with Pi's own renderers; MMP swaps in its grok-style ones. Extension
+    // tools, including an extension overriding a built-in name, keep their own renderers.
+    const definition = this.session.getToolDefinition(toolName);
+    const isBuiltIn = this.session.getAllTools().find((tool) => tool.name === toolName)?.sourceInfo.source === "builtin";
+    const renderers = toolBlock(toolName, (isBuiltIn ? builtInToolRenderers[toolName] : undefined) ?? definition);
     const component = new ToolExecutionComponent(
       toolName,
       toolCallId,
       args ?? {},
       undefined,
-      this.session.getToolDefinition(toolName),
+      renderers as never,
       this.tui,
       this.cwd,
     );
     component.setExpanded(this.toolsExpanded);
     this.tools.set(toolCallId, component);
-    this.add(component);
+    // Pi's tool component starts with its own blank row.
+    this.add(component, false);
     return component;
   }
 }

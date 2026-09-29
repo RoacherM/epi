@@ -7,7 +7,11 @@ export default function (pi) {
     models: ["tools"],
     responses: [
       () => fauxAssistantMessage(fauxToolCall("bash", { command: "echo TOOL-RAN-$((40+2))" }), { stopReason: "toolUse" }),
-      () => fauxAssistantMessage(fauxText("TOOL-DONE")),
+      (context) => {
+        const output = context.messages.filter((message) => message.role === "toolResult")
+          .flatMap((message) => message.content).map((part) => part.text ?? "").join("");
+        return fauxAssistantMessage(fauxText(`TOOL-DONE saw ${output.trim()}`));
+      },
     ],
   });
 }

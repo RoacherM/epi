@@ -513,18 +513,21 @@ M2 结束时就能日常使用，只是样子还接近 Pi。M4 才换成 grok �
 | M0 升级 Pi | 完成（0.87.1），见 [decisions.md](decisions.md) P0 |
 | M1 探针 | 并进 M2 一起做。已验证：S2（扩展消息只显示一次）、S3（全局主题和 MMP 的 Theme 颜色一致，有测试）、S5（MCP adapter 在新宿主里正常连接；`custom()` 面板和 `tui.select.*` 键位正常，用测试扩展验证，因为 MMP 的配置方式下 `/mcp` 不弹面板）。未做：S1（Pi 的选择器组件，M3 用到时验证）、S4（各终端表现）、S6（缺 fd/rg）、S7（查询终端背景色） |
 | M2 最小可用版本 | 完成 v0，放在 `MMP_TUI=v2` 开关后面（经典界面仍是默认，因为 `/login` 还只有经典界面有）。代码在 `src/tui/`，约 1,080 行 |
-| M3 以后 | 未开始 |
+| M3 内置命令 | 进行中：`/login`、`/logout`、`/model` 已完成（`src/tui/commands.ts`）。登录成功后如果还没有可用模型，会弹出按该 provider 过滤的模型选择器，因为 Pi 按 provider 选默认模型的那张表没有导出。其余命令未做 |
+| M4 grok 界面 | 进行中。已完成：顶栏（分支、缩短的路径、上下文占用）、用户消息块、运行状态行、圆角输入框（底边是模型和思考档位）、快捷键栏（`src/tui/chrome.ts`）；工具块用 `┃` 竖条和 `◆`，去掉 Pi 的底色框（`src/tui/tools/block.ts`，内置工具和扩展工具都套用）；7 个内置工具的渲染器（agy 写，审查后合并）。未做：thinking 折叠成 `Thought for Ns`、连续只读工具合并、完成闪烁、`▼` 新内容提示、矮屏降级 |
 
 M2 验收依据（都可重跑）：
 - `test/tui-services.test.mjs`：SDK 路径给模型的 system prompt 和 `piMain` 路径逐字一致；项目 `.pi/settings.json` 不生效。
 - `test/tui-app.test.mjs`：用内存里的假终端跑真实的新界面：启动页、对话、Esc 中止、工具调用、扩展对话框、未实现的内置命令给出提示。
 - `test/tui-theme.test.mjs`：两套配色完整；颜色一致。
+- `test/tui-chrome.test.mjs`：顶栏、用户消息块、状态行、输入框、快捷键栏、工具块的内容，以及 20/40/80/120 列下不超宽（含中文）。
 - 伪终端手动验证（scratchpad `phase0/pty-v2.py` + `screen.py`，后者用 pyte 还原画面）：真实终端里进入和退出全屏、grok 配色生效、扩展消息只显示一次。
 
 实现中发现、已经处理的问题：
 - 全屏模式必须用 `tui.setLayoutRoot(root)` 挂布局，用 `addChild` 时消息区只有 1 行高。
 - **Pi 的竞争条件**：扩展注册"原生 provider"时，Pi 会发起一次不等待的认证刷新；如果它排在 `createAgentSessionServices` 自己那次刷新之后，初始模型会从过期的快照里选（变成 `unknown`），第一条消息报"没有 API key"。`piMain` 路径也有，是之前偶发失败的原因。MMP 的做法：建完 services 后、绑定扩展后，各再 `await` 一次刷新。测试用的 faux 模型改成带 `apiKey` 的普通 provider 注册，Pi 会同步把它标记为已认证。
 - `initTheme` 从 `getAgentDir()/themes` 读主题，没设 `PI_CODING_AGENT_DIR` 时会去 `~/.pi/agent`，读不到就静默用 Pi 自己的主题。`installMmpTheme` 现在自己设置这个变量，并检查全局主题确实是 MMP 的，不是就报错。
+- 工具块去掉底色框靠 Pi 的 `renderShell: "self"`：设了它，Pi 只把 `renderCall` / `renderResult` 的结果放进一个无底色的容器。MMP 给每个工具的渲染器外面包一层，画竖条和缩进；渲染器复用上一次组件时（`context.lastComponent`），包装层把里面的原组件还给它。
 - 往消息区加提示时必须请求重画，否则在真实终端里要等下一次按键才显示。这个时序问题在假终端里复现不出来，只在伪终端里出现过。
 
 ## 14. 为什么不走皮肤路线

@@ -29,7 +29,7 @@ curl --proto '=https' --tlsv1.2 -fsSL \
 MMP_TUI=v2 mmp
 ```
 
-这是按 grok-build 重写的交互界面，还在开发中，默认仍是经典界面。目前能做的：全屏界面、MMP 启动页、对话和流式输出、工具调用、Esc 中止、Ctrl+C / Ctrl+D 退出、扩展的对话框和面板（`select`、`custom` 等）、`/new`、`/quit`。还不能做的：`/login`、`/model`、`/resume` 等 Pi 内置命令、`!` bash、grok 样式的消息块（目前沿用 Pi 的组件）。第一次使用请先用经典界面 `/login` 登录一次，两种界面共用 `~/.mmp/pi` 里的登录信息。
+这是按 grok-build 重写的交互界面，还在开发中，默认仍是经典界面。目前能做的：全屏界面、MMP 启动页、`/login`、`/logout`、`/model`、对话和流式输出、工具调用、Esc 中止、Ctrl+C / Ctrl+D 退出、扩展的对话框和面板（`select`、`custom` 等）、`/new`、`/quit`。还不能做的：`/resume`、`/compact`、`/reload` 等其它 Pi 内置命令、`!` bash、grok 样式的消息块（目前沿用 Pi 的组件）。两种界面共用 `~/.mmp/pi` 里的登录信息。
 
 ### 升级
 
