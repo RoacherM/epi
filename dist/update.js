@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { MmpArgumentError } from "./errors.js";
 const RELEASES_API = "https://api.github.com/repos/RoacherM/mmp/releases/latest";
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 3_000;
@@ -116,5 +118,103 @@ export async function runMmpUpdate(options) {
     finally {
         rmSync(directory, { recursive: true, force: true });
     }
+}
+/** `mmp update [--self|--extensions|--models|--all] [<source>]` (docs/cli-design.md §3). A bare
+ * `<source>` with no flag means "update this one extension", same as `--extensions <source>`. */
+export function parseUpdateArgs(argv) {
+    let target;
+    let source;
+    for (const argument of argv) {
+        if (argument === "--self" || argument === "--extensions" || argument === "--models" || argument === "--all") {
+            if (target !== undefined) {
+                throw new MmpArgumentError("mmp update accepts only one of --self, --extensions, --models, --all");
+            }
+            target = argument.slice(2);
+            continue;
+        }
+        if (argument.startsWith("-")) {
+            throw new MmpArgumentError(`Unknown option for mmp update: ${argument}`);
+        }
+        if (source !== undefined) {
+            throw new MmpArgumentError("mmp update accepts at most one source");
+        }
+        source = argument;
+    }
+    if (source !== undefined && target !== undefined && target !== "extensions") {
+        throw new MmpArgumentError(`mmp update <source> is only valid with --extensions (or no flag)`);
+    }
+    return { target: target ?? (source !== undefined ? "extensions" : "self"), ...(source === undefined ? {} : { source }) };
+}
+/**
+ * MMP never persists npm:/git: extension sources into Pi's own settings.json (that would create a
+ * second, project-`.pi/`-writing source of truth alongside the Manifest -- see the report). Instead
+ * every manifest-declared external extension is fed to Pi as a one-off `--extension` CLI argument
+ * (host.ts's buildPiArgs), which Pi's resource loader always resolves with "temporary" scope, cached
+ * under `<agentDir>/tmp/extensions` (Pi's `getExtensionTempFolder`, not exported but a fixed,
+ * one-line path convention). Git sources there already re-pull on every run; npm sources, once
+ * cached, do not re-check for a newer published version on their own. `mmp update --extensions`
+ * clears that whole cache so every manifest-declared source (npm and git alike) is fetched fresh --
+ * at the latest matching version -- the next time `mmp` runs.
+ */
+export function clearExtensionPackageCache(agentDir) {
+    const cacheDir = join(agentDir, "tmp", "extensions");
+    if (!existsSync(cacheDir)) {
+        return false;
+    }
+    rmSync(cacheDir, { recursive: true, force: true });
+    return true;
+}
+/** Mirrors Pi's refreshModelCatalogs (dist/package-manager-cli.js, not exported): a network,
+ * force refresh of the model catalog cached at `<agentDir>/models.json`. */
+export async function refreshModelCatalog(agentDir) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+    try {
+        const modelRuntime = await ModelRuntime.create({
+            authPath: join(agentDir, "auth.json"),
+            modelsPath: join(agentDir, "models.json"),
+            allowModelNetwork: false,
+            signal: controller.signal,
+        });
+        const result = await modelRuntime.refresh({
+            allowNetwork: true,
+            force: true,
+            signal: controller.signal,
+        });
+        if (result.aborted) {
+            throw new Error("Model catalog refresh timed out.");
+        }
+        if (result.errors.size > 0) {
+            const details = Array.from(result.errors, ([provider, error]) => `${provider}: ${error.message}`).join("; ");
+            throw new Error(`Model catalog refresh failed: ${details}`);
+        }
+    }
+    finally {
+        clearTimeout(timeout);
+    }
+}
+/** `mmp update` dispatcher: `--self`/bare (the pre-existing behaviour) updates MMP's own pinned
+ * release; `--extensions`/`<source>` clears the extension package cache; `--models` refreshes the
+ * model catalog; `--all` does all three. Returns the process exit code. */
+export async function runMmpUpdateCommand(argv, options) {
+    const write = options.write ?? ((text) => process.stdout.write(text));
+    const { target, source } = parseUpdateArgs(argv);
+    let exitCode = 0;
+    if (target === "self" || target === "all") {
+        exitCode = await runMmpUpdate(options);
+    }
+    if (target === "extensions" || target === "all") {
+        const cleared = clearExtensionPackageCache(options.agentDir);
+        write(source === undefined
+            ? cleared
+                ? "Cleared cached extension packages; they will be fetched fresh on the next run.\n"
+                : "No cached extension packages to clear.\n"
+            : `Cleared cached extension packages (including ${source}); they will be fetched fresh on the next run.\n`);
+    }
+    if (target === "models" || target === "all") {
+        await refreshModelCatalog(options.agentDir);
+        write("Model catalog refreshed.\n");
+    }
+    return exitCode;
 }
 //# sourceMappingURL=update.js.map

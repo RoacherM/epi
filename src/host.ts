@@ -7,7 +7,9 @@ import {
   resolveAssembly,
   type ResolvedAssembly,
 } from "./assembly.js";
-import { parseMmpArgs, type MmpArgs } from "./args.js";
+import { parseMmpArgs, renderHelp, type MmpArgs } from "./args.js";
+import { runAuthCommand } from "./commands/auth-cli.js";
+import { runConfigCommand, runInstallCommand, runListCommand, runRemoveCommand } from "./commands/manifest-cli.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { isInteractivePiRun } from "./interactive.js";
 import { resolveMmpPaths } from "./paths.js";
@@ -18,31 +20,36 @@ import {
 } from "./runtime-identity.js";
 import type { ResolvedResource } from "./manifest.js";
 import { askProjectTrust, saveProjectTrustChoice, shouldAskProjectTrust } from "./trust-prompt.js";
-import { runMmpUpdate, updateCheckDisabled } from "./update.js";
+import { runMmpUpdateCommand, updateCheckDisabled } from "./update.js";
 
 export const MMP_VERSION = "0.1.4";
 export const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
 
-export const MMP_HELP = `MMP options:
-  --dry-run       Resolve and validate configuration, print JSON, do not start Pi
-  --no-project    Disable project .mmp discovery
-  --approve       Trust the discovered project configuration for this run
-  --no-approve    Ignore the discovered project configuration for this run
-  --version       Print the pinned MMP and Pi versions
-  update          Install the latest MMP release (mmp update)
+export const MMP_HELP = renderHelp();
 
-Environment:
-  MMP_HOME        Absolute MMP configuration root (default: ~/.mmp)
-  MMP_DISABLE_UPDATE_CHECK  Do not check for new MMP releases
+/** `mmp <subcommand>`: routed before any flag parsing, and never forwarded to Pi's own CLI
+ * dispatcher (docs/cli-design.md §3) -- each reads/writes the Manifest or MMP's own agent
+ * directory directly. */
+const MMP_SUBCOMMANDS = new Set(["install", "remove", "uninstall", "list", "config", "auth"]);
 
-Rules, skills, and extensions are manifest-owned. Ambient themes, prompt
-templates, and context files are disabled. Direct Pi resource flags are rejected;
-all other arguments are honoured by pinned Pi 0.87 -- unchanged for non-interactive
-runs (piMain), or by MMP's own TUI for interactive runs (see mmp --help output above
-and the README for what the TUI does not support).
-
-Pi options:
-`;
+async function runSubcommand(subcommand: string, argv: readonly string[]): Promise<number> {
+  switch (subcommand) {
+    case "install":
+      return runInstallCommand(argv);
+    case "remove":
+      return runRemoveCommand(argv, "remove");
+    case "uninstall":
+      return runRemoveCommand(argv, "uninstall");
+    case "list":
+      return runListCommand(argv);
+    case "config":
+      return runConfigCommand(argv);
+    case "auth":
+      return runAuthCommand(argv);
+    default:
+      throw new Error(`unreachable subcommand: ${subcommand}`);
+  }
+}
 
 export const BASE_PI_RESOURCE_ARGS = [
   "--no-extensions",
@@ -167,9 +174,24 @@ async function maybeAskProjectTrust(
 }
 
 export async function runMmp(argv: readonly string[]): Promise<void> {
+  // Subcommands and `update` read/write MMP's own agent directory (~/.mmp/pi) directly, never
+  // through prepareMmpRun -- set the isolation guard (never Pi's default ~/.pi/agent) before each,
+  // but not before --help/--version, which must work even with an invalid MMP_HOME.
+  const subcommand = argv[0];
+  if (subcommand !== undefined && MMP_SUBCOMMANDS.has(subcommand)) {
+    process.env.PI_CODING_AGENT_DIR = resolveMmpPaths(process.env).agentDir;
+    process.exitCode = await runSubcommand(subcommand, argv.slice(1));
+    return;
+  }
+
   const args = parseMmpArgs(argv);
   if (args.update) {
-    process.exitCode = await runMmpUpdate({ currentVersion: MMP_VERSION });
+    const agentDir = resolveMmpPaths(process.env).agentDir;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    process.exitCode = await runMmpUpdateCommand(args.passthrough, {
+      currentVersion: MMP_VERSION,
+      agentDir,
+    });
     return;
   }
   // Pi's own notice would suggest `pi update`, which does not update MMP's pinned Pi.
@@ -183,9 +205,6 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
     args.passthrough.includes("-h")
   ) {
     process.stdout.write(MMP_HELP);
-    await piMain([...BASE_PI_RESOURCE_ARGS, "--help"], {
-      extensionFactories: [],
-    });
     return;
   }
   await maybeAskProjectTrust(args, process.env, process.cwd());
@@ -202,6 +221,7 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
     prepared.runtimeIdentity,
     prepared.resolveAssembly,
     updateCheck,
+    args.passthrough.includes("--verbose"),
   );
 
   if (prepared.args.dryRun) {

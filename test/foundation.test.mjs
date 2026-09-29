@@ -126,7 +126,7 @@ test("version reports both pinned components", () => {
   assert.equal(result.stderr, "");
 });
 
-test("help documents MMP flags before pinned Pi options without loading config", () => {
+test("help prints only MMP's own help, covers every table flag, without loading config", () => {
   const result = spawnSync(process.execPath, [cliPath.pathname, "--help"], {
     cwd: projectRoot,
     encoding: "utf8",
@@ -134,12 +134,66 @@ test("help documents MMP flags before pinned Pi options without loading config",
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /MMP options:/);
+  assert.match(result.stdout, /^Usage:/m);
   assert.match(result.stdout, /--dry-run/);
   assert.match(result.stdout, /--no-project/);
-  assert.match(result.stdout, /Pi options:/);
   assert.match(result.stdout, /--model <pattern>/);
+  assert.match(result.stdout, /mmp auth print-api-key/);
+  assert.match(result.stdout, /mmp install <source>/);
+  // MMP's own help never names Pi's CLI as a command, and never appends Pi's own --help output.
+  assert.doesNotMatch(result.stdout, /^\s*pi\s/m);
+  assert.doesNotMatch(result.stdout, /Pi options:/);
   assert.equal(result.stderr, "");
+});
+
+test("mmp --help documents every flag in the MMP_FLAG_TABLE", async () => {
+  const { MMP_FLAG_TABLE } = await import("../dist/args.js");
+  const result = spawnSync(process.execPath, [cliPath.pathname, "--help"], {
+    cwd: projectRoot,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  for (const entry of MMP_FLAG_TABLE) {
+    for (const flag of entry.flags) {
+      assert.ok(result.stdout.includes(flag), `--help is missing ${flag}`);
+    }
+  }
+});
+
+test("an unknown flag fails with a clear error and non-zero exit, nothing forwarded", () => {
+  const result = spawnSync(process.execPath, [cliPath.pathname, "--totally-unknown-flag"], {
+    cwd: projectRoot,
+    encoding: "utf8",
+  });
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^mmp: Unknown option: --totally-unknown-flag/);
+});
+
+test("--use-theme and --tui-mode are rejected with MMP's reason, not forwarded to Pi", () => {
+  for (const args of [["--use-theme", "dark"], ["--tui-mode", "fullscreen"]]) {
+    const result = spawnSync(process.execPath, [cliPath.pathname, ...args], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    });
+    assert.notEqual(result.status, 0, args.join(" "));
+    assert.match(result.stderr, /not supported by MMP/);
+  }
+});
+
+test("the benchmark entry's flags all parse and forward byte-for-byte (DEVELOPMENT.md §20)", () => {
+  const prepared = prepareMmpRun(
+    ["--mode", "json", "--no-session", "--no-approve", "-p", "hello"],
+    { MMP_HOME: "/tmp/mmp-foundation" },
+  );
+  assert.deepEqual(prepared.piArgs, [
+    ...BASE_PI_RESOURCE_ARGS,
+    "--mode",
+    "json",
+    "--no-session",
+    "-p",
+    "hello",
+  ]);
 });
 
 test("dry-run is JSON-only and does not create MMP_HOME", () => {

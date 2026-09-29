@@ -431,28 +431,32 @@ MMP 使用 Pi 导出的 `ProjectTrustStore` API，不直接解析 `trust.json`�
 2. 未信任时不得读取项目 Rules、Skills、Agents、Extensions、MCP 或 Hooks；
 3. MMP 自己消费 `--approve` 和 `--no-approve`，不传给 Pi；Pi 固定收到 `--no-approve`，项目 `.pi/` 永远不可信（2026-09-29 起，原因见 8.1 节的已修复问题）；
 4. Pi 不再弹原生 trust prompt。要信任或撤销项目 `.mmp`：交互模式第一次进入未决定的项目会自动问；随时可以在 `mmp` 里用 `/trust` 改。两条路径都写入同一个 `ProjectTrustStore`，重启 `mmp` 后生效（Manifest 里的 Extensions 不能热加载）；
-5. non-interactive 模式（`--dry-run`、`-p`、`--mode json/rpc`、非 TTY、Pi 子命令）不弹 MMP prompt；unknown 默认不加载项目 `.mmp`。
+5. non-interactive 模式（`--dry-run`、`-p`、`--mode json/rpc`、非 TTY、MMP 自己的子命令）不弹 MMP prompt；unknown 默认不加载项目 `.mmp`。
 
 不保留旧的 `--trust-project`。沿用 Pi 的 `--approve` / `--no-approve` 这两个名字，用户不用学新开关；但它们只作用于 `.mmp`。
 
 ## 9. SDK Host 契约
 
-### 9.1 参数所有权
+### 9.1 参数所有权（2026-09-29 起：见 [cli-design.md](docs/cli-design.md)）
 
-MMP 消费：
+`src/args.ts` 的 `MMP_FLAG_TABLE` 是唯一一张参数表，同时驱动解析、校验和 `mmp --help`。清单外的参数（`--xxx`/`-x` 形状但不在表里）一律 `Unknown option: ...` 报错退出，不再像早期版本那样把无法识别的 `--flag` 静默塞进 Pi 的 `unknownFlags`（extension 注册的自定义 CLI flag 因此不再能用；这是明确的取舍，不是遗漏）。
+
+MMP 自己消费、从不转发的参数：
 
 ```text
 --dry-run
 --no-project
 --version / -v
+--help / -h        （只打印 MMP 自己的帮助，不追加任何底层命令的帮助）
 --approve / -a
 --no-approve / -na
-update            （仅当它是第一个参数时；会遮住 Pi 的 `pi update` 包更新命令，MMP 本来就不允许 ambient package）
 ```
 
-MMP 固定传给 Pi（见 `BASE_PI_RESOURCE_ARGS`）：五个 `--no-*` 参数、`--system-prompt ""`、`--append-system-prompt ""`、`--no-approve`。
+MMP 校验（是否认识、是否带值）后原样转发的参数（和底层引擎对齐，取值语义由它在运行时校验，不重复实现）：`--provider`、`--model`、`--thinking`、`--api-key`、`--models`、`-c/--continue`、`-r/--resume`、`--session`、`--session-id`、`--fork`、`--session-dir`、`--no-session`、`-n/--name`、`-t/--tools`、`-xt/--exclude-tools`、`-nt/--no-tools`、`-nbt/--no-builtin-tools`、`-p/--print`、`--mode`、`--list-models`、`--export`、`--offline`、`--verbose`。初始消息和 `@file` 参数：非交互路径原样转发（底层实现自己处理 `@file`）；交互界面自己实现了等价逻辑（`src/file-arguments.ts`），见下。
 
-以下 Pi resource flags 由 MMP 保留，用户直接传入时 fail-fast：
+MMP 固定追加（见 `BASE_PI_RESOURCE_ARGS`）：五个 `--no-*` 参数、`--system-prompt ""`、`--append-system-prompt ""`、`--no-approve`。
+
+以下参数由 MMP 保留，用户直接传入时 fail-fast，提示改用 Manifest：
 
 ```text
 --extension / -e
@@ -470,7 +474,13 @@ MMP 固定传给 Pi（见 `BASE_PI_RESOURCE_ARGS`）：五个 `--no-*` 参数、
 
 原因：允许这些参数绕过 Manifest，会破坏 provenance 和“未声明即不存在”。
 
-其他 Pi 执行参数原样传递，例如：
+以下参数完全不提供，报错说明理由：`--use-theme`、`--tui-mode`（界面已换成 grok 风格的单一全屏主题，由 MMP 管理）。
+
+子命令 `update`/`install`/`remove`/`uninstall`/`list`/`config`/`auth` 只在 `argv[0]` 位置被识别，由 `host.ts` 的 `runMmp` 在参数表解析之前整体接管（`src/commands/manifest-cli.ts`、`src/commands/auth-cli.ts`、`src/update.ts`），从不进入上面的参数表，也从不转发给底层的 CLI 子命令处理逻辑——它们读写的是 MMP 自己的 Manifest 和 `~/.mmp/pi`，不是底层的 `settings.json`。
+
+`--verbose`：非交互路径原样转发；交互界面里由 `src/extensions/runtime.ts` 的 `mmp:runtime` 扩展在 `session_start`（`reason: "startup"`、`mode: "tui"`）时把启动信息（已加载 Rules/Skills/Extensions 数量、当前模型、当前 Session）显示成对话区提示，不产生底层的 verbose 输出格式。
+
+其他参数示例：
 
 ```bash
 mmp --model anthropic/claude-sonnet-4 --thinking high --print "fix this"
