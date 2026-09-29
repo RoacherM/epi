@@ -127,6 +127,14 @@ export async function runMmp(argv) {
         return;
     }
     process.env.PI_CODING_AGENT_DIR = prepared.agentDir;
+    // MMP's own interactive host (docs/tui-design.md), opt-in until it reaches parity.
+    if (process.env.MMP_TUI === "v2") {
+        const tui = await import("./tui/start.js");
+        if (tui.shouldUseTuiV2(process.env, args.passthrough, process.stdin.isTTY === true, process.stdout.isTTY === true)) {
+            process.exitCode = await tui.runTuiV2(prepared, extensionFactories);
+            return;
+        }
+    }
     await piMain(prepared.piArgs, { extensionFactories });
 }
 //# sourceMappingURL=host.js.map
