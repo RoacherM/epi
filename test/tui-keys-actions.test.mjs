@@ -1,0 +1,168 @@
+// App key actions added on top of the M3 key table (docs/tui-design.md 4.7): Ctrl+L, Alt+Enter
+// steer, Alt+Up dequeue, Ctrl+G external editor, and the queued-message display. Ctrl+V and Ctrl+Z
+// are covered as far as they can be without a real clipboard or terminal (see the bottom of this file).
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
+const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
+
+function runApp(t, extensions, steps, { env: extraEnv = {}, inspect } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "mmp-tui-keys-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  const result = spawnSync(process.execPath, [harness], {
+    cwd: root,
+    env: {
+      PATH: process.env.PATH,
+      HOME: home,
+      MMP_HOME: join(home, ".mmp"),
+      PI_OFFLINE: "1",
+      MMP_TUI_HARNESS: JSON.stringify({ steps }),
+      ...extraEnv,
+    },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  inspect?.(home);
+  return { ...parsed, text: `EXIT=${parsed.exit}\n${parsed.output}` };
+}
+
+test("Ctrl+L opens the model selector", (t) => {
+  const { text: out } = runApp(t, [fixture("faux-two-models.mjs")], [
+    ["wait", 2500], ["key", "ctrl+l"], ["wait", 500], ["mark", "opened"], ["key", "esc"], ["wait", 300],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(out, /EXIT=0/);
+});
+
+test("Ctrl+L lists the two faux models, proving the selector (not just any dialog) opened", (t) => {
+  const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
+    ["wait", 2500], ["key", "ctrl+l"], ["wait", 500], ["mark", "opened"], ["key", "esc"], ["wait", 300],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.opened, /model-a/);
+  assert.match(marks.opened, /model-b/);
+  assert.match(marks.opened, /Enter to select/);
+});
+
+test("Enter queues a follow-up while streaming; it shows in the queue display and is delivered after the turn", (t) => {
+  const { text: out, marks } = runApp(t, [fixture("faux-queue.mjs")], [
+    ["wait", 2500], ["type", "go"], ["key", "enter"],
+    ["wait", 1000], ["type", "later"], ["key", "enter"],
+    ["wait", 300], ["mark", "queued"],
+    ["wait", 6000], ["mark", "done"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(out, /EXIT=0/);
+  assert.match(marks.queued, /Follow-up: later/);
+  assert.match(marks.done, /SECOND-REPLY/);
+});
+
+test("Alt+Enter steers a message into the running turn instead of queuing a follow-up", (t) => {
+  const { text: out, marks } = runApp(t, [fixture("faux-queue.mjs")], [
+    ["wait", 2500], ["type", "go"], ["key", "enter"],
+    ["wait", 1000], ["type", "later"], ["key", "alt+enter"],
+    ["wait", 300], ["mark", "queued"],
+    ["wait", 6000], ["mark", "done"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(out, /EXIT=0/);
+  assert.match(marks.queued, /Steering: later/);
+  assert.doesNotMatch(marks.queued, /Follow-up: later/);
+  assert.match(marks.done, /SECOND-REPLY/);
+});
+
+test("Alt+Enter while idle submits like plain Enter", (t) => {
+  const { text: out } = runApp(t, [fixture("faux-two-models.mjs")], [
+    ["wait", 2500], ["type", "hi"], ["key", "alt+enter"], ["wait", 1500], ["key", "ctrl+d"],
+  ]);
+  assert.match(out, /EXIT=0/);
+  assert.match(out, /PICKED=model-a/);
+});
+
+test("Alt+Up restores a queued follow-up to the editor", (t) => {
+  const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
+    ["wait", 2500], ["type", "go"], ["key", "enter"],
+    ["wait", 1000], ["type", "restoreme"], ["key", "enter"],
+    ["wait", 300], ["mark", "queued"],
+    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
+    ["key", "ctrl+c"], ["wait", 300],
+    ["wait", 4000], ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.queued, /Follow-up: restoreme/);
+  // The frames drawn between the two marks: the queue line is gone and "restoreme" is back in the editor.
+  const afterDequeue = marks.restored.slice(marks.queued.length);
+  assert.match(afterDequeue, /restoreme/);
+  assert.doesNotMatch(afterDequeue, /Follow-up:/);
+});
+
+test("Alt+Enter steer sends the editor's expanded text, not a collapsed paste marker", (t) => {
+  // pi-tui collapses a paste over 1000 chars into a "[paste #1 N chars]" marker in the editor;
+  // Pi's own handleFollowUp expands it before sending, and Alt+Enter steer must do the same.
+  const pasted = `PASTE-MARKER-TEST-${"z".repeat(1100)}`;
+  const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
+    ["wait", 2500], ["type", "go"], ["key", "enter"],
+    ["wait", 1000], ["paste", pasted], ["wait", 200], ["key", "alt+enter"],
+    ["wait", 300], ["mark", "queued"],
+    ["wait", 6000], ["key", "ctrl+d"],
+  ]);
+  // If expansion were broken, the queue line would read the literal marker instead of this text.
+  assert.match(marks.queued, /Steering: PASTE-MARKER-TEST-z{50,}/);
+});
+
+test("Alt+Up reports when there is nothing queued", (t) => {
+  const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
+    ["wait", 2500], ["key", "alt+up"], ["wait", 300], ["mark", "after"], ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.after, /No queued messages to restore/);
+});
+
+test("Ctrl+G opens $EDITOR and loads what it saved into the editor", (t) => {
+  const { text: out, marks } = runApp(t, [fixture("faux-two-models.mjs")], [
+    ["wait", 2500], ["key", "ctrl+g"], ["wait", 1500], ["mark", "afterEdit"], ["key", "ctrl+c"], ["wait", 300],
+    ["key", "ctrl+d"],
+  ], { env: { EDITOR: `${process.execPath} ${fixture("fake-editor.mjs")}` } });
+  assert.match(out, /EXIT=0/);
+  assert.match(marks.afterEdit, /FROM-EXTERNAL-EDITOR/);
+});
+
+test("Ctrl+V does not crash the app (no controlled clipboard in this environment)", (t) => {
+  const { text: out } = runApp(t, [fixture("faux-two-models.mjs")], [
+    // Whatever is (or isn't) on the test machine's real clipboard, the key must not crash the
+    // TUI; asserting specific pasted content isn't reproducible in CI. A dev machine's clipboard
+    // can genuinely have text on it, so clear the editor before quitting rather than assume it's empty.
+    ["wait", 2500], ["key", "ctrl+v"], ["wait", 500], ["key", "ctrl+c"], ["wait", 300], ["key", "ctrl+d"],
+  ]);
+  assert.match(out, /EXIT=0/);
+});
+
+// Ctrl+Z (app.suspend) is not exercised through the harness: the real handler calls
+// `process.kill(0, "SIGTSTP")`, which would suspend the harness's own process group (and the test
+// runner, if run in the same group) with nothing to send it SIGCONT in a non-interactive test.
+// Its Windows guard is covered directly against the built module instead.
+test("suspendToShell refuses to suspend on Windows and says so instead of calling process.kill", async () => {
+  const { suspendToShell } = await import("../dist/tui/key-handlers.js");
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, "platform", { value: "win32" });
+  const notices = [];
+  try {
+    suspendToShell({
+      tui: { stop() { throw new Error("must not stop the TUI on Windows"); }, start() {}, requestRender() {} },
+      notice: (text, tone) => notices.push({ text, tone }),
+    });
+  } finally {
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+  }
+  assert.equal(notices.length, 1);
+  assert.match(notices[0].text, /not supported on Windows/);
+});
