@@ -18,12 +18,15 @@ function resolveFileArgument(fileArg, cwd) {
     const expanded = fileArg === "~" || fileArg.startsWith("~/") ? join(homedir(), fileArg.slice(1)) : fileArg;
     return resolve(isAbsolute(expanded) ? expanded : join(cwd, expanded));
 }
-/** Reads each `@file` argument: text files are inlined, image files are noted by path, a missing
- * file throws (instead of Pi's `console.error` + `process.exit(1)`) so the caller can report it
- * through MMP's normal preflight-error path. An empty file is skipped, matching Pi. */
+/** Reads each `@file` argument: text files are inlined, image files are noted by path and read as
+ * an attachment, a missing file throws (instead of Pi's `console.error` + `process.exit(1)`) so
+ * the caller can report it through MMP's normal preflight-error path. An empty file is skipped,
+ * matching Pi. Raw bytes are kept as-is; AgentSession resizes for the model at send time
+ * (agent-session.js's `_normalizePromptImages`), so there's no need to do it here too. */
 export async function processFileArguments(fileArgs, cwd) {
     let text = "";
     const imagePaths = [];
+    const images = [];
     for (const fileArg of fileArgs) {
         const absolutePath = resolveFileArgument(fileArg, cwd);
         if (!existsSync(absolutePath)) {
@@ -35,13 +38,14 @@ export async function processFileArguments(fileArgs, cwd) {
         const mimeType = await detectSupportedImageMimeTypeFromFile(absolutePath);
         if (mimeType) {
             imagePaths.push(absolutePath);
-            text += `<file name="${absolutePath}">image file (not attached as image data by MMP's TUI; read it by path)</file>\n`;
+            images.push({ type: "image", mimeType, data: readFileSync(absolutePath).toString("base64") });
+            text += `<file name="${absolutePath}">image file</file>\n`;
             continue;
         }
         const content = readFileSync(absolutePath, "utf8").replace(/^﻿/, "");
         text += `<file name="${absolutePath}">\n${content}\n</file>\n`;
     }
-    return { text, imagePaths };
+    return { text, imagePaths, images };
 }
 /**
  * Mirrors Pi's buildInitialMessage (dist/cli/initial-message.js): `@file` text is prepended to the
@@ -50,14 +54,14 @@ export async function processFileArguments(fileArgs, cwd) {
  */
 export async function buildTuiInitialMessages(fileArgs, messages, cwd) {
     if (fileArgs.length === 0) {
-        return [...messages];
+        return { messages: [...messages], images: [] };
     }
-    const { text } = await processFileArguments(fileArgs, cwd);
+    const { text, images } = await processFileArguments(fileArgs, cwd);
     if (text.length === 0) {
         // Every @file argument was empty and skipped (matches Pi: an empty fileText never gets pushed).
-        return [...messages];
+        return { messages: [...messages], images: [] };
     }
     const [first, ...rest] = messages;
-    return [`${text}${first ?? ""}`, ...rest];
+    return { messages: [`${text}${first ?? ""}`, ...rest], images };
 }
 //# sourceMappingURL=file-arguments.js.map

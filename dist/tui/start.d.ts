@@ -1,3 +1,4 @@
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { type AgentSessionRuntime, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { PreparedMmpRun } from "../host.js";
 import type { ProjectIdentity } from "./project-guard.js";
@@ -16,6 +17,9 @@ export interface TuiStartupOptions {
      * text, inlined into the first message (file-arguments.ts's buildTuiInitialMessages, mirroring
      * Pi's own buildInitialMessage), sent as the initial prompts once the app is up. */
     initialMessages: string[];
+    /** `@image` arguments among the `@file`s, paired with `initialMessages[0]` only (see
+     * file-arguments.ts's TuiInitialMessages). */
+    initialImages: ImageContent[];
     /** `--resume`: app.ts opens the same session selector `/resume` uses, right after startup, as
      * Pi's own `--resume` does. Only when no other flag already picked a session -- services.ts's
      * `buildSessionManager` gives `--session`/`--continue`/`--no-session` precedence over `--resume`

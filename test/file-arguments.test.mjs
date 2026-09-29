@@ -65,23 +65,37 @@ test("~ and relative paths both resolve", async (t) => {
 test("buildTuiInitialMessages prepends @file text to only the first message", async (t) => {
   const dir = tempDir(t);
   writeFileSync(join(dir, "a.txt"), "FILE-A");
-  const messages = await buildTuiInitialMessages(["a.txt"], ["first", "second"], dir);
+  const { messages, images } = await buildTuiInitialMessages(["a.txt"], ["first", "second"], dir);
   assert.equal(messages.length, 2);
   assert.match(messages[0], /FILE-A/);
   assert.match(messages[0], /first$/);
   assert.equal(messages[1], "second");
+  assert.deepEqual(images, []);
 });
 
 test("a lone @file with no other message still becomes a usable prompt", async (t) => {
   const dir = tempDir(t);
   writeFileSync(join(dir, "solo.txt"), "SOLO-CONTENT");
-  const messages = await buildTuiInitialMessages(["solo.txt"], [], dir);
+  const { messages } = await buildTuiInitialMessages(["solo.txt"], [], dir);
   assert.equal(messages.length, 1);
   assert.match(messages[0], /SOLO-CONTENT/);
 });
 
 test("no @file arguments leaves messages untouched", async (t) => {
   const dir = tempDir(t);
-  const messages = await buildTuiInitialMessages([], ["plain"], dir);
+  const { messages, images } = await buildTuiInitialMessages([], ["plain"], dir);
   assert.deepEqual(messages, ["plain"]);
+  assert.deepEqual(images, []);
+});
+
+test("an @image argument is attached as image data, paired with the first message", async (t) => {
+  const dir = tempDir(t);
+  writeFileSync(join(dir, "pic.png"), ONE_PIXEL_PNG);
+  const { messages, images } = await buildTuiInitialMessages(["pic.png"], ["describe this"], dir);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /describe this$/);
+  assert.equal(images.length, 1);
+  assert.equal(images[0].type, "image");
+  assert.equal(images[0].mimeType, "image/png");
+  assert.equal(images[0].data, ONE_PIXEL_PNG.toString("base64"));
 });

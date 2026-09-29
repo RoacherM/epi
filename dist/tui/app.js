@@ -10,17 +10,33 @@ import { errorText } from "./errors.js";
 import { createExtensionUIContext } from "./ext-host.js";
 import { installKeybindings } from "./keybindings.js";
 import { createKeyActions } from "./keys.js";
+import { ChipEditor } from "./paste-chips.js";
+import { pastePreview } from "./paste-preview.js";
 import { piTui } from "./pi-tui.js";
 import { crossProjectRefusal } from "./project-guard.js";
 import { confirmMissingSessionCwd, missingSessionCwdIssue, runResume } from "./session-commands.js";
 import { Transcript } from "./transcript.js";
 // One instance per layout slot: the layout engine keys slots by component identity.
 const blank = () => ({ render: () => [""], invalidate() { } });
-/** grok's horizontal margin: two columns on each side. */
+/** grok's horizontal margin: two columns on each side.
+ *
+ * Also forwards mouse events: pi-tui's alt-screen mouse dispatch (dispatchMouseToLayout) only
+ * descends into components that implement its layout-node protocol (Stack/ScrollView); a plain
+ * `{render, invalidate}` wrapper like this one is an opaque leaf, so without this, a click over
+ * `editorSlot` would never reach PromptFrame's own handleMouse (docs/tui-design.md 4.3's
+ * double-click-to-expand a chip). Every other `inset()` caller (header, footer, ...) just gets an
+ * always-undefined result back from its wrapped component's absent handleMouse, harmlessly. */
 function inset(component, columns = 2) {
     return {
         render: (width) => component.render(Math.max(1, width - columns * 2)).map((line) => `${" ".repeat(columns)}${line}`),
         invalidate: () => component.invalidate(),
+        handleMouse: (event) => {
+            const width = Math.max(1, event.width - columns * 2);
+            const x = event.x - columns;
+            if (x < 0 || x >= width)
+                return undefined;
+            return component.handleMouse?.({ ...event, x, width });
+        },
     };
 }
 function readGitBranch(cwd) {
@@ -63,16 +79,20 @@ export async function runTuiApp(options) {
     const editorSlot = new piTui.Container();
     const widgetsBelow = new piTui.Container();
     const footerSlot = new piTui.Container();
-    const editor = new piTui.Editor(tui, {
+    const editor = new ChipEditor(tui, {
         borderColor: (text) => theme.fg("border", text),
         selectList: getSelectListTheme(),
-    });
+    }, { getCwd: () => session.sessionManager.getCwd() });
     const prompt = new PromptFrame(theme, editor, () => {
         const model = session.model;
         const hasModel = model !== undefined && runtime.services.modelRuntime.getAvailableSnapshot().length > 0;
         return hasModel ? `${model.name ?? model.id} (${session.thinkingLevel})` : "no model · /login";
     }, () => (text) => theme.fg(turn === undefined ? "border" : "borderAccent", text));
     editorSlot.addChild(prompt);
+    // Preview popup for a paste/image chip (docs/tui-design.md 4.3), placed right above the prompt.
+    // Hidden while a dialog occupies the editor slot (e.g. /model): the chip it would describe is
+    // no longer what's on screen, matching the footer's own editorSlotHasDialog gate below.
+    const pastePreviewWidget = pastePreview(theme, () => (editorSlotHasDialog ? undefined : editor.chipAtCursor()));
     const header = headerBar(theme, () => {
         const usage = session.getContextUsage();
         return {
@@ -86,9 +106,12 @@ export async function runTuiApp(options) {
     const defaultFooter = shortcutsBar(theme, () => {
         const shortcuts = editorSlotHasDialog
             ? [{ key: "↑↓", label: "select" }, { key: "Enter", label: "confirm" }, { key: "Esc", label: "cancel" }]
-            : turn === undefined
-                ? [{ key: "Shift+Tab", label: "thinking" }, { key: "Ctrl+o", label: "tools" }, { key: "/", label: "commands" }, { key: "Ctrl+d", label: "quit" }]
-                : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "tools" }, { key: "Alt+Enter", label: "steer" }];
+            // The caret is on a text chip: Enter expands it instead of submitting (docs/tui-design.md 4.3).
+            : editor.chipAtCursor()?.kind === "text"
+                ? [{ key: "Enter", label: "expand" }]
+                : turn === undefined
+                    ? [{ key: "Shift+Tab", label: "thinking" }, { key: "Ctrl+o", label: "tools" }, { key: "/", label: "commands" }, { key: "Ctrl+d", label: "quit" }]
+                    : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "tools" }, { key: "Alt+Enter", label: "steer" }];
         return { shortcuts, right: theme.fg("muted", [...statuses.values()].join(" · ")) };
     });
     footerSlot.addChild(defaultFooter);
@@ -108,6 +131,7 @@ export async function runTuiApp(options) {
         { component: inset(queueDisplay), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
         { component: blank(), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
         { component: inset(widgetsAbove), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+        { component: inset(pastePreviewWidget), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
         { component: inset(editorSlot), basis: "auto", grow: 0, shrink: 1, minSize: 3 },
         { component: inset(widgetsBelow), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
         { component: inset(footerSlot), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
@@ -229,12 +253,21 @@ export async function runTuiApp(options) {
         getEditorText: () => editor.getText(),
         setEditorText: (text) => surface.setEditorText(text),
         getExpandedEditorText: () => editor.getExpandedText(),
+        getEditorImages: () => editor.getImageAttachments(),
         insertEditorText: (text) => {
             editor.insertTextAtCursor(text);
             tui.requestRender();
         },
+        pasteText: (text) => {
+            editor.pasteText(text);
+            tui.requestRender();
+        },
+        insertImage: (bytes, mimeType) => {
+            editor.insertImageChip(bytes, mimeType);
+            tui.requestRender();
+        },
         addToHistory: (text) => editor.addToHistory(text),
-        submit: (text) => submit(text),
+        submit: (text, images) => submit(text, images),
         restoreQueuedMessagesToEditor: () => restoreQueuedMessagesToEditor(),
         isWorking: () => turn !== undefined,
         toggleToolsExpanded: () => surface.setToolsExpanded(!toolsExpanded),
@@ -579,15 +612,18 @@ export async function runTuiApp(options) {
             for (const message of preCommands)
                 await session.prompt(message.text);
             const promptPromise = session
-                .prompt(firstPrompt.text, session.isStreaming ? { streamingBehavior: firstPrompt.mode } : undefined)
+                .prompt(firstPrompt.text, {
+                images: firstPrompt.images,
+                ...(session.isStreaming ? { streamingBehavior: firstPrompt.mode } : {}),
+            })
                 .catch((error) => restoreQueue(error));
             for (const message of rest) {
                 if (isExtensionCommandText(message.text))
                     await session.prompt(message.text);
                 else if (message.mode === "followUp")
-                    await session.followUp(message.text);
+                    await session.followUp(message.text, message.images);
                 else
-                    await session.steer(message.text);
+                    await session.steer(message.text, message.images);
             }
             void promptPromise;
         }
@@ -595,9 +631,9 @@ export async function runTuiApp(options) {
             restoreQueue(error);
         }
     }
-    async function submit(text) {
+    async function submit(text, images = []) {
         const trimmed = text.trim();
-        if (trimmed === "")
+        if (trimmed === "" && images.length === 0)
             return;
         if (!ready) {
             // Mirrors Pi's handleStartupSubmit.
@@ -642,13 +678,13 @@ export async function runTuiApp(options) {
                 }
                 return;
             }
-            compactionQueue.push({ text, mode: "followUp" });
+            compactionQueue.push({ text, images, mode: "followUp" });
             transcript.notice("Queued message for after compaction.");
             tui.requestRender();
             return;
         }
         try {
-            await session.prompt(text, session.isStreaming ? { streamingBehavior: "followUp" } : undefined);
+            await session.prompt(text, { images, ...(session.isStreaming ? { streamingBehavior: "followUp" } : {}) });
         }
         catch (error) {
             // No model, no auth: say why and keep the text.
@@ -657,7 +693,7 @@ export async function runTuiApp(options) {
                 editor.setText(text);
         }
     }
-    editor.onSubmit = (text) => void submit(text);
+    editor.onSubmitImages = (text, images) => void submit(text, images);
     // Pi binds these on the editor itself (defaultEditor.onAction/onEscape/onCtrlD), so they only
     // fire when the editor has focus; a dialog/selector taking the editor slot (takeEditorSlot,
     // above) gets every key first otherwise, since pi-tui runs input listeners before the focused
@@ -690,11 +726,14 @@ export async function runTuiApp(options) {
     // Pi's own interactive-mode.js (~855-864): sent directly through session.prompt(), not through
     // submit()'s full pipeline -- submit() clears the editor/history and runs MMP's built-ins (e.g.
     // `mmp /new`), which would wipe whatever the startup gate above just put back into the editor.
-    for (const message of options.initialMessages ?? []) {
+    // `initialImages` (an `@image` argument) pairs with the first message only, as Pi's own
+    // initialMessage/initialImages does.
+    for (const [index, message] of (options.initialMessages ?? []).entries()) {
         if (exiting)
             break;
+        const images = index === 0 ? options.initialImages ?? [] : [];
         try {
-            await session.prompt(message);
+            await session.prompt(message, images.length > 0 ? { images } : undefined);
         }
         catch (error) {
             transcript.notice(errorText(error), "error");

@@ -1,5 +1,3 @@
-// Entry of MMP's own interactive host (docs/tui-design.md): the only interactive path host.ts
-// dispatches to (docs/decisions.md M5). Non-interactive runs never reach this module.
 import { parseArgs } from "@earendil-works/pi-coding-agent";
 import { buildInlineExtensions } from "../extensions/index.js";
 import { buildTuiInitialMessages } from "../file-arguments.js";
@@ -37,8 +35,10 @@ export function projectIdentityFromPrepared(prepared, cwd) {
 }
 export async function startupOptionsFromPiArgs(piArgs, cwd) {
     const parsed = parseArgs([...piArgs]);
+    const { messages: initialMessages, images: initialImages } = await buildTuiInitialMessages(parsed.fileArgs, parsed.messages, cwd);
     return {
-        initialMessages: await buildTuiInitialMessages(parsed.fileArgs, parsed.messages, cwd),
+        initialMessages,
+        initialImages,
         resumeOnStart: parsed.resume === true &&
             parsed.session === undefined && parsed.continue !== true && parsed.noSession !== true,
     };
@@ -48,7 +48,7 @@ export async function runTuiV2(prepared, extensionFactories) {
     // Pi's exported components read the global theme; it must exist before any of them is built.
     const theme = installMmpTheme(prepared.agentDir, detectAppearance(process.env));
     const runtime = await createRuntimeFromPrepared(prepared, cwd, extensionFactories);
-    const { initialMessages, resumeOnStart } = await startupOptionsFromPiArgs(prepared.args.passthrough, cwd);
+    const { initialMessages, initialImages, resumeOnStart } = await startupOptionsFromPiArgs(prepared.args.passthrough, cwd);
     return runTuiApp({
         runtime,
         theme,
@@ -58,6 +58,7 @@ export async function runTuiV2(prepared, extensionFactories) {
         projectIdentity: projectIdentityFromPrepared(prepared, cwd),
         resumeOnStart,
         ...(initialMessages.length > 0 ? { initialMessages } : {}),
+        ...(initialImages.length > 0 ? { initialImages } : {}),
     });
 }
 //# sourceMappingURL=start.js.map

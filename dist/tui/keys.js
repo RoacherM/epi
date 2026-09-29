@@ -73,12 +73,13 @@ export function createKeyActions() {
             when: (host) => host.session().isStreaming,
             run: async (host) => {
                 const text = host.getExpandedEditorText();
-                if (text.trim() === "")
+                const images = host.getEditorImages();
+                if (text.trim() === "" && images.length === 0)
                     return;
                 host.addToHistory(text);
                 host.setEditorText("");
                 try {
-                    await host.session().prompt(text, { streamingBehavior: "steer" });
+                    await host.session().prompt(text, { images, streamingBehavior: "steer" });
                 }
                 catch (error) {
                     host.notice(errorText(error), "error");
@@ -91,7 +92,7 @@ export function createKeyActions() {
             // Idle: Alt+Enter submits like plain Enter (Pi's handleFollowUp does the same).
             id: "app.message.followUp",
             when: (host) => !host.session().isStreaming,
-            run: (host) => host.submit(host.getExpandedEditorText()),
+            run: (host) => host.submit(host.getExpandedEditorText(), host.getEditorImages()),
         },
         {
             id: "app.message.dequeue",
