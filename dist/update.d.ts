@@ -33,5 +33,38 @@ export declare function runMmpUpdate(options: {
     runInstaller?: (scriptPath: string) => number;
     write?: (text: string) => void;
 }): Promise<number>;
+export type UpdateTarget = "self" | "extensions" | "models" | "all";
+export interface UpdateCommandArgs {
+    target: UpdateTarget;
+    source?: string;
+}
+/** `mmp update [--self|--extensions|--models|--all] [<source>]` (docs/cli-design.md §3). A bare
+ * `<source>` with no flag means "update this one extension", same as `--extensions <source>`. */
+export declare function parseUpdateArgs(argv: readonly string[]): UpdateCommandArgs;
+/**
+ * MMP never persists npm:/git: extension sources into Pi's own settings.json (that would create a
+ * second, project-`.pi/`-writing source of truth alongside the Manifest -- see the report). Instead
+ * every manifest-declared external extension is fed to Pi as a one-off `--extension` CLI argument
+ * (host.ts's buildPiArgs), which Pi's resource loader always resolves with "temporary" scope, cached
+ * under `<agentDir>/tmp/extensions` (Pi's `getExtensionTempFolder`, not exported but a fixed,
+ * one-line path convention). Git sources there already re-pull on every run; npm sources, once
+ * cached, do not re-check for a newer published version on their own. `mmp update --extensions`
+ * clears that whole cache so every manifest-declared source (npm and git alike) is fetched fresh --
+ * at the latest matching version -- the next time `mmp` runs.
+ */
+export declare function clearExtensionPackageCache(agentDir: string): boolean;
+/** Mirrors Pi's refreshModelCatalogs (dist/package-manager-cli.js, not exported): a network,
+ * force refresh of the model catalog cached at `<agentDir>/models.json`. */
+export declare function refreshModelCatalog(agentDir: string): Promise<void>;
+/** `mmp update` dispatcher: `--self`/bare (the pre-existing behaviour) updates MMP's own pinned
+ * release; `--extensions`/`<source>` clears the extension package cache; `--models` refreshes the
+ * model catalog; `--all` does all three. Returns the process exit code. */
+export declare function runMmpUpdateCommand(argv: readonly string[], options: {
+    currentVersion: string;
+    agentDir: string;
+    fetchImpl?: FetchLike;
+    runInstaller?: (scriptPath: string) => number;
+    write?: (text: string) => void;
+}): Promise<number>;
 export {};
 //# sourceMappingURL=update.d.ts.map

@@ -111,7 +111,35 @@ test("update is an MMP subcommand only in first position", () => {
   assert.equal(parseMmpArgs(["update"]).update, true);
   assert.equal(parseMmpArgs(["-p", "update"]).update, false);
   assert.deepEqual(parseMmpArgs(["-p", "update"]).passthrough, ["-p", "update"]);
-  assert.throws(() => parseMmpArgs(["update", "--force"]), /takes no arguments/);
+  // `mmp update [--self|--extensions|--models|--all] [<source>]` (docs/cli-design.md §3): args
+  // after "update" are handed to runMmpUpdateCommand's own parser, not rejected here.
+  assert.deepEqual(parseMmpArgs(["update", "--extensions", "npm:foo"]).passthrough, ["--extensions", "npm:foo"]);
+});
+
+test("mmp update's own argument parser accepts --self/--extensions/--models/--all and a bare source", async () => {
+  const { parseUpdateArgs } = await import("../dist/update.js");
+  assert.deepEqual(parseUpdateArgs([]), { target: "self" });
+  assert.deepEqual(parseUpdateArgs(["--self"]), { target: "self" });
+  assert.deepEqual(parseUpdateArgs(["--models"]), { target: "models" });
+  assert.deepEqual(parseUpdateArgs(["--all"]), { target: "all" });
+  assert.deepEqual(parseUpdateArgs(["--extensions"]), { target: "extensions" });
+  assert.deepEqual(parseUpdateArgs(["--extensions", "npm:foo"]), { target: "extensions", source: "npm:foo" });
+  assert.deepEqual(parseUpdateArgs(["npm:foo"]), { target: "extensions", source: "npm:foo" });
+  assert.throws(() => parseUpdateArgs(["--self", "--models"]), /only one of/);
+  assert.throws(() => parseUpdateArgs(["--self", "npm:foo"]), /only valid with --extensions/);
+  assert.throws(() => parseUpdateArgs(["--bogus"]), /Unknown option/);
+});
+
+test("mmp update --extensions clears the cached extension package directory", async (t) => {
+  const { clearExtensionPackageCache } = await import("../dist/update.js");
+  const { mkdirSync, writeFileSync, existsSync } = await import("node:fs");
+  const agentDir = tempHome(t);
+  const cacheFile = join(agentDir, "tmp", "extensions", "npm", "some-file");
+  mkdirSync(join(agentDir, "tmp", "extensions", "npm"), { recursive: true });
+  writeFileSync(cacheFile, "cached");
+  assert.equal(clearExtensionPackageCache(agentDir), true);
+  assert.equal(existsSync(join(agentDir, "tmp", "extensions")), false);
+  assert.equal(clearExtensionPackageCache(agentDir), false, "nothing left to clear the second time");
 });
 
 function startRuntime(updateCheck, mode) {

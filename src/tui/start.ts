@@ -3,6 +3,7 @@
 import { type AgentSessionRuntime, type InlineExtension, parseArgs } from "@earendil-works/pi-coding-agent";
 
 import { buildInlineExtensions } from "../extensions/index.js";
+import { buildTuiInitialMessages } from "../file-arguments.js";
 import type { PreparedMmpRun } from "../host.js";
 import { runTuiApp } from "./app.js";
 import type { ProjectIdentity } from "./project-guard.js";
@@ -13,11 +14,16 @@ import { detectAppearance, installMmpTheme } from "./theme.js";
 export async function createRuntimeFromPrepared(
   prepared: PreparedMmpRun,
   cwd: string,
+  // Mirrors host.ts's own construction (same flag, same default undefined updateCheck) so a caller
+  // that builds a runtime straight from `prepared` (tests; host.ts always passes its own factories
+  // explicitly) still gets `--verbose` support.
   extensionFactories: InlineExtension[] = buildInlineExtensions(
     prepared.assembly,
     prepared.mmpHome,
     prepared.runtimeIdentity,
     prepared.resolveAssembly,
+    undefined,
+    prepared.args.passthrough.includes("--verbose"),
   ),
 ): Promise<AgentSessionRuntime> {
   return createMmpRuntime({
@@ -40,9 +46,9 @@ export function projectIdentityFromPrepared(prepared: PreparedMmpRun): ProjectId
 }
 
 export interface TuiStartupOptions {
-  /** Pi CLI positional messages (services.ts's TUI_V2 argument table), sent as the initial prompts
-   * once the app is up. `@file` arguments are rejected earlier as unsupported, so only plain text
-   * messages ever end up here. */
+  /** Pi CLI positional messages (services.ts's TUI_V2 argument table) plus any `@file` argument's
+   * text, inlined into the first message (file-arguments.ts's buildTuiInitialMessages, mirroring
+   * Pi's own buildInitialMessage), sent as the initial prompts once the app is up. */
   initialMessages: string[];
   /** `--resume`: app.ts opens the same session selector `/resume` uses, right after startup, as
    * Pi's own `--resume` does. Only when no other flag already picked a session -- services.ts's
@@ -51,10 +57,10 @@ export interface TuiStartupOptions {
   resumeOnStart: boolean;
 }
 
-export function startupOptionsFromPiArgs(piArgs: readonly string[]): TuiStartupOptions {
+export async function startupOptionsFromPiArgs(piArgs: readonly string[], cwd: string): Promise<TuiStartupOptions> {
   const parsed = parseArgs([...piArgs]);
   return {
-    initialMessages: parsed.messages,
+    initialMessages: await buildTuiInitialMessages(parsed.fileArgs, parsed.messages, cwd),
     resumeOnStart: parsed.resume === true &&
       parsed.session === undefined && parsed.continue !== true && parsed.noSession !== true,
   };
@@ -65,7 +71,7 @@ export async function runTuiV2(prepared: PreparedMmpRun, extensionFactories: Inl
   // Pi's exported components read the global theme; it must exist before any of them is built.
   const theme = installMmpTheme(prepared.agentDir, detectAppearance(process.env));
   const runtime = await createRuntimeFromPrepared(prepared, cwd, extensionFactories);
-  const { initialMessages, resumeOnStart } = startupOptionsFromPiArgs(prepared.args.passthrough);
+  const { initialMessages, resumeOnStart } = await startupOptionsFromPiArgs(prepared.args.passthrough, cwd);
   return runTuiApp({
     runtime,
     theme,

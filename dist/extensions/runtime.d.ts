@@ -6,5 +6,5 @@ export interface UpdateCheckOptions {
     currentVersion: string;
     disabled: boolean;
 }
-export declare function createMmpRuntimeExtension(initialIdentity: MmpRuntimeIdentity, initialAssembly: ResolvedAssembly, resolveAssembly?: () => ResolvedAssembly, updateCheck?: UpdateCheckOptions): InlineExtension;
+export declare function createMmpRuntimeExtension(initialIdentity: MmpRuntimeIdentity, initialAssembly: ResolvedAssembly, resolveAssembly?: () => ResolvedAssembly, updateCheck?: UpdateCheckOptions, verbose?: boolean): InlineExtension;
 //# sourceMappingURL=runtime.d.ts.map

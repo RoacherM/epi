@@ -47,11 +47,34 @@ function reloadableAssembly(
   };
 }
 
+/** `--verbose` in MMP's TUI (docs/cli-design.md §2): the startup details Pi's own verbose startup
+ * shows (dist/modes/interactive/interactive-mode.js), reduced to what MMP tracks -- loaded
+ * resources, model, session -- shown as transcript notices via `context.ui.notify`, the same path
+ * `/mmp`'s manifest-reload notice uses. Non-interactive runs (`-p`, `--mode json/rpc`) never build
+ * this extension against a "tui" context, so nothing extra prints there; `--verbose` reaches Pi's
+ * own piMain unchanged for that path. */
+function notifyVerboseStartup(assembly: ResolvedAssembly, context: ExtensionContext): void {
+  const resourceCount = assembly.inlineExtensions.length + assembly.externalExtensions.length;
+  context.ui.notify(
+    `Loaded resources: ${assembly.rules.length} rule file(s), ${assembly.skills.length} skill root(s), ${resourceCount} extension(s)`,
+  );
+  const model = context.model;
+  const modelText = model === undefined
+    ? "none (/login or /model to pick one)"
+    : `${model.name ?? model.id} (${model.provider})${context.thinkingLevel ? ` thinking=${context.thinkingLevel}` : ""}`;
+  context.ui.notify(`Model: ${modelText}`);
+  const sessionFile = context.sessionManager.getSessionFile();
+  context.ui.notify(
+    `Session: ${sessionFile ?? "ephemeral (--no-session)"} (id ${context.sessionManager.getSessionId()})`,
+  );
+}
+
 export function createMmpRuntimeExtension(
   initialIdentity: MmpRuntimeIdentity,
   initialAssembly: ResolvedAssembly,
   resolveAssembly: () => ResolvedAssembly = () => initialAssembly,
   updateCheck?: UpdateCheckOptions,
+  verbose = false,
 ): InlineExtension {
   return {
     name: "mmp:runtime",
@@ -121,6 +144,9 @@ export function createMmpRuntimeExtension(
         sessionActive = true;
         if (event.reason === "startup") {
           showUpdateNotice(context);
+          if (verbose) {
+            notifyVerboseStartup(activeAssembly, context);
+          }
         }
         context.ui.setHeader((_tui, theme) => ({
           render(width) {

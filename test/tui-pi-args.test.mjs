@@ -80,10 +80,8 @@ test("--no-session leaves no file under the sessions directory after a turn", (t
 });
 
 for (const [flag, args] of [
-  ["--verbose", ["--no-project", "--verbose"]],
   ["--use-theme", ["--no-project", "--use-theme", "dark"]],
   ["--tui-mode", ["--no-project", "--tui-mode", "fullscreen"]],
-  ["@file arguments", ["--no-project", "@nope.txt"]],
 ]) {
   test(`${flag} is refused before the TUI starts, naming the flag`, (t) => {
     const f = fixture(t);
@@ -93,6 +91,10 @@ for (const [flag, args] of [
     assert.equal(result.stdout, "");
   });
 }
+
+// @file arguments and --verbose are now supported on the TUI path (docs/cli-design.md §2); see
+// file-arguments.test.mjs for @file's own unit tests, and the harness tests below for both, driven
+// through the real start.ts/app.ts sequence.
 
 test("--resume no longer needs MMP_TUI=v2 and builds a session normally on the SDK path", (t) => {
   const f = fixture(t);
@@ -142,5 +144,43 @@ test('mmp "hello" sends it as the first prompt without any typing', (t) => {
     ["key", "ctrl+d"],
   ]);
   assert.match(marks.afterStartup, /ECHO:hello/);
+  assert.match(out, /EXIT=0/);
+});
+
+test('mmp @file.txt inlines the file into the first prompt (docs/cli-design.md §2)', (t) => {
+  const root = mkdtempSync(join(tmpdir(), "mmp-tui-file-arg-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
+  writeFileSync(join(root, "note.txt"), "the file's own content");
+  const result = spawnSync(process.execPath, [harnessPath], {
+    cwd: root,
+    env: {
+      PATH: process.env.PATH,
+      HOME: home,
+      MMP_HOME: join(home, ".mmp"),
+      PI_OFFLINE: "1",
+      MMP_TUI_HARNESS: JSON.stringify({
+        args: ["--no-project", "@note.txt", "hello"],
+        steps: [["wait", 3000], ["mark", "afterStartup"], ["key", "ctrl+d"]],
+      }),
+    },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.match(parsed.marks.afterStartup, /ECHO:.*note\.txt.*the file's own content.*hello/s);
+});
+
+test("mmp --verbose shows loaded resources, model, and session as startup notices", (t) => {
+  const { text: out, marks } = runHarness(t, [fauxEcho], ["--no-project", "--verbose"], [
+    ["wait", 3000], ["mark", "afterStartup"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.afterStartup, /Loaded resources:/);
+  assert.match(marks.afterStartup, /Model:/);
+  assert.match(marks.afterStartup, /Session:/);
   assert.match(out, /EXIT=0/);
 });

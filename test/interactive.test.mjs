@@ -37,11 +37,9 @@ test("--export is not interactive", () => {
   assert.equal(isInteractivePiRun(["--export", "html"], true, true), false);
 });
 
-for (const subcommand of ["auth", "config", "install", "remove", "uninstall", "update", "list"]) {
-  test(`the "${subcommand}" Pi CLI subcommand is not interactive`, () => {
-    assert.equal(isInteractivePiRun([subcommand], true, true), false);
-  });
-}
+// MMP's own `auth`/`config`/`install`/`remove`/`uninstall`/`update`/`list` subcommands
+// (docs/cli-design.md §3) are routed by host.ts's `runMmp` before argv ever reaches
+// `isInteractivePiRun` -- see cli-e2e.test.mjs for the subcommands themselves, end to end.
 
 test("a plain interactive run with no special args is interactive", () => {
   assert.equal(isInteractivePiRun([], true, true), true);

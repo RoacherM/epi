@@ -40,16 +40,18 @@ function createSettingsManager(cwd, agentDir) {
  *   --no-builtin-tools/-nbt, --api-key, --offline, --resume (opens the same session selector
  *   `/resume` uses, once the TUI has started; see start.ts's `startupOptionsFromPiArgs` and
  *   session-commands.ts's `runResume`), and positional messages (sent as the first prompt once
- *   the TUI is up).
+ *   the TUI is up). `--verbose` and `@file` arguments are also supported, but not parsed here:
+ *   `--verbose` is read by `createMmpRuntimeExtension` (../extensions/runtime.ts), which shows
+ *   startup details as transcript notices on `session_start`; `@file` text is inlined into the
+ *   first message by start.ts's `startupOptionsFromPiArgs` (../file-arguments.ts) before it ever
+ *   reaches `createMmpRuntime`.
  *
  * Anything else Pi's parser can set is unsupported: this throws before the TUI starts rather
  * than silently dropping it.
  */
 const UNSUPPORTED_PI_ARGS = [
-    { present: (parsed) => parsed.verbose === true, flag: "--verbose", reason: "verbose startup output isn't part of MMP's TUI" },
     { present: (parsed) => parsed.useTheme !== undefined, flag: "--use-theme", reason: "MMP has its own theme" },
     { present: (parsed) => parsed.tuiMode !== undefined, flag: "--tui-mode", reason: "MMP's TUI is fullscreen only" },
-    { present: (parsed) => parsed.fileArgs.length > 0, flag: "@file arguments", reason: "turning them into the first message is not exposed by Pi's SDK" },
 ];
 function unsupportedFlagError(flag, reason) {
     return new MmpArgumentError(`${flag} is not supported by MMP: ${reason}.`);

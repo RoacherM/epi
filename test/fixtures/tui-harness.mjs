@@ -32,7 +32,7 @@ const terminal = {
 const prepared = prepareMmpRun(args);
 const theme = installMmpTheme(prepared.agentDir, detectAppearance(process.env));
 const runtime = await createRuntimeFromPrepared(prepared, process.cwd());
-const { initialMessages, resumeOnStart } = startupOptionsFromPiArgs(prepared.args.passthrough);
+const { initialMessages, resumeOnStart } = await startupOptionsFromPiArgs(prepared.args.passthrough, process.cwd());
 const running = runTuiApp({
   runtime,
   theme,
