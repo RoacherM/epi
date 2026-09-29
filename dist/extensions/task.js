@@ -1,5 +1,8 @@
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+// Just the pure text-width helper, not pi-tui's Component classes: this extension has none of the
+// "must be Pi's exact installed copy" concerns src/tui/pi-tui.ts exists for (no instanceof checks).
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { emitTaskHook } from "../hook-events.js";
 import { loadTaskAgents } from "../task-agents.js";
@@ -62,6 +65,71 @@ function jobResult(job) {
         details: job,
     };
 }
+// -----------------------------------------------------------------------------
+// grok-style renderers (docs/tui-design.md 4.2). Without these, MMP's generic tool-block
+// fallback (src/tui/tools/block.ts) prints the raw JSON from jobResult()/todo's result text.
+// -----------------------------------------------------------------------------
+/** A minimal Component: these renderers don't need width-aware wrapping or reuse. */
+function toolLines(rows) {
+    return { render: (width) => rows.map((row) => truncateToWidth(row, width)), invalidate() { } };
+}
+const MAX_DETAIL_LINES = 10;
+function capLines(theme, lines) {
+    if (lines.length <= MAX_DETAIL_LINES)
+        return lines;
+    const shown = lines.slice(0, MAX_DETAIL_LINES);
+    shown.push(theme.fg("muted", `… ${lines.length - MAX_DETAIL_LINES} more lines`));
+    return shown;
+}
+function jobSummaryLine(theme, job) {
+    const tone = job.status === "completed" ? "success"
+        : job.status === "failed" ? "error"
+            : job.status === "cancelled" ? "warning"
+                : job.status === "running" ? "accent"
+                    : "muted";
+    return `${theme.fg("accent", job.agent)} ${theme.fg(tone, job.status)} ${theme.fg("muted", job.id)}`;
+}
+/**
+ * Shared by task/task_status/task_wait/task_cancel: all resolve to a TaskJobSnapshot via
+ * jobResult(), or to `{ error }` via errorResult() when the call itself was invalid (bad jobId).
+ */
+function renderTaskResult(result, options, theme) {
+    const details = result.details;
+    if (details === undefined)
+        return toolLines([]);
+    // A failed TaskJobSnapshot also has an `error` field, so discriminate on `status` (only the
+    // snapshot has one), not on `error`'s presence -- errorResult()'s `{ error }` never has it.
+    if (!("status" in details)) {
+        return toolLines([theme.fg("error", details.error)]);
+    }
+    const job = details;
+    if (!options.expanded)
+        return toolLines([jobSummaryLine(theme, job)]);
+    const detail = job.status === "completed" ? (job.result ?? "(no output)").split("\n")
+        : job.status === "failed" ? [job.error ?? "Task failed."]
+            : [];
+    return toolLines([jobSummaryLine(theme, job), ...capLines(theme, detail)]);
+}
+function todoStatusGlyph(status) {
+    return status === "completed" ? "✓" : status === "in_progress" ? "◐" : "☐";
+}
+function todoStatusTone(status) {
+    return status === "completed" ? "success" : status === "in_progress" ? "accent" : "muted";
+}
+function renderTodoResult(result, options, theme) {
+    const details = result.details;
+    if (details !== undefined && "error" in details) {
+        return toolLines([theme.fg("error", details.error)]);
+    }
+    const items = details?.items ?? [];
+    if (items.length === 0)
+        return toolLines([theme.fg("muted", "No items.")]);
+    if (!options.expanded) {
+        const done = items.filter((item) => item.status === "completed").length;
+        return toolLines([theme.fg("muted", `${items.length} item${items.length === 1 ? "" : "s"}, ${done} done`)]);
+    }
+    return toolLines(items.map((item) => `${theme.fg(todoStatusTone(item.status), todoStatusGlyph(item.status))} ${item.text}`));
+}
 export function createTaskInlineExtension(options) {
     const agents = loadTaskAgents({
         globalAgentsDir: join(options.mmpHome, "agents"),
@@ -103,6 +171,7 @@ export function createTaskInlineExtension(options) {
                 ].join(" "),
                 promptSnippet: "Delegate bounded work to an isolated configured agent.",
                 executionMode: "parallel",
+                renderResult: renderTaskResult,
                 parameters: Type.Object({
                     agent: Type.String({ description: "Configured agent name" }),
                     task: Type.String({ description: "Bounded task to perform" }),
@@ -160,6 +229,7 @@ export function createTaskInlineExtension(options) {
                 label: "Task status",
                 description: "Return the current state of one MMP task job.",
                 executionMode: "parallel",
+                renderResult: renderTaskResult,
                 parameters: Type.Object({ jobId: Type.String() }),
                 async execute(_toolCallId, params) {
                     try {
@@ -175,6 +245,7 @@ export function createTaskInlineExtension(options) {
                 label: "Task wait",
                 description: "Wait for an MMP task job to finish or until timeoutSeconds elapses.",
                 executionMode: "parallel",
+                renderResult: renderTaskResult,
                 parameters: Type.Object({
                     jobId: Type.String(),
                     timeoutSeconds: Type.Optional(Type.Number({ minimum: 0.001 })),
@@ -200,6 +271,7 @@ export function createTaskInlineExtension(options) {
                 label: "Task cancel",
                 description: "Cancel a queued or running MMP task job and its process tree.",
                 executionMode: "parallel",
+                renderResult: renderTaskResult,
                 parameters: Type.Object({ jobId: Type.String() }),
                 async execute(_toolCallId, params) {
                     try {
@@ -219,6 +291,7 @@ export function createTaskInlineExtension(options) {
                 name: "todo",
                 label: "Todo",
                 description: "Manage the current MMP session checklist.",
+                renderResult: renderTodoResult,
                 parameters: Type.Object({
                     action: Type.Union([
                         Type.Literal("list"),

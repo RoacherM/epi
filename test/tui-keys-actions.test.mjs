@@ -1,6 +1,6 @@
 // App key actions added on top of the M3 key table (docs/tui-design.md 4.7): Ctrl+L, Alt+Enter
-// steer, Alt+Up dequeue, Ctrl+G external editor, and the queued-message display. Ctrl+V and Ctrl+Z
-// are covered as far as they can be without a real clipboard or terminal (see the bottom of this file).
+// steer, Alt+Up dequeue, Ctrl+G external editor, Ctrl+V paste, and the queued-message display.
+// Ctrl+Z is covered as far as it can be without a real terminal (see the bottom of this file).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -37,14 +37,9 @@ function runApp(t, extensions, steps, { env: extraEnv = {}, inspect } = {}) {
   return { ...parsed, text: `EXIT=${parsed.exit}\n${parsed.output}` };
 }
 
-test("Ctrl+L opens the model selector", (t) => {
-  const { text: out } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["key", "ctrl+l"], ["wait", 500], ["mark", "opened"], ["key", "esc"], ["wait", 300],
-    ["key", "ctrl+d"],
-  ]);
-  assert.match(out, /EXIT=0/);
-});
-
+// "Ctrl+L opens the model selector" (asserting only EXIT=0) was removed: that assertion passes
+// whether or not the selector actually opened. The test below covers the same key with real
+// assertions (it can only pass if the model selector, not just any dialog, is on screen).
 test("Ctrl+L lists the two faux models, proving the selector (not just any dialog) opened", (t) => {
   const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
     ["wait", 2500], ["key", "ctrl+l"], ["wait", 500], ["mark", "opened"], ["key", "esc"], ["wait", 300],
@@ -136,14 +131,18 @@ test("Ctrl+G opens $EDITOR and loads what it saved into the editor", (t) => {
   assert.match(marks.afterEdit, /FROM-EXTERNAL-EDITOR/);
 });
 
-test("Ctrl+V does not crash the app (no controlled clipboard in this environment)", (t) => {
-  const { text: out } = runApp(t, [fixture("faux-two-models.mjs")], [
-    // Whatever is (or isn't) on the test machine's real clipboard, the key must not crash the
-    // TUI; asserting specific pasted content isn't reproducible in CI. A dev machine's clipboard
-    // can genuinely have text on it, so clear the editor before quitting rather than assume it's empty.
-    ["wait", 2500], ["key", "ctrl+v"], ["wait", 500], ["key", "ctrl+c"], ["wait", 300], ["key", "ctrl+d"],
-  ]);
+test("Ctrl+V pastes text from the clipboard into the editor", (t) => {
+  // MMP_TEST_CLIPBOARD_FILE (src/tui/clipboard.ts) swaps the real system clipboard for a plain
+  // file, so this never reads the developer's actual clipboard or writes a stray image to tmpdir.
+  const clipboardFile = join(mkdtempSync(join(tmpdir(), "mmp-clipboard-test-")), "clipboard.txt");
+  t.after(() => rmSync(clipboardFile, { force: true }));
+  writeFileSync(clipboardFile, "PASTED-TEXT");
+  const { text: out, marks } = runApp(t, [fixture("faux-two-models.mjs")], [
+    ["wait", 2500], ["key", "ctrl+v"], ["wait", 500], ["mark", "afterPaste"], ["key", "ctrl+c"], ["wait", 300],
+    ["key", "ctrl+d"],
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(out, /EXIT=0/);
+  assert.match(marks.afterPaste, /PASTED-TEXT/);
 });
 
 // Ctrl+Z (app.suspend) is not exercised through the harness: the real handler calls

@@ -4,6 +4,7 @@
 // (excluded when `excludeFromContext`). MMP draws its own grok-style frame instead of reusing Pi's
 // exported `BashExecutionComponent` (rail `┃` + `◆`, matching tools/block.ts).
 import { keyText } from "@earendil-works/pi-coding-agent";
+import { errorText } from "./errors.js";
 import { piTui } from "./pi-tui.js";
 // Matches tools/block.ts: a rail column, then 2 columns of padding before the `◆` bullet; output
 // lines sit two columns further in, under the bullet's text.
@@ -127,7 +128,7 @@ export async function runUserBash(host, text) {
     }
     catch (error) {
         block.setComplete(undefined, false);
-        host.notice(`Bash command failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+        host.notice(`Bash command failed: ${errorText(error)}`, "error");
     }
     host.tui.requestRender();
     return true;

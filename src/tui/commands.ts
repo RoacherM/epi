@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { CommandHost } from "./command-host.js";
+import { errorText } from "./errors.js";
 import { resolveMmpPaths } from "../paths.js";
 import { findNearestProjectManifest } from "../project.js";
 import { projectTrustOptions, saveProjectTrustChoice } from "../trust-prompt.js";
@@ -21,10 +22,6 @@ type AuthPrompt = { type: string; message: string; placeholder?: string; options
 type AuthEvent = { type: string; url?: string; instructions?: string; message?: string; links?: never } & Record<string, unknown>;
 
 const CANCELLED = "Login cancelled";
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /** Pi keeps a placeholder model when nothing usable is configured. */
 function needsModel(session: AgentSession): boolean {

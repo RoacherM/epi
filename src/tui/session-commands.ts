@@ -3,20 +3,17 @@
 // The flows follow Pi's interactive mode, built from the components Pi exports.
 import {
   type AgentSession,
-  copyToClipboard,
   SessionManager,
   SessionSelectorComponent,
   ThinkingSelectorComponent,
 } from "@earendil-works/pi-coding-agent";
 
+import { writeClipboardText } from "./clipboard.js";
 import type { CommandHost } from "./command-host.js";
+import { errorText } from "./errors.js";
 import { crossProjectRefusal } from "./project-guard.js";
 
 type ThinkingLevel = AgentSession["thinkingLevel"];
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /** Pi's handleCompactCommand ignores the throw: compact() already emitted a `compaction_end`
  * event with the failure reason, which transcript.ts turns into a notice. Pi does not refuse
@@ -136,7 +133,7 @@ export async function runCopy(host: CommandHost): Promise<void> {
     return;
   }
   try {
-    await copyToClipboard(text);
+    await writeClipboardText(text);
     host.notice("Copied last agent message to clipboard.");
   } catch (error) {
     host.notice(errorText(error), "error");

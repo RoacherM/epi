@@ -61,8 +61,6 @@ function parseDiffString(diffStr) {
     const lines = [];
     let additions = 0;
     let removals = 0;
-    let currentOldLine = 1;
-    let currentNewLine = 1;
     for (const rawLine of rawLines) {
         if (!rawLine || rawLine.startsWith("---") || rawLine.startsWith("+++")) {
             continue;
@@ -70,44 +68,26 @@ function parseDiffString(diffStr) {
         if (/^\s*\.\.\.\s*$/.test(rawLine)) {
             continue;
         }
+        // Pi's edit tool (edit-diff.js generateDiffString) only ever emits a numbered line
+        // ("+12 text", "-12 text", " 12 text") or the "   ..." skip marker handled above; a plain
+        // unified-diff "+text"/"-text" without a line number never occurs, so it is not parsed here.
         const piMatch = rawLine.match(/^([+-\s])(\s*\d+)\s(.*)$/);
-        if (piMatch && piMatch[1] !== undefined && piMatch[2] !== undefined && piMatch[3] !== undefined) {
-            const prefix = piMatch[1];
-            const lineNum = parseInt(piMatch[2].trim(), 10);
-            const text = piMatch[3].replace(/\t/g, "   ");
-            if (prefix === "+") {
-                additions++;
-                lines.push({ kind: "add", lineNum, text });
-                currentNewLine = lineNum + 1;
-            }
-            else if (prefix === "-") {
-                removals++;
-                lines.push({ kind: "remove", lineNum, text });
-                currentOldLine = lineNum + 1;
-            }
-            else {
-                lines.push({ kind: "context", lineNum, text });
-                currentOldLine = lineNum + 1;
-                currentNewLine = lineNum + 1;
-            }
+        if (!piMatch || piMatch[1] === undefined || piMatch[2] === undefined || piMatch[3] === undefined) {
             continue;
         }
-        const prefix = rawLine[0];
-        const rest = rawLine.slice(1).replace(/\t/g, "   ");
+        const prefix = piMatch[1];
+        const lineNum = parseInt(piMatch[2].trim(), 10);
+        const text = piMatch[3].replace(/\t/g, "   ");
         if (prefix === "+") {
             additions++;
-            const lineNum = currentNewLine++;
-            lines.push({ kind: "add", lineNum, text: rest });
+            lines.push({ kind: "add", lineNum, text });
         }
         else if (prefix === "-") {
             removals++;
-            const lineNum = currentOldLine++;
-            lines.push({ kind: "remove", lineNum, text: rest });
+            lines.push({ kind: "remove", lineNum, text });
         }
-        else if (prefix === " ") {
-            const lineNum = currentNewLine++;
-            currentOldLine++;
-            lines.push({ kind: "context", lineNum, text: rest });
+        else {
+            lines.push({ kind: "context", lineNum, text });
         }
     }
     return { lines, additions, removals };
@@ -340,10 +320,8 @@ export const writeRenderers = {
             const firstLine = errorText.split("\n")[0] ?? "Error";
             return new TruncatedLinesComponent(options.expanded ? theme.fg("error", errorText) : theme.fg("error", firstLine));
         }
-        const diff = result.details?.diff;
-        if (typeof diff === "string" && diff.trim().length > 0) {
-            return renderUnifiedDiffResult(result, options, theme, context);
-        }
+        // Pi's write tool always returns `details: undefined` (write.js): it has no prior file
+        // content to diff against, so there is no diff branch here, only the new-file line dump.
         const content = typeof context.args?.content === "string" ? context.args.content : "";
         return renderWriteNewFileResult(content, options, theme);
     },

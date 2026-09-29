@@ -2,6 +2,7 @@
 // Pi's defaults and the user's ~/.mmp/pi/keybindings.json both apply. The first matching action
 // whose `when` holds consumes the key; otherwise it goes to the focused component (editor, dialog).
 import type { CommandHost } from "./command-host.js";
+import { errorText } from "./errors.js";
 import { runModel } from "./commands.js";
 import { openExternalEditor, pasteClipboard, suspendToShell } from "./key-handlers.js";
 import { runCopy } from "./session-commands.js";
@@ -97,7 +98,7 @@ export function createKeyActions(): KeyAction[] {
         try {
           await host.session().prompt(text, { streamingBehavior: "steer" });
         } catch (error) {
-          host.notice(error instanceof Error ? error.message : String(error), "error");
+          host.notice(errorText(error), "error");
           if (host.getEditorText() === "") host.setEditorText(text);
         }
       },

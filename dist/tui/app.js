@@ -6,6 +6,7 @@ import { getSelectListTheme, } from "@earendil-works/pi-coding-agent";
 import { runUserBash } from "./bash-block.js";
 import { headerBar, PromptFrame, queuedMessagesBar, shortcutsBar, TurnStatus, } from "./chrome.js";
 import { findBuiltin, slashCompletions } from "./builtins.js";
+import { errorText } from "./errors.js";
 import { createExtensionUIContext } from "./ext-host.js";
 import { installKeybindings } from "./keybindings.js";
 import { createKeyActions } from "./keys.js";
@@ -41,7 +42,7 @@ export async function runTuiApp(options) {
         scrollToEndIndicator: () => theme.bg("selectedBg", theme.fg("text", " ↓ Jump to latest ")),
     });
     let session = runtime.session;
-    const transcript = new Transcript(tui, theme, cwd, session);
+    const transcript = new Transcript(tui, theme, session);
     const statuses = new Map();
     const widgets = { aboveEditor: new Map(), belowEditor: new Map() };
     let toolsExpanded = false;
@@ -73,7 +74,12 @@ export async function runTuiApp(options) {
     editorSlot.addChild(prompt);
     const header = headerBar(theme, () => {
         const usage = session.getContextUsage();
-        return { branch, cwd, contextTokens: usage?.tokens ?? undefined, contextWindow: usage?.contextWindow };
+        return {
+            branch,
+            cwd: session.sessionManager.getCwd(),
+            contextTokens: usage?.tokens ?? undefined,
+            contextWindow: usage?.contextWindow,
+        };
     });
     const turnStatus = new TurnStatus(theme, () => (turn === undefined || !workingVisible ? undefined : { ...turn, activity: workingMessage ?? turn.activity }), () => tui.requestRender());
     const defaultFooter = shortcutsBar(theme, () => {
@@ -123,8 +129,10 @@ export async function runTuiApp(options) {
     }
     // ── autocomplete ──────────────────────────────────────────────────────────
     let autocomplete = new piTui.CombinedAutocompleteProvider([], cwd, null);
+    // Rebuilt in bind() (after a /new, /resume, /reload, or fork), so this always reads the cwd of
+    // whichever session is bound then, not the cwd the app launched with.
     function resetAutocomplete() {
-        autocomplete = new piTui.CombinedAutocompleteProvider(slashCompletions(session), cwd, null);
+        autocomplete = new piTui.CombinedAutocompleteProvider(slashCompletions(session), session.sessionManager.getCwd(), null);
         editor.setAutocompleteProvider(autocomplete);
     }
     // ── extension host ────────────────────────────────────────────────────────
@@ -201,7 +209,11 @@ export async function runTuiApp(options) {
     const commandHost = {
         tui,
         theme,
-        cwd,
+        // A getter, not a snapshot: /trust and anything else reading commandHost.cwd must see the
+        // bound session's cwd, which can change after /new, /resume, /reload, or a fork.
+        get cwd() {
+            return session.sessionManager.getCwd();
+        },
         agentDir: options.agentDir,
         runtime,
         projectIdentity: options.projectIdentity,
@@ -343,7 +355,7 @@ export async function runTuiApp(options) {
                         return await runtime.switchSession(sessionPath, actionOptions);
                     }
                     catch (error) {
-                        transcript.notice(`Could not switch session: ${error instanceof Error ? error.message : String(error)}`, "error");
+                        transcript.notice(`Could not switch session: ${errorText(error)}`, "error");
                         return { cancelled: true };
                     }
                 },
@@ -404,7 +416,7 @@ export async function runTuiApp(options) {
                 await session.prompt(message.text, session.isStreaming ? { streamingBehavior: message.mode } : undefined);
             }
             catch (error) {
-                transcript.notice(error instanceof Error ? error.message : String(error), "error");
+                transcript.notice(errorText(error), "error");
             }
         }
     }
@@ -427,7 +439,7 @@ export async function runTuiApp(options) {
                 await builtin.command.run(commandHost, commandArgs);
             }
             catch (error) {
-                transcript.notice(`/${command} failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+                transcript.notice(`/${command} failed: ${errorText(error)}`, "error");
             }
             return;
         }
@@ -454,7 +466,7 @@ export async function runTuiApp(options) {
         }
         catch (error) {
             // No model, no auth: say why and keep the text.
-            transcript.notice(error instanceof Error ? error.message : String(error), "error");
+            transcript.notice(errorText(error), "error");
             if (editor.getText() === "")
                 editor.setText(text);
         }
@@ -471,7 +483,7 @@ export async function runTuiApp(options) {
         const action = keyActions.find((candidate) => keybindings.matches(data, candidate.id) && (candidate.when?.(commandHost) ?? true));
         if (action === undefined)
             return undefined;
-        void Promise.resolve(action.run(commandHost)).catch((error) => transcript.notice(error instanceof Error ? error.message : String(error), "error"));
+        void Promise.resolve(action.run(commandHost)).catch((error) => transcript.notice(errorText(error), "error"));
         tui.requestRender();
         return { consume: true };
     });

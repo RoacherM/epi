@@ -1,3 +1,4 @@
+import { errorText } from "./errors.js";
 import { runModel } from "./commands.js";
 import { openExternalEditor, pasteClipboard, suspendToShell } from "./key-handlers.js";
 import { runCopy } from "./session-commands.js";
@@ -91,7 +92,7 @@ export function createKeyActions() {
                     await host.session().prompt(text, { streamingBehavior: "steer" });
                 }
                 catch (error) {
-                    host.notice(error instanceof Error ? error.message : String(error), "error");
+                    host.notice(errorText(error), "error");
                     if (host.getEditorText() === "")
                         host.setEditorText(text);
                 }

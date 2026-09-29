@@ -1,7 +1,7 @@
 // /compact, /resume, /thinking, /copy, app.message.copy, /reload (docs/tui-design.md 4.6).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,7 @@ import test from "node:test";
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
-function runApp(t, extensions, steps, { settings, inspect } = {}) {
+function runApp(t, extensions, steps, { settings, inspect, env: extraEnv = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), "mmp-tui-session-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
@@ -28,6 +28,7 @@ function runApp(t, extensions, steps, { settings, inspect } = {}) {
       MMP_HOME: join(home, ".mmp"),
       PI_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({ steps }),
+      ...extraEnv,
     },
     encoding: "utf8",
     timeout: 60_000,
@@ -61,11 +62,10 @@ test("/thinking sets the level directly, rejects an unknown level, and offers a 
 });
 
 test("/copy and Ctrl+X copy the last assistant reply, and refuse when there is none", (t) => {
-  // The copy is real (Pi writes the system clipboard); put the developer's text clipboard back.
-  if (process.platform === "darwin") {
-    const saved = spawnSync("pbpaste", { encoding: "utf8" }).stdout;
-    t.after(() => spawnSync("pbcopy", { input: saved }));
-  }
+  // MMP_TEST_CLIPBOARD_FILE (src/tui/clipboard.ts) swaps the real system clipboard for a plain
+  // file, so this test never touches the developer's actual clipboard.
+  const clipboardFile = join(mkdtempSync(join(tmpdir(), "mmp-clipboard-test-")), "clipboard.txt");
+  t.after(() => rmSync(clipboardFile, { force: true }));
   const { text: out, marks } = runApp(t, [fixture("faux-two-replies.mjs")], [
     ["wait", 2500],
     ["type", "/copy"], ["key", "enter"], ["wait", 300], ["mark", "beforeAnyReply"],
@@ -73,11 +73,12 @@ test("/copy and Ctrl+X copy the last assistant reply, and refuse when there is n
     ["type", "/copy"], ["key", "enter"], ["wait", 300], ["mark", "afterCopy"],
     ["key", "ctrl+x"], ["wait", 300], ["mark", "afterCtrlX"],
     ["key", "ctrl+d"],
-  ]);
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.beforeAnyReply, /No agent messages to copy yet\./);
   assert.match(marks.afterReply, /FIRST-REPLY/);
   assert.match(marks.afterCopy.slice(marks.afterReply.length), /Copied last agent message to clipboard\./);
   assert.match(marks.afterCtrlX.slice(marks.afterCopy.length), /Copied last agent message to clipboard\./);
+  assert.equal(readFileSync(clipboardFile, "utf8"), "FIRST-REPLY");
   assert.match(out, /EXIT=0/);
 });
 
