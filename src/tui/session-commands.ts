@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { CommandHost } from "./command-host.js";
+import { crossProjectRefusal } from "./project-guard.js";
 
 type ThinkingLevel = AgentSession["thinkingLevel"];
 
@@ -65,6 +66,13 @@ export async function runResume(host: CommandHost): Promise<void> {
 
 async function resumeSession(host: CommandHost, sessionPath: string): Promise<void> {
   try {
+    // Check before the runtime tears down the current session (docs/tui-design.md §15): a refused
+    // switch must leave the running session exactly as it was.
+    const refusal = crossProjectRefusal(sessionPath, host.projectIdentity);
+    if (refusal !== undefined) {
+      host.notice(refusal, "warning");
+      return;
+    }
     const result = await host.runtime.switchSession(sessionPath);
     if (!result.cancelled) host.notice("Resumed session.");
   } catch (error) {

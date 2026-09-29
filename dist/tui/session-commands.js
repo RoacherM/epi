@@ -2,6 +2,7 @@
 // (docs/tui-design.md 4.6); registered in builtins.ts and keys.ts.
 // The flows follow Pi's interactive mode, built from the components Pi exports.
 import { copyToClipboard, SessionManager, SessionSelectorComponent, ThinkingSelectorComponent, } from "@earendil-works/pi-coding-agent";
+import { crossProjectRefusal } from "./project-guard.js";
 function errorText(error) {
     return error instanceof Error ? error.message : String(error);
 }
@@ -43,6 +44,13 @@ export async function runResume(host) {
 }
 async function resumeSession(host, sessionPath) {
     try {
+        // Check before the runtime tears down the current session (docs/tui-design.md §15): a refused
+        // switch must leave the running session exactly as it was.
+        const refusal = crossProjectRefusal(sessionPath, host.projectIdentity);
+        if (refusal !== undefined) {
+            host.notice(refusal, "warning");
+            return;
+        }
         const result = await host.runtime.switchSession(sessionPath);
         if (!result.cancelled)
             host.notice("Resumed session.");

@@ -2,6 +2,8 @@
 import type { AgentSession, AgentSessionRuntime, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 
+import type { ProjectIdentity } from "./project-guard.js";
+
 export type NoticeTone = "info" | "warning" | "error";
 
 export interface CommandHost {
@@ -11,6 +13,8 @@ export interface CommandHost {
   /** MMP's Pi state directory (~/.mmp/pi): where /trust's ProjectTrustStore lives. */
   readonly agentDir: string;
   readonly runtime: AgentSessionRuntime;
+  /** The project this process assembled its manifest from; used to refuse a cross-project /resume. */
+  readonly projectIdentity: ProjectIdentity;
   /** The current session; it changes after /new, /resume, /reload and forks. */
   session(): AgentSession;
   /** Show a component where the editor is; the returned function puts the editor back. */

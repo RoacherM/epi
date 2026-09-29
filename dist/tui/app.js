@@ -10,6 +10,7 @@ import { createExtensionUIContext } from "./ext-host.js";
 import { installKeybindings } from "./keybindings.js";
 import { createKeyActions } from "./keys.js";
 import { piTui } from "./pi-tui.js";
+import { crossProjectRefusal, refusalForCwd } from "./project-guard.js";
 import { Transcript } from "./transcript.js";
 // One instance per layout slot: the layout engine keys slots by component identity.
 const blank = () => ({ render: () => [""], invalidate() { } });
@@ -190,6 +191,7 @@ export async function runTuiApp(options) {
         cwd,
         agentDir: options.agentDir,
         runtime,
+        projectIdentity: options.projectIdentity,
         session: () => session,
         takeEditorSlot: (component) => surface.takeEditorSlot(component),
         notice: (text, tone) => transcript.notice(text, tone ?? "info"),
@@ -290,9 +292,33 @@ export async function runTuiApp(options) {
             commandContextActions: {
                 waitForIdle: () => session.waitForIdle(),
                 newSession: (actionOptions) => runtime.newSession(actionOptions),
-                fork: (entryId, actionOptions) => runtime.fork(entryId, actionOptions),
+                fork: (entryId, actionOptions) => {
+                    // fork() rebuilds services at the session's own (already-validated) cwd, not a new one,
+                    // but guard it too: defense in depth against any future path that hands it a foreign cwd.
+                    const refusal = refusalForCwd(session.sessionManager.getCwd(), options.projectIdentity);
+                    if (refusal !== undefined) {
+                        transcript.notice(refusal, "warning");
+                        return Promise.resolve({ cancelled: true });
+                    }
+                    return runtime.fork(entryId, actionOptions);
+                },
                 navigateTree: (targetId, actionOptions) => session.navigateTree(targetId, actionOptions),
-                switchSession: (sessionPath, actionOptions) => runtime.switchSession(sessionPath, actionOptions),
+                switchSession: async (sessionPath, actionOptions) => {
+                    try {
+                        // Check before the runtime tears down the current session (docs/tui-design.md §15): a
+                        // refused switch must leave the running session exactly as it was.
+                        const refusal = crossProjectRefusal(sessionPath, options.projectIdentity);
+                        if (refusal !== undefined) {
+                            transcript.notice(refusal, "warning");
+                            return { cancelled: true };
+                        }
+                        return await runtime.switchSession(sessionPath, actionOptions);
+                    }
+                    catch (error) {
+                        transcript.notice(`Could not switch session: ${error instanceof Error ? error.message : String(error)}`, "error");
+                        return { cancelled: true };
+                    }
+                },
                 reload: () => reloadSession(),
             },
             shutdownHandler: () => void exit(0),
@@ -386,6 +412,12 @@ export async function runTuiApp(options) {
     catch (error) {
         await exit(1);
         throw error;
+    }
+    // Only on the very first bind: /new, /resume and /reload also call bind() and must not replay it.
+    for (const message of options.initialMessages ?? []) {
+        if (exiting)
+            break;
+        await submit(message);
     }
     const code = await finished;
     process.off("SIGTERM", onSignal);

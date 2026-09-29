@@ -532,6 +532,8 @@ M2 验收依据（都可重跑）：
 - `initTheme` 从 `getAgentDir()/themes` 读主题，没设 `PI_CODING_AGENT_DIR` 时会去 `~/.pi/agent`，读不到就静默用 Pi 自己的主题。`installMmpTheme` 现在自己设置这个变量，并检查全局主题确实是 MMP 的，不是就报错。
 - 工具块去掉底色框靠 Pi 的 `renderShell: "self"`：设了它，Pi 只把 `renderCall` / `renderResult` 的结果放进一个无底色的容器。MMP 给每个工具的渲染器外面包一层，画竖条和缩进；渲染器复用上一次组件时（`context.lastComponent`），包装层把里面的原组件还给它。
 - 往消息区加提示时必须请求重画，否则在真实终端里要等下一次按键才显示。这个时序问题在假终端里复现不出来，只在伪终端里出现过。
+- `createMmpRuntime`（`src/tui/services.ts`）以前只认 provider/model/thinking/session/continue，其余 Pi CLI 参数（`--tools`、`--no-tools`、`--exclude-tools`、`--no-session`、`--session-id`、`--session-dir`、`--fork`、`--name`、`--models`、`--api-key` 等）被静默丢弃——用 `--tools read` 得到的却是能改文件、跑命令的模型。现在这些参数都用 Pi 导出的 API（`SessionManager` 的静态方法、`resolveModelScopeWithDiagnostics` 等）照 `dist/main.js` 的逻辑实现；v2 还不支持的参数（`--resume`、`--verbose`、`--use-theme`、`--tui-mode`、`@file`）在 TUI 启动前直接报错退出，不再假装支持。支持/不支持的清单集中写在 `services.ts` 顶部一处注释里。
+- `AgentSessionRuntime.switchSession` 只按新会话的 cwd 重建 services，但 MMP 的 Manifest（Rules/Skills/`mmp:*` 扩展）是启动时装好、不能热加载的（见 8.2）：`/resume` 到另一个项目的会话后，shell 命令会在新项目里跑，模型却还在用旧项目的 Rules。修复：`src/tui/project-guard.ts` 的 `crossProjectRefusal` 在真正切换前比较目标会话 cwd 最近的 `.mmp/mmp.json` 根目录和启动时装配的那个，不同就用一条提示（附带 `cd ... && mmp --session ...`）拒绝，`/resume`（`session-commands.ts`）和扩展的 `switchSession` 动作（`app.ts`）共用同一个判断；同项目子目录的会话不受影响。
 
 ## 14. 为什么不走皮肤路线
 
