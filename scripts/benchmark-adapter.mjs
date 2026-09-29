@@ -22,6 +22,8 @@ import { StringDecoder } from "node:string_decoder";
 
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 
+import { BASE_PI_RESOURCE_ARGS } from "../dist/host.js";
+
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const defaultMmpEntry = join(root, "dist", "cli.js");
 const defaultPiEntry = join(
@@ -611,13 +613,7 @@ function baselineAssembly(trialHome, cwd) {
     agentDir: join(trialHome, "pi"),
     projectDiscovery: "disabled",
     cwd,
-    piResourceArgs: [
-      "--no-extensions",
-      "--no-skills",
-      "--no-prompt-templates",
-      "--no-themes",
-      "--no-context-files",
-    ],
+    piResourceArgs: [...BASE_PI_RESOURCE_ARGS],
     rules: [],
     skills: [],
     inlineExtensions: [],
@@ -820,14 +816,7 @@ async function main(argv) {
     ];
     const measuredArgs = options.harness === "mmp"
       ? commonArgs
-      : [
-          "--no-extensions",
-          "--no-skills",
-          "--no-prompt-templates",
-          "--no-themes",
-          "--no-context-files",
-          ...commonArgs,
-        ];
+      : [...BASE_PI_RESOURCE_ARGS, ...commonArgs];
     run = await runChild({
       entry: options.entry,
       args: measuredArgs,

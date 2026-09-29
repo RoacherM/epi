@@ -65,7 +65,6 @@ export function parseMmpArgs(argv) {
                     throw new MmpArgumentError("--approve and --no-approve cannot be used together");
                 }
                 projectTrustOverride = true;
-                passthrough.push(argument);
                 break;
             case "--no-approve":
             case "-na":
@@ -73,7 +72,6 @@ export function parseMmpArgs(argv) {
                     throw new MmpArgumentError("--approve and --no-approve cannot be used together");
                 }
                 projectTrustOverride = false;
-                passthrough.push(argument);
                 break;
             case "--version":
             case "-v":

@@ -28,6 +28,14 @@ export const BASE_PI_RESOURCE_ARGS = [
     "--no-prompt-templates",
     "--no-themes",
     "--no-context-files",
+    // No --no-* flag covers SYSTEM.md / APPEND_SYSTEM.md discovery; an explicit empty
+    // value skips discovery and keeps Pi's default prompt.
+    "--system-prompt",
+    "",
+    "--append-system-prompt",
+    "",
+    // MMP's --approve only trusts .mmp/mmp.json. Pi must never trust project .pi/ files.
+    "--no-approve",
 ];
 export function buildPiArgs(resources, passthrough) {
     const args = [...BASE_PI_RESOURCE_ARGS];

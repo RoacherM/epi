@@ -88,7 +88,6 @@ export function parseMmpArgs(argv: readonly string[]): MmpArgs {
           );
         }
         projectTrustOverride = true;
-        passthrough.push(argument);
         break;
       case "--no-approve":
       case "-na":
@@ -98,7 +97,6 @@ export function parseMmpArgs(argv: readonly string[]): MmpArgs {
           );
         }
         projectTrustOverride = false;
-        passthrough.push(argument);
         break;
       case "--version":
       case "-v":
