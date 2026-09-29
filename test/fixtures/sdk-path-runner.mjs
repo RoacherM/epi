@@ -17,6 +17,15 @@ try {
   if (options.dumpTools === true) {
     process.stdout.write(`${JSON.stringify(runtime.session.getActiveToolNames())}\n`);
   }
+  if (options.dumpCwd === true) {
+    process.stdout.write(`${JSON.stringify({ runtimeCwd: runtime.cwd, sessionCwd: runtime.session.sessionManager.getCwd() })}\n`);
+  }
+  if (options.dumpDiagnostics === true) {
+    process.stdout.write(`${JSON.stringify(runtime.diagnostics)}\n`);
+  }
+  if (options.dumpModel === true) {
+    process.stdout.write(`${JSON.stringify({ model: runtime.session.model, thinkingLevel: runtime.session.thinkingLevel })}\n`);
+  }
   if (options.prompt !== undefined) {
     await runtime.session.prompt(options.prompt);
     process.stdout.write(`${runtime.session.getLastAssistantText() ?? ""}\n`);

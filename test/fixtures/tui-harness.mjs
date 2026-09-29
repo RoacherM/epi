@@ -39,7 +39,7 @@ const running = runTuiApp({
   cwd: process.cwd(),
   agentDir: prepared.agentDir,
   logDirectory: prepared.agentDir,
-  projectIdentity: projectIdentityFromPrepared(prepared),
+  projectIdentity: projectIdentityFromPrepared(prepared, process.cwd()),
   resumeOnStart,
   ...(initialMessages.length > 0 ? { initialMessages } : {}),
   terminal,

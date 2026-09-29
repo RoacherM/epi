@@ -16,19 +16,6 @@ export interface KeyAction {
 
 const DOUBLE_PRESS_MS = 1000;
 
-/** Pi's restoreQueuedMessagesToEditor: put any queued steering/follow-up text back in the editor
- * (ahead of whatever the user already typed) before an abort drops it. Shared by Esc, Ctrl+C and
- * Alt+Up (app.message.dequeue) so a turn can never be aborted with its queue silently discarded. */
-function restoreQueuedMessagesToEditor(host: CommandHost): number {
-  const { steering, followUp } = host.session().clearQueue();
-  const queued = [...steering, ...followUp];
-  if (queued.length === 0) return 0;
-  const queuedText = queued.join("\n\n");
-  const current = host.getEditorText();
-  host.setEditorText([queuedText, current].filter((text) => text.trim() !== "").join("\n\n"));
-  return queued.length;
-}
-
 export function createKeyActions(): KeyAction[] {
   let lastCtrlC = 0;
   return [
@@ -41,7 +28,7 @@ export function createKeyActions(): KeyAction[] {
       run: (host) => {
         const session = host.session();
         if (session.isStreaming) {
-          restoreQueuedMessagesToEditor(host);
+          host.restoreQueuedMessagesToEditor();
           void session.abort();
         } else if (session.isCompacting) {
           session.abortCompaction();
@@ -57,7 +44,7 @@ export function createKeyActions(): KeyAction[] {
         if (host.getEditorText() !== "") {
           host.setEditorText("");
         } else if (host.session().isStreaming) {
-          restoreQueuedMessagesToEditor(host);
+          host.restoreQueuedMessagesToEditor();
           void host.session().abort();
         } else if (Date.now() - lastCtrlC < DOUBLE_PRESS_MS) {
           void host.exit(0);
@@ -112,7 +99,7 @@ export function createKeyActions(): KeyAction[] {
     {
       id: "app.message.dequeue",
       run: (host) => {
-        const count = restoreQueuedMessagesToEditor(host);
+        const count = host.restoreQueuedMessagesToEditor();
         if (count === 0) host.notice("No queued messages to restore.");
         else host.notice(`Restored ${count} queued message${count > 1 ? "s" : ""} to editor.`);
       },

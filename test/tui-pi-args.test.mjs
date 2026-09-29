@@ -4,7 +4,7 @@
 // after it.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import test from "node:test";
 const runnerPath = fileURLToPath(new URL("./fixtures/sdk-path-runner.mjs", import.meta.url));
 const harnessPath = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const fauxEcho = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
+const slowSessionStart = fileURLToPath(new URL("./fixtures/slow-session-start-extension.mjs", import.meta.url));
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "mmp-pi-args-"));
@@ -115,6 +116,26 @@ for (const [flag, args] of [
   });
 }
 
+// Alignment item (docs/tui-design.md §2): "--fork --session-id <existing>" must be rejected like
+// Pi's own createSessionManager (main.js ~289-294), which checks for a local session already
+// using that id before forking, so --fork can never silently collide with an existing session file.
+test("--fork --session-id naming an existing local session is refused, like Pi", (t) => {
+  const f = fixture(t);
+  const seeded = runSdkPath(f, { prompt: "hi" });
+  assert.equal(seeded.status, 0, seeded.stderr);
+  const sessionsDir = join(f.home, ".mmp", "pi", "sessions");
+  const cwdDir = readdirSync(sessionsDir)[0];
+  const sessionFile = readdirSync(join(sessionsDir, cwdDir)).find((name) => name.endsWith(".jsonl"));
+  const sessionPath = join(sessionsDir, cwdDir, sessionFile);
+  // The file name is "<timestamp>_<id>.jsonl" (session-manager.js), not the bare id; read it from
+  // the session header itself instead of parsing the file name.
+  const sessionId = JSON.parse(readFileSync(sessionPath, "utf8").split("\n")[0]).id;
+
+  const result = runSdkPath(f, { args: ["--no-project", "--fork", sessionPath, "--session-id", sessionId] });
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, new RegExp(`Session already exists with id '${sessionId}'`));
+});
+
 function runHarness(t, extensions, args, steps) {
   const root = mkdtempSync(join(tmpdir(), "mmp-tui-initial-msg-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -183,4 +204,36 @@ test("mmp --verbose shows loaded resources, model, and session as startup notice
   assert.match(marks.afterStartup, /Model:/);
   assert.match(marks.afterStartup, /Session:/);
   assert.match(out, /EXIT=0/);
+});
+
+// Bug 2 (docs/tui-design.md §15): the initial-messages loop called submit(text), the same pipeline
+// Enter uses. submit() unconditionally clears the editor and history before doing anything else
+// (and would run MMP's own built-ins for e.g. `mmp /new`), so a positional CLI message sent once
+// startup finished wiped out whatever the startup gate (submit()'s `!ready` branch) had just put
+// back into the editor for text typed before startup was ready. Pi's own interactive-mode.js
+// (~855-864) sends initial messages straight through session.prompt(), bypassing that pipeline
+// entirely; this cross-case (startup gate + initial message + typed text) fails before the fix
+// (the editor ends up empty) and passes after (the typed text survives, untouched).
+test("an initial CLI message does not wipe out text the startup gate had just restored to the editor", (t) => {
+  const { text: out } = runHarness(t, [fauxEcho, slowSessionStart], ["--no-project", "hello"], [
+    // No initial wait: submitted before the slow session_start (300ms) lets bind() finish, so the
+    // startup gate puts "typed-text" back in the editor instead of sending it.
+    ["type", "typed-text"], ["key", "enter"],
+    ["wait", 2000],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(out, /Startup is still in progress/);
+  // The initial message ("hello") was sent once startup finished...
+  assert.match(out, /ECHO:hello/);
+  // ...and "typed-text" was never itself submitted...
+  assert.doesNotMatch(out, /ECHO:typed-text/);
+  // ...and it's still sitting in the editor: it appears at least once (when the startup gate first
+  // restored it) and the editor is never redrawn empty afterward. pi-tui only re-emits the editor's
+  // box when its content actually changes, so a later redraw showing it empty -- "❯" immediately
+  // followed by run of spaces up to the border, not by more text -- is the bug's signature; its
+  // absence is what "still there" actually looks like in this incremental, cumulative capture.
+  // Ctrl+D only quits with an empty editor, so this run needs the timeout, like
+  // tui-startup-typeahead.test.mjs's own first test -- there is nothing to assert about EXIT.
+  assert.match(out, /❯ typed-text\s/);
+  assert.doesNotMatch(out, /❯ {2,}[│┃]/);
 });

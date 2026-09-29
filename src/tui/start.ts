@@ -5,6 +5,7 @@ import { type AgentSessionRuntime, type InlineExtension, parseArgs } from "@eare
 import { buildInlineExtensions } from "../extensions/index.js";
 import { buildTuiInitialMessages } from "../file-arguments.js";
 import type { PreparedMmpRun } from "../host.js";
+import { findNearestProjectManifest } from "../project.js";
 import { runTuiApp } from "./app.js";
 import type { ProjectIdentity } from "./project-guard.js";
 import { createMmpRuntime } from "./services.js";
@@ -32,15 +33,20 @@ export async function createRuntimeFromPrepared(
     piArgs: prepared.args.passthrough,
     extensionFactories,
     externalExtensionPaths: prepared.assembly.externalExtensions.map((extension) => extension.value),
-    projectIdentity: projectIdentityFromPrepared(prepared),
+    projectIdentity: projectIdentityFromPrepared(prepared, cwd),
   });
 }
 
 /** The project this process assembled its manifest from (project-guard.ts): fixed for the whole
- * run, since manifest extensions cannot be hot-loaded (DEVELOPMENT.md §8.2). */
-export function projectIdentityFromPrepared(prepared: PreparedMmpRun): ProjectIdentity {
+ * run, since manifest extensions cannot be hot-loaded (DEVELOPMENT.md §8.2).
+ *
+ * `root` is recomputed from `cwd` directly, independent of `--no-project`/trust: with
+ * `--no-project` (or an untrusted/missing manifest), `prepared.assembly.projectManifest` is
+ * undefined even when a `.mmp/mmp.json` really does exist above `cwd`, which made a session
+ * started in that very folder look like "a different project" to project-guard.ts. */
+export function projectIdentityFromPrepared(prepared: PreparedMmpRun, cwd: string): ProjectIdentity {
   return {
-    root: prepared.assembly.projectManifest?.root,
+    root: findNearestProjectManifest(cwd, prepared.assembly.globalManifest)?.root,
     globalManifestPath: prepared.assembly.globalManifest,
   };
 }
@@ -78,7 +84,7 @@ export async function runTuiV2(prepared: PreparedMmpRun, extensionFactories: Inl
     cwd,
     agentDir: prepared.agentDir,
     logDirectory: prepared.agentDir,
-    projectIdentity: projectIdentityFromPrepared(prepared),
+    projectIdentity: projectIdentityFromPrepared(prepared, cwd),
     resumeOnStart,
     ...(initialMessages.length > 0 ? { initialMessages } : {}),
   });

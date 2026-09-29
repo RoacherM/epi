@@ -1,4 +1,24 @@
 import type { CommandHost } from "./command-host.js";
+export interface MissingSessionCwdIssue {
+    sessionFile?: string;
+    sessionCwd: string;
+    fallbackCwd: string;
+}
+/**
+ * Duck-types Pi's `MissingSessionCwdError` (core/session-cwd.js): thrown by
+ * `AgentSessionRuntime.switchSession` when the session's stored cwd no longer exists, but not part
+ * of the SDK's export surface (only "." is exported, so the class itself can't be imported). The
+ * class sets `this.name = "MissingSessionCwdError"` and carries the same `issue` shape, which is
+ * stable to check for instead.
+ */
+export declare function missingSessionCwdIssue(error: unknown): MissingSessionCwdIssue | undefined;
+/**
+ * Mirrors Pi's promptForMissingSessionCwd/showExtensionConfirm (interactive-mode.js ~2073-2079):
+ * a Yes/No dialog offering to continue the switch in the current cwd instead. MMP has no dedicated
+ * extension-confirm dialog wired to app.ts, so this reuses the same ExtensionSelectorComponent the
+ * SDK's own extension `ui.confirm` uses (ext-host.ts), taking the editor slot directly.
+ */
+export declare function confirmMissingSessionCwd(host: CommandHost, issue: MissingSessionCwdIssue): Promise<string | undefined>;
 /** Pi's handleCompactCommand ignores the throw: compact() already emitted a `compaction_end`
  * event with the failure reason, which transcript.ts turns into a notice. Pi does not refuse
  * this command while a turn is running either; `session.compact` aborts it first. */
