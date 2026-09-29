@@ -136,3 +136,13 @@ test("TUI v2 draws built-in tools with MMP's grok renderers instead of Pi's own"
   // MMP's collapsed read result states the line count; Pi's own renderer shows no such line.
   assert.match(marks.after, /read-me\.txt \(\d+ lines\)/);
 });
+
+// Item 4/5 (pre-merge review, docs/tui-design.md 4.2/4.3): Ctrl+O now also expands a collapsed user
+// message, not just tool output, so the idle shortcuts bar reads "Ctrl+o:expand" instead of "tools".
+test("the idle shortcuts bar reads Ctrl+o:expand, not Ctrl+o:tools", (t) => {
+  const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
+    ["wait", 2500], ["mark", "idle"], ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.idle, /Ctrl\+o:expand/);
+  assert.doesNotMatch(marks.idle, /Ctrl\+o:tools/);
+});

@@ -81,22 +81,51 @@ test("moving the caret off the chip hides the popup; moving back onto it shows i
   assert.match(since(marks.off, marks.on), /enter or double-click to expand/);
 });
 
-test("the shortcuts bar shows Enter:expand while the caret is on a text chip", (t) => {
+// Item 2 (docs/tui-design.md 4.3): grok's footer reads "Enter:send" right after a paste, and only
+// switches to "Enter:expand" once the caret has actually moved onto the chip. Before the fix,
+// chipAtCursor()'s inclusive-at-end span made "just pasted" indistinguishable from "on the chip".
+test("the shortcuts bar shows Enter:expand only once the caret has moved onto the chip, not right after pasting", (t) => {
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500], paste, ["wait", 300], ["mark", "onChip"], ["key", "ctrl+d"],
+    ["wait", 2500], paste, ["wait", 300], ["mark", "justPasted"],
+    ["key", "left"], ["wait", 300], ["mark", "onChip"], ["key", "ctrl+d"],
   ]);
+  assert.doesNotMatch(marks.justPasted, /Enter:expand/);
   assert.match(marks.onChip, /Enter:expand/);
 });
 
-test("Enter on the chip expands it in place instead of submitting", (t) => {
+// Item 7: the footer on a text chip reads "Enter:expand │ Shift+Enter:newline", not just the first.
+test("the shortcuts bar on a text chip also offers Shift+Enter:newline", (t) => {
+  const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
+    ["wait", 2500], paste, ["wait", 300],
+    ["key", "left"], ["wait", 300], ["mark", "onChip"], ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.onChip, /Enter:expand\s*│\s*Shift\+Enter:newline/);
+});
+
+test("Enter right after a paste sends it, like grok, instead of expanding it in place", (t) => {
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
     ["wait", 2500], paste, ["wait", 300], ["mark", "pasted"],
+    ["key", "enter"], ["wait", 800], ["mark", "sent"], ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.pasted, /\[Pasted: 4 lines\]/);
+  // ECHO: only appears once the model actually received the message -- "expanded in place" never
+  // calls the model at all, so this is what tells the two apart (both leave "[Pasted:" gone and
+  // "line1".."line4" somewhere on screen, which is why a weaker assertion wouldn't catch a
+  // regression back to expand-on-Enter).
+  assert.match(marks.sent, /ECHO:line1\s+line2\s+line3\s+line4/);
+});
+
+test("Enter on the chip expands it in place instead of submitting, once the caret has moved onto it", (t) => {
+  const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
+    ["wait", 2500], paste, ["wait", 300],
+    ["key", "left"], ["wait", 300], ["mark", "onChip"],
     ["key", "enter"], ["wait", 300], ["mark", "expanded"], ["key", "ctrl+d"],
   ]);
-  const redrawn = since(marks.pasted, marks.expanded);
+  const redrawn = since(marks.onChip, marks.expanded);
   assert.doesNotMatch(redrawn, /\[Pasted: 4 lines\]/);
   assert.match(redrawn, /line1/);
   assert.match(redrawn, /line4/);
+  assert.doesNotMatch(marks.expanded, /ECHO:/); // still sitting in the editor, never submitted
 });
 
 test("backspace deletes the whole chip in one keystroke", (t) => {
@@ -126,19 +155,35 @@ test("a chip pasted into the draft survives Alt+Up restoring a queued follow-up 
   // prepends the queued message, then calls setEditorText -- which must keep this chip's registry
   // entry, not just its marker text, or the chip becomes dead text that "expands" to its own
   // literal label instead of the original paste.
+  //
+  // The queued text is deliberately longer than the "[Pasted: 4 lines]" label (item 1's regression):
+  // the restored draft is 3 lines ("queueme with a much longer follow-up text", "", "[Pasted: 4
+  // lines]"), so the chip sits on line 2, not line 0. Before the fix, findChip matched against all
+  // previous lines joined with the current one, so the chip's start/end were offsets into that
+  // whole concatenation while being compared against the cursor's own within-line column -- with a
+  // short queued prefix the two ranges happened to overlap by coincidence and the bug went
+  // unnoticed; a longer prefix pushes the false offsets well past the real column, so this reliably
+  // fails before the fix (Enter can no longer find the chip at all) and passes after.
+  const queued = "queueme with a much longer follow-up text";
   const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
     ["wait", 2500], ["type", "go"], ["key", "enter"], // starts a streamed turn
-    ["wait", 500], ["type", "queueme"], ["key", "enter"], // queues a follow-up while streaming
+    ["wait", 500], ["type", queued], ["key", "enter"], // queues a follow-up while streaming
     ["wait", 300], paste, ["wait", 300], // a fresh, unsubmitted chip now sits in the draft
     ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
+    ["key", "left"], ["wait", 300], ["mark", "onChip"], // caret onto the chip (item 2: "end" alone no longer counts)
     ["key", "enter"], ["wait", 300], ["mark", "expanded"], // Enter on the chip should still expand it
     ["key", "ctrl+c"], ["wait", 300], ["wait", 4000], ["key", "ctrl+d"],
   ]);
-  assert.match(marks.restored, /queueme/);
+  assert.match(marks.restored, new RegExp(queued.slice(0, 10)));
   assert.match(marks.restored, /\[Pasted: 4 lines\]/);
-  const redrawnByExpand = since(marks.restored, marks.expanded);
+  const redrawnByExpand = since(marks.onChip, marks.expanded);
   assert.match(redrawnByExpand, /line1/);
   assert.match(redrawnByExpand, /line4/);
+  // The discriminator: still streaming at this point, so a failed expand falls through to submit(),
+  // which queues Enter as a follow-up (docs/tui-design.md 4.7) instead of expanding in place -- a
+  // weaker "line1..line4 somewhere on screen" assertion wouldn't catch that regression, since the
+  // queued text would show the same lines either way.
+  assert.doesNotMatch(redrawnByExpand, /Follow-up:/);
 });
 
 test("Ctrl+V with a big block of text on the clipboard folds into a chip too, same as a terminal paste", (t) => {
@@ -150,6 +195,121 @@ test("Ctrl+V with a big block of text on the clipboard folds into a chip too, sa
     ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],
   ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterPaste, /\[Pasted: 4 lines\]/);
+});
+
+// Item 4: a paste ending with a newline is N real lines terminated by it, not N+1 (the trailing
+// empty one) -- grok shows 40 for exactly this input.
+test("a paste ending with a newline shows the real line count, not one more", (t) => {
+  const forty = Array.from({ length: 40 }, (_, i) => `line${i}`).join("\n");
+  const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
+    ["wait", 2500], ["paste", `${forty}\n`], ["wait", 300], ["mark", "afterPaste"], ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.afterPaste, /\[Pasted: 40 lines\]/);
+  assert.doesNotMatch(marks.afterPaste, /\[Pasted: 41 lines\]/);
+});
+
+// Item 6 (docs/tui-design.md 4.3): an image queued as a follow-up while a turn is streaming (MMP's
+// Enter semantics, docs/tui-design.md 4.7) used to vanish on Alt+Up along with any text -- app.ts's
+// clearAllQueues only ever read session.clearQueue()'s plain string arrays. Recovered here via the
+// underlying Agent's public peekQueuedMessages() (see clearAllQueues's own comment for why that's
+// possible for the session's own queue, unlike compactionQueue which was always MMP's own data).
+test("Alt+Up restores an image queued as a follow-up while streaming, not just the text", (t) => {
+  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-queue-image-"));
+  t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
+  const clipboardFile = join(clipboardDir, "clipboard.png");
+  writeFileSync(clipboardFile, ONE_PIXEL_PNG);
+  const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
+    ["wait", 2500], ["type", "go"], ["key", "enter"], // starts a streamed turn
+    ["wait", 500], ["key", "ctrl+v"], ["wait", 300], // pastes [Image #1] into the draft
+    ["key", "enter"], ["wait", 300], ["mark", "queued"], // queues it as a follow-up (still streaming)
+    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
+    ["key", "ctrl+c"], ["wait", 300], ["wait", 4000], ["key", "ctrl+d"],
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  assert.match(marks.queued, /Follow-up:/);
+  const afterRestore = since(marks.queued, marks.restored);
+  assert.match(afterRestore, /\[Image #\d+\]/);
+});
+
+// Pi's own queue (PendingMessageQueue, pi-agent-core) defaults to "one-at-a-time": peekQueuedMessages()
+// only ever exposes the *first* queued message's real content on its own. clearAllQueues (app.ts)
+// works around this by switching the Agent's steeringMode/followUpMode to "all" before peeking, so a
+// *second* follow-up queued in the same turn is fully recoverable too, including its image -- not
+// just the first one (covered by the single-message test above).
+test("Alt+Up restores a second queued follow-up's image too, not just the first message's", (t) => {
+  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-second-queued-"));
+  t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
+  const clipboardFile = join(clipboardDir, "clipboard.png");
+  writeFileSync(clipboardFile, ONE_PIXEL_PNG);
+  const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
+    ["wait", 2500], ["type", "go"], ["key", "enter"], // starts a streamed turn
+    ["wait", 500], ["type", "first"], ["key", "enter"], // queues follow-up #1 (plain text)
+    ["wait", 300], ["type", "second "], ["key", "ctrl+v"], ["key", "enter"], // follow-up #2: text + [Image #1]
+    ["wait", 300], ["mark", "queued"],
+    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
+    ["key", "ctrl+c"], ["wait", 300], ["wait", 4000], ["key", "ctrl+d"],
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  const afterRestore = since(marks.queued, marks.restored);
+  assert.match(afterRestore, /first/);
+  assert.match(afterRestore, /second/);
+  assert.match(afterRestore, /\[Image #\d+\]/);
+  assert.doesNotMatch(afterRestore, /Couldn't check/);
+});
+
+// Item 3 (pre-merge review): an extension's ctx.sendMessage (AgentSession.sendCustomMessage,
+// agent-session.js ~1496) queues straight into the Agent's own queue with no entry in the plain-text
+// follow-up array app.ts's clearAllQueues reads for restore. Pairing the peeked Agent message back to
+// that text entry by *position* would misattribute here -- the injected message lands in the Agent's
+// queue first, so a positional pairing would match it to the real follow-up's text and conclude
+// (wrongly) that the real message had no image, losing it. Pairing by content instead (does a peeked
+// message's own text equal this queued text) finds the real message correctly regardless of order.
+test("a queued follow-up's image isn't lost or misattributed to an extension's injected followUp custom message", (t) => {
+  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-inject-"));
+  t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
+  const clipboardFile = join(clipboardDir, "clipboard.png");
+  writeFileSync(clipboardFile, ONE_PIXEL_PNG);
+  const { marks } = runApp(t, [fixture("faux-queue.mjs"), fixture("inject-custom-queue-message.mjs")], [
+    ["wait", 2500],
+    ["type", "/schedule-inject followUp"], ["key", "enter"], // schedules pi.sendMessage ~800ms from now
+    ["wait", 300],
+    ["type", "go"], ["key", "enter"], // starts a streamed turn
+    ["wait", 1200], // the scheduled injection lands here, mid-stream
+    ["type", "real "], ["key", "ctrl+v"], ["key", "enter"], // real queued follow-up: text + [Image #1]
+    ["wait", 300], ["mark", "queued"],
+    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
+    ["key", "ctrl+c"], ["wait", 300], ["wait", 4000], ["key", "ctrl+d"],
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  const afterRestore = since(marks.queued, marks.restored);
+  assert.match(afterRestore, /real/);
+  assert.match(afterRestore, /\[Image #\d+\]/);
+});
+
+// Second must-fix from the pre-merge review of the first pairing fix: sendCustomMessage's *default*
+// deliverAs is "steer" (agent-session.js), not "followUp" -- an injected message with no explicit
+// deliverAs lands in the Agent's own steering queue, with (as above) no entry in AgentSession's own
+// text arrays. Gating clearAllQueues's steering peek/clear on session.getSteeringMessages() being
+// non-empty (which it never is here, since this message never touches that array) used to skip
+// clearing steering, so the one peekQueuedMessages() call left standing returned the injected
+// *steering* content instead of the real queued follow-up -- losing its image the same way, just
+// through the fix's own new gate rather than the original positional-pairing bug.
+test("a queued follow-up's image survives an injected custom message using the default (steer) delivery", (t) => {
+  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-inject-default-"));
+  t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
+  const clipboardFile = join(clipboardDir, "clipboard.png");
+  writeFileSync(clipboardFile, ONE_PIXEL_PNG);
+  const { marks } = runApp(t, [fixture("faux-queue.mjs"), fixture("inject-custom-queue-message.mjs")], [
+    ["wait", 2500],
+    ["type", "/schedule-inject"], ["key", "enter"], // no argument: default deliverAs (steer)
+    ["wait", 300],
+    ["type", "go"], ["key", "enter"], // starts a streamed turn
+    ["wait", 1200], // the scheduled injection lands here, mid-stream, into the steering queue
+    ["type", "real "], ["key", "ctrl+v"], ["key", "enter"], // real queued follow-up: text + [Image #1]
+    ["wait", 300], ["mark", "queued"],
+    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
+    ["key", "ctrl+c"], ["wait", 300], ["wait", 4000], ["key", "ctrl+d"],
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  const afterRestore = since(marks.queued, marks.restored);
+  assert.match(afterRestore, /real/);
+  assert.match(afterRestore, /\[Image #\d+\]/);
 });
 
 test("Ctrl+V with an image on the clipboard (via the test seam) becomes an [Image #1] chip with a dimensioned preview, and is sent as an attachment", (t) => {
@@ -216,6 +376,36 @@ test("double-click on the chip through the real mouse-dispatch path expands it (
   assert.match(redrawn, /line3/);
   assert.match(redrawn, /line4/);
   assert.match(marks.afterClick, /Shift\+Tab:thinking/); // footer back to normal: chip is gone
+});
+
+// Item 3's press fix has a subtle regression risk: the press branch probes with a synthetic click
+// to decide whether to claim the gesture, which moves the caret and can leave a stale `before`
+// reference for the *real* click that follows -- landing the caret at the chip's `end` instead of
+// inside it, which chipAtCursor() (item 2) no longer counts as "on" a text chip. A single ordinary
+// click (not a double-click) must still show the popup and the Enter:expand footer.
+test("a single click on the chip (not a double-click) still shows the popup and Enter:expand", (t) => {
+  const rows = 40;
+  const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
+    ["wait", 2500], paste, ["wait", 300],
+    ["mouse", { x: 2 + 4 + 2, y: rows - 4, clicks: 1 }],
+    ["wait", 300], ["mark", "afterClick"],
+    ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],
+  ], { rows });
+  // Marks are cumulative, and the press alone (before the release/click that follows it settle
+  // the caret) already triggers one correct-looking redraw -- so this can't just check that the
+  // right text appears *somewhere* in the cumulative output (it would, even from that transient
+  // frame, whether or not the final state is right). Instead it checks *which state's text was
+  // drawn most recently*: the last occurrence of the on-chip footer/hint must come after the last
+  // occurrence of the idle footer/just-pasted hint, proving the settled state -- not a stale one --
+  // is the on-chip one.
+  assert.ok(
+    marks.afterClick.lastIndexOf("Enter:expand") > marks.afterClick.lastIndexOf("Shift+Tab:thinking"),
+    "the settled footer should show Enter:expand, not have fallen back to idle",
+  );
+  assert.ok(
+    marks.afterClick.lastIndexOf("enter or double-click to expand") > marks.afterClick.lastIndexOf("paste again or double-click to expand"),
+    "the settled popup hint should read enter-to-expand, not still paste-again (or nothing)",
+  );
 });
 
 for (const columns of [40, 80, 120]) {

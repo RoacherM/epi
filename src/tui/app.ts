@@ -135,7 +135,10 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   // Preview popup for a paste/image chip (docs/tui-design.md 4.3), placed right above the prompt.
   // Hidden while a dialog occupies the editor slot (e.g. /model): the chip it would describe is
   // no longer what's on screen, matching the footer's own editorSlotHasDialog gate below.
-  const pastePreviewWidget = pastePreview(theme, () => (editorSlotHasDialog ? undefined : editor.chipAtCursor()));
+  // chipForPopup(), not chipAtCursor(): the popup still shows right after a fresh paste (spec
+  // table), even though chipAtCursor() alone no longer counts that position as "on the chip"
+  // (docs/tui-design.md 4.3's Enter row -- Enter must send there, like grok, not expand).
+  const pastePreviewWidget = pastePreview(theme, () => (editorSlotHasDialog ? undefined : editor.chipForPopup()));
 
   const header = headerBar(theme, () => {
     const usage = session.getContextUsage();
@@ -154,12 +157,16 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   const defaultFooter = shortcutsBar(theme, () => {
     const shortcuts: Shortcut[] = editorSlotHasDialog
       ? [{ key: "↑↓", label: "select" }, { key: "Enter", label: "confirm" }, { key: "Esc", label: "cancel" }]
-      // The caret is on a text chip: Enter expands it instead of submitting (docs/tui-design.md 4.3).
+      // The caret is genuinely on a text chip (not merely just past one right after pasting, per
+      // chipAtCursor()'s strict span check): Enter expands it instead of submitting, and Shift+Enter
+      // still adds a newline without expanding (docs/tui-design.md 4.3, item 7's footer style).
       : editor.chipAtCursor()?.kind === "text"
-        ? [{ key: "Enter", label: "expand" }]
+        ? [{ key: "Enter", label: "expand" }, { key: "Shift+Enter", label: "newline" }]
+        // "expand", not "tools": Ctrl+o now also expands a collapsed user message (item 5), not
+        // just tool output.
         : turn === undefined
-          ? [{ key: "Shift+Tab", label: "thinking" }, { key: "Ctrl+o", label: "tools" }, { key: "/", label: "commands" }, { key: "Ctrl+d", label: "quit" }]
-          : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "tools" }, { key: "Alt+Enter", label: "steer" }];
+          ? [{ key: "Shift+Tab", label: "thinking" }, { key: "Ctrl+o", label: "expand" }, { key: "/", label: "commands" }, { key: "Ctrl+d", label: "quit" }]
+          : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "expand" }, { key: "Alt+Enter", label: "steer" }];
     return { shortcuts, right: theme.fg("muted", [...statuses.values()].join(" · ")) };
   });
   footerSlot.addChild(defaultFooter);
@@ -623,25 +630,118 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       session.extensionRunner.getRegisteredCommands().some((registered) => registered.invocationName === command);
   }
 
+  type QueuedMessage = { text: string; images: ImageContent[] };
+
+  /** A queued AgentMessage's own text content joined into one string -- matches exactly what
+   * AgentSession._queueSteer/_queueFollowUp push onto the plain-text `_steeringMessages`/
+   * `_followUpMessages` arrays, since both are built from the same `text` variable in the same call
+   * (agent-session.js). Used to pair a peeked AgentMessage back to its text entry by content, not
+   * position (item 3): `session.sendCustomMessage` (agent-session.js ~1496) enqueues an extension's
+   * custom message straight into the Agent's own queue with no corresponding text-array entry at
+   * all, so a positional pairing could silently attach *its* images to the wrong queued text. */
+  function queuedMessageText(message: unknown): string {
+    const content = message !== null && typeof message === "object" && "content" in message ? (message as { content: unknown }).content : undefined;
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return "";
+    return (content as { type: string; text?: string }[]).filter((part) => part.type === "text").map((part) => part.text ?? "").join("");
+  }
+
+  function queuedMessageImages(message: unknown): ImageContent[] {
+    const content = message !== null && typeof message === "object" && "content" in message ? (message as { content: unknown }).content : undefined;
+    return Array.isArray(content) ? (content as { type: string }[]).filter((part): part is ImageContent => part.type === "image") : [];
+  }
+
+  /** Pairs each of `texts` with the first not-yet-claimed `peeked` message whose own text content
+   * equals it (see queuedMessageText), consuming that message so two identical queued texts don't
+   * both draw images from the same one. */
+  function imagesFor(texts: readonly string[], peeked: readonly unknown[]): ImageContent[][] {
+    const available = [...peeked];
+    return texts.map((text) => {
+      const index = available.findIndex((message) => queuedMessageText(message) === text);
+      if (index === -1) return [];
+      const [message] = available.splice(index, 1);
+      return queuedMessageImages(message);
+    });
+  }
+
   /** Pi's clearAllQueues (interactive-mode.js ~3729): the session's own steering/follow-up queue
-   * plus app.ts's own compaction queue, combined and cleared. */
-  function clearAllQueues(): { steering: string[]; followUp: string[] } {
+   * plus app.ts's own compaction queue, combined and cleared -- with images recovered (item 6:
+   * images used to be silently dropped on restore).
+   *
+   * compactionQueue is MMP's own array (submit()'s isCompacting branch, below) and always keeps its
+   * images intact. The session's own steering/followUp queues (AgentSession's private
+   * `_steeringMessages`/`_followUpMessages`, backing getSteeringMessages/getFollowUpMessages/
+   * clearQueue) are typed as plain `string[]` -- Pi's own upstream restoreQueuedMessagesToEditor
+   * (interactive-mode.js ~3761) has this exact same gap. The underlying Agent (session.agent,
+   * pi-agent-core) exposes public `steeringMode`/`followUpMode` setters alongside
+   * `peekQueuedMessages()`/`clearSteeringQueue()` -- switching both queues to "all" mode makes
+   * peekQueuedMessages() return *every* message in whichever queue it reads (with real content,
+   * including images), not just the first: Pi's default "one-at-a-time" mode
+   * (PendingMessageQueue.peek(), pi-agent-core) only ever exposes one message, which is what made a
+   * second queued message's images unrecoverable before. Clearing just the steering queue at the
+   * Agent level (not AgentSession's own clearQueue(), which would also wipe the text-array
+   * bookkeeping this still needs) and peeking again then returns every follow-up message the same
+   * way. Modes are restored before returning; session.clearQueue() (unaffected by any of this --
+   * queue mode only changes what peek() exposes, never the messages themselves) still does the
+   * actual clearing and the `_steeringMessages`/`_followUpMessages` bookkeeping.
+   *
+   * Always peeks/clears steering first, unconditionally -- not just when
+   * `session.getSteeringMessages()` is non-empty. `agent.steer(...)` (the default for an
+   * extension's `sendMessage` when `deliverAs` isn't "followUp", item 3's
+   * inject-custom-queue-message.mjs test) can populate the Agent's own steering queue with no
+   * matching entry in `_steeringMessages`; gating on the session's own (empty, in that case) count
+   * would skip clearing steering, and the one `peekQueuedMessages()` call left would then return
+   * that injected steering content instead of the real follow-ups, losing them the same way item 3
+   * already fixed for the position-based pairing bug. Pairing `steering` texts against the first
+   * peek and `followUp` texts against the second is always correct regardless: when steering really
+   * is empty, the first peek is follow-up content anyway, but it's paired against zero steering
+   * texts (imagesFor on an empty array), so nothing is misattributed. */
+  function clearAllQueues(): { steering: QueuedMessage[]; followUp: QueuedMessage[] } {
+    const agent = session.agent;
+    const savedSteeringMode = agent.steeringMode;
+    const savedFollowUpMode = agent.followUpMode;
+    agent.steeringMode = "all";
+    agent.followUpMode = "all";
+    // peekQueuedMessages() returns steering's own messages when non-empty, else follow-up's; after
+    // clearSteeringQueue() empties it, a second call reaches follow-up's either way.
+    const firstPeeked = agent.peekQueuedMessages();
+    agent.clearSteeringQueue();
+    const secondPeeked = agent.peekQueuedMessages();
+    agent.steeringMode = savedSteeringMode;
+    agent.followUpMode = savedFollowUpMode;
     const { steering, followUp } = session.clearQueue();
-    const compactionSteering = compactionQueue.filter((message) => message.mode === "steer").map((message) => message.text);
-    const compactionFollowUp = compactionQueue.filter((message) => message.mode === "followUp").map((message) => message.text);
+    const steeringImages = imagesFor(steering, firstPeeked);
+    const followUpImages = imagesFor(followUp, secondPeeked);
+    const compactionSteering = compactionQueue.filter((message) => message.mode === "steer");
+    const compactionFollowUp = compactionQueue.filter((message) => message.mode === "followUp");
     compactionQueue = [];
-    return { steering: [...steering, ...compactionSteering], followUp: [...followUp, ...compactionFollowUp] };
+    return {
+      steering: [
+        ...steering.map((text, index) => ({ text, images: steeringImages[index] ?? [] })),
+        ...compactionSteering.map(({ text, images }) => ({ text, images })),
+      ],
+      followUp: [
+        ...followUp.map((text, index) => ({ text, images: followUpImages[index] ?? [] })),
+        ...compactionFollowUp.map(({ text, images }) => ({ text, images })),
+      ],
+    };
   }
 
   /** Pi's restoreQueuedMessagesToEditor (interactive-mode.js ~3761): put any queued steering/
-   * follow-up text back in the editor (ahead of whatever the user already typed). Shared by Esc,
-   * Ctrl+C, Alt+Up (via CommandHost) and an extension's ctx.abort() (the abortHandler above), so a
-   * turn or compaction can never be aborted with its queue silently discarded. */
+   * follow-up text back in the editor (ahead of whatever the user already typed), re-registering
+   * any recovered images as chips (item 6) rather than dropping them. Shared by Esc, Ctrl+C, Alt+Up
+   * (via CommandHost) and an extension's ctx.abort() (the abortHandler above), so a turn or
+   * compaction can never be aborted with its queue silently discarded. */
   function restoreQueuedMessagesToEditor(): number {
     const { steering, followUp } = clearAllQueues();
     const queued = [...steering, ...followUp];
     if (queued.length === 0) return 0;
-    const queuedText = queued.join("\n\n");
+    const queuedText = queued
+      .map((message) => [
+        message.text,
+        ...message.images.map((image) => editor.registerImage(Buffer.from(image.data, "base64"), image.mimeType)),
+      ].filter((part) => part !== "").join(" "))
+      .join("\n\n");
     const current = editor.getText();
     editor.setText([queuedText, current].filter((text) => text.trim() !== "").join("\n\n"));
     tui.requestRender();

@@ -240,7 +240,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 
 | 类型 | 样式 | Pi 组件能否复用 |
 |---|---|---|
-| 用户消息 | `❯` 加整块底色 `userMessageBg`，上下各 1 行内边距。带 OSC 133 标记，全屏下可以跳到上一条/下一条提示 | 不复用，自己写。Pi 的 `UserMessageComponent` 样式不同 |
+| 用户消息 | `❯` 加整块底色 `userMessageBg`，上下各 1 行内边距。带 OSC 133 标记，全屏下可以跳到上一条/下一条提示。超过 3 **逻辑行**（不是屏幕上折行后的行数——窄屏下一整行很长也不会因为折行超过 3 行就被折叠）折叠成前 3 行 + `…`，`Ctrl+O` 展开（2026-09-30 用户在真实终端里实测 grok 1.0.44：粘贴 12 行内容发送后，气泡里只显示前 3 行再加一行 `…`）。图片内容块显示成 `[Image #N]`，`@file` 内联的 `<file name="...">...</file>`（file-arguments.ts）显示成 `[File: 文件名]`；都只影响这里的显示，模型收到的还是完整内容 | 不复用，自己写。Pi 的 `UserMessageComponent` 样式不同 |
 | 助手消息 | markdown，没有标题行 | 复用 `AssistantMessageComponent`（导出），传入扩展的 markdown 变换 |
 | thinking | 折叠成一行 `◆ Thought for 2.0s`，可以单独展开 | 用 `AssistantMessageComponent` 自带的参数：`hideThinking=true` 加 `hiddenLabel="Thought for 2.0s"`。展开某一条消息，就用 `hideThinking=false` 重新创建这条消息的组件。thinking 和正文在一条消息里交错出现，交给这个组件处理最简单。grok 的"运行中显示最后 3 行"要自己遍历内容块，放到 v1.1 |
 | 工具调用 | 运行中：左侧 `┃` 竖条用 `accent` 色；结束：`◆` 加标题一行，失败时标题用 `error` 色。三种状态：折叠、截断、展开 | 自己写卡片外框，内容见下 |
@@ -258,7 +258,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 
 扩展注册的工具（比如 MCP 工具）用它们自己的 `renderCall` / `renderResult`，放进同一个卡片外框里。既没有内置样式也没有自带渲染器的工具，用通用样式：显示参数 JSON 和结果文本。
 
-**折叠。** `Ctrl+O` 切换所有工具块，`Ctrl+T` 切换所有 thinking。单个块用鼠标点标题行切换。v1 不做键盘逐块选中（grok 的 scrollback 焦点模式），放到 v1.1。
+**折叠。** `Ctrl+O` 切换所有工具块和折叠的用户消息（上面那行），`Ctrl+T` 切换所有 thinking。单个块用鼠标点标题行切换。快捷键栏对应显示 `Ctrl+o:expand`（不再是 `tools`，因为现在也展开用户消息）。v1 不做键盘逐块选中（grok 的 scrollback 焦点模式），放到 v1.1。
 
 ### 4.3 输入框和阻塞卡片
 
@@ -278,7 +278,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | 何时变成标签 | 一次粘贴 ≥4 行 → `[Pasted: N lines]`；>10KB → `[Pasted: 12 KB]` | Ctrl+V 贴图片、`@图片`、拖进终端的图片路径 → `[Image #N]` |
 | 标签 | 原子：光标不能停在标签中间，退格一次删掉整个标签 | 同左 |
 | 预览浮窗 | 刚粘贴完、或光标落在标签上时，在输入框上方显示：前 3 行、`⋮ (N more lines)`、后 3 行，底边提示 `enter or double-click to expand`（刚粘贴时提示 `paste again or double-click to expand`）。光标离开就消失 | 光标落在标签上时显示，标题 `Image #1 ─ PNG · 64x40 · 5.0 KB`，框里用终端图形协议画图（pi-tui 的 `Image` 组件）；终端不支持图形时只显示标题行 |
-| 展开 | 光标在标签上按 Enter、双击标签、或刚粘贴时再粘贴一次 → 标签换成全文。此时底栏显示 `Enter:expand` | 不展开；Enter 照常发送 |
+| 展开 | 光标**真正落在**标签上（不是刚粘贴完、光标停在标签末尾那一下——grok 1.0.44 里两者不同：刚粘贴完底栏是 `Enter:send`、浮窗提示 `paste again or double-click to expand`；光标移到标签上后底栏才变成 `Enter:expand │ Shift+Enter:newline`、浮窗提示 `enter or double-click to expand`）时按 Enter、双击标签、或刚粘贴时再粘贴一次 → 标签换成全文 | 不展开；Enter 照常发送 |
 | 发送 | 标签换成全文后发给模型 | 图片作为图片附在消息里（`session.prompt(text, { images })`），不再让模型用 read 工具去读文件 |
 
 ### 4.4 状态行

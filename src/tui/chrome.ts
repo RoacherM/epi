@@ -1,7 +1,7 @@
 // grok-build chrome (docs/tui-design.md 4.1, grok notes 2.1-2.2): header bar, user message block,
 // turn status row, framed prompt, shortcuts bar. Pure render functions of the state they are given.
 import { homedir } from "node:os";
-import { sep } from "node:path";
+import { basename, sep } from "node:path";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorComponent, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
@@ -69,19 +69,57 @@ export function headerBar(theme: Theme, state: () => HeaderState): Component {
 
 // ── user message block ────────────────────────────────────────────────────────
 
-/** Full-width `userMessageBg` block with one row of padding, `❯ text` and the time on the right. */
+const FILE_BLOCK_RE = /<file name="([^"]*)">[\s\S]*?<\/file>\n?/g;
+
+/** A user message's own display text: `<file name="...">...</file>` blocks (file-arguments.ts's
+ * `@file` inlining) collapse to `[File: name]`, and image content parts (never inlined as text)
+ * show as `[Image #N]` -- the model still gets the full `content` array unchanged; this only
+ * affects what's drawn in the transcript (item 5, docs/tui-design.md 4.3's 发送 row). */
+function displayText(content: unknown): string {
+  const text = typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content.filter((part): part is { type: "text"; text: string } => part?.type === "text").map((part) => part.text).join("")
+      : "";
+  const imageCount = Array.isArray(content) ? content.filter((part) => part?.type === "image").length : 0;
+  const withFileChips = text.replace(FILE_BLOCK_RE, (_match, name: string) => `[File: ${basename(name)}]\n`).trim();
+  const images = Array.from({ length: imageCount }, (_, index) => `[Image #${index + 1}]`).join(" ");
+  return [withFileChips, images].filter((part) => part !== "").join("\n");
+}
+
+const COLLAPSED_LINES = 3;
+
+/** Full-width `userMessageBg` block with one row of padding, `❯ text` and the time on the right.
+ * Collapses past `COLLAPSED_LINES` *logical* lines (not wrapped rows) to `…` -- observed in grok
+ * 1.0.44 (docs/tui-design.md 4.2/4.3): a sent 12-line paste renders as its first 3 lines then `…`.
+ * Counting logical lines, not wrapped rows, means a single long line never collapses just because a
+ * narrow terminal wraps it into more than 3 screen rows. Expanded back with Ctrl+O -- the same
+ * toggle that expands tool output (item 5). */
 export class UserMessageBlock implements Component {
+  private readonly text: string;
+  private expanded = false;
+
   constructor(
     private readonly theme: Theme,
-    private readonly text: string,
+    content: unknown,
     private readonly time: Date,
-  ) {}
+  ) {
+    this.text = displayText(content);
+  }
+
+  setExpanded(expanded: boolean): void {
+    this.expanded = expanded;
+  }
 
   render(width: number): string[] {
     const paint = (content: string) => this.theme.bg("userMessageBg", content + " ".repeat(Math.max(0, width - visibleWidth(content))));
     const clock = this.theme.fg("muted", this.time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
     const bodyWidth = Math.max(1, width - 4 - visibleWidth(clock) - 3);
-    const lines = piTui.wrapTextWithAnsi(this.text, bodyWidth);
+    const logicalLines = this.text.split("\n");
+    const source = this.expanded || logicalLines.length <= COLLAPSED_LINES
+      ? this.text
+      : [...logicalLines.slice(0, COLLAPSED_LINES), "…"].join("\n");
+    const lines = piTui.wrapTextWithAnsi(source, bodyWidth);
     const rows = lines.map((text, index) => {
       const prefix = index === 0 ? `${this.theme.fg("muted", "❯")} ` : "  ";
       const left = `  ${prefix}${this.theme.fg("userMessageText", text)}`;

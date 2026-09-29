@@ -46,10 +46,18 @@ const IMAGE_CHIP_SINGLE = new RegExp(`^${IMAGE_CHIP_SOURCE}$`);
 const LEFT_ARROW = "\x1b[D";
 const RIGHT_ARROW = "\x1b[C";
 const BACKSPACE = "\x7f";
+/** A single trailing newline is the terminator of the pasted text's last line, not an extra empty
+ * line after it -- grok's own line count agrees (a paste ending in "\n" with 40 real lines shows
+ * "40 lines", not 41). Used both for the chip label's count and the preview popup's line list, so
+ * the two never disagree. Only ONE trailing newline is dropped; a genuine blank line before it
+ * (two or more trailing newlines) still counts. */
+export function dropTrailingNewline(text) {
+    return text.endsWith("\n") ? text.slice(0, -1) : text;
+}
 /** A paste triggers a chip at >=4 lines OR >10KB (docs/tui-design.md 4.3); lines wins the label
  * when both are true, matching grok's own priority (docs/notes/research-grok-build-tui.md:323). */
 export function decidePasteChip(text) {
-    const lines = text.split("\n").length;
+    const lines = dropTrailingNewline(text).split("\n").length;
     const bytes = Buffer.byteLength(text, "utf8");
     if (lines < MIN_PASTE_LINES && bytes <= MAX_PASTE_BYTES)
         return undefined;
@@ -150,6 +158,10 @@ export class ChipEditor {
      * has a different chip count and correctly resets. */
     setText(text) {
         this.inner.setText(text);
+        // Always ends the "just pasted" window, even when the chip registries survive below: a
+        // restored queued message prepended ahead of a fresh chip shifts its line/column, so the old
+        // `{line, col}` no longer points at the chip's end and must not be trusted by chipForPopup.
+        this.lastPastedChip = undefined;
         if (!this.sameChipsAs(text))
             this.resetChips();
     }
@@ -178,10 +190,12 @@ export class ChipEditor {
     getImageAttachments() {
         return this.resolveForSubmit(this.inner.getText()).images;
     }
-    /** Ctrl+V with an image on the clipboard, or an `@image`-equivalent drop: adds an `[Image #N]`
-     * chip at the cursor. `bytes` are kept as-is; AgentSession resizes for the model at send time
-     * (agent-session.js's `_normalizePromptImages`), so there's no need to do it here too. */
-    insertImageChip(bytes, mimeType) {
+    /** Registers an image's data without inserting anything -- for a caller building the marker into
+     * arbitrary text itself (Esc/Alt+Up queue restore, app.ts's restoreQueuedMessagesToEditor) ahead
+     * of one `setText()` call, rather than at the current cursor. Returns the `[Image #N]` label to
+     * place in that text; `setText`'s own `sameChipsAs` check sees the id already in `imageChips` and
+     * keeps it, same as any other chip surviving a restore. */
+    registerImage(bytes, mimeType) {
         this.imageCounter += 1;
         const id = this.imageCounter;
         const base64 = Buffer.from(bytes).toString("base64");
@@ -194,15 +208,48 @@ export class ChipEditor {
             width: dimensions?.widthPx,
             height: dimensions?.heightPx,
         });
-        this.lastPastedChip = undefined;
-        this.inner.insertTextAtCursor(`[Image #${id}]`);
+        return `[Image #${id}]`;
     }
-    /** The chip the caret currently sits on or inside (start/end inclusive -- see the module
-     * comment on why this is containment-based rather than boundary-exact), for the preview popup,
-     * the `Enter:expand` shortcut, and double-click. */
+    /** Ctrl+V with an image on the clipboard, or an `@image`-equivalent drop: adds an `[Image #N]`
+     * chip at the cursor. `bytes` are kept as-is; AgentSession resizes for the model at send time
+     * (agent-session.js's `_normalizePromptImages`), so there's no need to do it here too. */
+    insertImageChip(bytes, mimeType) {
+        const label = this.registerImage(bytes, mimeType);
+        this.lastPastedChip = undefined;
+        this.inner.insertTextAtCursor(label);
+    }
+    /** The chip the caret sits *on*. Two passes, so two adjacent chips (`A.end === B.start`, no
+     * character between them) resolve consistently to the second one at their shared boundary instead
+     * of getting stuck on the first: (1) a chip that strictly contains the caret (`start <= col <
+     * end`) always wins, checked in document order, so at a shared boundary this finds B (the first
+     * chip for which the boundary column is strictly `< end`) rather than A (for which it's `===
+     * end`, no longer "in" it -- see below); (2) only if nothing does, an image chip's own `end` still
+     * counts (no Enter-conflict, they never expand, so there's nothing to protect there) -- but never
+     * a text chip's, whose `end` right after a fresh paste is deliberately not "on the chip" (item 2,
+     * docs/tui-design.md 4.3): Enter there must send like grok, not expand. Drives Enter-to-expand,
+     * the footer's `Enter:expand` shortcut, and double-click. */
     chipAtCursor() {
         const cursor = this.inner.getCursor();
-        const match = this.findChip(cursor.line, (start, end) => cursor.col >= start && cursor.col <= end);
+        const inside = this.findChip(cursor.line, (start, end) => cursor.col >= start && cursor.col < end);
+        if (inside !== undefined)
+            return this.chipInfo(cursor.line, inside);
+        const atEnd = this.findChip(cursor.line, (start, end) => cursor.col === end);
+        if (atEnd !== undefined && IMAGE_CHIP_SINGLE.test(atEnd.text))
+            return this.chipInfo(cursor.line, atEnd);
+        return undefined;
+    }
+    /** `chipAtCursor()`, or -- if the caret is still exactly where the most recent paste left it --
+     * the chip that paste just created. For the preview popup (still shown right after pasting, per
+     * the spec table) and the "paste again to expand" gesture, both of which must keep working even
+     * though `chipAtCursor()` alone no longer counts that position as "on the chip". */
+    chipForPopup() {
+        const strict = this.chipAtCursor();
+        if (strict !== undefined)
+            return strict;
+        const cursor = this.inner.getCursor();
+        if (this.lastPastedChip?.line !== cursor.line || this.lastPastedChip.col !== cursor.col)
+            return undefined;
+        const match = this.findChip(cursor.line, (start, end) => cursor.col === end);
         return match && this.chipInfo(cursor.line, match);
     }
     handleInput(data) {
@@ -221,17 +268,49 @@ export class ChipEditor {
         this.snapOutOfChipSpan(before);
     }
     handleMouse(event) {
+        // Same rule as handleInput: a deliberate interaction other than a fresh paste ends the "just
+        // pasted" window (the "paste again to expand" gesture and its popup hint), so a plain click
+        // that lands on a chip reads as "the caret landed on it" (spec table), not "still fresh from
+        // the paste". Only "press" counts as that: wheel/move events reach this handler too (the
+        // pointer merely being over the prompt while scrolling the transcript, say), and clearing on
+        // those would make a paste-again gesture insert a second chip instead of expanding, right after
+        // nothing more than an incidental mouse movement.
         if (event.type === "press") {
-            // Claim the press ourselves (Editor's own "just focus" pattern) unless the autocomplete
-            // dropdown wants it first. pi-tui's alt-screen only lets a component see "click" events with
-            // a real clickCount (its own double-click detection lives in the captured-target path) once
-            // something has claimed the press; otherwise a second click at the same spot is consumed by
-            // the screen's own double-click-selects-the-word-under-the-cursor behavior before it ever
-            // reaches us. Editor.handleMouse deliberately declines press so ordinary prompt text can
-            // still be drag-selected; a chip isn't ordinary text, so this trades that drag-select away
-            // (for the whole editor, not just chip spans -- there's no cheap way to tell which a press
-            // will land on before Editor positions the cursor) for double-click-to-expand actually working.
-            return this.inner.handleMouse(event) ?? { handled: true, focus: true, capture: true };
+            this.lastPastedChip = undefined;
+            // The autocomplete dropdown (Editor.handleMouse's own top check, which runs for every event
+            // type, not just clicks) gets first refusal; if it claims the press, that result stands.
+            const autocomplete = this.inner.handleMouse(event);
+            if (autocomplete !== undefined)
+                return autocomplete;
+            if (event.button !== "left")
+                return undefined;
+            // Editor.handleMouse otherwise declines every press outright (it only positions the caret on
+            // a "click", i.e. press+release with no movement in between) so there is no way to ask it
+            // "would this land on a chip" without actually positioning the caret. Probe by feeding it a
+            // synthetic click at the same coordinates -- a pure, idempotent function of (line, col), so
+            // the real click that follows (whether delivered here via a capture, or via the alt-screen's
+            // own unclaimed-press-then-synthesized-click path) recomputes the identical position.
+            const before = this.inner.getCursor();
+            this.inner.handleMouse({ ...event, type: "click", clickCount: 1 });
+            const onChip = this.chipAtCursor() !== undefined;
+            if (!onChip) {
+                // Not claiming this press: put the caret back where it was (same line only -- there's no
+                // cheap way to move it back across lines without simulating arrow keys, word-wrap and all,
+                // so a vertical probe is an accepted, narrower version of the same gap already documented
+                // for snapOutOfChipSpan). Before this, an ordinary press on plain text silently moved the
+                // caret and could exit Editor's own history-browsing (both are its private click-handling
+                // side effects, not something this probe can undo) even though the gesture goes on to be
+                // unclaimed and handled as drag-select/plain-click by the alt-screen instead.
+                if (this.inner.getCursor().line === before.line)
+                    this.moveCursorToColumn(before.line, before.col);
+                return undefined; // let the alt-screen's native drag-select run instead
+            }
+            this.snapOutOfChipSpan(before, true);
+            // Claim the whole gesture (Editor's own "just focus" pattern) so a second click here is
+            // delivered to us as a real clickCount, instead of the screen's own
+            // double-click-selects-the-word-under-the-cursor behavior claiming it first -- but only when
+            // the press actually lands on a chip, so ordinary prompt text keeps its drag-select.
+            return { handled: true, focus: true, capture: true };
         }
         const before = this.inner.getCursor();
         const result = this.inner.handleMouse(event);
@@ -242,7 +321,14 @@ export class ChipEditor {
                 return { ...result, handled: true, render: true };
             }
         }
-        this.snapOutOfChipSpan(before);
+        // A genuine click always snaps to the chip's start, not "whichever boundary it was heading
+        // toward" -- a click has no direction of its own (only `handleInput`'s arrow/word-jump moves
+        // do), and `before` here can itself be a leftover from the press branch's own probe-and-snap
+        // rather than where the caret truly was before this gesture, which would otherwise sometimes
+        // read as "moving forward" and land at `end` -- exactly the position chipAtCursor() (item 2)
+        // no longer treats as "on" a text chip, silently hiding the popup and Enter:expand after a
+        // perfectly ordinary single click.
+        this.snapOutOfChipSpan(before, event.type === "click");
         return result;
     }
     /** Editor's own cursor movement (arrows, word/Home/End jumps, a single click) has no idea our
@@ -250,15 +336,16 @@ export class ChipEditor {
      * and typing there would break the marker's regex match, shifting every later chip's index in
      * `textChips`/`imageChips` and misattributing their content on submit (not merely a cosmetic
      * gap). After any such move, if the caret ended up inside a span, step it the rest of the way to
-     * whichever boundary it was heading toward (nearer one, for a click with no direction). */
-    snapOutOfChipSpan(before) {
+     * whichever boundary it was heading toward (nearer one) -- or, when `toStart` is set (every
+     * mouse-driven call site: a click has no direction), always to the start. */
+    snapOutOfChipSpan(before, toStart = false) {
         const after = this.inner.getCursor();
         if (after.line !== before.line)
             return; // a vertical move onto a chip on another line: rare, accepted gap
         const match = this.findChip(after.line, (start, end) => after.col > start && after.col < end);
         if (!match)
             return;
-        const target = after.col >= before.col ? match.end : match.start;
+        const target = toStart ? match.start : after.col >= before.col ? match.end : match.start;
         this.moveCursorToColumn(after.line, target);
     }
     // ── paste interception ──────────────────────────────────────────────────
@@ -302,7 +389,12 @@ export class ChipEditor {
         const justPasted = this.lastPastedChip;
         this.lastPastedChip = undefined;
         if (justPasted && justPasted.line === cursor.line && justPasted.col === cursor.col) {
-            const chip = this.chipAtCursor();
+            // The caret sits right at the chip's end here (that's what "just pasted" means), which
+            // chipAtCursor() alone no longer treats as "on the chip" for text (docs/tui-design.md 4.3's
+            // Enter row) -- match inclusively instead. Can't reuse chipForPopup(): it reads
+            // this.lastPastedChip, which was just cleared above (`justPasted` is the local copy).
+            const match = this.findChip(cursor.line, (start, end) => cursor.col === end);
+            const chip = match && this.chipInfo(cursor.line, match);
             if (chip?.kind === "text") {
                 this.expandTextChip(chip);
                 return;
@@ -338,10 +430,23 @@ export class ChipEditor {
             }
             return false; // idle cursor, or on an image chip: Enter submits as usual
         }
-        if (kb.matches(data, "tui.editor.deleteCharBackward")) {
-            const cursor = this.inner.getCursor();
-            // Backspace deletes the whole chip when it would otherwise land inside/at its end.
+        const cursor = this.inner.getCursor();
+        // Backspace, and word-delete-backward (Ctrl+W, Alt+Backspace), all delete the whole chip when
+        // they'd otherwise land inside or at its end -- word-delete otherwise eats into a chip's marker
+        // character by character/word by word (Editor has no idea it's meant to be one atomic unit) and
+        // leaves a corrupted fragment (e.g. "[Pasted: 4 lines" with the closing bracket gone) instead of
+        // the label or the chip.
+        if (kb.matches(data, "tui.editor.deleteCharBackward") || kb.matches(data, "tui.editor.deleteWordBackward")) {
             const match = this.findChip(cursor.line, (start, end) => cursor.col > start && cursor.col <= end);
+            if (match) {
+                this.deleteChipSpan(cursor.line, match);
+                return true;
+            }
+        }
+        // Delete, and word-delete-forward (Alt+D, Alt+Delete): the mirror image, deleting the whole
+        // chip when they'd otherwise land at its start or inside it.
+        if (kb.matches(data, "tui.editor.deleteCharForward") || kb.matches(data, "tui.editor.deleteWordForward")) {
+            const match = this.findChip(cursor.line, (start, end) => cursor.col >= start && cursor.col < end);
             if (match) {
                 this.deleteChipSpan(cursor.line, match);
                 return true;
@@ -350,22 +455,37 @@ export class ChipEditor {
         return false;
     }
     deleteChipSpan(line, match) {
+        // Checked before the text changes below: while desynced (textChipsDesynced's own comment),
+        // splicing textChips by position is exactly the operation that can misattribute a still-live
+        // chip's real content to whichever text-chip-shaped match happens to be getting deleted here --
+        // deleting a resurrected dead chip's text (the common recovery action, since it's what's left
+        // after undo brought it back) must not also eat a real entry meant for a different, live chip.
+        // Skipping the splice here is what lets the document's own match count fall back in sync with
+        // textChips.length once the dead text is actually gone, undoing the desync instead of
+        // compounding it.
+        const desynced = this.textChipsDesynced(this.inner.getText());
         this.moveCursorToColumn(line, match.end);
         this.deleteBackward(match.end - match.start);
         const imageId = IMAGE_CHIP_SINGLE.exec(match.text)?.[1];
         if (imageId !== undefined) {
             this.imageChips.delete(Number(imageId));
         }
-        else {
+        else if (!desynced) {
             this.textChips.splice(this.textChipCountBefore(line, match.start), 1);
         }
         this.lastPastedChip = undefined;
     }
     expandTextChip(chip) {
+        // See deleteChipSpan's comment: while desynced, chip.content is already just chip.label (the
+        // desync-aware fallback in chipInfo), so this "expands" it into itself -- a no-op past the
+        // registry, but the splice below would still misattribute a different, live chip's real entry,
+        // so it's skipped here too.
+        const desynced = this.textChipsDesynced(this.inner.getText());
         const cursor = this.inner.getCursor();
         this.moveCursorToColumn(cursor.line, chip.end);
         this.deleteBackward(chip.end - chip.start);
-        this.textChips.splice(this.textChipCountBefore(cursor.line, chip.start), 1);
+        if (!desynced)
+            this.textChips.splice(this.textChipCountBefore(cursor.line, chip.start), 1);
         this.inner.insertTextAtCursor(chip.content);
         this.lastPastedChip = undefined;
     }
@@ -384,8 +504,15 @@ export class ChipEditor {
             this.inner.handleInput(BACKSPACE);
     }
     // ── chip lookup ─────────────────────────────────────────────────────────
+    /** Matches against `line`'s own text only. `contains` is fed `(start, end)` columns *within that
+     * line*, matching `inner.getCursor().col`/`moveCursorToColumn`'s coordinate space -- unlike
+     * `lineText(line)` (all previous lines joined + this one), whose match indices are offsets into
+     * the whole concatenation and were being compared against a same-line column (the bug this
+     * replaces: a chip on any line but the first always missed, or matched the wrong span, once a
+     * doc had more than one line). `textChipCountBefore` below still needs `lineText`'s document-wide
+     * prefix -- that one's correct as is. */
     findChip(line, contains) {
-        const text = this.lineText(line);
+        const text = this.inner.getText().split("\n")[line] ?? "";
         for (const match of text.matchAll(CHIP_REGEX_G)) {
             const start = match.index ?? 0;
             const end = start + match[0].length;
@@ -403,11 +530,28 @@ export class ChipEditor {
             return { kind: "image", label: match.text, start: match.start, end: match.end, justPasted: false, image };
         }
         const index = this.textChipCountBefore(line, match.start);
-        // A desynced registry (see the module comment) falls back to the literal label rather than
-        // throwing: the popup shows the label as its own content instead of the original text.
-        const content = this.textChips[index] ?? match.text;
+        // A desynced registry (see textChipsDesynced's own comment) falls back to the literal label
+        // rather than throwing: the popup shows the label as its own content instead of the original
+        // text. Checked document-wide, not just "is index in range" -- with more matches than registry
+        // entries, positional lookup can find *something* at every index, just the wrong chip's content.
+        const content = this.textChipsDesynced(this.inner.getText()) ? match.text : this.textChips[index] ?? match.text;
         const justPasted = this.lastPastedChip?.line === line && this.lastPastedChip.col === match.end;
         return { kind: "text", label: match.text, start: match.start, end: match.end, justPasted, content };
+    }
+    /** True once the number of `[Pasted: ...]`-shaped substrings in the document no longer matches
+     * `textChips.length` -- meaning at least one of them isn't backed by a real registry entry
+     * anymore. This happens because Editor's undo stack has no idea our chip markers are meant to be
+     * one atomic unit: deleting a chip is several synthetic Backspace keypresses (`deleteBackward`),
+     * each its own undo step, so undoing *some* of them (not all the way back to before the paste)
+     * resurrects the marker's literal text with no way to restore its `textChips` entry alongside it.
+     * Once desynced, positional mapping (`textChips[index]`) can no longer be trusted for *any* text
+     * chip on the line -- with more matches than registry entries, it doesn't just show the dead one
+     * as its own label, it can misattribute a later, still-live chip's real content to the dead one
+     * and leave the live one showing its own label instead (a content swap, not merely "plain text").
+     * So every text chip falls back to its own literal label instead, uniformly, until a further edit
+     * (e.g. deleting the resurrected text) brings the count back in sync. */
+    textChipsDesynced(text) {
+        return [...text.matchAll(TEXT_CHIP_REGEX_G)].length !== this.textChips.length;
     }
     /** How many `[Pasted: ...]` chips appear before (line, col) -- the index into `textChips`,
      * since chip labels carry no id and are only distinguishable by document order. */
@@ -423,6 +567,7 @@ export class ChipEditor {
     }
     resolveForSubmit(rawText) {
         const images = [];
+        const desynced = this.textChipsDesynced(rawText);
         let textIndex = 0;
         const text = rawText.replace(CHIP_REGEX_G, (match) => {
             const imageId = IMAGE_CHIP_SINGLE.exec(match)?.[1];
@@ -432,7 +577,7 @@ export class ChipEditor {
                     images.push({ type: "image", data: meta.base64, mimeType: meta.mimeType });
                 return "";
             }
-            const content = this.textChips[textIndex];
+            const content = desynced ? undefined : this.textChips[textIndex];
             textIndex += 1;
             return content ?? match;
         });

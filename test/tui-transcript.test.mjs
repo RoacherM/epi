@@ -36,6 +36,73 @@ test("a notice does not hide the welcome page, but a real message does", () => {
   assert.doesNotMatch(rendered, /WELCOME PAGE/, "a real message replaces the welcome page");
 });
 
+// Item 5 (docs/tui-design.md 4.3): a user message longer than 3 lines collapses to the first 3
+// plus "…", like grok; Ctrl+O (the same toggle that expands tool output, wired through
+// setToolsExpanded) expands it back. Display-only -- session.messages (what the model saw) is
+// never touched by any of this.
+test("a long user message collapses to 3 lines plus an ellipsis, and Ctrl+O expands it", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  const lines = Array.from({ length: 6 }, (_, i) => `line${i}`).join("\n");
+  transcript.handle({ type: "message_start", message: { role: "user", content: lines, timestamp: Date.now() } });
+  const collapsed = transcript.root.render(80).join("\n");
+  assert.match(collapsed, /line0/);
+  assert.match(collapsed, /line1/);
+  assert.match(collapsed, /line2/);
+  assert.doesNotMatch(collapsed, /line3/);
+  assert.match(collapsed, /…/);
+
+  transcript.setToolsExpanded(true);
+  const expanded = transcript.root.render(80).join("\n");
+  assert.match(expanded, /line3/);
+  assert.match(expanded, /line5/);
+});
+
+// Pre-merge review, item 4: collapse must count *logical* lines (message.content's own "\n"s), not
+// wrapped screen rows -- otherwise a single long line, with no logical line breaks at all, would
+// wrongly collapse on a narrow terminal just because wrapping happens to spread it across more than
+// 3 rows there.
+test("a single long line never collapses, even wrapped across many rows on a narrow terminal", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  const longLine = Array.from({ length: 30 }, (_, i) => `word${i}`).join(" "); // one logical line
+  transcript.handle({ type: "message_start", message: { role: "user", content: longLine, timestamp: Date.now() } });
+  const rendered = transcript.root.render(20).join("\n"); // narrow enough to wrap into >3 rows
+  assert.match(rendered, /word0/);
+  assert.match(rendered, /word29/); // the very last word still shows: never collapsed
+  assert.doesNotMatch(rendered, /…/);
+});
+
+test("a user message's image content parts show as [Image #N], not silently dropped", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  transcript.handle({
+    type: "message_start",
+    message: {
+      role: "user",
+      timestamp: Date.now(),
+      content: [
+        { type: "text", text: "describe these" },
+        { type: "image", data: "AAAA", mimeType: "image/png" },
+        { type: "image", data: "BBBB", mimeType: "image/png" },
+      ],
+    },
+  });
+  const rendered = transcript.root.render(80).join("\n");
+  assert.match(rendered, /describe these/);
+  assert.match(rendered, /\[Image #1\]/);
+  assert.match(rendered, /\[Image #2\]/);
+});
+
+// file-arguments.ts's `<file name="...">...</file>` inlining (an `@file` argument's full content)
+// shows as a `[File: name]` chip, not the whole file dumped into the transcript.
+test("a user message's inlined <file> block shows as a [File: name] chip, not its full content", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  const content = `<file name="/abs/path/notes.txt">\nSECRET FILE CONTENTS HERE\n</file>\nwhat does this say?`;
+  transcript.handle({ type: "message_start", message: { role: "user", content, timestamp: Date.now() } });
+  const rendered = transcript.root.render(80).join("\n");
+  assert.match(rendered, /\[File: notes\.txt\]/);
+  assert.match(rendered, /what does this say\?/);
+  assert.doesNotMatch(rendered, /SECRET FILE CONTENTS HERE/);
+});
+
 test("several notices before any message still get spacer gaps between them", () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   transcript.notice("first notice");
