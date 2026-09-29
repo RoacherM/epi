@@ -38,7 +38,7 @@ printf '%s\\n' "$*" > "$NPM_LOG"
 mkdir -p "$MMP_PREFIX/bin"
 cat > "$MMP_PREFIX/bin/mmp" <<'EOF'
 #!/bin/sh
-printf 'mmp 0.1.4\\npi 0.83.0\\n'
+printf 'mmp 0.1.4\\npi 0.87.1\\n'
 EOF
 chmod +x "$MMP_PREFIX/bin/mmp"
 `,
@@ -78,7 +78,7 @@ test("curl installer verifies and installs the requested package", () => {
     assert.equal(result.stderr, "");
     assert.match(result.stdout, /Downloading MMP 0\.1\.4/);
     assert.match(result.stdout, /Installed MMP at .*\/bin\/mmp/);
-    assert.match(result.stdout, /mmp 0\.1\.4\npi 0\.83\.0/);
+    assert.match(result.stdout, /mmp 0\.1\.4\npi 0\.87\.1/);
     assert.match(
       readFileSync(fixture.npmLog, "utf8"),
       new RegExp(

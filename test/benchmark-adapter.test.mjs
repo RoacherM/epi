@@ -84,13 +84,13 @@ test("benchmark adapter emits reproducible isolated trial artifacts without glob
       "baseline",
       "BENCHMARK_OK",
       [],
-      "pi-0.83-baseline",
+      "pi-0.87-baseline",
     );
     assert.equal(first.result.status, 0, first.result.stderr);
     assert.equal(second.result.status, 0, second.result.stderr);
     assert.equal(baseline.result.status, 0, baseline.result.stderr);
     assert.equal(baseline.metadata.harness, "pi");
-    assert.equal(baseline.metadata.versions.pi, "0.83.0");
+    assert.equal(baseline.metadata.versions.pi, "0.87.1");
     assert.equal(existsSync(join(baseline.outputDir, "mmp-home", "mmp.json")), false);
     assert.equal(existsSync(join(baseline.outputDir, "mmp-home", "pi", "settings.json")), true);
     assert.equal(first.metadata.result.success, true);

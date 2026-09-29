@@ -25,7 +25,7 @@ function fixture() {
   };
   const identity = createMmpRuntimeIdentity({
     mmpVersion: "0.1.4",
-    piVersion: "0.83.0",
+    piVersion: "0.87.1",
     mmpHome: "/fixture/mmp",
     assembly,
   });

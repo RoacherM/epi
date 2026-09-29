@@ -31,7 +31,7 @@ Environment:
 
 Rules, skills, and extensions are manifest-owned. Ambient themes, prompt
 templates, and context files are disabled. Direct Pi resource flags are rejected;
-all other arguments are passed to pinned Pi 0.83 unchanged.
+all other arguments are passed to pinned Pi 0.87 unchanged.
 
 Pi options:
 `;

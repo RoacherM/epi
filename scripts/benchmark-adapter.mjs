@@ -33,7 +33,7 @@ const defaultPiEntry = join(
   "cli.js",
 );
 const MMP_VERSION = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
-const EXPECTED_PI_VERSION = "0.83.0";
+const EXPECTED_PI_VERSION = "0.87.1";
 const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
 const MAX_JSONL_LINE_BYTES = 16 * 1024 * 1024;
 const KILL_GRACE_MS = 2000;
@@ -45,7 +45,7 @@ const EXIT_CODE = {
   grader: 5,
 };
 const VARIANTS = new Set([
-  "pi-0.83-baseline",
+  "pi-0.87-baseline",
   "mmp-core-empty",
   "mmp-rules-skills",
   "mmp-full",
@@ -221,7 +221,7 @@ function resolveOptions(raw) {
   const cwd = resolve(raw.cwd);
   const promptFile = raw.promptFile === undefined ? undefined : resolve(raw.promptFile);
   const entry = resolve(
-    raw.entry ?? (raw.variant === "pi-0.83-baseline" ? defaultPiEntry : defaultMmpEntry),
+    raw.entry ?? (raw.variant === "pi-0.87-baseline" ? defaultPiEntry : defaultMmpEntry),
   );
   requirePathType(bundle, "directory", "--bundle");
   requirePathType(cwd, "directory", "--cwd");
@@ -253,7 +253,7 @@ function resolveOptions(raw) {
     promptFile,
     grader,
     graderTimeoutMs,
-    harness: raw.variant === "pi-0.83-baseline" ? "pi" : "mmp",
+    harness: raw.variant === "pi-0.87-baseline" ? "pi" : "mmp",
   };
 }
 

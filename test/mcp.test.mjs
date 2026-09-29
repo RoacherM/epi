@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -171,4 +171,57 @@ test("--dry-run validates declared MCP configuration before starting Pi", (t) =>
     result.stderr,
     /must define exactly one of command, socket, or url/,
   );
+});
+
+test("declared MCP server completes search -> call through a scripted model and is reclaimed", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "mmp-mcp-acceptance-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const mmpHome = join(root, "home", ".mmp");
+  mkdirSync(mmpHome, { recursive: true });
+  const repoRoot = fileURLToPath(new URL("../", import.meta.url));
+  const driver = fileURLToPath(new URL("./fixtures/faux-mcp-driver.mjs", import.meta.url));
+  writeFileSync(
+    join(mmpHome, "mcp.json"),
+    readFileSync(fileURLToPath(new URL("./fixtures/mcp-runtime/mcp.json", import.meta.url))),
+  );
+  writeFileSync(
+    join(mmpHome, "mmp.json"),
+    JSON.stringify({ version: 1, extensions: ["mmp:mcp", driver] }),
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    [cliPath, "--no-project", "--model", "mmp-faux/scripted", "-p", "go"],
+    {
+      cwd: root,
+      encoding: "utf8",
+      input: "",
+      timeout: 120_000,
+      env: {
+        PATH: process.env.PATH,
+        HOME: join(root, "home"),
+        MMP_HOME: mmpHome,
+        MMP_MCP_CWD: repoRoot,
+        MMP_MCP_FIXTURE_VALUE: "fixture-ok",
+        // Offline: a model-catalog refresh landing mid-run occasionally dropped the faux provider.
+        PI_OFFLINE: "1",
+      },
+    },
+  );
+
+  const output = `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+  assert.equal(result.status, 0, output);
+  const [, reported] = result.stdout.match(/RESULTS>>(.*)<<RESULTS/s) ?? [];
+  assert.ok(reported, output);
+  const [searchResult, callResult] = JSON.parse(reported);
+  assert.match(searchResult, /fixture_echo/);
+  assert.equal(callResult, "fixture-ok:ping");
+  // The adapter stops the server during shutdown; allow the signal up to 2s to land before calling it a leak.
+  let leftovers = "";
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    leftovers = spawnSync("pgrep", ["-f", "test/fixtures/mcp-server.mjs"], { encoding: "utf8" }).stdout.trim();
+    if (leftovers === "") break;
+    spawnSync("sleep", ["0.1"]);
+  }
+  assert.equal(leftovers, "", `MCP stdio server outlived the session\n${output}`);
 });

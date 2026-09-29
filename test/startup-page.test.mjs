@@ -17,7 +17,7 @@ const identity = {
     name: "MMP",
     version: "0.1.4",
     engine: "Pi",
-    engineVersion: "0.83.0",
+    engineVersion: "0.87.1",
   },
   paths: {
     mmpHome: "/fixture/.mmp",
@@ -83,7 +83,7 @@ test("wide startup page presents the Make My Pi brand and assembly controls", ()
   assert.match(output, /Make My Pi/);
   assert.match(output, /Compose Pi your way\./);
   assert.match(output, /MoonshotAI: Kimi K2\.5/);
-  assert.match(output, /openrouter · Pi 0\.83\.0/);
+  assert.match(output, /openrouter · Pi 0\.87\.1/);
   assert.match(output, /ASSEMBLY/);
   assert.match(output, /COMPOSITION/);
   assert.match(output, /rules \+ skills \+ extensions/);
