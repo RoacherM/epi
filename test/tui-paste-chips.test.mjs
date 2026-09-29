@@ -65,6 +65,16 @@ test("decidePasteChip: lines wins when both thresholds are crossed", () => {
   assert.match(decision.label, /lines\]$/);
 });
 
+// Item 4: a paste ending with a newline is 40 real lines terminated by it, not 41 lines (the last
+// one empty) -- grok shows 40. Only the single trailing newline is dropped; a genuine blank line
+// before it still counts.
+test("decidePasteChip: a single trailing newline is not counted as an extra line", () => {
+  const forty = Array.from({ length: 40 }, (_, i) => `line${i}`).join("\n");
+  assert.equal(decidePasteChip(`${forty}\n`).lines, 40);
+  assert.equal(decidePasteChip(forty).lines, 40); // no trailing newline: same count either way
+  assert.equal(decidePasteChip(`${forty}\n\n`).lines, 41); // a real blank line before it still counts
+});
+
 // ── resolveImagePath / sniffImageFile ────────────────────────────────────────
 
 test("resolveImagePath resolves relative and ~ paths, and rejects a missing file", (t) => {
@@ -90,7 +100,9 @@ test("pasting >=4 lines folds into an atomic [Pasted: N lines] chip", () => {
   const editor = makeEditor();
   paste(editor, "line1\nline2\nline3\nline4\nline5");
   assert.equal(editor.getText(), "[Pasted: 5 lines]");
-  const chip = editor.chipAtCursor();
+  // chipForPopup(), not chipAtCursor(): the caret is at the chip's end right after pasting, which
+  // is "just pasted" for the popup (this test), not "on the chip" for Enter (see the Enter tests).
+  const chip = editor.chipForPopup();
   assert.equal(chip.kind, "text");
   assert.equal(chip.content, "line1\nline2\nline3\nline4\nline5");
   assert.equal(chip.justPasted, true);
@@ -99,9 +111,9 @@ test("pasting >=4 lines folds into an atomic [Pasted: N lines] chip", () => {
 test("moving the cursor off the chip hides it, moving back onto it shows it again", () => {
   const editor = makeEditor();
   paste(editor, "line1\nline2\nline3\nline4");
-  assert.notEqual(editor.chipAtCursor(), undefined);
+  assert.notEqual(editor.chipForPopup(), undefined); // just pasted: still shown
   editor.handleInput(" "); // types past the chip, cursor now after it
-  assert.equal(editor.chipAtCursor(), undefined);
+  assert.equal(editor.chipForPopup(), undefined);
   for (let i = 0; i < 2; i += 1) editor.handleInput("\x1b[D"); // left arrow, back onto the chip
   assert.notEqual(editor.chipAtCursor(), undefined);
 });
@@ -135,11 +147,92 @@ test("typing after navigating past one chip doesn't corrupt a later chip's conte
   assert.match(expanded, /BBBB\nBBBB\nBBBB\nBBBB/);
 });
 
-test("Enter on a text chip expands it instead of submitting", () => {
+// ── item 1: chips on any line after the first ───────────────────────────────
+//
+// findChip used to match against `lineText(line)` -- all previous lines joined plus the current
+// one -- so a chip's start/end were offsets into that whole concatenation while every caller
+// (chipAtCursor, the backspace intercept, snapOutOfChipSpan, textChipCountBefore's *sibling*
+// lookups) compared them against the cursor's own within-line column. A chip on line 0 happened to
+// work (the "previous lines" prefix is empty there); anything past it didn't. A short preceding
+// line could still coincidentally overlap by luck, so these deliberately use a first line longer
+// than the chip label, like the reviewer's chip-line2b.mjs repro.
+
+test("a chip on line 1, preceded by a longer line, is found correctly (not just line 0)", () => {
+  const editor = makeEditor();
+  editor.setText("this is a much longer first line of text\n");
+  paste(editor, "a\nb\nc\nd\ne"); // chip lands on line 1, cursor at its end
+  assert.equal(editor.getCursor().line, 1);
+  assert.equal(editor.chipAtCursor(), undefined); // just pasted, not yet "on" it (item 2)
+  assert.equal(editor.chipForPopup()?.content, "a\nb\nc\nd\ne");
+});
+
+test("Backspace deletes the whole chip on line 1 in one keystroke, not one character", () => {
+  const editor = makeEditor();
+  editor.setText("this is a much longer first line of text\n");
+  paste(editor, "a\nb\nc\nd\ne");
+  editor.handleInput(BACKSPACE);
+  assert.equal(editor.getText(), "this is a much longer first line of text\n");
+  assert.equal(editor.getExpandedText(), "this is a much longer first line of text\n");
+});
+
+test("Enter expands a chip on line 1 once the caret has moved onto it", () => {
+  const editor = makeEditor();
+  let submitted;
+  editor.onSubmitImages = (text) => { submitted = text; };
+  editor.setText("this is a much longer first line of text\n");
+  paste(editor, "a\nb\nc\nd\ne");
+  editor.handleInput("\x1b[D"); // onto the chip
+  assert.equal(editor.chipAtCursor()?.kind, "text");
+  editor.handleInput(ENTER);
+  assert.equal(editor.getText(), "this is a much longer first line of text\na\nb\nc\nd\ne");
+  assert.equal(submitted, undefined);
+});
+
+test("two chips on two different lines keep separate content and don't mix coordinates", () => {
+  const editor = makeEditor();
+  paste(editor, "AAAA\nAAAA\nAAAA\nAAAA"); // chip #1 on line 0
+  editor.handleInput("\n");
+  paste(editor, "BBBB\nBBBB\nBBBB\nBBBB"); // chip #2 on line 1
+  assert.equal(editor.getCursor().line, 1);
+  assert.equal(editor.chipForPopup()?.content, "BBBB\nBBBB\nBBBB\nBBBB"); // not chip #1's content
+  // Move onto chip #1 (line 0) and check it independently.
+  editor.handleInput("\x1b[A"); // up into line 0, lands at its end (same column as line 1's)
+  assert.equal(editor.getCursor().line, 0);
+  editor.handleInput("\x1b[D"); // onto the chip itself, not just its end
+  const chip1 = editor.chipAtCursor();
+  assert.equal(chip1?.kind, "text");
+  assert.equal(chip1.content, "AAAA\nAAAA\nAAAA\nAAAA");
+  // Backspacing chip #1 must not touch chip #2's registry entry or text.
+  editor.handleInput("\x1b[C"); // onto its end, so backspace deletes the whole span
+  editor.handleInput(BACKSPACE);
+  const expanded = editor.getExpandedText();
+  assert.doesNotMatch(expanded, /AAAA/);
+  assert.match(expanded, /BBBB\nBBBB\nBBBB\nBBBB/);
+});
+
+// Item 2 (docs/tui-design.md 4.3): grok sends on Enter right after a paste (footer reads
+// "Enter:send", popup hint "paste again or double-click to expand") and only expands once the
+// caret has actually moved onto the chip (footer "Enter:expand", hint "enter or double-click to
+// expand"). Before the fix, the caret sitting at the chip's end right after pasting (chipAtCursor's
+// old inclusive-at-end span) was indistinguishable from genuinely being "on" it.
+test("Enter right after a paste sends, like grok, instead of expanding the fresh chip", () => {
   const editor = makeEditor();
   let submitted;
   editor.onSubmitImages = (text) => { submitted = text; };
   paste(editor, "line1\nline2\nline3\nline4");
+  assert.equal(editor.chipAtCursor(), undefined); // not "on" the chip yet, even though it's the only content
+  editor.handleInput(ENTER);
+  assert.equal(submitted, "line1\nline2\nline3\nline4");
+  assert.equal(editor.getText(), "");
+});
+
+test("Enter on a text chip expands it instead of submitting, once the caret has moved onto it", () => {
+  const editor = makeEditor();
+  let submitted;
+  editor.onSubmitImages = (text) => { submitted = text; };
+  paste(editor, "line1\nline2\nline3\nline4"); // cursor at the chip's end
+  editor.handleInput("\x1b[D"); // left arrow: lands inside the chip, snaps to its start boundary
+  assert.equal(editor.chipAtCursor()?.kind, "text");
   editor.handleInput(ENTER);
   assert.equal(editor.getText(), "line1\nline2\nline3\nline4");
   assert.equal(submitted, undefined);
@@ -160,6 +253,18 @@ test("pasting again while the just-pasted popup is showing expands the chip inst
   assert.equal(editor.getText(), "line1\nline2\nline3\nline4");
 });
 
+// A mouse wheel/move event reaching this editor (the pointer merely sitting over the prompt while
+// something else scrolls, e.g.) must not end the "just pasted" window -- only a deliberate press
+// does (see handleMouse's own comment). Otherwise an incidental wheel event between a paste and the
+// user's next paste-again gesture would silently turn it into a second chip instead of expanding.
+test("an incidental wheel event over the editor doesn't break the paste-again-to-expand gesture", () => {
+  const editor = makeEditor();
+  paste(editor, "line1\nline2\nline3\nline4");
+  editor.handleMouse({ type: "wheel", button: "none", x: 2, y: 1, screenX: 2, screenY: 1, width: 80, height: 3, shift: false, alt: false, ctrl: false, wheelDelta: -1 });
+  paste(editor, "line1\nline2\nline3\nline4");
+  assert.equal(editor.getText(), "line1\nline2\nline3\nline4");
+});
+
 test("double-click on the chip expands it", () => {
   const editor = makeEditor();
   paste(editor, "line1\nline2\nline3\nline4");
@@ -176,6 +281,38 @@ test("double-click on the chip expands it", () => {
   assert.equal(editor.getText(), "line1\nline2\nline3\nline4 ");
 });
 
+// ── item 3: a press only claims the gesture on a chip ───────────────────────
+//
+// handleMouse used to claim every press unconditionally (`inner.handleMouse(event) ?? {handled:
+// true, focus: true, capture: true}` -- Editor's own press handling always declines, so the `??`
+// side always won), which disabled the alt-screen's native drag-select for ordinary, non-chip
+// prompt text: any truthy press result locks the whole press/drag/release gesture to this component
+// (TuiAltScreen.handleMouseEvent's mouseCapture/mousePressTarget), bypassing the
+// handleSelectionMouseEvent path a real terminal's drag-to-select relies on.
+
+function press(editor, x) {
+  return editor.handleMouse({ type: "press", button: "left", x, y: 1, screenX: x, screenY: 1, width: 80, height: 3, shift: false, alt: false, ctrl: false });
+}
+
+test("pressing away from any chip does not claim the gesture, so drag-select still works there", () => {
+  const editor = makeEditor();
+  editor.handleInput("just some ordinary text, no chip here");
+  assert.equal(press(editor, 2), undefined);
+});
+
+test("pressing on a chip claims the gesture, so a following click carries a real clickCount", () => {
+  const editor = makeEditor();
+  paste(editor, "line1\nline2\nline3\nline4");
+  editor.handleInput(" "); // move off, same setup as the double-click test above
+  const chipStart = editor.getText().indexOf("[Pasted");
+  const result = press(editor, chipStart + 2);
+  assert.equal(result?.handled, true);
+  assert.equal(result?.capture, true);
+  // Landing the press onto the chip also moves the caret there (the probe click), same as a real
+  // click would -- chipAtCursor() should already see it, not just the claim.
+  assert.equal(editor.chipAtCursor()?.kind, "text");
+});
+
 test("submit expands the chip to full text and sends no images", () => {
   const editor = makeEditor();
   let submitted;
@@ -188,6 +325,24 @@ test("submit expands the chip to full text and sends no images", () => {
   assert.deepEqual(submitted.images, []);
   assert.equal(editor.getText(), "");
   assert.equal(editor.chipAtCursor(), undefined);
+});
+
+// Method checklist (history recall): a submitted chip's history entry is the already-expanded text
+// (app.ts's submit() calls addToHistory with the resolved text, mirroring Pi's own history, not the
+// marker), so Up-arrow recall after this file's line/column changes still brings back plain text --
+// nothing chip-shaped for the recalled draft's own (empty) registries to misattribute.
+test("history recall after a chip-containing submit brings back the expanded text, not a marker", () => {
+  const editor = makeEditor();
+  let submitted;
+  editor.onSubmitImages = (text) => { submitted = text; };
+  paste(editor, "line1\nline2\nline3\nline4");
+  editor.handleInput(" done"); // move off the chip, so Enter submits instead of expanding it
+  editor.handleInput(ENTER);
+  assert.equal(submitted, "line1\nline2\nline3\nline4 done");
+  editor.addToHistory(submitted); // what app.ts's submit() does with the resolved text
+  editor.handleInput("\x1b[A"); // up-arrow: recall
+  assert.equal(editor.getText(), "line1\nline2\nline3\nline4 done");
+  assert.equal(editor.chipAtCursor(), undefined); // plain recalled text, not a live chip
 });
 
 // ── image chips ──────────────────────────────────────────────────────────
@@ -249,7 +404,9 @@ test("the just-pasted text popup shows first/last lines, an ellipsis for the mid
   const editor = makeEditor();
   const lines = Array.from({ length: 10 }, (_, i) => `line${i + 1}`);
   paste(editor, lines.join("\n"));
-  const popup = pastePreview(theme, () => editor.chipAtCursor());
+  // chipForPopup(), matching how app.ts actually wires the popup: the caret is at the chip's end
+  // right after pasting, which chipAtCursor() alone no longer counts as "on the chip" (item 2).
+  const popup = pastePreview(theme, () => editor.chipForPopup());
   // 60 columns: wide enough for the hint text to fit in the bottom border (see the width-fit test
   // below for what happens when it doesn't -- the hint is dropped, not truncated mid-word).
   const rendered = popup.render(60).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
@@ -268,6 +425,9 @@ test("once the cursor has moved and come back, the hint switches to enter-to-exp
   const editor = makeEditor();
   paste(editor, "a\nb\nc\nd\ne\nf\ng");
   editor.handleInput(" ");
+  // Two lefts, not one: the first only lands back at the chip's end (still "just pasted" territory
+  // for chipAtCursor's boundary check), the second actually lands inside it and snaps to its start.
+  editor.handleInput("\x1b[D");
   editor.handleInput("\x1b[D");
   const popup = pastePreview(theme, () => editor.chipAtCursor());
   const body = popup.render(60).map((line) => line.replace(/\x1b\[[0-9;]*m/g, "")).join("\n");
@@ -282,6 +442,33 @@ test("the image popup title shows format, dimensions and size", () => {
   assert.match(body, /Image #1 ─ PNG · 1x1 · 0\.1 KB/);
 });
 
+// Item 7: popup style like grok -- the image title sits on the *top* border (not a body row), and
+// the box is narrower than the full available width when its content doesn't need it all (grok's
+// own popup reads roughly 40 columns against a much wider input box).
+test("the image popup title is on the top border, not a body row", () => {
+  const editor = makeEditor();
+  editor.insertImageChip(ONE_PIXEL_PNG, "image/png");
+  const popup = pastePreview(theme, () => editor.chipAtCursor());
+  const lines = popup.render(120).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.match(lines[0], /^╭.*Image #1 ─ PNG · 1x1 · 0\.1 KB.*╮$/);
+  assert.match(lines.at(-1), /^╰─+╯$/); // plain bottom rule: images never show an expand hint
+  assert.ok(piTui.visibleWidth(lines[0]) < 120, "should not stretch to the full available width");
+});
+
+// Item 7: bottom border reads `╰─ hint ─╯` -- a dash right after the corner on both ends, not the
+// hint running straight into the corner.
+test("the text popup's bottom border has a dash right after the corner on both ends", () => {
+  const editor = makeEditor();
+  paste(editor, "line1\nline2\nline3\nline4");
+  const popup = pastePreview(theme, () => editor.chipForPopup());
+  const lines = popup.render(120).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+  const bottom = lines.at(-1);
+  assert.match(bottom, /^╰─/); // dash right after the corner, not the hint running straight into it
+  assert.match(bottom, /─╯$/); // and one right before the closing corner too
+  assert.match(bottom, /double-click to expand/);
+  assert.ok(piTui.visibleWidth(lines[0]) < 120, "should not stretch to the full available width");
+});
+
 test("the popup renders nothing when the caret is off any chip", () => {
   const editor = makeEditor();
   editor.handleInput("just typing, no chip here");
@@ -292,7 +479,7 @@ test("the popup renders nothing when the caret is off any chip", () => {
 test("text and image popups fit widths 40, 80 and 120", () => {
   const wide = makeEditor();
   paste(wide, Array.from({ length: 12 }, (_, i) => `a very long line of pasted text number ${i}`).join("\n"));
-  const textPopup = pastePreview(theme, () => wide.chipAtCursor());
+  const textPopup = pastePreview(theme, () => wide.chipForPopup());
   const imageEditor = makeEditor();
   imageEditor.insertImageChip(ONE_PIXEL_PNG, "image/png");
   const imagePopup = pastePreview(theme, () => imageEditor.chipAtCursor());

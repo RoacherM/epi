@@ -126,6 +126,35 @@ test("Alt+Up restores a message queued during compaction, not just the session's
   assert.doesNotMatch(out, /AFTER-COMPACT-REPLY/);
 });
 
+// Item 6 (docs/tui-design.md 4.3): an image queued during compaction used to be silently dropped
+// on Alt+Up -- clearAllQueues (app.ts) returned text only. compactionQueue is app.ts's own array
+// and always keeps the image alongside the text, so restoring it is just re-registering it as a
+// chip in the ChipEditor.
+const ONE_PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
+
+test("Alt+Up restores an image queued during compaction, not just the text", (t) => {
+  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-compact-image-"));
+  t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
+  const clipboardFile = join(clipboardDir, "clipboard.png");
+  writeFileSync(clipboardFile, ONE_PIXEL_PNG);
+  const { marks } = runApp(t, [fixture("faux-slow-compact.mjs")], [
+    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 1500],
+    ["type", "/compact"], ["key", "enter"], ["wait", 400],
+    ["key", "ctrl+v"], ["wait", 300], // pastes [Image #1] into the draft
+    ["key", "enter"], ["wait", 300], ["mark", "queuedDuringCompaction"], // queued into compactionQueue
+    ["key", "alt+up"], ["wait", 300], ["mark", "afterAltUp"],
+    ["key", "ctrl+d"],
+  ], { ...KEEP_NO_RECENT, env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  assert.match(marks.queuedDuringCompaction, /Queued message for after compaction\./);
+  const afterAltUp = marks.afterAltUp.slice(marks.queuedDuringCompaction.length);
+  // A fresh id, not #1: registerImage() always allocates a new one (the pre-existing "ids aren't
+  // reused" gap, docs/tui-design.md 4.3), so this checks the chip came back at all, not its number.
+  assert.match(afterAltUp, /\[Image #\d+\]/);
+});
+
 // Cross-case named in the fix method (docs/tui-design.md §15): queue a message during compaction,
 // then Esc -- unlike /new (below), Esc's abortCompaction() is not a session replacement, so the
 // queued message must still be flushed once compaction_end fires, not dropped. Exercises the

@@ -92,7 +92,10 @@ export async function runTuiApp(options) {
     // Preview popup for a paste/image chip (docs/tui-design.md 4.3), placed right above the prompt.
     // Hidden while a dialog occupies the editor slot (e.g. /model): the chip it would describe is
     // no longer what's on screen, matching the footer's own editorSlotHasDialog gate below.
-    const pastePreviewWidget = pastePreview(theme, () => (editorSlotHasDialog ? undefined : editor.chipAtCursor()));
+    // chipForPopup(), not chipAtCursor(): the popup still shows right after a fresh paste (spec
+    // table), even though chipAtCursor() alone no longer counts that position as "on the chip"
+    // (docs/tui-design.md 4.3's Enter row -- Enter must send there, like grok, not expand).
+    const pastePreviewWidget = pastePreview(theme, () => (editorSlotHasDialog ? undefined : editor.chipForPopup()));
     const header = headerBar(theme, () => {
         const usage = session.getContextUsage();
         return {
@@ -106,9 +109,11 @@ export async function runTuiApp(options) {
     const defaultFooter = shortcutsBar(theme, () => {
         const shortcuts = editorSlotHasDialog
             ? [{ key: "↑↓", label: "select" }, { key: "Enter", label: "confirm" }, { key: "Esc", label: "cancel" }]
-            // The caret is on a text chip: Enter expands it instead of submitting (docs/tui-design.md 4.3).
+            // The caret is genuinely on a text chip (not merely just past one right after pasting, per
+            // chipAtCursor()'s strict span check): Enter expands it instead of submitting, and Shift+Enter
+            // still adds a newline without expanding (docs/tui-design.md 4.3, item 7's footer style).
             : editor.chipAtCursor()?.kind === "text"
-                ? [{ key: "Enter", label: "expand" }]
+                ? [{ key: "Enter", label: "expand" }, { key: "Shift+Enter", label: "newline" }]
                 : turn === undefined
                     ? [{ key: "Shift+Tab", label: "thinking" }, { key: "Ctrl+o", label: "tools" }, { key: "/", label: "commands" }, { key: "Ctrl+d", label: "quit" }]
                     : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "tools" }, { key: "Alt+Enter", label: "steer" }];
@@ -558,27 +563,81 @@ export async function runTuiApp(options) {
         return command !== undefined &&
             session.extensionRunner.getRegisteredCommands().some((registered) => registered.invocationName === command);
     }
+    /** Pairs `texts` with `candidate` (an AgentMessage[] snapshot of the same queue, same order) by
+     * position, up to however much of `candidate` actually lines up -- `agent.peekQueuedMessages()`
+     * (see clearAllQueues below) only ever returns the *first* message of whichever queue it's
+     * reading in Pi's default "one-at-a-time" mode (PendingMessageQueue.peek(), pi-agent-core), so a
+     * second or later queued message's images are never visible here even when the first's are.
+     * `unresolved` counts entries past that point, for a notice rather than a silent, possibly wrong,
+     * "no images" (item 6's "or show a notice" fallback). */
+    function imagesFor(texts, candidate) {
+        const paired = Math.min(texts.length, candidate.length);
+        const images = texts.map((_, index) => {
+            if (index >= paired)
+                return [];
+            const message = candidate[index];
+            const content = message !== null && typeof message === "object" && "content" in message ? message.content : undefined;
+            return Array.isArray(content) ? content.filter((part) => part.type === "image") : [];
+        });
+        return { images, unresolved: texts.length - paired };
+    }
     /** Pi's clearAllQueues (interactive-mode.js ~3729): the session's own steering/follow-up queue
-     * plus app.ts's own compaction queue, combined and cleared. */
+     * plus app.ts's own compaction queue, combined and cleared -- with images recovered where
+     * possible (item 6: images used to be silently dropped on restore).
+     *
+     * compactionQueue is MMP's own array (submit()'s isCompacting branch, below) and always keeps its
+     * images intact. The session's own steering/followUp queues (AgentSession's private
+     * `_steeringMessages`/`_followUpMessages`, backing getSteeringMessages/getFollowUpMessages/
+     * clearQueue) are typed as plain `string[]` -- Pi's own upstream restoreQueuedMessagesToEditor
+     * (interactive-mode.js ~3761) has this exact same gap, so it isn't fixable through AgentSession's
+     * curated surface. The underlying `agent.peekQueuedMessages()` (Agent, not AgentSession -- public,
+     * unlike its private `steeringQueue`/`followUpQueue` fields) does return full AgentMessage content
+     * including images, for whichever of the two queues it picks (steering's if non-empty, else
+     * followUp's) -- recoverable for that queue's first message, which is the common case this app's
+     * own key table produces (one steer or one follow-up queued at a time). A second queued message
+     * in the same turn, or the queue this app didn't pick, is counted in `unresolvedImages` instead of
+     * guessed at. */
     function clearAllQueues() {
+        const peeked = session.agent.peekQueuedMessages();
         const { steering, followUp } = session.clearQueue();
-        const compactionSteering = compactionQueue.filter((message) => message.mode === "steer").map((message) => message.text);
-        const compactionFollowUp = compactionQueue.filter((message) => message.mode === "followUp").map((message) => message.text);
+        const steeringResult = imagesFor(steering, peeked);
+        const followUpResult = steering.length === 0 ? imagesFor(followUp, peeked) : imagesFor(followUp, []);
+        const compactionSteering = compactionQueue.filter((message) => message.mode === "steer");
+        const compactionFollowUp = compactionQueue.filter((message) => message.mode === "followUp");
         compactionQueue = [];
-        return { steering: [...steering, ...compactionSteering], followUp: [...followUp, ...compactionFollowUp] };
+        return {
+            steering: [
+                ...steering.map((text, index) => ({ text, images: steeringResult.images[index] ?? [] })),
+                ...compactionSteering.map(({ text, images }) => ({ text, images })),
+            ],
+            followUp: [
+                ...followUp.map((text, index) => ({ text, images: followUpResult.images[index] ?? [] })),
+                ...compactionFollowUp.map(({ text, images }) => ({ text, images })),
+            ],
+            unresolvedImages: steeringResult.unresolved + followUpResult.unresolved,
+        };
     }
     /** Pi's restoreQueuedMessagesToEditor (interactive-mode.js ~3761): put any queued steering/
-     * follow-up text back in the editor (ahead of whatever the user already typed). Shared by Esc,
-     * Ctrl+C, Alt+Up (via CommandHost) and an extension's ctx.abort() (the abortHandler above), so a
-     * turn or compaction can never be aborted with its queue silently discarded. */
+     * follow-up text back in the editor (ahead of whatever the user already typed), re-registering
+     * any recovered images as chips (item 6) rather than dropping them. Shared by Esc, Ctrl+C, Alt+Up
+     * (via CommandHost) and an extension's ctx.abort() (the abortHandler above), so a turn or
+     * compaction can never be aborted with its queue silently discarded. */
     function restoreQueuedMessagesToEditor() {
-        const { steering, followUp } = clearAllQueues();
+        const { steering, followUp, unresolvedImages } = clearAllQueues();
         const queued = [...steering, ...followUp];
         if (queued.length === 0)
             return 0;
-        const queuedText = queued.join("\n\n");
+        const queuedText = queued
+            .map((message) => [
+            message.text,
+            ...message.images.map((image) => editor.registerImage(Buffer.from(image.data, "base64"), image.mimeType)),
+        ].filter((part) => part !== "").join(" "))
+            .join("\n\n");
         const current = editor.getText();
         editor.setText([queuedText, current].filter((text) => text.trim() !== "").join("\n\n"));
+        if (unresolvedImages > 0) {
+            transcript.notice(`Couldn't check ${unresolvedImages} other queued message${unresolvedImages > 1 ? "s" : ""} for images; any it had aren't restored.`, "warning");
+        }
         tui.requestRender();
         return queued.length;
     }

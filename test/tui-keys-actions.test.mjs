@@ -131,6 +131,29 @@ test("Ctrl+G opens $EDITOR and loads what it saved into the editor", (t) => {
   assert.match(marks.afterEdit, /FROM-EXTERNAL-EDITOR/);
 });
 
+// Item 6 (docs/tui-design.md 4.3): $EDITOR only ever sees getExpandedEditorText(), which never
+// inlines image chips (they're sent as attachments, not text) -- so an image chip in the draft was
+// silently gone once $EDITOR's plain-text result replaced the editor. Not recoverable (the image
+// was never handed to $EDITOR in the first place), so this is a notice, not a restore.
+const ONE_PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
+
+test("Ctrl+G opening $EDITOR shows a notice for an image chip it drops from the prompt", (t) => {
+  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-editor-image-"));
+  t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
+  const clipboardFile = join(clipboardDir, "clipboard.png");
+  writeFileSync(clipboardFile, ONE_PIXEL_PNG);
+  const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
+    ["wait", 2500], ["key", "ctrl+v"], ["wait", 300], // pastes [Image #1] into the draft
+    ["key", "ctrl+g"], ["wait", 1500], ["mark", "afterEdit"], ["key", "ctrl+c"], ["wait", 300],
+    ["key", "ctrl+d"],
+  ], { env: { EDITOR: `${process.execPath} ${fixture("fake-editor.mjs")}`, MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  assert.match(marks.afterEdit, /FROM-EXTERNAL-EDITOR/);
+  assert.match(marks.afterEdit, /dropped 1 image/);
+});
+
 test("Ctrl+V pastes text from the clipboard into the editor", (t) => {
   // MMP_TEST_CLIPBOARD_FILE (src/tui/clipboard.ts) swaps the real system clipboard for a plain
   // file, so this never reads the developer's actual clipboard or writes a stray image to tmpdir.

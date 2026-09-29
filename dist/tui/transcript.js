@@ -6,16 +6,6 @@ import { UserMessageBlock } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
 import { toolBlock } from "./tools/block.js";
 import { builtInToolRenderers } from "./tools/index.js";
-function messageText(content) {
-    if (typeof content === "string")
-        return content;
-    if (!Array.isArray(content))
-        return "";
-    return content
-        .filter((part) => part?.type === "text")
-        .map((part) => part.text)
-        .join("");
-}
 // grok block layout: a 1-column rail plus 2 columns of padding before block content.
 const CONTENT_PAD = 3;
 export class Transcript {
@@ -28,6 +18,7 @@ export class Transcript {
     messages = new piTui.Container();
     messageCount = 0;
     tools = new Map();
+    userMessages = [];
     streaming;
     toolsExpanded = false;
     constructor(tui, theme, session) {
@@ -46,15 +37,20 @@ export class Transcript {
         this.messages.clear();
         this.messageCount = 0;
         this.tools.clear();
+        this.userMessages.length = 0;
         this.streaming = undefined;
         for (const message of session.messages) {
             this.addFinishedMessage(message);
         }
     }
+    /** Ctrl+O (docs/tui-design.md 4.3, item 5): the same toggle that expands tool output also
+     * expands a user message collapsed past 3 lines, instead of a second toggle. */
     setToolsExpanded(expanded) {
         this.toolsExpanded = expanded;
         for (const tool of this.tools.values())
             tool.setExpanded(expanded);
+        for (const block of this.userMessages)
+            block.setExpanded(expanded);
     }
     /**
      * A notice ("/tree is not in MMP TUI v2 yet", an extension load warning) is not a real
@@ -151,9 +147,13 @@ export class Transcript {
     }
     addFinishedMessage(message) {
         switch (message.role) {
-            case "user":
-                this.add(new UserMessageBlock(this.theme, messageText(message.content), new Date(message.timestamp ?? Date.now())));
+            case "user": {
+                const block = new UserMessageBlock(this.theme, message.content, new Date(message.timestamp ?? Date.now()));
+                block.setExpanded(this.toolsExpanded);
+                this.userMessages.push(block);
+                this.add(block);
                 break;
+            }
             case "assistant":
                 this.assistant(message, false);
                 this.syncToolCalls(message, true);

@@ -18,11 +18,21 @@ const { readClipboardImage } = (await import(pathToFileURL(join(piDist, "utils",
 export async function openExternalEditor(host) {
     const command = host.session().settingsManager.getExternalEditorCommand();
     const content = host.getExpandedEditorText();
+    // getExpandedEditorText() never inlines image chips (they're sent as attachments, not text --
+    // docs/tui-design.md 4.3's 发送 row), so any of them are already excluded from what $EDITOR sees.
+    // Counted here, before the editor is replaced below, so there's something to compare against.
+    const imageCount = host.getEditorImages().length;
     host.tui.stop();
     try {
         const result = await runExternalEditor(command, content);
         if (result.status === "complete") {
             host.setEditorText(result.content);
+            // Item 6: setEditorText() replaces the whole draft with $EDITOR's plain text, which can't
+            // carry image chips -- silently dropping them is the bug; a notice is the fix (recovery isn't
+            // possible here, unlike the queue-restore case, since $EDITOR never saw the image at all).
+            if (imageCount > 0) {
+                host.notice(`External editor dropped ${imageCount} image${imageCount > 1 ? "s" : ""} from the prompt (images aren't sent to $EDITOR).`, "warning");
+            }
         }
         else {
             // Pi ignores this silently; MMP's rule is that failures show, so a bad $EDITOR isn't a mystery.

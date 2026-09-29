@@ -19,15 +19,6 @@ import { builtInToolRenderers } from "./tools/index.js";
 
 type AgentMessage = AgentSession["messages"][number];
 
-function messageText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((part): part is { type: "text"; text: string } => part?.type === "text")
-    .map((part) => part.text)
-    .join("");
-}
-
 // grok block layout: a 1-column rail plus 2 columns of padding before block content.
 const CONTENT_PAD = 3;
 
@@ -38,6 +29,7 @@ export class Transcript {
   private readonly messages: Container = new piTui.Container();
   private messageCount = 0;
   private readonly tools = new Map<string, ToolExecutionComponent>();
+  private readonly userMessages: UserMessageBlock[] = [];
   private streaming: AssistantMessageComponent | undefined;
   private toolsExpanded = false;
 
@@ -59,15 +51,19 @@ export class Transcript {
     this.messages.clear();
     this.messageCount = 0;
     this.tools.clear();
+    this.userMessages.length = 0;
     this.streaming = undefined;
     for (const message of session.messages) {
       this.addFinishedMessage(message);
     }
   }
 
+  /** Ctrl+O (docs/tui-design.md 4.3, item 5): the same toggle that expands tool output also
+   * expands a user message collapsed past 3 lines, instead of a second toggle. */
   setToolsExpanded(expanded: boolean): void {
     this.toolsExpanded = expanded;
     for (const tool of this.tools.values()) tool.setExpanded(expanded);
+    for (const block of this.userMessages) block.setExpanded(expanded);
   }
 
   /**
@@ -169,9 +165,13 @@ export class Transcript {
 
   private addFinishedMessage(message: AgentMessage): void {
     switch (message.role) {
-      case "user":
-        this.add(new UserMessageBlock(this.theme, messageText(message.content), new Date(message.timestamp ?? Date.now())));
+      case "user": {
+        const block = new UserMessageBlock(this.theme, message.content, new Date(message.timestamp ?? Date.now()));
+        block.setExpanded(this.toolsExpanded);
+        this.userMessages.push(block);
+        this.add(block);
         break;
+      }
       case "assistant":
         this.assistant(message, false);
         this.syncToolCalls(message, true);

@@ -278,7 +278,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | 何时变成标签 | 一次粘贴 ≥4 行 → `[Pasted: N lines]`；>10KB → `[Pasted: 12 KB]` | Ctrl+V 贴图片、`@图片`、拖进终端的图片路径 → `[Image #N]` |
 | 标签 | 原子：光标不能停在标签中间，退格一次删掉整个标签 | 同左 |
 | 预览浮窗 | 刚粘贴完、或光标落在标签上时，在输入框上方显示：前 3 行、`⋮ (N more lines)`、后 3 行，底边提示 `enter or double-click to expand`（刚粘贴时提示 `paste again or double-click to expand`）。光标离开就消失 | 光标落在标签上时显示，标题 `Image #1 ─ PNG · 64x40 · 5.0 KB`，框里用终端图形协议画图（pi-tui 的 `Image` 组件）；终端不支持图形时只显示标题行 |
-| 展开 | 光标在标签上按 Enter、双击标签、或刚粘贴时再粘贴一次 → 标签换成全文。此时底栏显示 `Enter:expand` | 不展开；Enter 照常发送 |
+| 展开 | 光标**真正落在**标签上（不是刚粘贴完、光标停在标签末尾那一下——grok 1.0.44 里两者不同：刚粘贴完底栏是 `Enter:send`、浮窗提示 `paste again or double-click to expand`；光标移到标签上后底栏才变成 `Enter:expand │ Shift+Enter:newline`、浮窗提示 `enter or double-click to expand`）时按 Enter、双击标签、或刚粘贴时再粘贴一次 → 标签换成全文 | 不展开；Enter 照常发送 |
 | 发送 | 标签换成全文后发给模型 | 图片作为图片附在消息里（`session.prompt(text, { images })`），不再让模型用 read 工具去读文件 |
 
 ### 4.4 状态行

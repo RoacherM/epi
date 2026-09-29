@@ -10,12 +10,16 @@ export interface HeaderState {
     contextWindow: number | undefined;
 }
 export declare function headerBar(theme: Theme, state: () => HeaderState): Component;
-/** Full-width `userMessageBg` block with one row of padding, `❯ text` and the time on the right. */
+/** Full-width `userMessageBg` block with one row of padding, `❯ text` and the time on the right.
+ * Collapses past `COLLAPSED_LINES` wrapped rows to `…` (grok shows the first 3 lines then that),
+ * expanded back with Ctrl+O -- the same toggle that expands tool output (item 5). */
 export declare class UserMessageBlock implements Component {
     private readonly theme;
-    private readonly text;
     private readonly time;
-    constructor(theme: Theme, text: string, time: Date);
+    private readonly text;
+    private expanded;
+    constructor(theme: Theme, content: unknown, time: Date);
+    setExpanded(expanded: boolean): void;
     render(width: number): string[];
     invalidate(): void;
 }

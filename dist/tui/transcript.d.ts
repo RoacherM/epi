@@ -10,11 +10,14 @@ export declare class Transcript {
     private readonly messages;
     private messageCount;
     private readonly tools;
+    private readonly userMessages;
     private streaming;
     private toolsExpanded;
     constructor(tui: TUI, theme: Theme, session: AgentSession);
     /** New session after /new, /resume, /reload: clear and replay its history. */
     reset(session: AgentSession): void;
+    /** Ctrl+O (docs/tui-design.md 4.3, item 5): the same toggle that expands tool output also
+     * expands a user message collapsed past 3 lines, instead of a second toggle. */
     setToolsExpanded(expanded: boolean): void;
     /**
      * A notice ("/tree is not in MMP TUI v2 yet", an extension load warning) is not a real
