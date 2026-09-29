@@ -78,9 +78,15 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   let toolsExpanded = false;
   let turn: TurnState | undefined;
   let queued: QueuedMessagesState = { steering: [], followUp: [] };
+  // Messages submitted while compaction is running (Pi's compactionQueuedMessages): session.prompt()
+  // throws during compaction, so these are held here and sent once compaction_end fires.
+  let compactionQueue: { text: string; mode: "steer" | "followUp" }[] = [];
   let workingMessage: string | undefined;
   let workingVisible = true;
   let branch = readGitBranch(cwd);
+  // True while a dialog/selector (ui.select, /model, /login, …) occupies the editor slot; the app
+  // key table and the shortcuts bar both read it (docs/tui-design.md 4.1: the bar follows focus).
+  let editorSlotHasDialog = false;
 
   // ── layout (grok notes 2.2): header, transcript, turn status, prompt, shortcuts ──
   const widgetsAbove: Container = new piTui.Container();
@@ -108,13 +114,18 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     () => tui.requestRender(),
   );
   const defaultFooter = shortcutsBar(theme, () => {
-    const shortcuts: Shortcut[] = turn === undefined
-      ? [{ key: "Shift+Tab", label: "thinking" }, { key: "Ctrl+o", label: "tools" }, { key: "/", label: "commands" }, { key: "Ctrl+d", label: "quit" }]
-      : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "tools" }, { key: "Alt+Enter", label: "steer" }];
+    const shortcuts: Shortcut[] = editorSlotHasDialog
+      ? [{ key: "↑↓", label: "select" }, { key: "Enter", label: "confirm" }, { key: "Esc", label: "cancel" }]
+      : turn === undefined
+        ? [{ key: "Shift+Tab", label: "thinking" }, { key: "Ctrl+o", label: "tools" }, { key: "/", label: "commands" }, { key: "Ctrl+d", label: "quit" }]
+        : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "tools" }, { key: "Alt+Enter", label: "steer" }];
     return { shortcuts, right: theme.fg("muted", [...statuses.values()].join(" · ")) };
   });
   footerSlot.addChild(defaultFooter);
-  const queueDisplay = queuedMessagesBar(theme, () => queued);
+  const queueDisplay = queuedMessagesBar(theme, () => ({
+    steering: [...queued.steering, ...compactionQueue.filter((message) => message.mode === "steer").map((message) => message.text)],
+    followUp: [...queued.followUp, ...compactionQueue.filter((message) => message.mode === "followUp").map((message) => message.text)],
+  }));
 
   const scroll = new piTui.ScrollView(inset(transcript.root), { follow: "end", primary: true, scrollbar: "auto" });
   const turnGap: Component = { render: () => (turn === undefined ? [] : [""]), invalidate() {} };
@@ -163,11 +174,13 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       editorSlot.clear();
       editorSlot.addChild(component);
       tui.setFocus(component);
+      editorSlotHasDialog = true;
       tui.requestRender();
       return () => {
         editorSlot.clear();
         editorSlot.addChild(prompt);
         tui.setFocus(editor);
+        editorSlotHasDialog = false;
         tui.requestRender();
       };
     },
@@ -310,6 +323,28 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       case "tool_execution_end":
         setActivity("Waiting for response…");
         break;
+      // Manual /compact runs with isStreaming false, so it needs its own turn-status entry (Pi
+      // shows a CompactionStatusIndicator and lets Esc cancel it via a temporary onEscape override;
+      // MMP's app.interrupt checks session.isCompacting instead, so the shared turn state suffices).
+      case "compaction_start":
+        turn = turn === undefined
+          ? { startedAt: now, phaseStartedAt: now, activity: "Compacting…", outputTokens: 0, estimated: false }
+          : { ...turn, activity: "Compacting…", phaseStartedAt: now };
+        break;
+      case "compaction_end":
+        if (!session.isStreaming) turn = undefined;
+        // Pi flushes its compaction queue unconditionally here, whether compaction succeeded,
+        // failed, or was aborted by Esc; a message typed while it ran still deserves sending.
+        void flushCompactionQueue();
+        break;
+      case "auto_retry_start":
+        turn = turn === undefined
+          ? { startedAt: now, phaseStartedAt: now, activity: `Retrying (${event.attempt}/${event.maxAttempts})…`, outputTokens: 0, estimated: false }
+          : { ...turn, activity: `Retrying (${event.attempt}/${event.maxAttempts})…`, phaseStartedAt: now };
+        break;
+      case "auto_retry_end":
+        if (!session.isStreaming) turn = undefined;
+        break;
       default:
         break;
     }
@@ -373,9 +408,38 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   }
 
   // ── input ─────────────────────────────────────────────────────────────────
+  // Pi's setupEditorSubmitHandler is only installed once startup (managed-tool setup, then
+  // rebindCurrentSession) finishes; until then defaultEditor.onSubmit is handleStartupSubmit,
+  // which just puts the text back with a status line instead of racing session.prompt() against
+  // a session whose extensions aren't bound yet. `ready` mirrors that gate; flips true once the
+  // first bind() below resolves.
+  let ready = false;
+
+  /** Pi's flushCompactionQueue: sent once compaction_end fires, in submission order. The first
+   * call starts a normal turn; later ones steer/follow-up into the turn it just started. */
+  async function flushCompactionQueue(): Promise<void> {
+    if (compactionQueue.length === 0) return;
+    const messages = compactionQueue;
+    compactionQueue = [];
+    tui.requestRender();
+    for (const message of messages) {
+      try {
+        await session.prompt(message.text, session.isStreaming ? { streamingBehavior: message.mode } : undefined);
+      } catch (error) {
+        transcript.notice(error instanceof Error ? error.message : String(error), "error");
+      }
+    }
+  }
+
   async function submit(text: string): Promise<void> {
     const trimmed = text.trim();
     if (trimmed === "") return;
+    if (!ready) {
+      // Mirrors Pi's handleStartupSubmit.
+      editor.setText(text);
+      transcript.notice("Startup is still in progress; try again in a moment.");
+      return;
+    }
     editor.addToHistory(text);
     editor.setText("");
     const [, command, commandArgs = ""] = /^\/(\S+)\s*([\s\S]*)$/.exec(trimmed) ?? [];
@@ -397,18 +461,31 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       return;
     }
     if (await runUserBash(commandHost, trimmed)) return;
+    if (session.isCompacting) {
+      // session.prompt() throws while compaction is running (Pi's queueCompactionMessage);
+      // MMP's Enter is Pi's Alt+Enter follow-up semantics (docs/tui-design.md 4.7 table).
+      compactionQueue.push({ text, mode: "followUp" });
+      transcript.notice("Queued message for after compaction.");
+      tui.requestRender();
+      return;
+    }
     try {
       await session.prompt(text, session.isStreaming ? { streamingBehavior: "followUp" } : undefined);
     } catch (error) {
-      // No model, no auth, compaction running: say why and keep the text.
+      // No model, no auth: say why and keep the text.
       transcript.notice(error instanceof Error ? error.message : String(error), "error");
       if (editor.getText() === "") editor.setText(text);
     }
   }
   editor.onSubmit = (text) => void submit(text);
 
+  // Pi binds these on the editor itself (defaultEditor.onAction/onEscape/onCtrlD), so they only
+  // fire when the editor has focus; a dialog/selector taking the editor slot (takeEditorSlot,
+  // above) gets every key first otherwise, since pi-tui runs input listeners before the focused
+  // component (bug: Esc/Ctrl+D/Ctrl+C/Ctrl+L would hit the app instead of the open dialog).
   const keyActions = createKeyActions();
   tui.addInputListener((data) => {
+    if (tui.getFocusedComponent() !== editor) return undefined;
     const action = keyActions.find((candidate) =>
       keybindings.matches(data, candidate.id as never) && (candidate.when?.(commandHost) ?? true));
     if (action === undefined) return undefined;
@@ -426,6 +503,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     await exit(1);
     throw error;
   }
+  ready = true;
 
   const code = await finished;
   process.off("SIGTERM", onSignal);
