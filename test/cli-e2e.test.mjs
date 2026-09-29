@@ -71,10 +71,11 @@ test("mmp install -l writes the project Manifest instead of the global one", (t)
 });
 
 // Bug 5 (DEVELOPMENT.md §8.2 rule 1): install/remove/config -l used to read and write an untrusted
-// project .mmp/mmp.json unconditionally -- resolveManifest (called by writeManifest to validate the
-// result) can run declared Rules/Skills/Extensions' side effects, exactly what `mmp list` already
-// refuses to do for an untrusted project. Pi requires --approve for its own project-scope package
-// commands the same way (package-manager-cli.js's writesProjectPackageConfig/isProjectTrusted checks).
+// project .mmp/mmp.json unconditionally. The rule is that a project's .mmp/mmp.json is only read
+// once the project is trusted, full stop -- not because resolveManifest executes anything (it just
+// resolves declared paths) -- exactly what `mmp list` already refuses to do for an untrusted project.
+// Pi requires --approve for its own project-scope package commands the same way
+// (package-manager-cli.js's writesProjectPackageConfig/isProjectTrusted checks).
 test("mmp install -l refuses an untrusted project without --approve, printing the same line mmp list uses", (t) => {
   const f = fixture(t);
   const result = run(f, ["install", "npm:proj-extension", "-l"]);
@@ -83,11 +84,15 @@ test("mmp install -l refuses an untrusted project without --approve, printing th
   assert.equal(existsSync(projectManifestPath(f)), false, "nothing was written");
 });
 
-test("mmp install -l --no-approve refuses even though nothing else was decided yet", (t) => {
+// Bug 7a (review round 2): the refusal text used to say "...(mmp --approve or /trust)" even when the
+// user had just explicitly passed --no-approve, which is self-contradictory -- suggesting the exact
+// flag they just used to refuse. It now says plainly that --no-approve is why.
+test("mmp install -l --no-approve refuses even though nothing else was decided yet, without suggesting --approve", (t) => {
   const f = fixture(t);
   const result = run(f, ["install", "npm:proj-extension", "-l", "--no-approve"]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /not trusted/);
+  assert.match(result.stderr, /refused by --no-approve/);
+  assert.doesNotMatch(result.stderr, /mmp --approve/);
   assert.equal(existsSync(projectManifestPath(f)), false);
 });
 
@@ -133,18 +138,25 @@ test("mmp install rejects a local source that does not exist, before writing any
 // was non-empty, never that the package or repo actually exists, so a typo silently wrote a Manifest
 // entry that would only fail much later, the next time `mmp` starts and tries to load it. Fixed with
 // a real existence check (manifest-cli.ts's defaultCheckSourceExists: `npm view`/`git ls-remote`).
-// These all run fully offline and deterministically: an invalid npm tag name and a missing/present
-// local git repo (via a `file://` URL, which `git ls-remote` supports directly) fail or succeed
-// client-side, without ever reaching the network -- unlike a real, resolvable package/repo name,
-// which this suite deliberately never depends on. `runNoOffline` drops the PI_OFFLINE that
-// `fixture()`'s other tests rely on (bug 6's own skip, tested separately below).
-function runNoOffline(f, args) {
+// `runNoOffline` drops the PI_OFFLINE that `fixture()`'s other tests rely on (bug 6's own skip,
+// tested separately below).
+function runNoOffline(f, args, extraEnv = {}) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: join(f.home, ".mmp") },
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: join(f.home, ".mmp"), ...extraEnv },
     encoding: "utf8",
     timeout: 30_000,
   });
+}
+
+const fakeNetworkBin = fileURLToPath(new URL("./fixtures/fake-network-bin", import.meta.url));
+
+/** Runs with test/fixtures/fake-network-bin's git/npm shadowing the real ones (first on PATH), so
+ * manifest-cli.ts's own spawn("git"|"npm", ...) reaches the fake, driven entirely by FAKE_CMD_* env
+ * vars (test/fixtures/fake-network-command.mjs) -- the real spawn/stdio/timeout plumbing runs for
+ * real, but no real network or real git/npm behavior is involved. */
+function runWithFakeCommand(f, args, fakeCmdEnv) {
+  return runNoOffline(f, args, { PATH: `${fakeNetworkBin}:${process.env.PATH}`, ...fakeCmdEnv });
 }
 
 test("mmp install rejects an npm: source that doesn't resolve, before writing anything", (t) => {
@@ -157,42 +169,6 @@ test("mmp install rejects an npm: source that doesn't resolve, before writing an
   assert.equal(existsSync(globalManifestPath(f)), false);
 });
 
-test("mmp install rejects a git: source whose repo isn't reachable, before writing anything", (t) => {
-  const f = fixture(t);
-  const missingRepo = join(f.root, "no-such-repo.git");
-  const result = runNoOffline(f, ["install", `git:file://${missingRepo}`]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /git repository not reachable/);
-  assert.equal(existsSync(globalManifestPath(f)), false);
-});
-
-test("mmp install accepts a git: source whose repo is reachable", (t) => {
-  const f = fixture(t);
-  const repo = join(f.root, "real-repo.git");
-  mkdirSync(repo, { recursive: true });
-  const init = spawnSync("git", ["init", "--bare", repo], { encoding: "utf8" });
-  assert.equal(init.status, 0, init.stderr);
-  const result = runNoOffline(f, ["install", `git:file://${repo}`]);
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(readFileSync(globalManifestPath(f), "utf8")).extensions, [`git:file://${repo}`]);
-});
-
-// Pi's own git source syntax allows a `#ref` suffix pinning a branch/tag/commit (utils/git.js's
-// `split.ref`; package-manager.js's installGit uses it as a checkout target). Only the repo itself
-// needs to be reachable for this check, not that specific ref, so the `#ref` must be stripped before
-// building the reachability URL -- otherwise a perfectly valid `git:host/path#ref` source would be
-// rejected as unreachable (`git ls-remote` doesn't understand a `#ref` suffix on the URL itself).
-test("mmp install accepts a git: source with a #ref suffix, checking only that the repo is reachable", (t) => {
-  const f = fixture(t);
-  const repo = join(f.root, "real-repo.git");
-  mkdirSync(repo, { recursive: true });
-  const init = spawnSync("git", ["init", "--bare", repo], { encoding: "utf8" });
-  assert.equal(init.status, 0, init.stderr);
-  const result = runNoOffline(f, ["install", `git:file://${repo}#main`]);
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(readFileSync(globalManifestPath(f), "utf8")).extensions, [`git:file://${repo}#main`]);
-});
-
 // PI_OFFLINE mirrors Pi's own offline mode (package-manager.js's isOfflineModeEnabled): every
 // network-backed resolution Pi does is skipped, and so is this same kind of check. Reuses the exact
 // spec that fails fast above (with real, non-offline checking) to prove the skip is real -- it only
@@ -202,6 +178,132 @@ test("mmp install skips the npm/git existence check under PI_OFFLINE, like Pi's 
   const result = run(f, ["install", "npm:Not A Valid Name!!!"]); // fixture() already sets PI_OFFLINE=1
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(readFileSync(globalManifestPath(f), "utf8")).extensions, ["npm:Not A Valid Name!!!"]);
+});
+
+// Bug 4 (review round 2): --offline is an MMP flag (docs/cli-design.md §2), and `mmp install
+// --offline` used to be rejected as an unknown option even though PI_OFFLINE already skips this same
+// check. Reuses the exact spec that fails fast above to prove the skip is real.
+test("mmp install --offline skips the npm/git existence check, honouring the flag like PI_OFFLINE", (t) => {
+  const f = fixture(t);
+  const result = runNoOffline(f, ["install", "npm:Not A Valid Name!!!", "--offline"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(globalManifestPath(f), "utf8")).extensions, ["npm:Not A Valid Name!!!"]);
+});
+
+// Bug 1 (blocking, review round 2): Pi's git ref separator is `@`, not `#` (utils/git.js's
+// splitRef) -- `git:github.com/earendil-works/pi-mono@main` (a reviewer's exact repro) must check
+// only `https://github.com/earendil-works/pi-mono`'s reachability, not the whole
+// "...pi-mono@main" string (which was never reachable, since it isn't a real URL). Pi's own
+// parseGitUrl rejects `file://` sources entirely (only https/http/ssh/git are recognized, and a bare
+// host/path needs a real-looking host), so a real git repo can't be addressed offline the way the
+// previous version of this test did; instead this injects a fake checkSourceExists (manifest-cli.ts's
+// own seam) and asserts on exactly what it was asked to check -- proving the parser split the ref
+// off correctly without needing any real command or network at all.
+test("mmp install's git ref parsing splits on @ (not #), matching Pi's splitRef", async (t) => {
+  const { runInstallCommand } = await import("../dist/commands/manifest-cli.js");
+  const home = mkdtempSync(join(tmpdir(), "mmp-git-ref-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const cases = [
+    ["git:github.com/earendil-works/pi-mono@main", { type: "git", url: "https://github.com/earendil-works/pi-mono" }],
+    ["git:https://github.com/earendil-works/pi-mono@v1.2.3", { type: "git", url: "https://github.com/earendil-works/pi-mono" }],
+    ["git:git@github.com:earendil-works/pi-mono@main", { type: "git", url: "git@github.com:earendil-works/pi-mono" }],
+    ["git:github.com/earendil-works/pi-mono", { type: "git", url: "https://github.com/earendil-works/pi-mono" }],
+  ];
+  for (const [source, expected] of cases) {
+    const checked = [];
+    process.env.MMP_HOME = join(home, ".mmp");
+    try {
+      const code = await runInstallCommand([source], { checkSourceExists: async (parsed) => { checked.push(parsed); } });
+      assert.equal(code, 0, source);
+    } finally {
+      delete process.env.MMP_HOME;
+    }
+    assert.deepEqual(checked, [expected], source);
+    rmSync(join(home, ".mmp", "mmp.json"), { force: true });
+  }
+});
+
+// Pi's own loader (utils/git.js's parseGitUrl/buildGitSource) would refuse each of these at `mmp`
+// startup; MMP now catches the same shapes before ever writing them to the Manifest, with a message
+// that says why, instead of a confusing "not reachable" from a mis-built check URL (or a silent write
+// that only fails on the next `mmp` run).
+test("mmp install rejects a git: source Pi's own loader would also reject", (t) => {
+  const f = fixture(t);
+  const cases = [
+    ["git:file:///some/local/repo", /unsupported scheme/],
+    ["git:ftp://github.com/user/repo", /unsupported scheme/],
+    ["git:onlyonesegment", /expected host\/path/],
+    ["git:localhost-but-not-quite/user/repo", /expected host\/path/],
+    ["git:github.com/onlyorg", /not a valid repository/],
+    ["git:github.com/user/../../etc", /not a valid repository/],
+  ];
+  for (const [source, expected] of cases) {
+    const result = runNoOffline(f, ["install", source]);
+    assert.notEqual(result.status, 0, source);
+    assert.match(result.stderr, expected, `${source}: ${result.stderr}`);
+    assert.equal(existsSync(globalManifestPath(f)), false, source);
+  }
+});
+
+// Item 3 (review round 2): a source starting with "-" would be read as a flag by `git ls-remote`/
+// `npm view` if it ever reached them -- a reviewer reproduced `git:--upload-pack=...` running an
+// arbitrary command via a malicious upload-pack. Rejected before any command runs, for both source
+// kinds.
+test("mmp install rejects an npm:/git: source that looks like a command-line flag", (t) => {
+  const f = fixture(t);
+  for (const source of ["npm:--evil-flag", "git:--upload-pack=touch /tmp/pwned;@github.com/a/b"]) {
+    const result = runNoOffline(f, ["install", source]);
+    assert.notEqual(result.status, 0, source);
+    assert.match(result.stderr, /looks like a command-line flag/, source);
+    assert.equal(existsSync(globalManifestPath(f)), false, source);
+  }
+});
+
+// Item 2 (review round 2): the real check used to discard stderr (`stdio: "ignore"`), so a failure
+// for any reason -- offline, DNS, auth, a 404 -- surfaced as the same generic message with no clue
+// why. It now captures and includes stderr. Uses the fake git/npm (test/fixtures/fake-network-bin)
+// to drive a real failing exit deterministically, offline.
+test("mmp install includes the command's stderr in the failure message", (t) => {
+  const f = fixture(t);
+  const result = runWithFakeCommand(f, ["install", "git:github.com/user/repo"], {
+    FAKE_CMD_EXIT_CODE: "128",
+    FAKE_CMD_STDERR: "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /git repository not reachable/);
+  assert.match(result.stderr, /terminal prompts disabled/);
+});
+
+// Item 2: a real failing exit (as opposed to the command not existing at all, tested next) still
+// succeeds when the fake command reports success, proving the same plumbing works end to end.
+test("mmp install succeeds when the (fake) git command reports success", (t) => {
+  const f = fixture(t);
+  const result = runWithFakeCommand(f, ["install", "git:github.com/user/repo"], { FAKE_CMD_EXIT_CODE: "0" });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+// Item 2: git/npm missing from PATH entirely (ENOENT) must not be reported as "package not found" --
+// that's actively misleading (there's no lookup to fail; the tool itself couldn't run).
+test("mmp install distinguishes git/npm missing from PATH from a failed lookup", (t) => {
+  const f = fixture(t);
+  const emptyBin = mkdtempSync(join(tmpdir(), "mmp-empty-bin-"));
+  t.after(() => rmSync(emptyBin, { recursive: true, force: true }));
+  const result = runNoOffline(f, ["install", "git:github.com/user/repo"], { PATH: emptyBin });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /git is not on PATH/);
+  assert.doesNotMatch(result.stderr, /not reachable/);
+});
+
+// Item 2: no timeout meant a dead host (or a repo demanding credentials with GIT_TERMINAL_PROMPT
+// unset) hung the whole command for however long the OS took to give up. Pi's own
+// NETWORK_TIMEOUT_MS is 10s (package-manager.js's getLatestNpmVersion); this proves MMP's matches by
+// making the fake command sleep past it and checking the command is actually killed, not left
+// running -- this test genuinely takes a bit over 10s.
+test("mmp install times out instead of hanging on an unresponsive command", { timeout: 20_000 }, (t) => {
+  const f = fixture(t);
+  const result = runWithFakeCommand(f, ["install", "git:github.com/user/repo"], { FAKE_CMD_SLEEP_MS: "30000" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /timed out after 10000ms/);
 });
 
 test("mmp remove drops the source; removing an absent source exits 1 without touching the file", (t) => {

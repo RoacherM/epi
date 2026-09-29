@@ -8,15 +8,22 @@ export type ParsedInstallSource = {
 };
 /**
  * Checks that a parsed `npm:`/`git:` source actually resolves, throwing with why not. The default
- * (real) implementation shells out to `npm view <spec> version` / `git ls-remote <url>` -- the same
- * kind of check Pi's own package manager runs to resolve these source kinds (package-manager.js's
- * getLatestNpmVersion/installGit) -- rather than reusing Pi's public `DefaultPackageManager` here,
- * whose temporary-scope resolution is a much bigger hammer (it actually downloads/clones into the
- * shared extension cache as a side effect) and, like this check, has nothing to test against without
- * live network. `runInstallCommand`'s `checkSourceExists` option lets tests substitute a fake result
- * instead of shelling out at all. */
+ * (real) implementation shells out to `npm view -- <spec> version` / `git ls-remote -- <url>` -- the
+ * same kind of check Pi's own package manager runs to resolve these source kinds
+ * (package-manager.js's getLatestNpmVersion/installGit) -- rather than reusing Pi's public
+ * `DefaultPackageManager` here, whose temporary-scope resolution is a much bigger hammer (it
+ * actually downloads/clones into the shared extension cache as a side effect) and, like this check,
+ * has nothing to test against without live network. `runInstallCommand`'s `checkSourceExists` option
+ * lets tests substitute a fake result instead of shelling out at all. */
 export type SourceExistenceChecker = (source: ParsedInstallSource) => Promise<void>;
-export declare function defaultCheckSourceExists(source: ParsedInstallSource): Promise<void>;
+/** Mirrors Pi's own NETWORK_TIMEOUT_MS (package-manager.js's getLatestNpmVersion): without a
+ * timeout, a dead host or a private/blocked repo hangs the command for as long as the OS takes to
+ * give up (routinely a minute or more), and there's no way to answer a credential prompt anyway. */
+export declare const NETWORK_CHECK_TIMEOUT_MS = 10000;
+export declare function defaultCheckSourceExists(source: ParsedInstallSource, options?: {
+    offline?: boolean;
+    timeoutMs?: number;
+}): Promise<void>;
 export declare function runInstallCommand(argv: readonly string[], options?: {
     checkSourceExists?: SourceExistenceChecker;
 }): Promise<number>;

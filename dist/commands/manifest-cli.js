@@ -19,11 +19,12 @@ function projectTarget(cwd) {
     return { path: join(cwd, ".mmp", "mmp.json"), source: "project" };
 }
 /**
- * A `-l` install/remove/config reads and writes the project Manifest the same way a real `mmp` run
- * would read it (through `resolveManifest`, which can execute declared Rules/Skills/Extensions'
- * side effects during resolution) -- exactly what `mmp list` refuses to do for an untrusted project
- * (DEVELOPMENT.md §8.2 rule 1). This mirrors that same check for these three commands, and Pi's own
- * requirement that project-scope package/config commands need `--approve` (package-manager-cli.js's
+ * The rule (DEVELOPMENT.md §8.2 rule 1, `mmp list`'s own check below): a project's `.mmp/mmp.json`
+ * is only read when the project is trusted -- `resolveManifest` itself just resolves declared paths,
+ * it doesn't execute any Rule/Skill/Extension, but reading an untrusted project's file at all (its
+ * declared paths, its JSON) is exactly what an untrusted project must not get to influence. This
+ * mirrors that same check for `-l` install/remove/config, and Pi's own requirement that
+ * project-scope package/config commands need `--approve` (package-manager-cli.js's
  * `writesProjectPackageConfig`/`isProjectTrusted` checks): an explicit `--approve`/`--no-approve`
  * overrides the saved decision for this run only (never persisted, same as `resolveProjectManifest`
  * in project.ts); otherwise the last decision from `mmp --approve`/`/trust` applies.
@@ -34,6 +35,10 @@ function assertProjectTrustedFor(cwd, approveOverride) {
     if (trusted)
         return;
     const manifestPath = projectTarget(cwd).path;
+    if (approveOverride === false) {
+        // The user just said --no-approve; suggesting "use --approve" here would be self-contradictory.
+        throw new MmpArgumentError(`Project (${manifestPath}): refused by --no-approve`);
+    }
     // Same line `mmp list` prints for an untrusted project Manifest (runListCommand, below).
     throw new MmpArgumentError(`Project (${manifestPath}): not trusted -- not read (mmp --approve or /trust)`);
 }
@@ -83,12 +88,69 @@ function writeManifest(target, mutate) {
 function extensionsOf(json) {
     return Array.isArray(json.extensions) ? json.extensions.filter((entry) => typeof entry === "string") : [];
 }
-function runCommandSucceeds(command, args) {
+/** Mirrors Pi's own NETWORK_TIMEOUT_MS (package-manager.js's getLatestNpmVersion): without a
+ * timeout, a dead host or a private/blocked repo hangs the command for as long as the OS takes to
+ * give up (routinely a minute or more), and there's no way to answer a credential prompt anyway. */
+export const NETWORK_CHECK_TIMEOUT_MS = 10_000;
+function runCheckCommand(command, args, timeoutMs) {
     return new Promise((resolvePromise) => {
-        const child = spawn(command, args, { stdio: "ignore" });
-        child.on("error", () => resolvePromise(false));
-        child.on("close", (code) => resolvePromise(code === 0));
+        let settled = false;
+        let stderr = "";
+        const finish = (result) => {
+            if (settled)
+                return;
+            settled = true;
+            clearTimeout(timer);
+            resolvePromise(result);
+        };
+        const child = spawn(command, [...args], {
+            stdio: ["ignore", "ignore", "pipe"],
+            // Without this, git prompting for credentials on a private or missing repo would hang until
+            // the timeout below anyway, but with a dangling prompt nothing running non-interactively could
+            // ever answer; npm's `view` has no equivalent prompt, so this is a no-op there.
+            env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        });
+        const timer = setTimeout(() => {
+            child.kill("SIGKILL");
+            finish({ ok: false, missing: false, stderr: `timed out after ${timeoutMs}ms waiting for ${command}` });
+        }, timeoutMs);
+        child.stderr?.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+        child.on("error", (error) => finish({ ok: false, missing: error.code === "ENOENT", stderr: error.message }));
+        child.on("close", (code) => finish({ ok: code === 0, missing: false, stderr: stderr.trim() }));
     });
+}
+/**
+ * Argument-injection guard: a source starting with `-` would be read as a flag by `git ls-remote`/
+ * `npm view` if it ever reached them unguarded -- a reviewer reproduced `git:--upload-pack=...`
+ * running an arbitrary command via a malicious upload-pack. `--` immediately before the source in
+ * the actual command (below) is the first line of defense; rejecting it here, before any command
+ * ever runs, is the second, and catches it even if a future change to the URL-building in
+ * `parseGitSpec` ever passed something through unprefixed.
+ */
+function assertNotFlagLike(value, label) {
+    if (value.startsWith("-")) {
+        throw new MmpArgumentError(`${label} looks like a command-line flag, not a source: ${value}`);
+    }
+}
+export async function defaultCheckSourceExists(source, options) {
+    if (isOffline() || options?.offline === true)
+        return;
+    const timeoutMs = options?.timeoutMs ?? NETWORK_CHECK_TIMEOUT_MS;
+    if (source.type === "npm") {
+        const result = await runCheckCommand("npm", ["view", "--", source.spec, "version"], timeoutMs);
+        if (result.missing)
+            throw new MmpArgumentError("npm is not on PATH; cannot verify the package exists");
+        if (!result.ok) {
+            throw new MmpArgumentError(`npm package not found: ${source.spec}${result.stderr ? `\n${result.stderr}` : ""}`);
+        }
+        return;
+    }
+    const result = await runCheckCommand("git", ["ls-remote", "--", source.url], timeoutMs);
+    if (result.missing)
+        throw new MmpArgumentError("git is not on PATH; cannot verify the repository exists");
+    if (!result.ok) {
+        throw new MmpArgumentError(`git repository not reachable: ${source.url}${result.stderr ? `\n${result.stderr}` : ""}`);
+    }
 }
 /** Mirrors Pi's own `isOfflineModeEnabled` (package-manager.js): PI_OFFLINE disables every
  * network-backed resolution Pi does, including this same kind of npm/git existence check, so
@@ -97,28 +159,127 @@ function isOffline() {
     const value = process.env.PI_OFFLINE;
     return value === "1" || value?.toLowerCase() === "true" || value?.toLowerCase() === "yes";
 }
-export async function defaultCheckSourceExists(source) {
-    if (isOffline())
-        return;
-    if (source.type === "npm") {
-        if (!(await runCommandSucceeds("npm", ["view", source.spec, "version"]))) {
-            throw new MmpArgumentError(`npm package not found: ${source.spec}`);
+/** Mirrors Pi's splitRef (utils/git.js, not exported): finds an `@ref` suffix pinning a
+ * branch/tag/commit in each of Pi's three git source shapes -- scp-like (`git@host:path@ref`), an
+ * explicit-scheme URL (`scheme://host/path@ref`), and a bare host/path (`host/path@ref`). The
+ * separator is `@`, not `#` (a reviewer caught the earlier version splitting on the wrong
+ * character -- `git:github.com/user/repo@v1` would have checked the unreachable
+ * ".../repo@v1" instead of ".../repo"). Only the repo part is used for the reachability check below;
+ * the ref itself isn't checked (docs/cli-design.md §3 only promises the repo is reachable). */
+function splitGitRef(url) {
+    const scpLikeMatch = /^git@([^:]+):(.+)$/.exec(url);
+    if (scpLikeMatch) {
+        const pathWithMaybeRef = scpLikeMatch[2] ?? "";
+        const refSeparator = pathWithMaybeRef.indexOf("@");
+        if (refSeparator < 0)
+            return { repo: url };
+        const repoPath = pathWithMaybeRef.slice(0, refSeparator);
+        const ref = pathWithMaybeRef.slice(refSeparator + 1);
+        if (!repoPath || !ref)
+            return { repo: url };
+        return { repo: `git@${scpLikeMatch[1] ?? ""}:${repoPath}`, ref };
+    }
+    if (url.includes("://")) {
+        try {
+            const parsed = new URL(url);
+            const pathWithMaybeRef = parsed.pathname.replace(/^\/+/, "");
+            const refSeparator = pathWithMaybeRef.indexOf("@");
+            if (refSeparator < 0)
+                return { repo: url };
+            const repoPath = pathWithMaybeRef.slice(0, refSeparator);
+            const ref = pathWithMaybeRef.slice(refSeparator + 1);
+            if (!repoPath || !ref)
+                return { repo: url };
+            parsed.pathname = `/${repoPath}`;
+            return { repo: parsed.toString().replace(/\/$/, ""), ref };
         }
-        return;
+        catch {
+            return { repo: url };
+        }
     }
-    if (!(await runCommandSucceeds("git", ["ls-remote", source.url]))) {
-        throw new MmpArgumentError(`git repository not reachable: ${source.url}`);
-    }
+    const slashIndex = url.indexOf("/");
+    if (slashIndex < 0)
+        return { repo: url };
+    const host = url.slice(0, slashIndex);
+    const pathWithMaybeRef = url.slice(slashIndex + 1);
+    const refSeparator = pathWithMaybeRef.indexOf("@");
+    if (refSeparator < 0)
+        return { repo: url };
+    const repoPath = pathWithMaybeRef.slice(0, refSeparator);
+    const ref = pathWithMaybeRef.slice(refSeparator + 1);
+    if (!repoPath || !ref)
+        return { repo: url };
+    return { repo: `${host}/${repoPath}`, ref };
 }
-/** `git:<spec>` stores a bare host/path (`github.com/user/repo`, docs/cli-design.md §3's example), an
- * already-schemed/SSH URL, or either of those with a `#ref` suffix pinning a branch/tag/commit (Pi's
- * own git source format, utils/git.js's `split.ref`). Only the repo itself needs to be reachable
- * (docs/cli-design.md §3), not that specific ref, so the `#ref` is dropped for the check. `git
- * ls-remote` needs a real URL, so a bare spec is given an `https://` scheme; anything that already
- * looks like one (a scheme, or `user@host:`) is left alone. */
-function gitUrlForReachabilityCheck(spec) {
-    const repo = spec.split("#")[0];
-    return /^([a-z][a-z0-9+.-]*:\/\/|[^/@]+@)/i.test(repo) ? repo : `https://${repo}`;
+const GIT_URL_SCHEMES = new Set(["https:", "http:", "ssh:", "git:"]);
+/** Rejects a path Pi's own buildGitSource (utils/git.js) would also reject: too few segments (needs
+ * at least an org/repo), or an unsafe part (a `..` segment, or -- encoded or not -- a null byte or
+ * backslash). */
+function hasInvalidGitPath(path) {
+    const normalized = path.replace(/\.git$/, "").replace(/^\/+|\/+$/g, "");
+    const segments = normalized.split("/").filter((segment) => segment.length > 0);
+    if (segments.length < 2)
+        return true;
+    let decoded;
+    try {
+        decoded = decodeURIComponent(normalized);
+    }
+    catch {
+        return true;
+    }
+    return [normalized, decoded].some((candidate) => candidate.includes("\0") || candidate.includes("\\") || candidate.split("/").includes(".."));
+}
+/**
+ * Parses and validates a `git:<spec>` source (the part after the `git:` prefix), scoped to the
+ * shapes MMP's own docs show (docs/cli-design.md §3): a bare `host/path`, an explicit
+ * `https/http/ssh/git` URL, or `git@host:path` scp syntax, each optionally with an `@ref`. Mirrors
+ * the structural checks Pi's own parseGitUrl/buildGitSource (utils/git.js, not exported) apply --
+ * host present (a dot, or "localhost", for the bare form), only those four schemes, at least an
+ * org/repo path, no unsafe path parts -- so a spec Pi's own loader would reject at `mmp` startup is
+ * caught here first, before it's ever written to the Manifest, instead of surfacing as a confusing
+ * "not reachable" from a mis-built check URL (or, worse, silently written and failing only on the
+ * next `mmp` run). This is a deliberate subset: it doesn't replicate parseGitUrl's
+ * hosted-git-info-based shorthand (an unprefixed "user/repo" resolving to GitHub, bitbucket
+ * detection, and the like), since MMP's own git: examples always give an explicit host.
+ */
+function parseGitSpec(spec) {
+    const { repo } = splitGitRef(spec);
+    assertNotFlagLike(repo, "git repository");
+    const scpLikeMatch = /^git@([^:@/]+):(.+)$/.exec(repo);
+    if (scpLikeMatch) {
+        const host = scpLikeMatch[1];
+        if (!host || hasInvalidGitPath(scpLikeMatch[2])) {
+            throw new MmpArgumentError(`git source is not a valid repository: git:${spec}`);
+        }
+        return { url: repo };
+    }
+    const schemeMatch = /^([a-z][a-z0-9+.-]*):\/\//i.exec(repo);
+    if (schemeMatch) {
+        if (!GIT_URL_SCHEMES.has(schemeMatch[1].toLowerCase() + ":")) {
+            throw new MmpArgumentError(`git source uses an unsupported scheme (${schemeMatch[1]}:); only https, http, ssh, and git are accepted: git:${spec}`);
+        }
+        let parsed;
+        try {
+            parsed = new URL(repo);
+        }
+        catch {
+            throw new MmpArgumentError(`git source is not a valid URL: git:${spec}`);
+        }
+        if (!parsed.hostname || hasInvalidGitPath(parsed.pathname)) {
+            throw new MmpArgumentError(`git source is not a valid repository: git:${spec}`);
+        }
+        return { url: repo };
+    }
+    const slashIndex = repo.indexOf("/");
+    if (slashIndex < 0) {
+        throw new MmpArgumentError(`git source is not a valid repository (expected host/path): git:${spec}`);
+    }
+    const host = repo.slice(0, slashIndex);
+    const path = repo.slice(slashIndex + 1);
+    if ((!host.includes(".") && host !== "localhost") || hasInvalidGitPath(path)) {
+        throw new MmpArgumentError(`git source is not a valid repository (expected host/path): git:${spec}`);
+    }
+    return { url: `https://${repo}` };
 }
 /**
  * Validates the source before it's ever written to the Manifest (docs/cli-design.md §3), and
@@ -136,7 +297,14 @@ async function validateAndResolveSource(source, checkSourceExists) {
         if (spec.length === 0) {
             throw new MmpArgumentError(`extension package source is empty: ${source}`);
         }
-        await checkSourceExists(source.startsWith("npm:") ? { type: "npm", spec } : { type: "git", url: gitUrlForReachabilityCheck(spec) });
+        if (source.startsWith("npm:")) {
+            assertNotFlagLike(spec, "npm package");
+            await checkSourceExists({ type: "npm", spec });
+        }
+        else {
+            const { url } = parseGitSpec(spec);
+            await checkSourceExists({ type: "git", url });
+        }
         return source;
     }
     const resolved = isAbsolute(source) ? source : resolve(process.cwd(), source);
@@ -157,7 +325,7 @@ function isHelpRequested(argv) {
  * not per command). */
 function renderInstallHelp() {
     return `Usage:
-  mmp install <source> [-l] [--approve|--no-approve]
+  mmp install <source> [-l] [--approve|--no-approve] [--offline]
 
 Add an extension source to the Manifest.
 
@@ -167,10 +335,12 @@ Options:
                       otherwise trusted (this run only; does not persist -- use mmp --approve or
                       /trust to persist it)
   -na, --no-approve  Refuse an -l write even if the project is otherwise trusted
+  --offline          Skip checking that an npm:/git: source actually resolves (like PI_OFFLINE)
 
 Examples:
   mmp install npm:@foo/bar
   mmp install git:github.com/user/repo
+  mmp install git:github.com/user/repo@v1.0
   mmp install ./local/path
 `;
 }
@@ -220,6 +390,9 @@ function parseSourceArgs(argv, commandName) {
     let source;
     let local = false;
     let approveOverride;
+    // Only `install` acts on this (its own existence check, below); accepted here too so `remove`
+    // doesn't need a separate parser for the one flag it ignores.
+    let offline = false;
     for (const argument of argv) {
         if (argument === "-l") {
             local = true;
@@ -233,6 +406,10 @@ function parseSourceArgs(argv, commandName) {
             approveOverride = false;
             continue;
         }
+        if (argument === "--offline") {
+            offline = true;
+            continue;
+        }
         if (argument.startsWith("-")) {
             throw new MmpArgumentError(`Unknown option for mmp ${commandName}: ${argument}`);
         }
@@ -244,18 +421,20 @@ function parseSourceArgs(argv, commandName) {
     if (source === undefined) {
         throw new MmpArgumentError(`mmp ${commandName} requires a source`);
     }
-    return { source, local, approveOverride };
+    return { source, local, approveOverride, offline };
 }
 export async function runInstallCommand(argv, options) {
     if (isHelpRequested(argv)) {
         process.stdout.write(renderInstallHelp());
         return 0;
     }
-    const { source: rawSource, local, approveOverride } = parseSourceArgs(argv, "install");
+    const { source: rawSource, local, approveOverride, offline } = parseSourceArgs(argv, "install");
     if (local)
         assertProjectTrustedFor(process.cwd(), approveOverride);
     const target = local ? projectTarget(process.cwd()) : globalTarget();
-    const source = await validateAndResolveSource(rawSource, options?.checkSourceExists ?? defaultCheckSourceExists);
+    const checkSourceExists = options?.checkSourceExists ??
+        ((parsedSource) => defaultCheckSourceExists(parsedSource, { offline }));
+    const source = await validateAndResolveSource(rawSource, checkSourceExists);
     writeManifest(target, (json) => {
         const extensions = extensionsOf(json);
         if (!extensions.includes(source))

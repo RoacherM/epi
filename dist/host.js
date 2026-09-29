@@ -202,7 +202,7 @@ export async function runMmp(argv) {
         disabled: updateCheckDisabled(process.env, args.passthrough),
     };
     // Building the inline extensions also validates their config (MCP, hooks), which --dry-run reports.
-    const extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly, updateCheck, args.passthrough.includes("--verbose"));
+    const extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly, updateCheck, passthroughHasFlag(args.passthrough, "--verbose"));
     if (prepared.args.dryRun) {
         const output = {
             mmpVersion: MMP_VERSION,

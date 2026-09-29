@@ -122,7 +122,7 @@ mmp config [-l] [--approve|--no-approve]                        # 用 $VISUAL/$E
 mmp auth print-api-key|print-bearer-token|check                # 打印或检查 provider 凭证（读写 ~/.mmp/pi，不读 ~/.pi/agent）
 ```
 
-`-l` 把 `install`/`remove`/`config` 的目标从全局 `~/.mmp/mmp.json` 换成当前目录的 `.mmp/mmp.json`；目标项目未被信任时三者都会拒绝，报同一句 "not trusted" 提示，除非带 `--approve`（仅本次生效，和 Pi 自己的项目级 package 命令一样，见 `package-manager-cli.js`）。`mmp install` 写入前会校验来源是否真实存在：`npm:` 用 `npm view <spec> version` 确认包（和版本）能解析，`git:` 用 `git ls-remote` 确认仓库可达，本地路径确认文件存在；校验失败不写入，并说明原因。写入后需要重启 `mmp` 才生效；扩展包本身不会被预先下载进 `.pi/` 或 Pi 的 `settings.json`——它们和其它 Manifest 声明的 Extension 一样，在下次 `mmp` 启动时按 `--extension npm:x`/`git:x` 的方式加载，缓存在 `~/.mmp/pi/tmp/extensions` 下；`mmp update --extensions` 清空这份缓存，让声明的来源在下次启动时重新拉取。`mmp config` 的编辑结果如果校验失败，会保留编辑前的文件内容并报错。
+`-l` 把 `install`/`remove`/`config` 的目标从全局 `~/.mmp/mmp.json` 换成当前目录的 `.mmp/mmp.json`；目标项目未被信任时三者都会拒绝，报同一句 "not trusted" 提示，除非带 `--approve`（仅本次生效，和 Pi 自己的项目级 package 命令一样，见 `package-manager-cli.js`）。`mmp install` 写入前会校验来源是否真实存在：`npm:` 用 `npm view <spec> version` 确认包（和版本）能解析，`git:` 用 `git ls-remote` 确认仓库可达（10 秒超时；命令缺失或返回非零都会带上原始报错说明原因；`--offline` 和 `PI_OFFLINE` 一样跳过这项检查），本地路径确认文件存在；`git:` 只接受 Pi 自己会接受的形状（host/path、显式协议 URL、scp 语法，可选 `@ref`），校验失败不写入，并说明原因。写入后需要重启 `mmp` 才生效；扩展包本身不会被预先下载进 `.pi/` 或 Pi 的 `settings.json`——它们和其它 Manifest 声明的 Extension 一样，在下次 `mmp` 启动时按 `--extension npm:x`/`git:x` 的方式加载，缓存在 `~/.mmp/pi/tmp/extensions` 下；`mmp update --extensions` 清空这份缓存，让声明的来源在下次启动时重新拉取。`mmp config` 的编辑结果如果校验失败，会保留编辑前的文件内容并报错。
 
 ## 配置布局
 

@@ -280,7 +280,7 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
     prepared.runtimeIdentity,
     prepared.resolveAssembly,
     updateCheck,
-    args.passthrough.includes("--verbose"),
+    passthroughHasFlag(args.passthrough, "--verbose"),
   );
 
   if (prepared.args.dryRun) {

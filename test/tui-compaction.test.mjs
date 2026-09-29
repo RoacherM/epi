@@ -199,10 +199,19 @@ test("/new during compaction drops the queued message instead of flushing it int
 
 // Bug 1 (docs/tui-design.md §15): /import called host.runtime.importFromJsonl directly instead of
 // going through app.ts's session-replacement guard, so sessionReplacementInFlight was never set for
-// it -- the outgoing session's compaction_end (fired by importFromJsonl's own teardownCurrent, before
-// the imported session replaces it) flushed a message queued during compaction straight into the
-// session being torn down. Same fix and same proof as the /new case above, for /import.
-test("/import during compaction drops the queued message instead of flushing it into the disposed session", (t) => {
+// it. This test does NOT discriminate the fix, unlike the /new case above -- confirmed empirically
+// (instrumented flushCompactionQueue and compared pre-/post-fix runs of this exact scenario): Pi's
+// own compact() clears its compaction state and emits compaction_end (AgentSession.compact,
+// "compaction_end listeners may submit queued prompts, so expose idle state before notifying them")
+// *before* teardownCurrent's later steps dispose the outgoing session, so calling session.prompt()
+// from flushCompactionQueue at that moment is idle and doesn't throw either way; pre-fix it's
+// actually called (confirmed via added instrumentation) and pre-fix or post-fix the queued text
+// never reaches any model (this session's turn is cut off by disposal before the request goes out),
+// so the model log and transcript look identical whether the fix is present or not. Kept anyway as a
+// regression check on the actually-fixed *end state* (import finishes cleanly, the app stays usable,
+// no spurious failure notice); test/tui-fatal-errors.test.mjs's /import case is what discriminates
+// bug 1 itself.
+test("/import during compaction leaves the app usable afterward, without a spurious failure notice", (t) => {
   const logDir = mkdtempSync(join(tmpdir(), "mmp-compact-log-"));
   const logPath = join(logDir, "log.txt");
   t.after(() => rmSync(logDir, { recursive: true, force: true }));

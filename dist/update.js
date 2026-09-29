@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { passthroughHasFlag } from "./args.js";
 import { MmpArgumentError } from "./errors.js";
 // Shared with src/tui/share-commands.ts (/bug, /changelog): one place names MMP's GitHub repo.
 export const MMP_REPO = "RoacherM/mmp";
@@ -78,12 +79,14 @@ export async function refreshUpdateCache(options) {
     writeFileSync(cachePath(options.mmpHome), `${JSON.stringify(next, null, 2)}\n`);
     return next;
 }
-/** Update checks never run for reproducible or offline runs. */
+/** Update checks never run for reproducible or offline runs. `--offline` after a bare `--` is a
+ * message, not the flag (Pi's own parseArgs, cli/args.js, stops interpreting flags at `--`; bug 9's
+ * passthroughHasFlag respects that same boundary). */
 export function updateCheckDisabled(environment, piArguments) {
     return (environment.MMP_DISABLE_UPDATE_CHECK !== undefined ||
         environment.PI_OFFLINE !== undefined ||
         environment.CI !== undefined ||
-        piArguments.includes("--offline"));
+        passthroughHasFlag(piArguments, "--offline"));
 }
 export function updateNotice(cache, currentVersion) {
     const latest = cache?.latestVersion;
