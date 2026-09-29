@@ -290,19 +290,20 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 
 **命令面板**：`Ctrl+P` 打开浮层，模糊搜索所有命令，分组显示（会话、模型、上下文、其它），右侧显示快捷键。数据来自动作表和扩展注册的命令。
 
-**优先级**（2026-09-29 与用户确认）。Pi 有 24 个内置命令，都要在 MMP 里重新接线。命令表在 `src/tui/builtins.ts`，键位表在 `src/tui/keys.ts`；未接线的命令在补全里标 `(not in v2 yet)`，输入后提示用经典界面。
+**优先级**（2026-09-29 与用户确认；✓ 为已完成）。Pi 有 24 个内置命令，都要在 MMP 里重新接线。命令表在 `src/tui/builtins.ts`，键位表在 `src/tui/keys.ts`；未接线的命令在补全里标 `(not in v2 yet)`，输入后提示用经典界面。
 
 | 级别 | 内容 | 实现 |
 |---|---|---|
 | 已完成 | `/login`、`/logout`、`/model`、`/new`、`/quit` | `commands.ts`；`runtime.newSession` |
-| P0 | 补全列出全部命令、prompt 模板和 `/skill:*` | `slashCompletions`（已完成） |
-| P0 | `/compact [指令]` | `session.compact` |
-| P0 | `/resume` | `SessionSelectorComponent`（导出）+ `runtime.switchSession` |
-| P0 | `/thinking [档位]` | `ThinkingSelectorComponent`（导出） |
-| P0 | `/copy`、`Ctrl+X` | `getLastAssistantText` + `copyToClipboard` |
-| P0 | `/reload` | `session.reload()`，然后重建宿主状态（6.3 节） |
-| P0 | `!命令`、`!!命令` | `session.executeBash` + `BashExecutionComponent`（导出） |
-| P0 | 键位：`Ctrl+L`、`Alt+Enter`、`Alt+↑`、`Ctrl+G`、`Ctrl+T`、`Ctrl+V`、`Ctrl+Z` | 各自一个 SDK 调用或 pi-tui 功能 |
+| P0 ✓ | 补全列出全部命令、prompt 模板和 `/skill:*` | `slashCompletions`（已完成） |
+| P0 ✓ | `/compact [指令]` | `session.compact` |
+| P0 ✓ | `/resume` | `SessionSelectorComponent`（导出）+ `runtime.switchSession` |
+| P0 ✓ | `/thinking [档位]` | `ThinkingSelectorComponent`（导出） |
+| P0 ✓ | `/copy`、`Ctrl+X` | `getLastAssistantText` + `copyToClipboard` |
+| P0 ✓ | `/reload` | `session.reload()`，然后重建宿主状态（6.3 节） |
+| P0 ✓ | `!命令`、`!!命令` | `session.executeBash` + `BashExecutionComponent`（导出） |
+| P0 ✓ | 键位：`Ctrl+L`、`Alt+Enter`、`Alt+↑`、`Ctrl+G`、`Ctrl+V`、`Ctrl+Z`，以及运行中排队消息的显示 | 各自一个 SDK 调用或 pi-tui 功能 |
+| P0 | `Ctrl+T` 折叠 thinking | 和 M4 的 `Thought for Ns` 一起做 |
 | P1 | `/tree`、`/fork`、`/clone`、`/name`、`/session`、`/export`、`/import`、`/hotkeys` | 组件都有导出，主要是接线 |
 | P2 | `/settings`、`/scoped-models` | `/settings` 里有些项只对 Pi 自己的界面有意义，要先挑出适用于 MMP 的 |
 
@@ -516,7 +517,7 @@ M2 结束时就能日常使用，只是样子还接近 Pi。M4 才换成 grok �
 | M0 升级 Pi | 完成（0.87.1），见 [decisions.md](decisions.md) P0 |
 | M1 探针 | 并进 M2 一起做。已验证：S2（扩展消息只显示一次）、S3（全局主题和 MMP 的 Theme 颜色一致，有测试）、S5（MCP adapter 在新宿主里正常连接；`custom()` 面板和 `tui.select.*` 键位正常，用测试扩展验证，因为 MMP 的配置方式下 `/mcp` 不弹面板）。未做：S1（Pi 的选择器组件，M3 用到时验证）、S4（各终端表现）、S6（缺 fd/rg）、S7（查询终端背景色） |
 | M2 最小可用版本 | 完成 v0，放在 `MMP_TUI=v2` 开关后面（经典界面仍是默认，因为 `/login` 还只有经典界面有）。代码在 `src/tui/`，约 1,080 行 |
-| M3 内置命令 | 进行中：`/login`、`/logout`、`/model` 已完成（`src/tui/commands.ts`）。登录成功后如果还没有可用模型，会弹出按该 provider 过滤的模型选择器，因为 Pi 按 provider 选默认模型的那张表没有导出。其余命令未做 |
+| M3 内置命令 | P0 完成（`Ctrl+T` 除外，随 M4 做）：补全、`/compact` `/resume` `/thinking` `/copy` `/reload`、`!` 命令、常用键位和排队显示。由 3 个 Sonnet subagent 分别在独立 worktree 里写，审查后合并。P1、P2 未做 |
 | M4 grok 界面 | 进行中。已完成：顶栏（分支、缩短的路径、上下文占用）、用户消息块、运行状态行、圆角输入框（底边是模型和思考档位）、快捷键栏（`src/tui/chrome.ts`）；工具块用 `┃` 竖条和 `◆`，去掉 Pi 的底色框（`src/tui/tools/block.ts`，内置工具和扩展工具都套用）；7 个内置工具的渲染器（agy 写，审查后合并）。未做：thinking 折叠成 `Thought for Ns`、连续只读工具合并、完成闪烁、`▼` 新内容提示、矮屏降级 |
 
 M2 验收依据（都可重跑）：
