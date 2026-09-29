@@ -33,6 +33,7 @@ test("MMP consumes only its own flags and preserves Pi arguments", () => {
     dryRun: true,
     noProject: true,
     version: false,
+    update: false,
     projectTrustOverride: true,
     passthrough: [
       "--model",

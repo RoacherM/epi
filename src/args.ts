@@ -32,6 +32,7 @@ export interface MmpArgs {
   dryRun: boolean;
   noProject: boolean;
   version: boolean;
+  update: boolean;
   projectTrustOverride: boolean | undefined;
   passthrough: string[];
 }
@@ -47,6 +48,20 @@ function findReservedResourceFlag(argument: string): string | undefined {
 }
 
 export function parseMmpArgs(argv: readonly string[]): MmpArgs {
+  if (argv[0] === "update") {
+    if (argv.length > 1) {
+      throw new MmpArgumentError("mmp update takes no arguments");
+    }
+    return {
+      dryRun: false,
+      noProject: false,
+      version: false,
+      update: true,
+      projectTrustOverride: undefined,
+      passthrough: [],
+    };
+  }
+
   const passthrough: string[] = [];
   let dryRun = false;
   let noProject = false;
@@ -111,6 +126,7 @@ export function parseMmpArgs(argv: readonly string[]): MmpArgs {
     dryRun,
     noProject,
     version,
+    update: false,
     projectTrustOverride,
     passthrough,
   };

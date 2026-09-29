@@ -10,15 +10,17 @@ import { createTaskInlineExtension } from "./task.js";
 import { createMmpRuntimeExtension } from "./runtime.js";
 import type { MmpRuntimeIdentity } from "../runtime-identity.js";
 import { createMmpMcpExtension } from "./mcp.js";
+import type { UpdateCheckOptions } from "./runtime.js";
 
 export function buildInlineExtensions(
   assembly: ResolvedAssembly,
   mmpHome: string,
   runtimeIdentity: MmpRuntimeIdentity,
   resolveAssembly: () => ResolvedAssembly = () => assembly,
+  updateCheck?: UpdateCheckOptions,
 ): InlineExtension[] {
   const extensions: InlineExtension[] = [
-    createMmpRuntimeExtension(runtimeIdentity, assembly, resolveAssembly),
+    createMmpRuntimeExtension(runtimeIdentity, assembly, resolveAssembly, updateCheck),
   ];
   for (const extension of assembly.inlineExtensions) {
     switch (extension.name) {

@@ -12,6 +12,13 @@ import {
   type MmpRuntimeIdentity,
 } from "../runtime-identity.js";
 import { renderMmpStartupPage } from "../startup-page.js";
+import { readUpdateCache, refreshUpdateCache, updateNotice } from "../update.js";
+
+export interface UpdateCheckOptions {
+  mmpHome: string;
+  currentVersion: string;
+  disabled: boolean;
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -44,12 +51,28 @@ export function createMmpRuntimeExtension(
   initialIdentity: MmpRuntimeIdentity,
   initialAssembly: ResolvedAssembly,
   resolveAssembly: () => ResolvedAssembly = () => initialAssembly,
+  updateCheck?: UpdateCheckOptions,
 ): InlineExtension {
   return {
     name: "mmp:runtime",
     factory(pi) {
       let activeAssembly = initialAssembly;
       let activeIdentity = initialIdentity;
+      let sessionActive = false;
+
+      function showUpdateNotice(context: ExtensionContext): void {
+        if (updateCheck === undefined || updateCheck.disabled) {
+          return;
+        }
+        const { mmpHome, currentVersion } = updateCheck;
+        const show = (notice: string | undefined) => {
+          if (notice !== undefined && sessionActive) {
+            context.ui.setStatus("mmp-update", context.ui.theme.fg("warning", notice));
+          }
+        };
+        show(updateNotice(readUpdateCache(mmpHome), currentVersion));
+        void refreshUpdateCache({ mmpHome }).then((cache) => show(updateNotice(cache, currentVersion)));
+      }
 
       function refreshManifest(
         context: ExtensionContext,
@@ -95,6 +118,10 @@ export function createMmpRuntimeExtension(
         if (context.mode !== "tui") {
           return;
         }
+        sessionActive = true;
+        if (event.reason === "startup") {
+          showUpdateNotice(context);
+        }
         const model = context.model;
         const pageOptions = model === undefined
           ? {}
@@ -114,6 +141,10 @@ export function createMmpRuntimeExtension(
           },
           invalidate() {},
         }));
+      });
+
+      pi.on("session_shutdown", () => {
+        sessionActive = false;
       });
 
       pi.on("resources_discover", () => ({

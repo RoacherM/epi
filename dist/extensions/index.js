@@ -5,9 +5,9 @@ import { createHooksInlineExtension } from "./hooks.js";
 import { createTaskInlineExtension } from "./task.js";
 import { createMmpRuntimeExtension } from "./runtime.js";
 import { createMmpMcpExtension } from "./mcp.js";
-export function buildInlineExtensions(assembly, mmpHome, runtimeIdentity, resolveAssembly = () => assembly) {
+export function buildInlineExtensions(assembly, mmpHome, runtimeIdentity, resolveAssembly = () => assembly, updateCheck) {
     const extensions = [
-        createMmpRuntimeExtension(runtimeIdentity, assembly, resolveAssembly),
+        createMmpRuntimeExtension(runtimeIdentity, assembly, resolveAssembly, updateCheck),
     ];
     for (const extension of assembly.inlineExtensions) {
         switch (extension.name) {

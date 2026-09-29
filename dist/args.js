@@ -32,6 +32,19 @@ function findReservedResourceFlag(argument) {
     return RESERVED_RESOURCE_VALUE_FLAGS.find((flag) => argument.startsWith(`${flag}=`));
 }
 export function parseMmpArgs(argv) {
+    if (argv[0] === "update") {
+        if (argv.length > 1) {
+            throw new MmpArgumentError("mmp update takes no arguments");
+        }
+        return {
+            dryRun: false,
+            noProject: false,
+            version: false,
+            update: true,
+            projectTrustOverride: undefined,
+            passthrough: [],
+        };
+    }
     const passthrough = [];
     let dryRun = false;
     let noProject = false;
@@ -85,6 +98,7 @@ export function parseMmpArgs(argv) {
         dryRun,
         noProject,
         version,
+        update: false,
         projectTrustOverride,
         passthrough,
     };

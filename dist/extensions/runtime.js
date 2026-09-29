@@ -1,5 +1,6 @@
 import { createMmpRuntimeIdentity, createMmpRuntimeReport, normalizeLoadedSkills, renderMmpRuntimePrompt, } from "../runtime-identity.js";
 import { renderMmpStartupPage } from "../startup-page.js";
+import { readUpdateCache, refreshUpdateCache, updateNotice } from "../update.js";
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
@@ -18,12 +19,26 @@ function reloadableAssembly(initial, next) {
         externalExtensions: initial.externalExtensions,
     };
 }
-export function createMmpRuntimeExtension(initialIdentity, initialAssembly, resolveAssembly = () => initialAssembly) {
+export function createMmpRuntimeExtension(initialIdentity, initialAssembly, resolveAssembly = () => initialAssembly, updateCheck) {
     return {
         name: "mmp:runtime",
         factory(pi) {
             let activeAssembly = initialAssembly;
             let activeIdentity = initialIdentity;
+            let sessionActive = false;
+            function showUpdateNotice(context) {
+                if (updateCheck === undefined || updateCheck.disabled) {
+                    return;
+                }
+                const { mmpHome, currentVersion } = updateCheck;
+                const show = (notice) => {
+                    if (notice !== undefined && sessionActive) {
+                        context.ui.setStatus("mmp-update", context.ui.theme.fg("warning", notice));
+                    }
+                };
+                show(updateNotice(readUpdateCache(mmpHome), currentVersion));
+                void refreshUpdateCache({ mmpHome }).then((cache) => show(updateNotice(cache, currentVersion)));
+            }
             function refreshManifest(context, showSuccess) {
                 try {
                     const resolved = resolveAssembly();
@@ -54,6 +69,10 @@ export function createMmpRuntimeExtension(initialIdentity, initialAssembly, reso
                 if (context.mode !== "tui") {
                     return;
                 }
+                sessionActive = true;
+                if (event.reason === "startup") {
+                    showUpdateNotice(context);
+                }
                 const model = context.model;
                 const pageOptions = model === undefined
                     ? {}
@@ -68,6 +87,9 @@ export function createMmpRuntimeExtension(initialIdentity, initialAssembly, reso
                     },
                     invalidate() { },
                 }));
+            });
+            pi.on("session_shutdown", () => {
+                sessionActive = false;
             });
             pi.on("resources_discover", () => ({
                 skillPaths: activeAssembly.skills.map((skill) => skill.value),

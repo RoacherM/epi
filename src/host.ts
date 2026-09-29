@@ -15,6 +15,7 @@ import {
   type MmpRuntimeIdentity,
 } from "./runtime-identity.js";
 import type { ResolvedResource } from "./manifest.js";
+import { runMmpUpdate, updateCheckDisabled } from "./update.js";
 
 export const MMP_VERSION = "0.1.4";
 export const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
@@ -25,9 +26,11 @@ export const MMP_HELP = `MMP options:
   --approve       Trust the discovered project configuration for this run
   --no-approve    Ignore the discovered project configuration for this run
   --version       Print the pinned MMP and Pi versions
+  update          Install the latest MMP release (mmp update)
 
 Environment:
   MMP_HOME        Absolute MMP configuration root (default: ~/.mmp)
+  MMP_DISABLE_UPDATE_CHECK  Do not check for new MMP releases
 
 Rules, skills, and extensions are manifest-owned. Ambient themes, prompt
 templates, and context files are disabled. Direct Pi resource flags are rejected;
@@ -120,6 +123,12 @@ export function prepareMmpRun(
 
 export async function runMmp(argv: readonly string[]): Promise<void> {
   const args = parseMmpArgs(argv);
+  if (args.update) {
+    process.exitCode = await runMmpUpdate({ currentVersion: MMP_VERSION });
+    return;
+  }
+  // Pi's own notice would suggest `pi update`, which does not update MMP's pinned Pi.
+  process.env.PI_SKIP_VERSION_CHECK = "1";
   if (args.version) {
     process.stdout.write(`mmp ${MMP_VERSION}\npi ${PI_VERSION}\n`);
     return;
@@ -135,11 +144,18 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
     return;
   }
   const prepared = prepareParsedMmpRun(args, process.env, process.cwd());
+  const updateCheck = {
+    mmpHome: prepared.mmpHome,
+    currentVersion: MMP_VERSION,
+    disabled: updateCheckDisabled(process.env, args.passthrough),
+  };
+  // Building the inline extensions also validates their config (MCP, hooks), which --dry-run reports.
   const extensionFactories = buildInlineExtensions(
     prepared.assembly,
     prepared.mmpHome,
     prepared.runtimeIdentity,
     prepared.resolveAssembly,
+    updateCheck,
   );
 
   if (prepared.args.dryRun) {
