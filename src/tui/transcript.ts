@@ -44,7 +44,6 @@ export class Transcript {
   constructor(
     private readonly tui: TUI,
     private readonly theme: Theme,
-    private readonly cwd: string,
     private session: AgentSession,
   ) {
     this.root.addChild({
@@ -71,9 +70,13 @@ export class Transcript {
     for (const tool of this.tools.values()) tool.setExpanded(expanded);
   }
 
+  /**
+   * A notice ("/tree is not in MMP TUI v2 yet", an extension load warning) is not a real
+   * message: it must not count toward messageCount, which gates the welcome page's header.
+   */
   notice(text: string, tone: "info" | "warning" | "error" = "info"): void {
     const color = tone === "error" ? "error" : tone === "warning" ? "warning" : "muted";
-    this.add(new piTui.Text(this.theme.fg(color, text), 1, 0));
+    this.add(new piTui.Text(this.theme.fg(color, text), 1, 0), true, false);
     this.tui.requestRender();
   }
 
@@ -135,11 +138,15 @@ export class Transcript {
     this.tui.requestRender();
   }
 
-  /** `gap: false` for components that already start with a blank row (Pi's assistant and tool components). */
-  private add(component: Component, gap = true): void {
-    if (gap && this.messageCount > 0) this.messages.addChild(new piTui.Spacer(1));
+  /**
+   * `gap: false` for components that already start with a blank row (Pi's assistant and tool
+   * components). `counts: false` for a notice, which shares the spacer rhythm but must not hide
+   * the welcome page (see `notice()`).
+   */
+  private add(component: Component, gap = true, counts = true): void {
+    if (gap && this.messages.children.length > 0) this.messages.addChild(new piTui.Spacer(1));
     this.messages.addChild(component);
-    this.messageCount += 1;
+    if (counts) this.messageCount += 1;
   }
 
   private assistant(message: Extract<AgentMessage, { role: "assistant" }>, streaming: boolean): AssistantMessageComponent {
@@ -211,7 +218,7 @@ export class Transcript {
       undefined,
       renderers as never,
       this.tui,
-      this.cwd,
+      this.session.sessionManager.getCwd(),
     );
     component.setExpanded(this.toolsExpanded);
     this.tools.set(toolCallId, component);

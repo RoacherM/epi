@@ -132,7 +132,7 @@ test("TUI v2 draws built-in tools with MMP's grok renderers instead of Pi's own"
     ["wait", 2500], ["type", "read it"], ["key", "enter"], ["wait", 2500], ["mark", "after"], ["key", "ctrl+d"],
   ]);
   assert.match(marks.after, /READ-DONE/);
-  assert.match(marks.after, /read \S*faux-read-tool\.mjs/);
+  assert.match(marks.after, /read read-me\.txt/);
   // MMP's collapsed read result states the line count; Pi's own renderer shows no such line.
-  assert.match(marks.after, /faux-read-tool\.mjs \(\d+ lines\)/);
+  assert.match(marks.after, /read-me\.txt \(\d+ lines\)/);
 });

@@ -7,6 +7,7 @@ export type NoticeTone = "info" | "warning" | "error";
 export interface CommandHost {
   readonly tui: TUI;
   readonly theme: Theme;
+  /** The current session's cwd; like session(), it changes after /new, /resume, /reload and forks. */
   readonly cwd: string;
   /** MMP's Pi state directory (~/.mmp/pi): where /trust's ProjectTrustStore lives. */
   readonly agentDir: string;

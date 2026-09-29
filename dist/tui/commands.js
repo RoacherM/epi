@@ -1,13 +1,11 @@
 // /login, /logout, /model (docs/tui-design.md 4.6); registered in builtins.ts.
 // The flows follow Pi's interactive mode, built from the components Pi exports.
 import { CredentialSynchronizationError, ExtensionSelectorComponent, LoginDialogComponent, ModelSelectorComponent, OAuthSelectorComponent, resolveCliModel, } from "@earendil-works/pi-coding-agent";
+import { errorText } from "./errors.js";
 import { resolveMmpPaths } from "../paths.js";
 import { findNearestProjectManifest } from "../project.js";
 import { projectTrustOptions, saveProjectTrustChoice } from "../trust-prompt.js";
 const CANCELLED = "Login cancelled";
-function errorText(error) {
-    return error instanceof Error ? error.message : String(error);
-}
 /** Pi keeps a placeholder model when nothing usable is configured. */
 function needsModel(session) {
     const model = session.model;

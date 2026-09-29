@@ -1,10 +1,9 @@
 // /compact, /resume, /thinking, /copy (and the app.message.copy key), /reload
 // (docs/tui-design.md 4.6); registered in builtins.ts and keys.ts.
 // The flows follow Pi's interactive mode, built from the components Pi exports.
-import { copyToClipboard, SessionManager, SessionSelectorComponent, ThinkingSelectorComponent, } from "@earendil-works/pi-coding-agent";
-function errorText(error) {
-    return error instanceof Error ? error.message : String(error);
-}
+import { SessionManager, SessionSelectorComponent, ThinkingSelectorComponent, } from "@earendil-works/pi-coding-agent";
+import { writeClipboardText } from "./clipboard.js";
+import { errorText } from "./errors.js";
 /** Pi's handleCompactCommand ignores the throw: compact() already emitted a `compaction_end`
  * event with the failure reason, which transcript.ts turns into a notice. Pi does not refuse
  * this command while a turn is running either; `session.compact` aborts it first. */
@@ -99,7 +98,7 @@ export async function runCopy(host) {
         return;
     }
     try {
-        await copyToClipboard(text);
+        await writeClipboardText(text);
         host.notice("Copied last agent message to clipboard.");
     }
     catch (error) {

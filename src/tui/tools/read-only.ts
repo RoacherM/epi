@@ -68,7 +68,9 @@ function replaceTabs(text: string): string {
 
 function trimTrailingEmptyLines(lines: string[]): string[] {
   let end = lines.length;
-  while (end > 0 && lines[end - 1] === "") {
+  // highlightCode wraps even an empty line in color codes (e.g. "\x1B[...m\x1B[39m" for the blank
+  // line a trailing "\n" produces), so a plain `=== ""` check misses it; compare visible width.
+  while (end > 0 && piTui.visibleWidth(lines[end - 1] ?? "") === 0) {
     end--;
   }
   return lines.slice(0, end);
@@ -161,13 +163,6 @@ function renderReadResult(
     );
   }
 
-  const offset = context.args?.offset;
-  const limit = context.args?.limit;
-  const hasRange = offset !== undefined || limit !== undefined;
-  const start = offset ?? 1;
-  const end = limit !== undefined ? start + limit - 1 : "";
-  const rangeStr = hasRange ? `:${start}${end ? `-${end}` : ""}` : "";
-
   let renderedLines: string[];
   try {
     const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
@@ -179,9 +174,9 @@ function renderReadResult(
   const totalLines = result.details?.truncation?.totalLines ?? lines.length;
 
   if (!options.expanded) {
-    const suffix = hasRange
-      ? theme.fg("warning", rangeStr)
-      : ` ${theme.fg("muted", `(${totalLines} ${totalLines === 1 ? "line" : "lines"})`)}`;
+    // grok content rule: collapsed always states the line count. The call line already shows
+    // any offset/limit range, so repeating it here would just duplicate the call verbatim.
+    const suffix = ` ${theme.fg("muted", `(${totalLines} ${totalLines === 1 ? "line" : "lines"})`)}`;
     const line = `${theme.fg("accent", relPath)}${suffix}`;
     return createOrUpdateLines(context, [line]);
   }

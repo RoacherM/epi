@@ -7,6 +7,7 @@ import { keyText, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 
 import type { CommandHost } from "./command-host.js";
+import { errorText } from "./errors.js";
 import { piTui } from "./pi-tui.js";
 
 // Matches tools/block.ts: a rail column, then 2 columns of padding before the `◆` bullet; output
@@ -151,7 +152,7 @@ export async function runUserBash(host: CommandHost, text: string): Promise<bool
     block.setComplete(result.exitCode, result.cancelled);
   } catch (error) {
     block.setComplete(undefined, false);
-    host.notice(`Bash command failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+    host.notice(`Bash command failed: ${errorText(error)}`, "error");
   }
   host.tui.requestRender();
   return true;

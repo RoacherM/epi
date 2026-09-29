@@ -113,15 +113,43 @@ test("read renderer fits widths 40, 80, 120 and follows grok-build content rules
   assert.match(shortLines[4], /s4/);
   assert.doesNotMatch(shortLines.join("\n"), /… \d+ more lines/);
 
-  // 3. File read with range (offset/limit): collapsed shows range
+  // 3. File read with range (offset/limit): the call line already shows the range, so the
+  // collapsed result states the line count of what was actually returned instead of repeating it.
   const argsRange = { path: cjkRelPath, offset: 3, limit: 4 };
   const resRange = await readTool.execute("call-3", argsRange, undefined, undefined, { cwd: tempDir });
   const ctxRange = createMockContext(tempDir, argsRange, false);
+  const rangeCallLine = readRenderers.renderCall(argsRange, theme, ctxRange).render(80)[0];
   const resRangeCollapsed = readRenderers.renderResult(resRange, { expanded: false, isPartial: false }, theme, ctxRange);
   const rangeCollapsedLines = resRangeCollapsed.render(80);
   assert.equal(rangeCollapsedLines.length, 1);
   assert.match(rangeCollapsedLines[0], /项目\/测试\.ts/);
-  assert.match(rangeCollapsedLines[0], /:3-6/);
+  // 4 content lines plus Pi's own "more lines in file" continuation notice (2 more lines).
+  assert.match(rangeCollapsedLines[0], /6 lines/);
+  assert.notEqual(rangeCollapsedLines[0], rangeCallLine, "collapsed result must not repeat the call line verbatim");
+});
+
+test("read renderer: offset=1 (a common model default) does not make the collapsed result repeat the call line", async (t) => {
+  // Reproduces a real-terminal observation: the model called read with offset:1, and the
+  // collapsed result echoed "path:1" -- identical to the call line -- instead of a line count.
+  const tempDir = mkdtempSync(join(tmpdir(), "mmp-test-read-offset1-"));
+  t.after(() => rmSync(tempDir, { recursive: true, force: true }));
+  // Trailing newline on purpose: highlightCode wraps the resulting blank line in color codes,
+  // which must still be trimmed as an empty line (see trimTrailingEmptyLines).
+  writeFileSync(join(tempDir, "notes.md"), "line one\nline two\nline three\n");
+
+  const readTool = createReadToolDefinition(tempDir);
+  const args = { path: "notes.md", offset: 1 };
+  const result = await readTool.execute("call-1", args, undefined, undefined, { cwd: tempDir });
+  const ctx = createMockContext(tempDir, args, false);
+
+  const callLine = readRenderers.renderCall(args, theme, ctx).render(80)[0];
+  const collapsedLine = readRenderers.renderResult(result, { expanded: false, isPartial: false }, theme, ctx).render(80)[0];
+
+  assert.match(callLine, /notes\.md/);
+  assert.match(callLine, /:1/);
+  assert.match(collapsedLine, /notes\.md/);
+  assert.match(collapsedLine, /3 lines/);
+  assert.notEqual(collapsedLine, callLine);
 });
 
 test("grep renderer fits widths 40, 80, 120 and follows grok-build content rules", async (t) => {

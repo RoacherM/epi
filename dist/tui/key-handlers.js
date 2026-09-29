@@ -6,6 +6,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readClipboardForPaste } from "./clipboard.js";
+import { errorText } from "./errors.js";
 // Pi's clipboard readers (utils/clipboard.js, utils/clipboard-image.js) do the OS-specific work
 // (wl-paste, xclip, pbpaste, PowerShell, Photon format conversion, ...) but are not part of its
 // public API. Loaded from Pi's own package file, like keybindings.ts loads KeybindingsManager;
@@ -60,20 +62,19 @@ async function runExternalEditor(command, content) {
  * Pi ignores clipboard errors silently; MMP's rule is that failures show, so this shows a notice. */
 export async function pasteClipboard(host) {
     try {
-        const image = await readClipboardImage();
-        if (image) {
-            const ext = extensionForImageMimeType(image.mimeType) ?? "png";
+        const paste = await readClipboardForPaste(readClipboardImage, readClipboardText);
+        if (paste.kind === "image") {
+            const ext = extensionForImageMimeType(paste.mimeType) ?? "png";
             const filePath = join(tmpdir(), `mmp-clipboard-${randomUUID()}.${ext}`);
-            writeFileSync(filePath, Buffer.from(image.bytes));
+            writeFileSync(filePath, Buffer.from(paste.bytes));
             host.insertEditorText(filePath);
             return;
         }
-        const text = await readClipboardText();
-        if (text)
-            host.insertEditorText(text);
+        if (paste.kind === "text")
+            host.insertEditorText(paste.text);
     }
     catch (error) {
-        host.notice(`Could not read the clipboard: ${error instanceof Error ? error.message : String(error)}`, "error");
+        host.notice(`Could not read the clipboard: ${errorText(error)}`, "error");
     }
 }
 /** `app.suspend` (Ctrl+Z, not on Windows): suspend to the shell, restoring the fullscreen UI on SIGCONT. */

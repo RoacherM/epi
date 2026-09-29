@@ -21,7 +21,6 @@ const CONTENT_PAD = 3;
 export class Transcript {
     tui;
     theme;
-    cwd;
     session;
     /** Scrolled content: the welcome page (extension header) until the first message, then messages. */
     root = new piTui.Container();
@@ -31,10 +30,9 @@ export class Transcript {
     tools = new Map();
     streaming;
     toolsExpanded = false;
-    constructor(tui, theme, cwd, session) {
+    constructor(tui, theme, session) {
         this.tui = tui;
         this.theme = theme;
-        this.cwd = cwd;
         this.session = session;
         this.root.addChild({
             render: (width) => (this.messageCount === 0 ? this.header.render(width) : []),
@@ -58,9 +56,13 @@ export class Transcript {
         for (const tool of this.tools.values())
             tool.setExpanded(expanded);
     }
+    /**
+     * A notice ("/tree is not in MMP TUI v2 yet", an extension load warning) is not a real
+     * message: it must not count toward messageCount, which gates the welcome page's header.
+     */
     notice(text, tone = "info") {
         const color = tone === "error" ? "error" : tone === "warning" ? "warning" : "muted";
-        this.add(new piTui.Text(this.theme.fg(color, text), 1, 0));
+        this.add(new piTui.Text(this.theme.fg(color, text), 1, 0), true, false);
         this.tui.requestRender();
     }
     /** A block from the host (command output, info panels), separated like any other message. */
@@ -124,12 +126,17 @@ export class Transcript {
         }
         this.tui.requestRender();
     }
-    /** `gap: false` for components that already start with a blank row (Pi's assistant and tool components). */
-    add(component, gap = true) {
-        if (gap && this.messageCount > 0)
+    /**
+     * `gap: false` for components that already start with a blank row (Pi's assistant and tool
+     * components). `counts: false` for a notice, which shares the spacer rhythm but must not hide
+     * the welcome page (see `notice()`).
+     */
+    add(component, gap = true, counts = true) {
+        if (gap && this.messages.children.length > 0)
             this.messages.addChild(new piTui.Spacer(1));
         this.messages.addChild(component);
-        this.messageCount += 1;
+        if (counts)
+            this.messageCount += 1;
     }
     assistant(message, streaming) {
         const component = new AssistantMessageComponent(undefined, false, getMarkdownTheme(), undefined, CONTENT_PAD, this.session.extensionRunner.getMarkdownTransformers());
@@ -182,7 +189,7 @@ export class Transcript {
         const definition = this.session.getToolDefinition(toolName);
         const isBuiltIn = this.session.getAllTools().find((tool) => tool.name === toolName)?.sourceInfo.source === "builtin";
         const renderers = toolBlock(toolName, (isBuiltIn ? builtInToolRenderers[toolName] : undefined) ?? definition);
-        const component = new ToolExecutionComponent(toolName, toolCallId, args ?? {}, undefined, renderers, this.tui, this.cwd);
+        const component = new ToolExecutionComponent(toolName, toolCallId, args ?? {}, undefined, renderers, this.tui, this.session.sessionManager.getCwd());
         component.setExpanded(this.toolsExpanded);
         this.tools.set(toolCallId, component);
         // Pi's tool component starts with its own blank row.

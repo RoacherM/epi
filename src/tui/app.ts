@@ -25,6 +25,7 @@ import {
 } from "./chrome.js";
 import { findBuiltin, slashCompletions } from "./builtins.js";
 import type { CommandHost } from "./command-host.js";
+import { errorText } from "./errors.js";
 import { createExtensionUIContext, type HostSurface } from "./ext-host.js";
 import { installKeybindings } from "./keybindings.js";
 import { createKeyActions } from "./keys.js";
@@ -72,7 +73,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   });
 
   let session: AgentSession = runtime.session;
-  const transcript = new Transcript(tui, theme, cwd, session);
+  const transcript = new Transcript(tui, theme, session);
   const statuses = new Map<string, string>();
   const widgets = { aboveEditor: new Map<string, Component>(), belowEditor: new Map<string, Component>() };
   let toolsExpanded = false;
@@ -100,7 +101,12 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
 
   const header = headerBar(theme, () => {
     const usage = session.getContextUsage();
-    return { branch, cwd, contextTokens: usage?.tokens ?? undefined, contextWindow: usage?.contextWindow };
+    return {
+      branch,
+      cwd: session.sessionManager.getCwd(),
+      contextTokens: usage?.tokens ?? undefined,
+      contextWindow: usage?.contextWindow,
+    };
   });
   const turnStatus = new TurnStatus(
     theme,
@@ -150,8 +156,10 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
 
   // ── autocomplete ──────────────────────────────────────────────────────────
   let autocomplete: AutocompleteProvider = new piTui.CombinedAutocompleteProvider([], cwd, null);
+  // Rebuilt in bind() (after a /new, /resume, /reload, or fork), so this always reads the cwd of
+  // whichever session is bound then, not the cwd the app launched with.
   function resetAutocomplete(): void {
-    autocomplete = new piTui.CombinedAutocompleteProvider(slashCompletions(session), cwd, null);
+    autocomplete = new piTui.CombinedAutocompleteProvider(slashCompletions(session), session.sessionManager.getCwd(), null);
     editor.setAutocompleteProvider(autocomplete);
   }
 
@@ -221,7 +229,11 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   const commandHost: CommandHost = {
     tui,
     theme,
-    cwd,
+    // A getter, not a snapshot: /trust and anything else reading commandHost.cwd must see the
+    // bound session's cwd, which can change after /new, /resume, /reload, or a fork.
+    get cwd() {
+      return session.sessionManager.getCwd();
+    },
     agentDir: options.agentDir,
     runtime,
     session: () => session,
@@ -384,7 +396,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       try {
         await builtin.command.run(commandHost, commandArgs);
       } catch (error) {
-        transcript.notice(`/${command} failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+        transcript.notice(`/${command} failed: ${errorText(error)}`, "error");
       }
       return;
     }
@@ -401,7 +413,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       await session.prompt(text, session.isStreaming ? { streamingBehavior: "followUp" } : undefined);
     } catch (error) {
       // No model, no auth, compaction running: say why and keep the text.
-      transcript.notice(error instanceof Error ? error.message : String(error), "error");
+      transcript.notice(errorText(error), "error");
       if (editor.getText() === "") editor.setText(text);
     }
   }
@@ -413,7 +425,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       keybindings.matches(data, candidate.id as never) && (candidate.when?.(commandHost) ?? true));
     if (action === undefined) return undefined;
     void Promise.resolve(action.run(commandHost)).catch((error: unknown) =>
-      transcript.notice(error instanceof Error ? error.message : String(error), "error"));
+      transcript.notice(errorText(error), "error"));
     tui.requestRender();
     return { consume: true };
   });
