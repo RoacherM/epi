@@ -9,11 +9,13 @@ import { detectAppearance, installMmpTheme } from "../../dist/tui/theme.js";
 
 const KEYS = {
   enter: "\r", esc: "\x1b", "ctrl+c": "\x03", "ctrl+d": "\x04", "ctrl+x": "\x18", down: "\x1b[B", up: "\x1b[A",
+  left: "\x1b[D", right: "\x1b[C", backspace: "\x7f",
   "alt+enter": "\x1b\r", "alt+up": "\x1b[1;3A", "ctrl+l": "\x0c", "ctrl+g": "\x07", "ctrl+v": "\x16", tab: "\t",
 };
 // `args` replaces the default `--no-project` entirely (not appended to it), so tests that need
 // real project discovery (e.g. a cross-project /resume) can pass their own, such as ["--approve"].
-const { steps, args = ["--no-project"] } = JSON.parse(process.env.MMP_TUI_HARNESS);
+// `columns`/`rows` default to 120x40; set them to check a layout at a narrower width.
+const { steps, args = ["--no-project"], columns = 120, rows = 40 } = JSON.parse(process.env.MMP_TUI_HARNESS);
 
 let output = "";
 let onInput = () => {};
@@ -22,8 +24,8 @@ const terminal = {
   stop() {},
   async drainInput() {},
   write(data) { output += data; },
-  get columns() { return 120; },
-  get rows() { return 40; },
+  get columns() { return columns; },
+  get rows() { return rows; },
   get kittyProtocolActive() { return false; },
   moveBy() {}, hideCursor() {}, showCursor() {}, clearLine() {}, clearFromCursor() {}, clearScreen() {},
   setTitle() {}, setProgress() {},
@@ -32,7 +34,7 @@ const terminal = {
 const prepared = prepareMmpRun(args);
 const theme = installMmpTheme(prepared.agentDir, detectAppearance(process.env));
 const runtime = await createRuntimeFromPrepared(prepared, process.cwd());
-const { initialMessages, resumeOnStart } = await startupOptionsFromPiArgs(prepared.args.passthrough, process.cwd());
+const { initialMessages, initialImages, resumeOnStart } = await startupOptionsFromPiArgs(prepared.args.passthrough, process.cwd());
 const running = runTuiApp({
   runtime,
   theme,
@@ -42,6 +44,7 @@ const running = runTuiApp({
   projectIdentity: projectIdentityFromPrepared(prepared),
   resumeOnStart,
   ...(initialMessages.length > 0 ? { initialMessages } : {}),
+  ...(initialImages.length > 0 ? { initialImages } : {}),
   terminal,
 });
 
@@ -54,7 +57,11 @@ for (const [kind, value] of steps) {
   else if (kind === "type") for (const char of value) { onInput(char); await sleep(10); }
   // A real terminal delivers a paste as one bracketed chunk, not keystroke by keystroke.
   else if (kind === "paste") onInput(`\x1b[200~${value}\x1b[201~`);
-  else if (kind === "key") { onInput(KEYS[value]); await sleep(50); }
+  else if (kind === "key") {
+    if (!(value in KEYS)) throw new Error(`tui-harness.mjs: unknown key "${value}"`);
+    onInput(KEYS[value]);
+    await sleep(50);
+  }
 }
 const code = await Promise.race([running, sleep(5000).then(() => "did not exit")]);
 // Writes to a pipe are asynchronous; exiting before the callback truncates large outputs.

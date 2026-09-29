@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { sep } from "node:path";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, Editor } from "@earendil-works/pi-tui";
+import type { Component, EditorComponent, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
 import { piTui } from "./pi-tui.js";
 
@@ -147,10 +147,24 @@ export class TurnStatus implements Component {
  * draws its own top and bottom rules (possibly with a `↑ N more` label); those rows are replaced,
  * content rows get side rails, and anything below the bottom rule (autocomplete) stays outside.
  */
+/** Columns before the editor's own content starts inside the frame: `│` + space + the 2-column
+ * `❯ `/`  ` prompt. Shared by render() and handleMouse() so a click lands on the same character
+ * it's drawn on; exported so tests can compute click coordinates without duplicating it. */
+export const PROMPT_COLUMNS = 4;
+
+function plainText(text: string): string {
+  return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function isBorderRule(text: string): boolean {
+  const plain = plainText(text);
+  return plain.includes("─") && /^[─↑↓\d\s a-z]+$/.test(plain);
+}
+
 export class PromptFrame implements Component {
   constructor(
     private readonly theme: Theme,
-    readonly editor: Editor,
+    readonly editor: EditorComponent,
     private readonly label: () => string,
     private readonly borderColor: () => (text: string) => string,
   ) {}
@@ -163,25 +177,30 @@ export class PromptFrame implements Component {
     (this.editor as unknown as { focused?: boolean }).focused = value;
   }
 
-  render(width: number): string[] {
-    const color = this.borderColor();
-    // Frame (2 columns each side) plus the `❯ ` prompt column.
-    const inner = Math.max(1, width - 6);
+  /** Finds the editor's own top/bottom border rows within its rendered output at `inner` width,
+   * so render() and handleMouse() agree on which rows are content. */
+  private contentBounds(inner: number): { lines: string[]; top: number; bottom: number } {
     const lines = this.editor.render(inner);
-    const plain = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, "");
-    const isRule = (text: string) => plain(text).includes("─") && /^[─↑↓\d\s a-z]+$/.test(plain(text));
-    const top = lines.findIndex(isRule);
+    const top = lines.findIndex(isBorderRule);
     let bottom = -1;
     for (let index = lines.length - 1; index > top; index -= 1) {
-      if (isRule(lines[index] ?? "")) {
+      if (isBorderRule(lines[index] ?? "")) {
         bottom = index;
         break;
       }
     }
+    return { lines, top, bottom };
+  }
+
+  render(width: number): string[] {
+    const color = this.borderColor();
+    // Frame (2 columns each side) plus the `❯ ` prompt column.
+    const inner = Math.max(1, width - 6);
+    const { lines, top, bottom } = this.contentBounds(inner);
     if (top === -1 || bottom === -1) return lines.map((text) => fit(text, width));
 
     // Keep the editor's scroll hints (`↑ 3 more`, `↓ 2 more`) inside the new borders.
-    const hint = (rule: string) => plain(rule).replace(/─/g, "").trim();
+    const hint = (rule: string) => plainText(rule).replace(/─/g, "").trim();
     const border = (left: string, right: string, text: string) => {
       const label = text === "" ? "" : ` ${text} `;
       const fill = Math.max(0, width - 3 - visibleWidth(label));
@@ -208,6 +227,20 @@ export class PromptFrame implements Component {
 
   handleInput(data: string): void {
     this.editor.handleInput(data);
+  }
+
+  /** Forwards a click/double-click inside the content rows to the editor, translated into its own
+   * coordinate space (docs/tui-design.md 4.3: double-click on a chip expands it). Clicks on the
+   * border or the autocomplete dropdown below it are left unhandled, matching prior behavior. */
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    const inner = Math.max(1, event.width - 6);
+    const { top, bottom } = this.contentBounds(inner);
+    if (top === -1 || bottom === -1) return undefined;
+    const contentHeight = bottom - top - 1;
+    if (event.y < 1 || event.y > contentHeight) return undefined;
+    const x = event.x - PROMPT_COLUMNS;
+    if (x < 0 || x >= inner) return undefined;
+    return this.editor.handleMouse?.({ ...event, x, width: inner, height: contentHeight });
   }
 
   invalidate(): void {

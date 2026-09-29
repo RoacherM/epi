@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import type { ImageContent } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
   type AgentSessionEvent,
@@ -10,7 +11,7 @@ import {
   getSelectListTheme,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { AutocompleteProvider, Component, Container, Editor, Terminal } from "@earendil-works/pi-tui";
+import type { AutocompleteProvider, Component, Container, Terminal } from "@earendil-works/pi-tui";
 
 import { runUserBash } from "./bash-block.js";
 import {
@@ -29,6 +30,8 @@ import { errorText } from "./errors.js";
 import { createExtensionUIContext, type HostSurface } from "./ext-host.js";
 import { installKeybindings } from "./keybindings.js";
 import { createKeyActions } from "./keys.js";
+import { ChipEditor } from "./paste-chips.js";
+import { pastePreview } from "./paste-preview.js";
 import { piTui } from "./pi-tui.js";
 import { crossProjectRefusal, type ProjectIdentity } from "./project-guard.js";
 import { runResume } from "./session-commands.js";
@@ -46,6 +49,8 @@ export interface TuiAppOptions {
   /** Pi CLI positional messages (docs/tui-design.md §15): sent as prompts, in order, once the app
    * is up. Mirrors Pi's own interactive mode sequencing them after startup diagnostics. */
   initialMessages?: string[];
+  /** Paired with `initialMessages[0]` only (file-arguments.ts's TuiInitialMessages). */
+  initialImages?: ImageContent[];
   /** `--resume`: open the same session selector `/resume` uses, once, right after startup and
    * before any initial message, mirroring Pi's own `--resume` (start.ts's `startupOptionsFromPiArgs`). */
   resumeOnStart?: boolean;
@@ -91,7 +96,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   let queued: QueuedMessagesState = { steering: [], followUp: [] };
   // Messages submitted while compaction is running (Pi's compactionQueuedMessages): session.prompt()
   // throws during compaction, so these are held here and sent once compaction_end fires.
-  let compactionQueue: { text: string; mode: "steer" | "followUp" }[] = [];
+  let compactionQueue: { text: string; images: ImageContent[]; mode: "steer" | "followUp" }[] = [];
   let workingMessage: string | undefined;
   let workingVisible = true;
   let branch = readGitBranch(cwd);
@@ -104,16 +109,18 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   const editorSlot: Container = new piTui.Container();
   const widgetsBelow: Container = new piTui.Container();
   const footerSlot: Container = new piTui.Container();
-  const editor: Editor = new piTui.Editor(tui, {
+  const editor = new ChipEditor(tui, {
     borderColor: (text) => theme.fg("border", text),
     selectList: getSelectListTheme(),
-  });
+  }, { getCwd: () => session.sessionManager.getCwd() });
   const prompt = new PromptFrame(theme, editor, () => {
     const model = session.model;
     const hasModel = model !== undefined && runtime.services.modelRuntime.getAvailableSnapshot().length > 0;
     return hasModel ? `${model.name ?? model.id} (${session.thinkingLevel})` : "no model · /login";
   }, () => (text) => theme.fg(turn === undefined ? "border" : "borderAccent", text));
   editorSlot.addChild(prompt);
+  // Preview popup for a paste/image chip (docs/tui-design.md 4.3), placed right above the prompt.
+  const pastePreviewWidget = pastePreview(theme, () => editor.chipAtCursor());
 
   const header = headerBar(theme, () => {
     const usage = session.getContextUsage();
@@ -132,9 +139,12 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   const defaultFooter = shortcutsBar(theme, () => {
     const shortcuts: Shortcut[] = editorSlotHasDialog
       ? [{ key: "↑↓", label: "select" }, { key: "Enter", label: "confirm" }, { key: "Esc", label: "cancel" }]
-      : turn === undefined
-        ? [{ key: "Shift+Tab", label: "thinking" }, { key: "Ctrl+o", label: "tools" }, { key: "/", label: "commands" }, { key: "Ctrl+d", label: "quit" }]
-        : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "tools" }, { key: "Alt+Enter", label: "steer" }];
+      // The caret is on a text chip: Enter expands it instead of submitting (docs/tui-design.md 4.3).
+      : editor.chipAtCursor()?.kind === "text"
+        ? [{ key: "Enter", label: "expand" }]
+        : turn === undefined
+          ? [{ key: "Shift+Tab", label: "thinking" }, { key: "Ctrl+o", label: "tools" }, { key: "/", label: "commands" }, { key: "Ctrl+d", label: "quit" }]
+          : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "tools" }, { key: "Alt+Enter", label: "steer" }];
     return { shortcuts, right: theme.fg("muted", [...statuses.values()].join(" · ")) };
   });
   footerSlot.addChild(defaultFooter);
@@ -155,6 +165,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     { component: inset(queueDisplay), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
     { component: blank(), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
     { component: inset(widgetsAbove), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: inset(pastePreviewWidget), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
     { component: inset(editorSlot), basis: "auto", grow: 0, shrink: 1, minSize: 3 },
     { component: inset(widgetsBelow), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
     { component: inset(footerSlot), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
@@ -271,12 +282,17 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     getEditorText: () => editor.getText(),
     setEditorText: (text) => surface.setEditorText(text),
     getExpandedEditorText: () => editor.getExpandedText(),
+    getEditorImages: () => editor.getImageAttachments(),
     insertEditorText: (text) => {
       editor.insertTextAtCursor(text);
       tui.requestRender();
     },
+    insertImage: (bytes, mimeType) => {
+      editor.insertImageChip(bytes, mimeType);
+      tui.requestRender();
+    },
     addToHistory: (text) => editor.addToHistory(text),
-    submit: (text) => submit(text),
+    submit: (text, images) => submit(text, images),
     isWorking: () => turn !== undefined,
     toggleToolsExpanded: () => surface.setToolsExpanded(!toolsExpanded),
     exit: (code) => exit(code),
@@ -477,16 +493,19 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     tui.requestRender();
     for (const message of messages) {
       try {
-        await session.prompt(message.text, session.isStreaming ? { streamingBehavior: message.mode } : undefined);
+        await session.prompt(message.text, {
+          images: message.images,
+          ...(session.isStreaming ? { streamingBehavior: message.mode } : {}),
+        });
       } catch (error) {
         transcript.notice(errorText(error), "error");
       }
     }
   }
 
-  async function submit(text: string): Promise<void> {
+  async function submit(text: string, images: ImageContent[] = []): Promise<void> {
     const trimmed = text.trim();
-    if (trimmed === "") return;
+    if (trimmed === "" && images.length === 0) return;
     if (!ready) {
       // Mirrors Pi's handleStartupSubmit.
       editor.setText(text);
@@ -517,20 +536,20 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     if (session.isCompacting) {
       // session.prompt() throws while compaction is running (Pi's queueCompactionMessage);
       // MMP's Enter is Pi's Alt+Enter follow-up semantics (docs/tui-design.md 4.7 table).
-      compactionQueue.push({ text, mode: "followUp" });
+      compactionQueue.push({ text, images, mode: "followUp" });
       transcript.notice("Queued message for after compaction.");
       tui.requestRender();
       return;
     }
     try {
-      await session.prompt(text, session.isStreaming ? { streamingBehavior: "followUp" } : undefined);
+      await session.prompt(text, { images, ...(session.isStreaming ? { streamingBehavior: "followUp" as const } : {}) });
     } catch (error) {
       // No model, no auth: say why and keep the text.
       transcript.notice(errorText(error), "error");
       if (editor.getText() === "") editor.setText(text);
     }
   }
-  editor.onSubmit = (text) => void submit(text);
+  editor.onSubmitImages = (text, images) => void submit(text, images);
 
   // Pi binds these on the editor itself (defaultEditor.onAction/onEscape/onCtrlD), so they only
   // fire when the editor has focus; a dialog/selector taking the editor slot (takeEditorSlot,
@@ -561,9 +580,11 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     await runResume(commandHost);
   }
   // Only on the very first bind: /new, /resume and /reload also call bind() and must not replay it.
-  for (const message of options.initialMessages ?? []) {
+  // `initialImages` (an `@image` argument) pairs with the first message only, as Pi's own
+  // initialMessage/initialImages does (interactive-mode.js).
+  for (const [index, message] of (options.initialMessages ?? []).entries()) {
     if (exiting) break;
-    await submit(message);
+    await submit(message, index === 0 ? options.initialImages ?? [] : []);
   }
 
   const code = await finished;

@@ -1,7 +1,6 @@
 // Larger app-level key handlers (docs/tui-design.md 4.7): external editor, clipboard image paste,
 // suspend to shell. Kept out of keys.ts so its action table stays readable.
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -14,7 +13,7 @@ import { errorText } from "./errors.js";
 // test/tui-keys-actions.test.mjs fails if a Pi upgrade moves them.
 const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
 const { readClipboardText } = (await import(pathToFileURL(join(piDist, "utils", "clipboard.js")).href));
-const { readClipboardImage, extensionForImageMimeType } = (await import(pathToFileURL(join(piDist, "utils", "clipboard-image.js")).href));
+const { readClipboardImage } = (await import(pathToFileURL(join(piDist, "utils", "clipboard-image.js")).href));
 /** `app.editor.external` (Ctrl+G): edit the prompt in `$VISUAL`/`$EDITOR`, as Pi's `handleOpenExternalEditor` does. */
 export async function openExternalEditor(host) {
     const command = host.session().settingsManager.getExternalEditorCommand();
@@ -59,15 +58,14 @@ async function runExternalEditor(command, content) {
     }
 }
 /** `app.clipboard.pasteImage` (Ctrl+V): as Pi's `handleClipboardPaste`, an image wins over text.
- * Pi ignores clipboard errors silently; MMP's rule is that failures show, so this shows a notice. */
+ * An image becomes an `[Image #N]` chip directly (docs/tui-design.md 4.3), not a temp-file path
+ * for the model to read. Pi ignores clipboard errors silently; MMP's rule is that failures show,
+ * so this shows a notice. */
 export async function pasteClipboard(host) {
     try {
         const paste = await readClipboardForPaste(readClipboardImage, readClipboardText);
         if (paste.kind === "image") {
-            const ext = extensionForImageMimeType(paste.mimeType) ?? "png";
-            const filePath = join(tmpdir(), `mmp-clipboard-${randomUUID()}.${ext}`);
-            writeFileSync(filePath, Buffer.from(paste.bytes));
-            host.insertEditorText(filePath);
+            host.insertImage(paste.bytes, paste.mimeType);
             return;
         }
         if (paste.kind === "text")

@@ -1,3 +1,4 @@
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionRuntime, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { ProjectIdentity } from "./project-guard.js";
@@ -23,15 +24,22 @@ export interface CommandHost {
     addBlock(component: Component): void;
     getEditorText(): string;
     setEditorText(text: string): void;
-    /** Editor text with large-paste markers (`[paste #1 +N lines]`) expanded to their full content;
-     * use this, not `getEditorText`, for anything actually sent (submit, steer, external editor). */
+    /** Editor text with paste chips (`[Pasted: N lines]`) expanded to their full content and image
+     * chips (`[Image #N]`) removed; use this, not `getEditorText`, for anything actually sent
+     * (submit, steer, external editor). Pair with `getEditorImages()` to also carry attachments. */
     getExpandedEditorText(): string;
-    /** Insert text at the editor's cursor, e.g. a pasted clipboard image's file path. */
+    /** Image attachments currently represented by `[Image #N]` chips in the editor (docs/tui-design.md
+     * 4.3); pass alongside `getExpandedEditorText()`'s result to `session.prompt`/`steer`/`followUp`. */
+    getEditorImages(): ImageContent[];
+    /** Insert text at the editor's cursor, e.g. a pasted plain-text clipboard value. */
     insertEditorText(text: string): void;
+    /** Ctrl+V with an image on the clipboard, or an image file path dropped/pasted in: adds an
+     * `[Image #N]` chip at the cursor (docs/tui-design.md 4.3). */
+    insertImage(bytes: Uint8Array, mimeType: string): void;
     /** Record text in the editor's up-arrow history without submitting it. */
     addToHistory(text: string): void;
     /** Run the submit pipeline (built-ins, `!`, `session.prompt`) as if Enter were pressed. */
-    submit(text: string): Promise<void>;
+    submit(text: string, images?: ImageContent[]): Promise<void>;
     /** True while an agent turn is running. */
     isWorking(): boolean;
     toggleToolsExpanded(): void;

@@ -1,5 +1,6 @@
 // Entry of MMP's own interactive host (docs/tui-design.md): the only interactive path host.ts
 // dispatches to (docs/decisions.md M5). Non-interactive runs never reach this module.
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { type AgentSessionRuntime, type InlineExtension, parseArgs } from "@earendil-works/pi-coding-agent";
 
 import { buildInlineExtensions } from "../extensions/index.js";
@@ -50,6 +51,9 @@ export interface TuiStartupOptions {
    * text, inlined into the first message (file-arguments.ts's buildTuiInitialMessages, mirroring
    * Pi's own buildInitialMessage), sent as the initial prompts once the app is up. */
   initialMessages: string[];
+  /** `@image` arguments among the `@file`s, paired with `initialMessages[0]` only (see
+   * file-arguments.ts's TuiInitialMessages). */
+  initialImages: ImageContent[];
   /** `--resume`: app.ts opens the same session selector `/resume` uses, right after startup, as
    * Pi's own `--resume` does. Only when no other flag already picked a session -- services.ts's
    * `buildSessionManager` gives `--session`/`--continue`/`--no-session` precedence over `--resume`
@@ -59,8 +63,10 @@ export interface TuiStartupOptions {
 
 export async function startupOptionsFromPiArgs(piArgs: readonly string[], cwd: string): Promise<TuiStartupOptions> {
   const parsed = parseArgs([...piArgs]);
+  const { messages: initialMessages, images: initialImages } = await buildTuiInitialMessages(parsed.fileArgs, parsed.messages, cwd);
   return {
-    initialMessages: await buildTuiInitialMessages(parsed.fileArgs, parsed.messages, cwd),
+    initialMessages,
+    initialImages,
     resumeOnStart: parsed.resume === true &&
       parsed.session === undefined && parsed.continue !== true && parsed.noSession !== true,
   };
@@ -71,7 +77,7 @@ export async function runTuiV2(prepared: PreparedMmpRun, extensionFactories: Inl
   // Pi's exported components read the global theme; it must exist before any of them is built.
   const theme = installMmpTheme(prepared.agentDir, detectAppearance(process.env));
   const runtime = await createRuntimeFromPrepared(prepared, cwd, extensionFactories);
-  const { initialMessages, resumeOnStart } = await startupOptionsFromPiArgs(prepared.args.passthrough, cwd);
+  const { initialMessages, initialImages, resumeOnStart } = await startupOptionsFromPiArgs(prepared.args.passthrough, cwd);
   return runTuiApp({
     runtime,
     theme,
@@ -81,5 +87,6 @@ export async function runTuiV2(prepared: PreparedMmpRun, extensionFactories: Inl
     projectIdentity: projectIdentityFromPrepared(prepared),
     resumeOnStart,
     ...(initialMessages.length > 0 ? { initialMessages } : {}),
+    ...(initialImages.length > 0 ? { initialImages } : {}),
   });
 }
