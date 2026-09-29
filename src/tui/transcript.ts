@@ -7,7 +7,6 @@ import {
   CustomMessageComponent,
   getMarkdownTheme,
   type Theme,
-  ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, Container, TUI } from "@earendil-works/pi-tui";
 
@@ -15,6 +14,7 @@ import { UserBashBlock } from "./bash-block.js";
 import { UserMessageBlock } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
 import { toolBlock } from "./tools/block.js";
+import { asGroupKind, GroupedMessages, ToolEntry } from "./tools/group.js";
 import { builtInToolRenderers } from "./tools/index.js";
 
 type AgentMessage = AgentSession["messages"][number];
@@ -27,8 +27,9 @@ export class Transcript {
   readonly root: Container = new piTui.Container();
   readonly header: Container = new piTui.Container();
   private readonly messages: Container = new piTui.Container();
+  private readonly groupedMessages: GroupedMessages;
   private messageCount = 0;
-  private readonly tools = new Map<string, ToolExecutionComponent>();
+  private readonly tools = new Map<string, ToolEntry>();
   private readonly userMessages: UserMessageBlock[] = [];
   private streaming: AssistantMessageComponent | undefined;
   private toolsExpanded = false;
@@ -38,16 +39,23 @@ export class Transcript {
     private readonly theme: Theme,
     private session: AgentSession,
   ) {
+    this.groupedMessages = new GroupedMessages(this.messages, this.tui, this.theme);
     this.root.addChild({
       render: (width) => (this.messageCount === 0 ? this.header.render(width) : []),
       invalidate: () => this.header.invalidate(),
     });
-    this.root.addChild(this.messages);
+    // Grouping (docs/tui-design.md 4.2, tools/group.ts) is a render-time fold over `messages`'s own
+    // children, so `add()` and everything below it are untouched -- only what wraps `messages` here.
+    this.root.addChild(this.groupedMessages);
   }
 
   /** New session after /new, /resume, /reload: clear and replay its history. */
   reset(session: AgentSession): void {
     this.session = session;
+    // Drop pending completion-flash timers (tools/flash.ts) before the entries they belong to go
+    // away, and the same for any group line mid-flash.
+    for (const tool of this.tools.values()) tool.dispose();
+    this.groupedMessages.dispose();
     this.messages.clear();
     this.messageCount = 0;
     this.tools.clear();
@@ -204,7 +212,7 @@ export class Transcript {
     }
   }
 
-  private tool(toolName: string, toolCallId: string, args?: unknown): ToolExecutionComponent {
+  private tool(toolName: string, toolCallId: string, args?: unknown): ToolEntry {
     const existing = this.tools.get(toolCallId);
     if (existing !== undefined) {
       if (args !== undefined) existing.updateArgs(args);
@@ -215,14 +223,15 @@ export class Transcript {
     const definition = this.session.getToolDefinition(toolName);
     const isBuiltIn = this.session.getAllTools().find((tool) => tool.name === toolName)?.sourceInfo.source === "builtin";
     const renderers = toolBlock(toolName, (isBuiltIn ? builtInToolRenderers[toolName] : undefined) ?? definition);
-    const component = new ToolExecutionComponent(
+    const component = new ToolEntry(
       toolName,
       toolCallId,
       args ?? {},
-      undefined,
-      renderers as never,
+      renderers,
       this.tui,
       this.session.sessionManager.getCwd(),
+      this.theme,
+      asGroupKind(toolName, isBuiltIn),
     );
     component.setExpanded(this.toolsExpanded);
     this.tools.set(toolCallId, component);
