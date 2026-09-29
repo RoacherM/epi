@@ -64,6 +64,50 @@ function writeSessionFile(path, cwd) {
   writeFileSync(path, `${JSON.stringify(header)}\n`);
 }
 
+// Bug 1 (docs/tui-design.md §15): /import called host.runtime.importFromJsonl directly, bypassing
+// this same session-replacement guard -- a runtime factory failure after importFromJsonl's own
+// teardownCurrent left the app on a disposed session instead of exiting. Fails before app.ts wraps
+// runtime.importFromJsonl with the fatal handling (mirroring Pi's handleImportCommand,
+// interactive-mode.js ~5271-5311, and handleFatalRuntimeError, ~1557); passes after.
+test("/import failing after teardown is fatal: the alt screen is left cleanly and the process exits non-zero, naming the failure", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "mmp-tui-fatal-import-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("throw-on-second-session-extension.mjs")] }));
+  const sessionFile = join(root, "imported.jsonl");
+  writeSessionFile(sessionFile, root);
+  const result = spawnSync(process.execPath, [harnessPath], {
+    cwd: root,
+    env: {
+      PATH: process.env.PATH,
+      HOME: home,
+      MMP_HOME: join(home, ".mmp"),
+      PI_OFFLINE: "1",
+      MMP_TEST_SECOND_SESSION_MARKER: join(root, "marker"),
+      // As in the /new case above: fatal() calls process.exit(1) directly, cutting off the harness's
+      // JSON stdout write, so this checks the raw process exit and stderr instead of marks/JSON.
+      MMP_TUI_HARNESS: JSON.stringify({
+        args: ["--no-project"],
+        steps: [
+          ["wait", 2500],
+          ["type", `/import ${sessionFile}`], ["key", "enter"], ["wait", 400],
+          // The confirm dialog opens with "Yes" highlighted; Enter accepts it, triggering the
+          // teardown/rebuild that the second-session marker fails.
+          ["key", "enter"],
+          ["wait", 1500],
+        ],
+      }),
+    },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.equal(result.status, 1, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+  assert.match(result.stderr, /Failed to import session/);
+  assert.match(result.stderr, /"api" is required when registering streamSimple/);
+  assert.doesNotMatch(result.stderr, /Could not (switch|create|import) session/);
+});
+
 test("/switchto a session whose cwd no longer exists offers to continue in the current cwd instead of failing", (t) => {
   const root = mkdtempSync(join(tmpdir(), "mmp-tui-fatal-missing-cwd-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));

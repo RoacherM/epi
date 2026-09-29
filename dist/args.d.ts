@@ -33,6 +33,14 @@ export interface MmpArgs {
     passthrough: string[];
 }
 export declare function parseMmpArgs(argv: readonly string[]): MmpArgs;
+/**
+ * Whether `flag` appears in `passthrough` before a `--` separator, not after it. Pi's own parseArgs
+ * (cli/args.js) stops interpreting flags entirely at `--`, treating everything after it as positional
+ * messages/`@file` arguments -- `mmp -- --help` sends the literal text "--help" as a message, it
+ * doesn't print help (bug 9). `passthrough` always contains the `--` token itself (parseMmpArgs,
+ * above, pushes it through unchanged), so this only has to find that one marker.
+ */
+export declare function passthroughHasFlag(passthrough: readonly string[], flag: string): boolean;
 /** The shape of Pi's own `ExtensionFlag` (core/extensions/types.ts) that renderHelp's extension
  * section needs -- named locally so this file stays free of an SDK import, matching its existing
  * style (its only import is ./errors.js). */

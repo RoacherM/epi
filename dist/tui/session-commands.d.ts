@@ -23,11 +23,17 @@ export declare function confirmMissingSessionCwd(host: CommandHost, issue: Missi
  * event with the failure reason, which transcript.ts turns into a notice. Pi does not refuse
  * this command while a turn is running either; `session.compact` aborts it first. */
 export declare function runCompact(host: CommandHost, customInstructions: string): Promise<void>;
+/** What the session selector actually did: `"resumed"` picked a session (whether or not it went on
+ * to actually switch -- resumeSession reports its own refusals via a notice); `"cancelled"` is Esc,
+ * matching Pi's own selectSession returning no path; `"exited"` is Ctrl+D, which already quit the
+ * app itself (host.exit(0), below) -- distinguished from `"cancelled"` so a caller like app.ts's
+ * `--resume`-at-startup handling (bug 8) doesn't print its own message on top of an unrelated quit. */
+export type ResumeOutcome = "resumed" | "cancelled" | "exited";
 /** `/resume`: session selector for the current cwd (Tab switches to "all", like Pi's). Picking a
  * session hands off to `runtime.switchSession`, whose rebind callback (app.ts's `bind`) replays
  * the transcript. Sessions only ever come from the session manager's own directory, which MMP
  * points at `~/.mmp/pi/sessions` (never Pi's `~/.pi/agent`); see services.ts and paths.ts. */
-export declare function runResume(host: CommandHost): Promise<void>;
+export declare function runResume(host: CommandHost): Promise<ResumeOutcome>;
 /** `/thinking [level]`: set directly when the level is valid for the current model, otherwise
  * open the selector (also reachable with no argument). */
 export declare function runThinking(host: CommandHost, levelArg: string): Promise<void>;

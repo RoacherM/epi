@@ -60,19 +60,19 @@ export async function runCompact(host, customInstructions) {
  * points at `~/.mmp/pi/sessions` (never Pi's `~/.pi/agent`); see services.ts and paths.ts. */
 export async function runResume(host) {
     const sessionManager = host.session().sessionManager;
-    await new Promise((resolve) => {
+    return new Promise((resolve) => {
         let restore = () => { };
         const selector = new SessionSelectorComponent((onProgress, signal) => SessionManager.list(sessionManager.getCwd(), sessionManager.getSessionDir(), onProgress, signal), (onProgress, signal) => sessionManager.usesDefaultSessionDir()
             ? SessionManager.listAll(onProgress, signal)
             : SessionManager.listAll(sessionManager.getSessionDir(), onProgress, signal), (sessionPath) => {
             restore();
-            void resumeSession(host, sessionPath).then(resolve);
+            void resumeSession(host, sessionPath).then(() => resolve("resumed"));
         }, () => {
             restore();
-            resolve();
+            resolve("cancelled");
         }, () => {
             restore();
-            resolve();
+            resolve("exited");
             void host.exit(0);
         }, () => host.tui.requestRender(), undefined, sessionManager.getSessionFile());
         restore = host.takeEditorSlot(selector);

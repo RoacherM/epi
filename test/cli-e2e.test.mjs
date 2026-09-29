@@ -22,7 +22,10 @@ function fixture(t) {
     root,
     home,
     project,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp") },
+    // PI_OFFLINE (like Pi's own offline mode) skips mmp install's real npm/git existence check
+    // (manifest-cli.ts's defaultCheckSourceExists), so these tests' fictitious "npm:some-extension"
+    // sources don't need live network or a real published package.
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
   };
 }
 
@@ -60,11 +63,44 @@ test("mmp install adds a source to the global Manifest and mmp list shows it", (
 
 test("mmp install -l writes the project Manifest instead of the global one", (t) => {
   const f = fixture(t);
-  const result = run(f, ["install", "npm:proj-extension", "-l"]);
+  const result = run(f, ["install", "npm:proj-extension", "-l", "--approve"]);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(existsSync(globalManifestPath(f)), false);
   const manifest = JSON.parse(readFileSync(projectManifestPath(f), "utf8"));
   assert.deepEqual(manifest, { version: 1, extensions: ["npm:proj-extension"] });
+});
+
+// Bug 5 (DEVELOPMENT.md §8.2 rule 1): install/remove/config -l used to read and write an untrusted
+// project .mmp/mmp.json unconditionally -- resolveManifest (called by writeManifest to validate the
+// result) can run declared Rules/Skills/Extensions' side effects, exactly what `mmp list` already
+// refuses to do for an untrusted project. Pi requires --approve for its own project-scope package
+// commands the same way (package-manager-cli.js's writesProjectPackageConfig/isProjectTrusted checks).
+test("mmp install -l refuses an untrusted project without --approve, printing the same line mmp list uses", (t) => {
+  const f = fixture(t);
+  const result = run(f, ["install", "npm:proj-extension", "-l"]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not trusted -- not read \(mmp --approve or \/trust\)/);
+  assert.equal(existsSync(projectManifestPath(f)), false, "nothing was written");
+});
+
+test("mmp install -l --no-approve refuses even though nothing else was decided yet", (t) => {
+  const f = fixture(t);
+  const result = run(f, ["install", "npm:proj-extension", "-l", "--no-approve"]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not trusted/);
+  assert.equal(existsSync(projectManifestPath(f)), false);
+});
+
+test("mmp remove -l and mmp config -l also refuse an untrusted project without --approve", (t) => {
+  const f = fixture(t);
+  const removeResult = run(f, ["remove", "npm:proj-extension", "-l"]);
+  assert.notEqual(removeResult.status, 0);
+  assert.match(removeResult.stderr, /not trusted/);
+
+  const configResult = run(f, ["config", "-l"], { EDITOR: "true" });
+  assert.notEqual(configResult.status, 0);
+  assert.match(configResult.stderr, /not trusted/);
+  assert.equal(existsSync(projectManifestPath(f)), false, "config -l must not even create the file first");
 });
 
 test("mmp install resolves a relative local source against the current directory, not the Manifest's", (t) => {
@@ -79,7 +115,7 @@ test("mmp install resolves a relative local source against the current directory
 test("mmp install -l also resolves a relative local source against the current directory", (t) => {
   const f = fixture(t);
   writeFileSync(join(f.project, "ext.mjs"), "export default function () {}\n");
-  const result = run(f, ["install", "./ext.mjs", "-l"]);
+  const result = run(f, ["install", "./ext.mjs", "-l", "--approve"]);
   assert.equal(result.status, 0, result.stderr);
   const manifest = JSON.parse(readFileSync(projectManifestPath(f), "utf8"));
   assert.equal(manifest.extensions[0], join(realpathSync(f.project), "ext.mjs"));
@@ -91,6 +127,81 @@ test("mmp install rejects a local source that does not exist, before writing any
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /does not exist/);
   assert.equal(existsSync(globalManifestPath(f)), false);
+});
+
+// Bug 6 (docs/cli-design.md §3): `mmp install npm:<source>`/`git:<source>` only checked the prefix
+// was non-empty, never that the package or repo actually exists, so a typo silently wrote a Manifest
+// entry that would only fail much later, the next time `mmp` starts and tries to load it. Fixed with
+// a real existence check (manifest-cli.ts's defaultCheckSourceExists: `npm view`/`git ls-remote`).
+// These all run fully offline and deterministically: an invalid npm tag name and a missing/present
+// local git repo (via a `file://` URL, which `git ls-remote` supports directly) fail or succeed
+// client-side, without ever reaching the network -- unlike a real, resolvable package/repo name,
+// which this suite deliberately never depends on. `runNoOffline` drops the PI_OFFLINE that
+// `fixture()`'s other tests rely on (bug 6's own skip, tested separately below).
+function runNoOffline(f, args) {
+  return spawnSync(process.execPath, [cliPath, ...args], {
+    cwd: f.project,
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: join(f.home, ".mmp") },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+}
+
+test("mmp install rejects an npm: source that doesn't resolve, before writing anything", (t) => {
+  const f = fixture(t);
+  // A syntactically invalid npm tag name: `npm view` rejects it immediately and locally
+  // (EINVALIDTAGNAME), so this is a real, deterministic, offline failure of the real check.
+  const result = runNoOffline(f, ["install", "npm:Not A Valid Name!!!"]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /npm package not found/);
+  assert.equal(existsSync(globalManifestPath(f)), false);
+});
+
+test("mmp install rejects a git: source whose repo isn't reachable, before writing anything", (t) => {
+  const f = fixture(t);
+  const missingRepo = join(f.root, "no-such-repo.git");
+  const result = runNoOffline(f, ["install", `git:file://${missingRepo}`]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /git repository not reachable/);
+  assert.equal(existsSync(globalManifestPath(f)), false);
+});
+
+test("mmp install accepts a git: source whose repo is reachable", (t) => {
+  const f = fixture(t);
+  const repo = join(f.root, "real-repo.git");
+  mkdirSync(repo, { recursive: true });
+  const init = spawnSync("git", ["init", "--bare", repo], { encoding: "utf8" });
+  assert.equal(init.status, 0, init.stderr);
+  const result = runNoOffline(f, ["install", `git:file://${repo}`]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(globalManifestPath(f), "utf8")).extensions, [`git:file://${repo}`]);
+});
+
+// Pi's own git source syntax allows a `#ref` suffix pinning a branch/tag/commit (utils/git.js's
+// `split.ref`; package-manager.js's installGit uses it as a checkout target). Only the repo itself
+// needs to be reachable for this check, not that specific ref, so the `#ref` must be stripped before
+// building the reachability URL -- otherwise a perfectly valid `git:host/path#ref` source would be
+// rejected as unreachable (`git ls-remote` doesn't understand a `#ref` suffix on the URL itself).
+test("mmp install accepts a git: source with a #ref suffix, checking only that the repo is reachable", (t) => {
+  const f = fixture(t);
+  const repo = join(f.root, "real-repo.git");
+  mkdirSync(repo, { recursive: true });
+  const init = spawnSync("git", ["init", "--bare", repo], { encoding: "utf8" });
+  assert.equal(init.status, 0, init.stderr);
+  const result = runNoOffline(f, ["install", `git:file://${repo}#main`]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(globalManifestPath(f), "utf8")).extensions, [`git:file://${repo}#main`]);
+});
+
+// PI_OFFLINE mirrors Pi's own offline mode (package-manager.js's isOfflineModeEnabled): every
+// network-backed resolution Pi does is skipped, and so is this same kind of check. Reuses the exact
+// spec that fails fast above (with real, non-offline checking) to prove the skip is real -- it only
+// succeeds because the check never ran, not because the (impossible) name somehow resolved.
+test("mmp install skips the npm/git existence check under PI_OFFLINE, like Pi's own offline mode", (t) => {
+  const f = fixture(t);
+  const result = run(f, ["install", "npm:Not A Valid Name!!!"]); // fixture() already sets PI_OFFLINE=1
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(globalManifestPath(f), "utf8")).extensions, ["npm:Not A Valid Name!!!"]);
 });
 
 test("mmp remove drops the source; removing an absent source exits 1 without touching the file", (t) => {

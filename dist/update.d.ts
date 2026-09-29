@@ -45,7 +45,9 @@ export interface UpdateCommandArgs {
  * the installer's checksum; see docs/cli-design.md §3). */
 export declare function renderUpdateHelp(): string;
 /** `mmp update [--self|--extensions|--models|--all] [<source>]` (docs/cli-design.md §3). A bare
- * `<source>` with no flag means "update this one extension", same as `--extensions <source>`. */
+ * `<source>` with no flag is the same as `--extensions <source>`: it does not scope the clear to
+ * that one extension (there is no per-source cache to target -- see clearExtensionPackageCache's
+ * doc comment), it just gets echoed in the printed message. */
 export declare function parseUpdateArgs(argv: readonly string[]): UpdateCommandArgs;
 /**
  * MMP never persists npm:/git: extension sources into Pi's own settings.json (that would create a

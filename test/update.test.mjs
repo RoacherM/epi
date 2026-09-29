@@ -142,6 +142,34 @@ test("mmp update --extensions clears the cached extension package directory", as
   assert.equal(clearExtensionPackageCache(agentDir), false, "nothing left to clear the second time");
 });
 
+// Bug 4: `mmp update <source>` (and `--extensions <source>`) cleared the *entire* extension package
+// cache -- same as a bare `--extensions` -- but the help text and the printed message both claimed
+// it refetched only the named extension. There's no per-source cache to target: MMP never tracks
+// declared extensions through Pi's install/settings.json packages list (every one is a one-off
+// `--extension <source>` CLI argument, resolved into a single shared temp folder -- see
+// clearExtensionPackageCache's doc comment in src/update.ts). Fixed by saying what actually happens
+// instead of promising narrower scoping the cache layout can't deliver.
+test("mmp update <source> clears the whole cache and says so, instead of claiming it refetches only that source", async (t) => {
+  const { renderUpdateHelp, runMmpUpdateCommand } = await import("../dist/update.js");
+  const help = renderUpdateHelp();
+  assert.doesNotMatch(help, /Refetch one Manifest-declared extension/);
+  assert.match(help, /<source> is not validated or used to scope the/);
+
+  const agentDir = tempHome(t);
+  mkdirSync(join(agentDir, "tmp", "extensions", "npm"), { recursive: true });
+  writeFileSync(join(agentDir, "tmp", "extensions", "npm", "some-file"), "cached");
+  const output = [];
+  const code = await runMmpUpdateCommand(["npm:foo"], {
+    currentVersion: "0.1.4",
+    agentDir,
+    write: (text) => output.push(text),
+  });
+  assert.equal(code, 0);
+  const message = output.join("");
+  assert.doesNotMatch(message, /including npm:foo/, "must not imply only npm:foo was targeted");
+  assert.match(message, /all of them, not only npm:foo/);
+});
+
 function startRuntime(updateCheck, mode) {
   const handlers = new Map();
   createMmpRuntimeExtension({}, {}, undefined, updateCheck).factory({

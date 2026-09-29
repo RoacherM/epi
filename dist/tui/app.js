@@ -342,6 +342,7 @@ export async function runTuiApp(options) {
     const originalNewSession = runtime.newSession.bind(runtime);
     const originalFork = runtime.fork.bind(runtime);
     const originalSwitchSession = runtime.switchSession.bind(runtime);
+    const originalImportFromJsonl = runtime.importFromJsonl.bind(runtime);
     runtime.newSession = async (newSessionOptions) => {
         try {
             return await withSessionReplacement(() => originalNewSession(newSessionOptions));
@@ -377,6 +378,31 @@ export async function runTuiApp(options) {
             }
             catch (retryError) {
                 return fatal("Failed to switch session", retryError);
+            }
+        }
+    };
+    // /import (bug 1): same guard as newSession/fork/switchSession, mirroring Pi's
+    // handleImportCommand (interactive-mode.js ~5271-5311). Pi's SessionImportFileNotFoundError is
+    // thrown by importFromJsonl before any teardown (agent-session-runtime.js), so it stays a plain,
+    // recoverable notice for the caller (export-commands.ts) instead of going through `fatal`.
+    runtime.importFromJsonl = async (inputPath, cwdOverride) => {
+        try {
+            return await withSessionReplacement(() => originalImportFromJsonl(inputPath, cwdOverride));
+        }
+        catch (error) {
+            if (error instanceof Error && error.name === "SessionImportFileNotFoundError")
+                throw error;
+            const issue = missingSessionCwdIssue(error);
+            if (issue === undefined)
+                return fatal("Failed to import session", error);
+            const selectedCwd = await confirmMissingSessionCwd(commandHost, issue);
+            if (selectedCwd === undefined)
+                return { cancelled: true };
+            try {
+                return await withSessionReplacement(() => originalImportFromJsonl(inputPath, selectedCwd));
+            }
+            catch (retryError) {
+                return fatal("Failed to import session", retryError);
             }
         }
     };
@@ -720,7 +746,15 @@ export async function runTuiApp(options) {
     }
     ready = true;
     if (options.resumeOnStart === true) {
-        await runResume(commandHost);
+        // Bug 8: Pi's own --resume exits with "No session selected" when nothing is picked (main.js
+        // ~327-336's selectSession/process.exit(0)); MMP used to just carry on in the fresh default
+        // session bind() already set up above. Ctrl+D ("exited") already quit the app itself inside
+        // runResume (host.exit(0)) -- nothing more to do here for that case.
+        const outcome = await runResume(commandHost);
+        if (outcome === "cancelled") {
+            await exit(0);
+            process.stdout.write("No session selected\n");
+        }
     }
     // Only on the very first bind: /new, /resume and /reload also call bind() and must not replay it.
     // Pi's own interactive-mode.js (~855-864): sent directly through session.prompt(), not through

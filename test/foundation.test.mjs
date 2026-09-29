@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -163,6 +163,37 @@ test("mmp --help documents every flag in the MMP_FLAG_TABLE", async (t) => {
       assert.ok(result.stdout.includes(flag), `--help is missing ${flag}`);
     }
   }
+});
+
+// Bug 9: Pi's own parseArgs (cli/args.js) stops interpreting flags at a bare `--`, treating
+// everything after it as positional message/@file text -- `mmp -- --help` sends the literal string
+// "--help" as a message. MMP's own `--help` check used a raw `passthrough.includes("--help")`,
+// which doesn't care where "--help" appears, so it printed help anyway instead of aligning with Pi.
+test("passthroughHasFlag only matches a flag before a `--` separator, not after it", async () => {
+  const { passthroughHasFlag } = await import("../dist/args.js");
+  assert.equal(passthroughHasFlag(["--help"], "--help"), true);
+  assert.equal(passthroughHasFlag(["--", "--help"], "--help"), false);
+  assert.equal(passthroughHasFlag(["-p", "--", "--help"], "--help"), false);
+  assert.equal(passthroughHasFlag(["--help", "--", "hi"], "--help"), true);
+  assert.equal(passthroughHasFlag(["hello"], "--help"), false);
+});
+
+test("mmp -- --help sends \"--help\" as a message instead of printing help", (t) => {
+  const home = mkdtempSync(join(tmpdir(), "mmp-foundation-dashdash-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const fauxEcho = new URL("./fixtures/faux-echo.mjs", import.meta.url).pathname;
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
+  const result = spawnSync(process.execPath, [cliPath.pathname, "--no-project", "-p", "--", "--help"], {
+    cwd: projectRoot,
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
+    input: "",
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /mmp - AI coding assistant/);
+  assert.match(result.stdout, /ECHO:--help/);
 });
 
 test("a long unknown flag with no extension to claim it fails by name, not forwarded silently", (t) => {

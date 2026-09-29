@@ -4,18 +4,6 @@
 import { ExtensionEditorComponent, ExtensionSelectorComponent, TreeSelectorComponent, UserMessageSelectorComponent, } from "@earendil-works/pi-coding-agent";
 import { errorText } from "./errors.js";
 import { piTui } from "./pi-tui.js";
-/** Pi's restoreQueuedMessagesToEditor lives in keys.ts and isn't exported; both places that abort
- * a running turn on the user's behalf (Esc/Ctrl+C there, /tree here) need it, so it's duplicated
- * here rather than exporting an internal of a file other agents are concurrently editing. */
-function restoreQueuedMessagesToEditor(host) {
-    const { steering, followUp } = host.session().clearQueue();
-    const queued = [...steering, ...followUp];
-    if (queued.length === 0)
-        return;
-    const queuedText = queued.join("\n\n");
-    const current = host.getEditorText();
-    host.setEditorText([queuedText, current].filter((text) => text.trim() !== "").join("\n\n"));
-}
 /** `/fork`: pick a previous user message, then `runtime.fork(entryId)`. Like Pi, the original
  * text is put back in the editor so the user can edit it before resending down the new branch. */
 export async function runFork(host) {
@@ -142,7 +130,7 @@ async function navigateTo(host, entryId) {
         return;
     }
     if (session.isStreaming) {
-        restoreQueuedMessagesToEditor(host);
+        host.restoreQueuedMessagesToEditor();
         await session.abort();
     }
     if (session.isCompacting) {

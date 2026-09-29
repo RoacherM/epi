@@ -133,7 +133,8 @@ Update mmp itself, Manifest-declared extension packages, or the model catalog.
 
 Options:
   --self          Update mmp, including its pinned Pi core (default when no target is given)
-  --extensions    Clear the cached extension packages so Manifest-declared sources refetch
+  --extensions    Clear the whole cached extension package directory so every Manifest-declared
+                  source refetches (there is no per-source cache to clear individually -- see below)
   --models        Refresh the model catalog
   --all           Do all three
 
@@ -141,11 +142,15 @@ Examples:
   mmp update                  Update mmp only
   mmp update --all            Update mmp and refresh Manifest extensions and models
   mmp update --models         Refresh the model catalog only
-  mmp update <source>         Refetch one Manifest-declared extension (same as --extensions <source>)
+  mmp update <source>         Same as --extensions: <source> is not validated or used to scope the
+                               clear, it only shows up in the printed message; every Manifest-declared
+                               extension is refetched on the next run, not only the one named here.
 `;
 }
 /** `mmp update [--self|--extensions|--models|--all] [<source>]` (docs/cli-design.md §3). A bare
- * `<source>` with no flag means "update this one extension", same as `--extensions <source>`. */
+ * `<source>` with no flag is the same as `--extensions <source>`: it does not scope the clear to
+ * that one extension (there is no per-source cache to target -- see clearExtensionPackageCache's
+ * doc comment), it just gets echoed in the printed message. */
 export function parseUpdateArgs(argv) {
     let target;
     let source;
@@ -238,7 +243,9 @@ export async function runMmpUpdateCommand(argv, options) {
             ? cleared
                 ? "Cleared cached extension packages; they will be fetched fresh on the next run.\n"
                 : "No cached extension packages to clear.\n"
-            : `Cleared cached extension packages (including ${source}); they will be fetched fresh on the next run.\n`);
+            // There's no per-source cache to target (see clearExtensionPackageCache's doc comment):
+            // this clears every Manifest-declared extension's cache, not only `source`'s.
+            : `Cleared cached extension packages (all of them, not only ${source}); they will be fetched fresh on the next run.\n`);
     }
     if (target === "models" || target === "all") {
         await refreshModelCatalog(options.agentDir);

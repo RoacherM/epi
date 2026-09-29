@@ -30,7 +30,7 @@ MMP 自己维护这份清单。清单外的短参数（`-x`）一律报错退出
 | 参数 | 和 Pi 对齐 | 说明 |
 |---|---|---|
 | `--provider`、`--model`、`--thinking`、`--api-key`、`--models` | 是 | |
-| `-c/--continue`、`-r/--resume`、`--session`、`--session-id`、`--fork`、`--session-dir`、`--no-session`、`-n/--name` | 是 | `--session-dir` 和 Pi 一样展开 `~`，并读取 `PI_SESSION_DIR` 和设置里的 `sessionDir` |
+| `-c/--continue`、`-r/--resume`、`--session`、`--session-id`、`--fork`、`--session-dir`、`--no-session`、`-n/--name` | 是 | `--session-dir` 和 Pi 一样展开 `~`；没给时依次看 `MMP_SESSION_DIR`（MMP 自己的变量，语义和 Pi 的 `PI_CODING_AGENT_SESSION_DIR` 一样，但从不读取后者——Pi 装置设置的这个变量不会泄漏进 MMP）、设置里的 `sessionDir`。两条运行路径（`piMain` 和 `src/tui/services.ts`）用同一份解析结果：非交互路径调用 Pi 前会清掉进程里的 `PI_CODING_AGENT_SESSION_DIR`，再按 `MMP_SESSION_DIR` 重新赋值 |
 | `-t/--tools`、`-xt/--exclude-tools`、`-nt/--no-tools`、`-nbt/--no-builtin-tools` | 是 | |
 | `-p/--print`、`--mode text/json/rpc` | 是 | benchmark 的标准入口 `mmp --mode json --no-session --no-approve -p "…"`（DEVELOPMENT.md 第 20 节）保持不变 |
 | `--list-models [search]`、`--export <file>` | 是 | |
@@ -48,11 +48,11 @@ MMP 自己维护这份清单。清单外的短参数（`-x`）一律报错退出
 
 | 子命令 | 和 Pi 对齐 | MMP 的做法 |
 |---|---|---|
-| `mmp update [--self\|--extensions\|--models\|--all] [<source>]` | 参数形式对齐 | `--self`（不带参数时的默认）更新 MMP 本身，包括锁定的内核（现在的 `mmp update`）；`--extensions` 或 `<source>` 更新 Manifest 里的扩展包；`--models` 刷新模型目录；`--all` 全部 |
-| `mmp install <source> [-l]` | 用法对齐 | 把 `npm:` / `git:` / 本地路径写进 `~/.mmp/mmp.json` 的 `extensions`，加 `-l` 写进项目的 `.mmp/mmp.json`；写入前校验来源，写入后提示重启生效 |
-| `mmp remove <source> [-l]`、`mmp uninstall` | 用法对齐 | 从对应 Manifest 删除 |
-| `mmp list` | 用法对齐 | 列出全局和项目 Manifest 里的扩展、Rules、Skills，标明来自哪个 Manifest |
-| `mmp config [-l]` | 用途对齐 | 用 `$VISUAL`/`$EDITOR` 打开对应的 `mmp.json`，保存后按 Manifest 规则校验，出错就显示错误并保留原文件 |
+| `mmp update [--self\|--extensions\|--models\|--all] [<source>]` | 参数形式对齐，效果不同 | `--self`（不带参数时的默认）更新 MMP 本身，包括锁定的内核（现在的 `mmp update`）；`--extensions` 清空整个扩展包缓存目录，让 Manifest 里所有声明的扩展包在下次启动时重新拉取；`<source>` 效果和 `--extensions` 完全一样（清空整个缓存，不是只刷新这一个来源）——缓存按来源单独寻址不可行（见 `src/update.ts` `clearExtensionPackageCache` 的注释），`<source>` 只出现在打印的提示里；`--models` 刷新模型目录；`--all` 全部 |
+| `mmp install <source> [-l] [--approve\|--no-approve]` | 用法对齐 | 把 `npm:` / `git:` / 本地路径写进 `~/.mmp/mmp.json` 的 `extensions`，加 `-l` 写进项目的 `.mmp/mmp.json`；写入前校验来源真实存在（`npm:` 用 `npm view <spec> version`，`git:` 用 `git ls-remote`，本地路径检查文件存在——不复用 Pi 自己的 `DefaultPackageManager.resolveExtensionSources`，因为它在 `PI_OFFLINE` 下会静默跳过缺失的来源，测试没法离线验证；`checkSourceExists` 参数可注入假实现，见 `src/commands/manifest-cli.ts`），校验失败就不写入并说明原因；写入后提示重启生效。`-l` 目标项目未被信任时拒绝写入并打印和 `mmp list` 一样的 "not trusted" 提示，除非带 `--approve`（仅本次生效，不持久化，和 Pi 自己的项目级 package 命令要求一致，见 `package-manager-cli.js`） |
+| `mmp remove <source> [-l] [--approve\|--no-approve]`、`mmp uninstall` | 用法对齐 | 从对应 Manifest 删除；`-l` 的信任规则和 `install -l` 相同 |
+| `mmp list` | 用法对齐 | 列出全局和项目 Manifest 里的扩展、Rules、Skills，标明来自哪个 Manifest；项目未被信任时只打印 "not trusted" 提示，不读取其声明内容 |
+| `mmp config [-l] [--approve\|--no-approve]` | 用途对齐 | 用 `$VISUAL`/`$EDITOR` 打开对应的 `mmp.json`，保存后按 Manifest 规则校验，出错就显示错误并保留原文件；`-l` 的信任规则和 `install -l` 相同 |
 | `mmp auth print-api-key / print-bearer-token / check` | 是 | 读写 `~/.mmp/pi` 里的凭证 |
 
 ## 4. 斜杠命令

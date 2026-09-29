@@ -100,7 +100,7 @@ MMP 自有、和 Pi 行为不同的参数：
 | `-v, --version` | 输出 MMP 与固定内核版本 |
 | `-h, --help` | 只打印 MMP 自己的帮助 |
 
-其余模型、Session、工具、输出参数（`--provider`、`--model`、`--thinking`、`-c/--continue`、`--session*`、`-p/--print`、`--mode`、`--list-models`、`--export`、`--offline`、`--verbose` 等）和 Pi 对齐，参数名和取值语义不变。`--verbose` 在交互界面里把启动信息（已加载的 Rules/Skills/Extensions 数量、当前模型、当前 Session）显示成对话区提示；非交互模式行为和 Pi 一致。`@file` 参数：文本文件原文内联进第一条消息，图片文件按路径提示（交互界面的首条消息没有二进制附件通道），文件不存在会报错退出。
+其余模型、Session、工具、输出参数（`--provider`、`--model`、`--thinking`、`-c/--continue`、`--session*`、`-p/--print`、`--mode`、`--list-models`、`--export`、`--offline`、`--verbose` 等）和 Pi 对齐，参数名和取值语义不变。`--verbose` 在交互界面里把启动信息（已加载的 Rules/Skills/Extensions 数量、当前模型、当前 Session）显示成对话区提示；非交互模式行为和 Pi 一致。`@file` 参数：文本文件原文内联进第一条消息，图片文件按路径提示（交互界面的首条消息没有二进制附件通道），文件不存在会报错退出。`--session-dir` 没给时依次看 `MMP_SESSION_DIR` 环境变量、`~/.mmp/pi/settings.json` 里的 `sessionDir`（和 Pi 的 `--session-dir`/`PI_CODING_AGENT_SESSION_DIR`/`sessionDir` 顺序一致，只是变量名换成 MMP 自己的——Pi 装置里设置的 `PI_CODING_AGENT_SESSION_DIR` 不会被读取，不会跟 MMP 共享）。
 
 以下参数**不提供**：`--use-theme`、`--tui-mode`（界面已经是 grok 风格的单一全屏主题，由 MMP 管理）；`--extension`/`-e`、`--skill`、`--prompt-template`、`--theme`、`--system-prompt`、`--append-system-prompt` 及其 `--no-*` 形式（Rules/Skills/Extensions 只能通过 Manifest 声明，直接传入会报错并提示改用 `mmp install`/编辑 Manifest）。
 
@@ -113,16 +113,16 @@ MMP_HOME=/absolute/path/to/mmp-home mmp --dry-run
 ## 子命令
 
 ```bash
-mmp update [--self|--extensions|--models|--all] [<source>]   # 更新 mmp 本身/扩展包缓存/模型目录
-mmp install <source> [-l]                                     # 把 npm:/git:/本地路径写进 Manifest 的 extensions
-mmp remove <source> [-l]                                      # 从 Manifest 删除
-mmp uninstall <source> [-l]                                   # remove 的别名
-mmp list                                                       # 列出全局与项目 Manifest 里的 Rules/Skills/Extensions
-mmp config [-l]                                                # 用 $VISUAL/$EDITOR 编辑 Manifest，保存后立即校验
+mmp update [--self|--extensions|--models|--all] [<source>]      # 更新 mmp 本身/扩展包缓存/模型目录
+mmp install <source> [-l] [--approve|--no-approve]              # 把 npm:/git:/本地路径写进 Manifest 的 extensions
+mmp remove <source> [-l] [--approve|--no-approve]               # 从 Manifest 删除
+mmp uninstall <source> [-l] [--approve|--no-approve]            # remove 的别名
+mmp list                                                        # 列出全局与项目 Manifest 里的 Rules/Skills/Extensions
+mmp config [-l] [--approve|--no-approve]                        # 用 $VISUAL/$EDITOR 编辑 Manifest，保存后立即校验
 mmp auth print-api-key|print-bearer-token|check                # 打印或检查 provider 凭证（读写 ~/.mmp/pi，不读 ~/.pi/agent）
 ```
 
-`-l` 把 `install`/`remove`/`config` 的目标从全局 `~/.mmp/mmp.json` 换成当前目录的 `.mmp/mmp.json`。`mmp install` 写入前会校验来源（`npm:`/`git:` 前缀非空，或本地路径确实存在），写入后需要重启 `mmp` 才生效；扩展包本身不会被预先下载进 `.pi/` 或 Pi 的 `settings.json`——它们和其它 Manifest 声明的 Extension 一样，在下次 `mmp` 启动时按 `--extension npm:x`/`git:x` 的方式加载，缓存在 `~/.mmp/pi/tmp/extensions` 下；`mmp update --extensions` 清空这份缓存，让声明的来源在下次启动时重新拉取。`mmp config` 的编辑结果如果校验失败，会保留编辑前的文件内容并报错。
+`-l` 把 `install`/`remove`/`config` 的目标从全局 `~/.mmp/mmp.json` 换成当前目录的 `.mmp/mmp.json`；目标项目未被信任时三者都会拒绝，报同一句 "not trusted" 提示，除非带 `--approve`（仅本次生效，和 Pi 自己的项目级 package 命令一样，见 `package-manager-cli.js`）。`mmp install` 写入前会校验来源是否真实存在：`npm:` 用 `npm view <spec> version` 确认包（和版本）能解析，`git:` 用 `git ls-remote` 确认仓库可达，本地路径确认文件存在；校验失败不写入，并说明原因。写入后需要重启 `mmp` 才生效；扩展包本身不会被预先下载进 `.pi/` 或 Pi 的 `settings.json`——它们和其它 Manifest 声明的 Extension 一样，在下次 `mmp` 启动时按 `--extension npm:x`/`git:x` 的方式加载，缓存在 `~/.mmp/pi/tmp/extensions` 下；`mmp update --extensions` 清空这份缓存，让声明的来源在下次启动时重新拉取。`mmp config` 的编辑结果如果校验失败，会保留编辑前的文件内容并报错。
 
 ## 配置布局
 

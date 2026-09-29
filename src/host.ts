@@ -10,7 +10,7 @@ import {
   resolveAssembly,
   type ResolvedAssembly,
 } from "./assembly.js";
-import { parseMmpArgs, renderHelp, type MmpArgs } from "./args.js";
+import { parseMmpArgs, passthroughHasFlag, renderHelp, type MmpArgs } from "./args.js";
 import { runAuthCommand } from "./commands/auth-cli.js";
 import { runConfigCommand, runInstallCommand, runListCommand, runRemoveCommand } from "./commands/manifest-cli.js";
 import { buildInlineExtensions } from "./extensions/index.js";
@@ -255,8 +255,8 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
     return;
   }
   if (
-    args.passthrough.includes("--help") ||
-    args.passthrough.includes("-h")
+    passthroughHasFlag(args.passthrough, "--help") ||
+    passthroughHasFlag(args.passthrough, "-h")
   ) {
     const extensionFlags = await collectExtensionHelpFlags(args, process.env, process.cwd());
     // Collecting extensionFlags just ran every declared extension's factory (mmp:mcp among them,
@@ -306,6 +306,16 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
   }
 
   process.env.PI_CODING_AGENT_DIR = prepared.agentDir;
+  // No shared config with a Pi install (docs/cli-design.md §2): a Pi user's own
+  // PI_CODING_AGENT_SESSION_DIR must not silently redirect MMP's sessions on the piMain path below,
+  // where Pi's own main.js reads that variable directly. Clear it and, if MMP's own MMP_SESSION_DIR
+  // is set, pass its resolved value through Pi's variable instead, so piMain's resolution
+  // (--session-dir, then its env var, then the sessionDir setting) agrees with services.ts's
+  // identical MMP_SESSION_DIR-based resolution on the TUI path below.
+  delete process.env.PI_CODING_AGENT_SESSION_DIR;
+  if (process.env.MMP_SESSION_DIR !== undefined && process.env.MMP_SESSION_DIR !== "") {
+    process.env.PI_CODING_AGENT_SESSION_DIR = process.env.MMP_SESSION_DIR;
+  }
   // Every interactive run takes MMP's own TUI (docs/tui-design.md); no environment switch. All
   // other runs (print/json/rpc, --help, --list-models, --export, Pi CLI subcommands, non-TTY)
   // keep going through piMain unchanged (docs/decisions.md D3).
