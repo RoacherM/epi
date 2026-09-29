@@ -88,6 +88,23 @@ function displayText(content: unknown): string {
 }
 
 const COLLAPSED_LINES = 3;
+/** A line holding nothing but `[Image #N]` / `[File: name]` chips (what displayText() emits for
+ * attachments and `@file` blocks). */
+const CHIP_ONLY_LINE = /^\s*(?:\[(?:Image #\d+|File: [^\]\n]*)\]\s*)+$/;
+
+/** Cuts the text after its `COLLAPSED_LINES`-th logical line and appends `…`. Chip-only lines don't
+ * count toward the limit: three `@file` arguments plus a one-line question must still show the
+ * question. */
+function collapseUserText(text: string): string {
+  const lines = text.split("\n");
+  let counted = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (CHIP_ONLY_LINE.test(lines[index] ?? "")) continue;
+    counted += 1;
+    if (counted > COLLAPSED_LINES) return [...lines.slice(0, index), "…"].join("\n");
+  }
+  return text;
+}
 
 /** Full-width `userMessageBg` block with one row of padding, `❯ text` and the time on the right.
  * Collapses past `COLLAPSED_LINES` *logical* lines (not wrapped rows) to `…` -- observed in grok
@@ -115,10 +132,7 @@ export class UserMessageBlock implements Component {
     const paint = (content: string) => this.theme.bg("userMessageBg", content + " ".repeat(Math.max(0, width - visibleWidth(content))));
     const clock = this.theme.fg("muted", this.time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
     const bodyWidth = Math.max(1, width - 4 - visibleWidth(clock) - 3);
-    const logicalLines = this.text.split("\n");
-    const source = this.expanded || logicalLines.length <= COLLAPSED_LINES
-      ? this.text
-      : [...logicalLines.slice(0, COLLAPSED_LINES), "…"].join("\n");
+    const source = this.expanded ? this.text : collapseUserText(this.text);
     const lines = piTui.wrapTextWithAnsi(source, bodyWidth);
     const rows = lines.map((text, index) => {
       const prefix = index === 0 ? `${this.theme.fg("muted", "❯")} ` : "  ";

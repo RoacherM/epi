@@ -6,25 +6,44 @@
 // backing them -- is declared `private` in pi-tui's shipped .d.ts, and `Editor` has no constructor
 // hook to change the threshold or label. A subclass can't override a private member (tsc rejects
 // it), so this wraps an `Editor` instance instead of extending it, reimplementing just the paste
-// interception, chip bookkeeping and atomic backspace/expand on top of `Editor`'s public API
-// (`getText`, `getLines`, `getCursor`, `insertTextAtCursor`, `handleInput`, `render`, `handleMouse`).
+// interception, chip bookkeeping and atomic delete/expand on top of `Editor`'s public API
+// (`getText`, `getCursor`, `insertTextAtCursor`, `setText`, `handleInput`, `render`, `handleMouse`)
+// plus one private field, `state` (see "Chip registry" below).
 //
 // Because the wrapper's chip marker text (`[Pasted: N lines]`, `[Image #N]`) is inserted verbatim
 // into the inner editor's buffer, `render()` needs no translation step: what's stored is exactly
 // what's displayed, and Pi's own word-wrap/cursor-highlight code runs unmodified over it.
 //
+// Chip registry. A `[Pasted: N lines]` label carries no id, so its content is found by position:
+// `slots[i]` belongs to the i-th text-chip label in the document, and is a content id (a key into
+// `textContents`) or `null` for label-shaped text that has no content (typed by hand, yanked back
+// from the kill ring, part of an expanded paste). Invariant, checked after every edit: `slots` has
+// exactly one entry per text-chip label, in document order, and a non-null entry's content was
+// pasted under that very label -- so no label ever resolves to another chip's content.
+// `[Image #N]` labels carry their id; image data stays in `imageChips` until the draft is sent,
+// and ids are never reused, so a label deleted and brought back by undo resolves to its own image.
+//
+// How `slots` follows edits:
+// - Undo and history. pi-tui's `pushUndoSnapshot()` structuredClones `Editor.state` onto its undo
+//   stack, `undo()` Object.assigns the popped clone back onto `state`, and `navigateHistory()`
+//   clones `state` into `historyDraft` on the way into history and reinstalls it with
+//   `this.state = draft` on the way out. `slots` is stored on that same object
+//   (`state.mmpTextChips`), so every one of those paths restores the registry exactly as it was
+//   for that text, with no bookkeeping of our own. `sync()` recognises a restore by the array's
+//   identity (Pi's copy is a clone, never the array we last wrote).
+// - Every other edit (typing, Pi's deletes and kills, yank, setText): `carryOver()` diffs the
+//   previous text against the new one around the caret; a label wholly outside the changed range
+//   keeps its slot, one inside it is gone, and a new one is contentless. A recalled history entry
+//   replaces the draft, so every label in it is contentless.
+// - A delete key that removes only part of a label (Backspace at a chip's end, Ctrl+W after
+//   "[A] ", Alt+D before " [A]") would leave a fragment like "[Pasted: 4 lines";
+//   `removeChipFragments()` deletes the rest, so a partially covered chip is fully deleted.
+//
 // Pi's own per-grapheme atomicity lives in the private `segment()` override, unreachable from
 // here, so arrow keys, word/Home/End jumps and a single click all move the caret with no idea a
 // chip is meant to be one unit. `snapOutOfChipSpan` corrects that after every such move: if the
 // caret landed strictly inside a span, it's stepped the rest of the way to whichever boundary the
-// move was heading toward. This matters beyond looks -- a caret resting mid-span and then typing
-// there would break the marker's regex match, which shifts every later chip's index in
-// `textChips`/`imageChips` and misattributes their content on submit. History recall (Editor's own
-// Up/Down, entirely inside its private navigateHistory) is likewise unreachable from here; it's
-// harmless because history entries are always plain, already-expanded text (chips are resolved
-// before addToHistory() is ever called) -- except for the edge case of pasting a new chip while an
-// unsubmitted draft chip sits mid-buffer and then arrowing through history and back, which can
-// misindex `textChips`. `resolveForSubmit`'s literal-label fallback keeps that safe, not silent.
+// move was heading toward, so typing never lands mid-label.
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -50,12 +69,23 @@ const TEXT_CHIP_SOURCE = String.raw`\[Pasted: (?:\d+ lines|\d+(?:\.\d+)? KB)\]`;
 const IMAGE_CHIP_SOURCE = String.raw`\[Image #(\d+)\]`;
 const CHIP_REGEX_G = new RegExp(`${TEXT_CHIP_SOURCE}|${IMAGE_CHIP_SOURCE}`, "g");
 const TEXT_CHIP_REGEX_G = new RegExp(TEXT_CHIP_SOURCE, "g");
-const IMAGE_CHIP_REGEX_G = new RegExp(IMAGE_CHIP_SOURCE, "g");
 const IMAGE_CHIP_SINGLE = new RegExp(`^${IMAGE_CHIP_SOURCE}$`);
 
 const LEFT_ARROW = "\x1b[D";
 const RIGHT_ARROW = "\x1b[C";
 const BACKSPACE = "\x7f";
+const FORWARD_DELETE = "\x1b[3~";
+/** Pi's keys that delete text; any of them can cut a chip label in two. */
+const DELETE_ACTIONS = [
+  "tui.editor.deleteCharBackward",
+  "tui.editor.deleteCharForward",
+  "tui.editor.deleteWordBackward",
+  "tui.editor.deleteWordForward",
+  "tui.editor.deleteToLineStart",
+  "tui.editor.deleteToLineEnd",
+] as const;
+/** Pi's keys that can swap the draft for a history entry (Editor.navigateHistory). */
+const HISTORY_ACTIONS = ["tui.editor.cursorUp", "tui.editor.cursorDown", "tui.editor.historyPrevious", "tui.editor.historyNext"] as const;
 
 export interface ImageChipMeta {
   id: number;
@@ -69,6 +99,24 @@ export interface ImageChipMeta {
 export type ChipInfo =
   | { kind: "text"; label: string; start: number; end: number; justPasted: boolean; content: string }
   | { kind: "image"; label: string; start: number; end: number; justPasted: boolean; image: ImageChipMeta };
+
+/** A content id into `textContents`, or null for a text-chip label with no content. */
+type TextChipSlot = number | null;
+
+/** The private `Editor.state` object (pi-tui 0.87.1 components/editor.js), plus the registry we
+ * store on it -- a string key, because structuredClone drops symbol-keyed properties. */
+interface EditorStateWithChips {
+  lines: string[];
+  cursorLine: number;
+  cursorCol: number;
+  mmpTextChips?: TextChipSlot[];
+}
+
+interface ChipMatch {
+  text: string;
+  start: number;
+  end: number;
+}
 
 /** A single trailing newline is the terminator of the pasted text's last line, not an extra empty
  * line after it -- grok's own line count agrees (a paste ending in "\n" with 40 real lines shows
@@ -113,6 +161,34 @@ function fit(text: string, width: number): string {
   return piTui.truncateToWidth(text, Math.max(0, width), "…");
 }
 
+function chipMatches(text: string, regex: RegExp): ChipMatch[] {
+  return [...text.matchAll(regex)].map((match) => {
+    const start = match.index ?? 0;
+    return { text: match[0], start, end: start + match[0].length };
+  });
+}
+
+function cursorOffset(text: string, cursor: { line: number; col: number }): number {
+  const lines = text.split("\n");
+  let offset = 0;
+  for (let line = 0; line < cursor.line; line += 1) offset += (lines[line]?.length ?? 0) + 1;
+  return offset + cursor.col;
+}
+
+/** Aligns `before` and `after` as one contiguous edit: `prefix` characters at the start and
+ * `suffix` at the end are unchanged. When that split is ambiguous (deleting one of two identical
+ * labels "[A][A]" -> "[A]"), the prefix is cut at the caret, where the edit happened. */
+function alignEdit(before: string, beforeCursor: number, after: string, afterCursor: number): { prefix: number; suffix: number } {
+  const shorter = Math.min(before.length, after.length);
+  let maxPrefix = 0;
+  while (maxPrefix < shorter && before[maxPrefix] === after[maxPrefix]) maxPrefix += 1;
+  let maxSuffix = 0;
+  while (maxSuffix < shorter && before[before.length - 1 - maxSuffix] === after[after.length - 1 - maxSuffix]) maxSuffix += 1;
+  if (maxPrefix + maxSuffix <= shorter) return { prefix: maxPrefix, suffix: maxSuffix };
+  const prefix = Math.max(shorter - maxSuffix, Math.min(maxPrefix, beforeCursor, afterCursor));
+  return { prefix, suffix: shorter - prefix };
+}
+
 interface ChipEditorOptions extends EditorOptions {
   /** Read live so an image path pasted after /resume resolves against the new session's cwd. */
   getCwd: () => string;
@@ -120,17 +196,18 @@ interface ChipEditorOptions extends EditorOptions {
 
 /**
  * Wraps pi-tui's `Editor`, adding atomic paste/image chips on top of its public API. See the
- * module comment for why this wraps instead of extending `Editor`.
+ * module comment for why this wraps instead of extending `Editor`, and how the chip registry works.
  */
 export class ChipEditor {
   private readonly inner: Editor;
   private readonly getCwd: () => string;
-  /** Full original text of each `[Pasted: ...]` chip, ordered left-to-right/top-to-bottom to match
-   * the chip regex's match order (there's no id in the label to key by -- docs/tui-design.md 4.3
-   * shows none, matching grok; only `[Image #N]` chips carry a visible, and thus lookup-able, id). */
-  private textChips: string[] = [];
+  /** Content of every text chip pasted into this draft, by content id; see the module comment. */
+  private textContents = new Map<number, { label: string; content: string }>();
+  private textContentCounter = 0;
   private imageChips = new Map<number, ImageChipMeta>();
   private imageCounter = 0;
+  /** The text, caret offset and slots as of the last `sync()`. */
+  private synced: { text: string; cursor: number; slots: TextChipSlot[] } = { text: "", cursor: 0, slots: [] };
   /** Cursor position immediately after the most recent paste-created chip, for the "paste again to
    * expand" gesture; cleared once consumed or once another chip-aware edit happens. */
   private lastPastedChip: { line: number; col: number } | undefined;
@@ -147,6 +224,7 @@ export class ChipEditor {
     this.inner = new piTui.Editor(tui, theme, options);
     this.inner.onChange = (text) => this.onChange?.(text);
     this.inner.onSubmit = (text) => this.deliverSubmit(text);
+    this.sync();
   }
 
   get focused(): boolean {
@@ -193,31 +271,22 @@ export class ChipEditor {
     return this.inner.isShowingAutocomplete();
   }
 
-  /** Callers that put back text they just read from this same editor -- restoring a queued
-   * message ahead of the current draft on Esc/Ctrl+C/Alt+Up (keys.ts, session-tree-commands.ts),
-   * or the /fork editor-slot restore -- read the raw, unexpanded text (`getEditorText`, not
-   * `getExpandedText`) and prepend to it, so every chip already in it is still there, unchanged.
-   * Keep the registries in that case instead of wiping them (which would otherwise turn a live
-   * chip into dead bracket text that can no longer expand or attach an image). A real new draft
-   * (submit's `setText("")`, /new, Ctrl+G's external-editor result, an extension's setEditorText)
-   * has a different chip count and correctly resets. */
+  /** Replaces the whole draft. Chips in the part of the text that didn't change keep their content
+   * -- restoring a queued message ahead of the current draft on Esc/Ctrl+C/Alt+Up (keys.ts,
+   * session-tree-commands.ts) or the /fork editor-slot restore prepends to the raw, unexpanded text
+   * (`getText`, not `getExpandedText`), so every chip already in it survives. Pi's `setText` pushes
+   * an undo snapshot, so Ctrl+- after /new or Ctrl+G brings back the old draft with its chips. */
   setText(text: string): void {
     this.inner.setText(text);
-    // Always ends the "just pasted" window, even when the chip registries survive below: a
-    // restored queued message prepended ahead of a fresh chip shifts its line/column, so the old
+    this.sync();
+    // A restored queued message prepended ahead of a fresh chip shifts its line/column, so the old
     // `{line, col}` no longer points at the chip's end and must not be trusted by chipForPopup.
     this.lastPastedChip = undefined;
-    if (!this.sameChipsAs(text)) this.resetChips();
-  }
-
-  private sameChipsAs(text: string): boolean {
-    if ([...text.matchAll(TEXT_CHIP_REGEX_G)].length !== this.textChips.length) return false;
-    const imageIds = [...text.matchAll(IMAGE_CHIP_REGEX_G)].map((match) => Number(match[1]));
-    return imageIds.length === this.imageChips.size && imageIds.every((id) => this.imageChips.has(id));
   }
 
   insertTextAtCursor(text: string): void {
     this.inner.insertTextAtCursor(text);
+    this.sync();
   }
 
   /** Ctrl+V with text on the clipboard: goes through the same fold-or-not decision as a terminal
@@ -232,18 +301,17 @@ export class ChipEditor {
    * call more than once before the caller decides what to do with the result (e.g. keys.ts reads
    * this and `getImageAttachments()` separately for Alt+Enter). */
   getExpandedText(): string {
-    return this.resolveForSubmit(this.inner.getText()).text;
+    return this.resolveForSubmit(this.inner.getText(), this.synced.slots).text;
   }
 
   getImageAttachments(): ImageContent[] {
-    return this.resolveForSubmit(this.inner.getText()).images;
+    return this.resolveForSubmit(this.inner.getText(), this.synced.slots).images;
   }
 
   /** Registers an image's data without inserting anything -- for a caller building the marker into
    * arbitrary text itself (Esc/Alt+Up queue restore, app.ts's restoreQueuedMessagesToEditor) ahead
    * of one `setText()` call, rather than at the current cursor. Returns the `[Image #N]` label to
-   * place in that text; `setText`'s own `sameChipsAs` check sees the id already in `imageChips` and
-   * keeps it, same as any other chip surviving a restore. */
+   * place in that text. */
   registerImage(bytes: Uint8Array, mimeType: string): string {
     this.imageCounter += 1;
     const id = this.imageCounter;
@@ -266,7 +334,7 @@ export class ChipEditor {
   insertImageChip(bytes: Uint8Array, mimeType: string): void {
     const label = this.registerImage(bytes, mimeType);
     this.lastPastedChip = undefined;
-    this.inner.insertTextAtCursor(label);
+    this.insertTextAtCursor(label);
   }
 
   /** The chip the caret sits *on*. Two passes, so two adjacent chips (`A.end === B.start`, no
@@ -311,9 +379,14 @@ export class ChipEditor {
     // is "cursor landed on it later", not "still fresh from the paste" -- a different popup hint.
     this.lastPastedChip = undefined;
     if (this.interceptChipKey(data)) return;
-    const before = this.inner.getCursor();
-    this.inner.handleInput(data);
-    this.snapOutOfChipSpan(before);
+    const kb = piTui.getKeybindings();
+    const before = { ...this.synced, lineCol: this.inner.getCursor() };
+    // A recalled history entry is unrelated text: a label in it has no content, even where it
+    // happens to line up with a chip in the draft.
+    const recallsHistory = HISTORY_ACTIONS.some((action) => kb.matches(data, action));
+    this.innerInput(data, recallsHistory ? "replace" : "edit");
+    if (DELETE_ACTIONS.some((action) => kb.matches(data, action))) this.removeChipFragments(before);
+    this.snapOutOfChipSpan(before.lineCol);
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
@@ -328,7 +401,7 @@ export class ChipEditor {
       this.lastPastedChip = undefined;
       // The autocomplete dropdown (Editor.handleMouse's own top check, which runs for every event
       // type, not just clicks) gets first refusal; if it claims the press, that result stands.
-      const autocomplete = this.inner.handleMouse(event);
+      const autocomplete = this.innerMouse(event);
       if (autocomplete !== undefined) return autocomplete;
       if (event.button !== "left") return undefined;
       // Editor.handleMouse otherwise declines every press outright (it only positions the caret on
@@ -338,7 +411,7 @@ export class ChipEditor {
       // the real click that follows (whether delivered here via a capture, or via the alt-screen's
       // own unclaimed-press-then-synthesized-click path) recomputes the identical position.
       const before = this.inner.getCursor();
-      this.inner.handleMouse({ ...event, type: "click", clickCount: 1 });
+      this.innerMouse({ ...event, type: "click", clickCount: 1 });
       const onChip = this.chipAtCursor() !== undefined;
       if (!onChip) {
         // Not claiming this press: put the caret back where it was (same line only -- there's no
@@ -359,7 +432,7 @@ export class ChipEditor {
       return { handled: true, focus: true, capture: true };
     }
     const before = this.inner.getCursor();
-    const result = this.inner.handleMouse(event);
+    const result = this.innerMouse(event);
     if (event.type === "click" && (event.clickCount ?? 1) >= 2) {
       const chip = this.chipAtCursor();
       if (chip?.kind === "text") {
@@ -380,11 +453,10 @@ export class ChipEditor {
 
   /** Editor's own cursor movement (arrows, word/Home/End jumps, a single click) has no idea our
    * chip markers are meant to be one atomic unit, so it can land the caret strictly inside one --
-   * and typing there would break the marker's regex match, shifting every later chip's index in
-   * `textChips`/`imageChips` and misattributing their content on submit (not merely a cosmetic
-   * gap). After any such move, if the caret ended up inside a span, step it the rest of the way to
-   * whichever boundary it was heading toward (nearer one) -- or, when `toStart` is set (every
-   * mouse-driven call site: a click has no direction), always to the start. */
+   * and typing there would break the label. After any such move, if the caret ended up inside a
+   * span, step it the rest of the way to whichever boundary it was heading toward (nearer one) --
+   * or, when `toStart` is set (every mouse-driven call site: a click has no direction), always to
+   * the start. */
   private snapOutOfChipSpan(before: { line: number; col: number }, toStart = false): void {
     const after = this.inner.getCursor();
     if (after.line !== before.line) return; // a vertical move onto a chip on another line: rare, accepted gap
@@ -456,12 +528,18 @@ export class ChipEditor {
 
     const decision = decidePasteChip(filtered);
     if (decision === undefined) {
-      this.inner.insertTextAtCursor(filtered);
+      this.insertTextAtCursor(filtered);
       return;
     }
-    const index = this.textChipCountBefore(cursor.line, cursor.col);
-    this.textChips.splice(index, 0, filtered);
-    this.inner.insertTextAtCursor(decision.label);
+    this.textContentCounter += 1;
+    const id = this.textContentCounter;
+    this.textContents.set(id, { label: decision.label, content: filtered });
+    const start = cursorOffset(this.inner.getText(), cursor);
+    this.insertTextAtCursor(decision.label);
+    // insertTextAtCursor's sync() saw a new, contentless label at `start`; give it its content.
+    const index = chipMatches(this.inner.getText(), TEXT_CHIP_REGEX_G).findIndex((match) => match.start === start);
+    if (index === -1) throw new Error(`ChipEditor: pasted label ${decision.label} not found at offset ${start}`);
+    this.synced.slots[index] = id;
     const after = this.inner.getCursor();
     this.lastPastedChip = { line: after.line, col: after.col };
   }
@@ -469,72 +547,35 @@ export class ChipEditor {
   // ── chip-aware keys ─────────────────────────────────────────────────────
 
   private interceptChipKey(data: string): boolean {
-    const kb = piTui.getKeybindings();
-    if (kb.matches(data, "tui.input.submit")) {
-      const chip = this.chipAtCursor();
-      if (chip?.kind === "text") {
-        this.expandTextChip(chip);
-        return true;
-      }
-      return false; // idle cursor, or on an image chip: Enter submits as usual
-    }
-    const cursor = this.inner.getCursor();
-    // Backspace, and word-delete-backward (Ctrl+W, Alt+Backspace), all delete the whole chip when
-    // they'd otherwise land inside or at its end -- word-delete otherwise eats into a chip's marker
-    // character by character/word by word (Editor has no idea it's meant to be one atomic unit) and
-    // leaves a corrupted fragment (e.g. "[Pasted: 4 lines" with the closing bracket gone) instead of
-    // the label or the chip.
-    if (kb.matches(data, "tui.editor.deleteCharBackward") || kb.matches(data, "tui.editor.deleteWordBackward")) {
-      const match = this.findChip(cursor.line, (start, end) => cursor.col > start && cursor.col <= end);
-      if (match) {
-        this.deleteChipSpan(cursor.line, match);
-        return true;
-      }
-    }
-    // Delete, and word-delete-forward (Alt+D, Alt+Delete): the mirror image, deleting the whole
-    // chip when they'd otherwise land at its start or inside it.
-    if (kb.matches(data, "tui.editor.deleteCharForward") || kb.matches(data, "tui.editor.deleteWordForward")) {
-      const match = this.findChip(cursor.line, (start, end) => cursor.col >= start && cursor.col < end);
-      if (match) {
-        this.deleteChipSpan(cursor.line, match);
-        return true;
-      }
-    }
-    return false;
+    if (!piTui.getKeybindings().matches(data, "tui.input.submit")) return false;
+    const chip = this.chipAtCursor();
+    if (chip?.kind !== "text") return false; // idle cursor, or on an image chip: Enter submits as usual
+    this.expandTextChip(chip);
+    return true;
   }
 
-  private deleteChipSpan(line: number, match: { text: string; start: number; end: number }): void {
-    // Checked before the text changes below: while desynced (textChipsDesynced's own comment),
-    // splicing textChips by position is exactly the operation that can misattribute a still-live
-    // chip's real content to whichever text-chip-shaped match happens to be getting deleted here --
-    // deleting a resurrected dead chip's text (the common recovery action, since it's what's left
-    // after undo brought it back) must not also eat a real entry meant for a different, live chip.
-    // Skipping the splice here is what lets the document's own match count fall back in sync with
-    // textChips.length once the dead text is actually gone, undoing the desync instead of
-    // compounding it.
-    const desynced = this.textChipsDesynced(this.inner.getText());
-    this.moveCursorToColumn(line, match.end);
-    this.deleteBackward(match.end - match.start);
-    const imageId = IMAGE_CHIP_SINGLE.exec(match.text)?.[1];
-    if (imageId !== undefined) {
-      this.imageChips.delete(Number(imageId));
-    } else if (!desynced) {
-      this.textChips.splice(this.textChipCountBefore(line, match.start), 1);
-    }
-    this.lastPastedChip = undefined;
+  /** Deletes what's left of a chip label that the edit from `before` to now only partly removed
+   * (Backspace at its end, Delete at its start, Ctrl+W/Alt+D/Ctrl+U/Ctrl+K reaching into it), so a
+   * partially covered chip is fully deleted. Only for a pure deletion with the caret at its start,
+   * which is where every Pi delete leaves it. */
+  private removeChipFragments(before: { text: string; cursor: number }): void {
+    const { text, cursor } = this.synced;
+    if (text.length >= before.text.length) return;
+    const { prefix, suffix } = alignEdit(before.text, before.cursor, text, cursor);
+    if (prefix + suffix !== text.length || cursor !== prefix) return;
+    const deletedEnd = before.text.length - suffix;
+    const chips = chipMatches(before.text, CHIP_REGEX_G);
+    const cutAtStart = chips.find((chip) => chip.start < prefix && prefix < chip.end);
+    const cutAtEnd = chips.find((chip) => chip.start < deletedEnd && deletedEnd < chip.end);
+    if (cutAtStart) for (let i = cutAtStart.start; i < prefix; i += 1) this.innerInput(BACKSPACE);
+    if (cutAtEnd) for (let i = deletedEnd; i < cutAtEnd.end; i += 1) this.innerInput(FORWARD_DELETE);
   }
 
   private expandTextChip(chip: Extract<ChipInfo, { kind: "text" }>): void {
-    // See deleteChipSpan's comment: while desynced, chip.content is already just chip.label (the
-    // desync-aware fallback in chipInfo), so this "expands" it into itself -- a no-op past the
-    // registry, but the splice below would still misattribute a different, live chip's real entry,
-    // so it's skipped here too.
-    const desynced = this.textChipsDesynced(this.inner.getText());
     const cursor = this.inner.getCursor();
     this.moveCursorToColumn(cursor.line, chip.end);
-    this.deleteBackward(chip.end - chip.start);
-    if (!desynced) this.textChips.splice(this.textChipCountBefore(cursor.line, chip.start), 1);
-    this.inner.insertTextAtCursor(chip.content);
+    for (let i = chip.start; i < chip.end; i += 1) this.innerInput(BACKSPACE);
+    this.insertTextAtCursor(chip.content);
     this.lastPastedChip = undefined;
   }
 
@@ -544,109 +585,140 @@ export class ChipEditor {
     const current = this.inner.getCursor();
     if (current.line !== line) return;
     const key = col > current.col ? RIGHT_ARROW : LEFT_ARROW;
-    for (let i = 0; i < Math.abs(col - current.col); i += 1) this.inner.handleInput(key);
+    for (let i = 0; i < Math.abs(col - current.col); i += 1) this.innerInput(key);
   }
 
-  private deleteBackward(count: number): void {
-    for (let i = 0; i < count; i += 1) this.inner.handleInput(BACKSPACE);
+  // ── chip registry ───────────────────────────────────────────────────────
+
+  /** Every call into the inner editor goes through these two, so `slots` is correct between any
+   * two of Pi's undo snapshots, including between the synthetic keystrokes of one chip deletion. */
+  private innerInput(data: string, change: "edit" | "replace" = "edit"): void {
+    this.inner.handleInput(data);
+    this.sync(change);
+  }
+
+  private innerMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    const result = this.inner.handleMouse(event);
+    this.sync();
+    return result;
+  }
+
+  private editorState(): EditorStateWithChips {
+    const state = (this.inner as unknown as { state?: EditorStateWithChips }).state;
+    if (!state || !Array.isArray(state.lines) || typeof state.cursorLine !== "number" || typeof state.cursorCol !== "number") {
+      throw new Error("ChipEditor: pi-tui's Editor no longer has a private `state` {lines, cursorLine, cursorCol}; the chip registry depends on it (see src/tui/paste-chips.ts)");
+    }
+    return state;
+  }
+
+  /** Brings `slots` up to date with the editor's text; see the module comment. `change` says
+   * whether a text change (other than Pi restoring an earlier state) was an edit of the draft or
+   * a replacement of it by unrelated text. */
+  private sync(change: "edit" | "replace" = "edit"): void {
+    const state = this.editorState();
+    const text = this.inner.getText();
+    const cursor = cursorOffset(text, this.inner.getCursor());
+    const stored = state.mmpTextChips;
+    let slots: TextChipSlot[];
+    if (stored !== undefined && stored !== this.synced.slots) {
+      slots = this.restoredSlots(text, stored) ?? this.carryOver(text, cursor);
+    } else if (text === this.synced.text) {
+      slots = this.synced.slots;
+    } else if (change === "replace") {
+      slots = chipMatches(text, TEXT_CHIP_REGEX_G).map(() => null);
+    } else {
+      slots = this.carryOver(text, cursor);
+    }
+    state.mmpTextChips = slots;
+    this.synced = { text, cursor, slots };
+  }
+
+  /** Slots Pi put back with an earlier state (undo, leaving history). Checked chip by chip; only
+   * a count mismatch, which Pi's exact restore can't produce, falls back to `carryOver`. */
+  private restoredSlots(text: string, stored: TextChipSlot[]): TextChipSlot[] | undefined {
+    const labels = chipMatches(text, TEXT_CHIP_REGEX_G);
+    if (labels.length !== stored.length) return undefined;
+    return stored.map((id, index) => (id !== null && this.textContents.get(id)?.label === labels[index]?.text ? id : null));
+  }
+
+  /** Slots for `text` after an ordinary edit from `this.synced.text`: a label wholly in the
+   * unchanged prefix or suffix keeps its slot; any other label in `text` has no content. */
+  private carryOver(text: string, cursor: number): TextChipSlot[] {
+    const before = this.synced;
+    const { prefix, suffix } = alignEdit(before.text, before.cursor, text, cursor);
+    const shift = text.length - before.text.length;
+    const kept = new Map<number, { label: string; slot: TextChipSlot }>();
+    chipMatches(before.text, TEXT_CHIP_REGEX_G).forEach((match, index) => {
+      const slot = before.slots[index] ?? null;
+      if (match.end <= prefix) kept.set(match.start, { label: match.text, slot });
+      else if (match.start >= before.text.length - suffix) kept.set(match.start + shift, { label: match.text, slot });
+    });
+    return chipMatches(text, TEXT_CHIP_REGEX_G).map((match) => {
+      const survivor = kept.get(match.start);
+      return survivor?.label === match.text ? survivor.slot : null;
+    });
   }
 
   // ── chip lookup ─────────────────────────────────────────────────────────
 
-  /** Matches against `line`'s own text only. `contains` is fed `(start, end)` columns *within that
-   * line*, matching `inner.getCursor().col`/`moveCursorToColumn`'s coordinate space -- unlike
-   * `lineText(line)` (all previous lines joined + this one), whose match indices are offsets into
-   * the whole concatenation and were being compared against a same-line column (the bug this
-   * replaces: a chip on any line but the first always missed, or matched the wrong span, once a
-   * doc had more than one line). `textChipCountBefore` below still needs `lineText`'s document-wide
-   * prefix -- that one's correct as is. */
-  private findChip(
-    line: number,
-    contains: (start: number, end: number) => boolean,
-  ): { text: string; start: number; end: number } | undefined {
+  /** Matches against `line`'s own text only; `contains` is fed `(start, end)` columns within that
+   * line, matching `inner.getCursor().col`/`moveCursorToColumn`'s coordinate space. */
+  private findChip(line: number, contains: (start: number, end: number) => boolean): ChipMatch | undefined {
     const text = this.inner.getText().split("\n")[line] ?? "";
-    for (const match of text.matchAll(CHIP_REGEX_G)) {
-      const start = match.index ?? 0;
-      const end = start + match[0].length;
-      if (contains(start, end)) return { text: match[0], start, end };
-    }
-    return undefined;
+    return chipMatches(text, CHIP_REGEX_G).find((match) => contains(match.start, match.end));
   }
 
-  private chipInfo(line: number, match: { text: string; start: number; end: number }): ChipInfo | undefined {
+  private chipInfo(line: number, match: ChipMatch): ChipInfo | undefined {
     const imageId = IMAGE_CHIP_SINGLE.exec(match.text)?.[1];
     if (imageId !== undefined) {
       const image = this.imageChips.get(Number(imageId));
       if (!image) return undefined;
       return { kind: "image", label: match.text, start: match.start, end: match.end, justPasted: false, image };
     }
-    const index = this.textChipCountBefore(line, match.start);
-    // A desynced registry (see textChipsDesynced's own comment) falls back to the literal label
-    // rather than throwing: the popup shows the label as its own content instead of the original
-    // text. Checked document-wide, not just "is index in range" -- with more matches than registry
-    // entries, positional lookup can find *something* at every index, just the wrong chip's content.
-    const content = this.textChipsDesynced(this.inner.getText()) ? match.text : this.textChips[index] ?? match.text;
+    const offset = cursorOffset(this.inner.getText(), { line, col: match.start });
+    const index = chipMatches(this.inner.getText().slice(0, offset), TEXT_CHIP_REGEX_G).length;
+    const content = this.textContent(this.synced.slots[index], match.text) ?? match.text;
     const justPasted = this.lastPastedChip?.line === line && this.lastPastedChip.col === match.end;
     return { kind: "text", label: match.text, start: match.start, end: match.end, justPasted, content };
   }
 
-  /** True once the number of `[Pasted: ...]`-shaped substrings in the document no longer matches
-   * `textChips.length` -- meaning at least one of them isn't backed by a real registry entry
-   * anymore. This happens because Editor's undo stack has no idea our chip markers are meant to be
-   * one atomic unit: deleting a chip is several synthetic Backspace keypresses (`deleteBackward`),
-   * each its own undo step, so undoing *some* of them (not all the way back to before the paste)
-   * resurrects the marker's literal text with no way to restore its `textChips` entry alongside it.
-   * Once desynced, positional mapping (`textChips[index]`) can no longer be trusted for *any* text
-   * chip on the line -- with more matches than registry entries, it doesn't just show the dead one
-   * as its own label, it can misattribute a later, still-live chip's real content to the dead one
-   * and leave the live one showing its own label instead (a content swap, not merely "plain text").
-   * So every text chip falls back to its own literal label instead, uniformly, until a further edit
-   * (e.g. deleting the resurrected text) brings the count back in sync. */
-  private textChipsDesynced(text: string): boolean {
-    return [...text.matchAll(TEXT_CHIP_REGEX_G)].length !== this.textChips.length;
+  /** The content pasted under `label`, or undefined for a contentless slot. Checking the label
+   * again here is a last safety net: a slot never resolves to content pasted under another label. */
+  private textContent(slot: TextChipSlot | undefined, label: string): string | undefined {
+    const entry = slot === null || slot === undefined ? undefined : this.textContents.get(slot);
+    return entry?.label === label ? entry.content : undefined;
   }
 
-  /** How many `[Pasted: ...]` chips appear before (line, col) -- the index into `textChips`,
-   * since chip labels carry no id and are only distinguishable by document order. */
-  private textChipCountBefore(line: number, col: number): number {
-    const prefix = this.lineText(line, col);
-    return [...prefix.matchAll(TEXT_CHIP_REGEX_G)].length;
-  }
-
-  private lineText(line: number, upToCol?: number): string {
-    const lines = this.inner.getText().split("\n");
-    const before = lines.slice(0, line).join("\n") + (line > 0 ? "\n" : "");
-    const current = lines[line] ?? "";
-    return before + (upToCol === undefined ? current : current.slice(0, upToCol));
-  }
-
-  private resolveForSubmit(rawText: string): { text: string; images: ImageContent[] } {
+  private resolveForSubmit(rawText: string, slots: TextChipSlot[]): { text: string; images: ImageContent[] } {
     const images: ImageContent[] = [];
-    const desynced = this.textChipsDesynced(rawText);
     let textIndex = 0;
-    const text = rawText.replace(CHIP_REGEX_G, (match) => {
-      const imageId = IMAGE_CHIP_SINGLE.exec(match)?.[1];
+    const text = rawText.replace(CHIP_REGEX_G, (match: string, imageId: string | undefined) => {
       if (imageId !== undefined) {
         const meta = this.imageChips.get(Number(imageId));
-        if (meta) images.push({ type: "image", data: meta.base64, mimeType: meta.mimeType });
+        if (!meta) return match;
+        images.push({ type: "image", data: meta.base64, mimeType: meta.mimeType });
         return "";
       }
-      const content = desynced ? undefined : this.textChips[textIndex];
+      const content = this.textContent(slots[textIndex], match);
       textIndex += 1;
       return content ?? match;
     });
     return { text, images };
   }
 
+  /** Called from inside Pi's submitValue, before `innerInput` gets to sync(): `this.synced.slots`
+   * still describes the text being sent (Pi only trims it, which never removes a label). */
   private deliverSubmit(rawText: string): void {
-    const { text, images } = this.resolveForSubmit(rawText);
+    const { text, images } = this.resolveForSubmit(rawText, this.synced.slots);
     this.resetChips();
     this.onSubmitImages?.(text, images);
   }
 
+  /** Submit starts a new draft, and Pi clears its undo stack, so nothing can bring these back. */
   private resetChips(): void {
-    this.textChips = [];
+    this.textContents.clear();
     this.imageChips.clear();
+    this.synced = { text: "", cursor: 0, slots: [] };
     this.lastPastedChip = undefined;
   }
 }

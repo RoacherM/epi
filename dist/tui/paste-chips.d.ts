@@ -52,17 +52,18 @@ interface ChipEditorOptions extends EditorOptions {
 }
 /**
  * Wraps pi-tui's `Editor`, adding atomic paste/image chips on top of its public API. See the
- * module comment for why this wraps instead of extending `Editor`.
+ * module comment for why this wraps instead of extending `Editor`, and how the chip registry works.
  */
 export declare class ChipEditor {
     private readonly inner;
     private readonly getCwd;
-    /** Full original text of each `[Pasted: ...]` chip, ordered left-to-right/top-to-bottom to match
-     * the chip regex's match order (there's no id in the label to key by -- docs/tui-design.md 4.3
-     * shows none, matching grok; only `[Image #N]` chips carry a visible, and thus lookup-able, id). */
-    private textChips;
+    /** Content of every text chip pasted into this draft, by content id; see the module comment. */
+    private textContents;
+    private textContentCounter;
     private imageChips;
     private imageCounter;
+    /** The text, caret offset and slots as of the last `sync()`. */
+    private synced;
     /** Cursor position immediately after the most recent paste-created chip, for the "paste again to
      * expand" gesture; cleared once consumed or once another chip-aware edit happens. */
     private lastPastedChip;
@@ -87,16 +88,12 @@ export declare class ChipEditor {
     addToHistory(text: string): void;
     setAutocompleteProvider(provider: AutocompleteProvider): void;
     isShowingAutocomplete(): boolean;
-    /** Callers that put back text they just read from this same editor -- restoring a queued
-     * message ahead of the current draft on Esc/Ctrl+C/Alt+Up (keys.ts, session-tree-commands.ts),
-     * or the /fork editor-slot restore -- read the raw, unexpanded text (`getEditorText`, not
-     * `getExpandedText`) and prepend to it, so every chip already in it is still there, unchanged.
-     * Keep the registries in that case instead of wiping them (which would otherwise turn a live
-     * chip into dead bracket text that can no longer expand or attach an image). A real new draft
-     * (submit's `setText("")`, /new, Ctrl+G's external-editor result, an extension's setEditorText)
-     * has a different chip count and correctly resets. */
+    /** Replaces the whole draft. Chips in the part of the text that didn't change keep their content
+     * -- restoring a queued message ahead of the current draft on Esc/Ctrl+C/Alt+Up (keys.ts,
+     * session-tree-commands.ts) or the /fork editor-slot restore prepends to the raw, unexpanded text
+     * (`getText`, not `getExpandedText`), so every chip already in it survives. Pi's `setText` pushes
+     * an undo snapshot, so Ctrl+- after /new or Ctrl+G brings back the old draft with its chips. */
     setText(text: string): void;
-    private sameChipsAs;
     insertTextAtCursor(text: string): void;
     /** Ctrl+V with text on the clipboard: goes through the same fold-or-not decision as a terminal
      * bracketed paste (docs/tui-design.md 4.3), unlike `insertTextAtCursor` (used for programmatic,
@@ -111,8 +108,7 @@ export declare class ChipEditor {
     /** Registers an image's data without inserting anything -- for a caller building the marker into
      * arbitrary text itself (Esc/Alt+Up queue restore, app.ts's restoreQueuedMessagesToEditor) ahead
      * of one `setText()` call, rather than at the current cursor. Returns the `[Image #N]` label to
-     * place in that text; `setText`'s own `sameChipsAs` check sees the id already in `imageChips` and
-     * keeps it, same as any other chip surviving a restore. */
+     * place in that text. */
     registerImage(bytes: Uint8Array, mimeType: string): string;
     /** Ctrl+V with an image on the clipboard, or an `@image`-equivalent drop: adds an `[Image #N]`
      * chip at the cursor. `bytes` are kept as-is; AgentSession resizes for the model at send time
@@ -138,51 +134,52 @@ export declare class ChipEditor {
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
     /** Editor's own cursor movement (arrows, word/Home/End jumps, a single click) has no idea our
      * chip markers are meant to be one atomic unit, so it can land the caret strictly inside one --
-     * and typing there would break the marker's regex match, shifting every later chip's index in
-     * `textChips`/`imageChips` and misattributing their content on submit (not merely a cosmetic
-     * gap). After any such move, if the caret ended up inside a span, step it the rest of the way to
-     * whichever boundary it was heading toward (nearer one) -- or, when `toStart` is set (every
-     * mouse-driven call site: a click has no direction), always to the start. */
+     * and typing there would break the label. After any such move, if the caret ended up inside a
+     * span, step it the rest of the way to whichever boundary it was heading toward (nearer one) --
+     * or, when `toStart` is set (every mouse-driven call site: a click has no direction), always to
+     * the start. */
     private snapOutOfChipSpan;
     /** Buffers a bracketed-paste sequence ourselves (mirroring Editor's own, private, buffering) so
      * we can decide chip-or-not *before* the inner editor ever applies its own (different) fold. */
     private bufferPaste;
     private handlePaste;
     private interceptChipKey;
-    private deleteChipSpan;
+    /** Deletes what's left of a chip label that the edit from `before` to now only partly removed
+     * (Backspace at its end, Delete at its start, Ctrl+W/Alt+D/Ctrl+U/Ctrl+K reaching into it), so a
+     * partially covered chip is fully deleted. Only for a pure deletion with the caret at its start,
+     * which is where every Pi delete leaves it. */
+    private removeChipFragments;
     private expandTextChip;
     /** Steps the caret to `col` on the current line via synthetic arrow keys -- the only way to
      * reposition it without `setText()`'s side effect of jumping to the end of the whole buffer. */
     private moveCursorToColumn;
-    private deleteBackward;
-    /** Matches against `line`'s own text only. `contains` is fed `(start, end)` columns *within that
-     * line*, matching `inner.getCursor().col`/`moveCursorToColumn`'s coordinate space -- unlike
-     * `lineText(line)` (all previous lines joined + this one), whose match indices are offsets into
-     * the whole concatenation and were being compared against a same-line column (the bug this
-     * replaces: a chip on any line but the first always missed, or matched the wrong span, once a
-     * doc had more than one line). `textChipCountBefore` below still needs `lineText`'s document-wide
-     * prefix -- that one's correct as is. */
+    /** Every call into the inner editor goes through these two, so `slots` is correct between any
+     * two of Pi's undo snapshots, including between the synthetic keystrokes of one chip deletion. */
+    private innerInput;
+    private innerMouse;
+    private editorState;
+    /** Brings `slots` up to date with the editor's text; see the module comment. `change` says
+     * whether a text change (other than Pi restoring an earlier state) was an edit of the draft or
+     * a replacement of it by unrelated text. */
+    private sync;
+    /** Slots Pi put back with an earlier state (undo, leaving history). Checked chip by chip; only
+     * a count mismatch, which Pi's exact restore can't produce, falls back to `carryOver`. */
+    private restoredSlots;
+    /** Slots for `text` after an ordinary edit from `this.synced.text`: a label wholly in the
+     * unchanged prefix or suffix keeps its slot; any other label in `text` has no content. */
+    private carryOver;
+    /** Matches against `line`'s own text only; `contains` is fed `(start, end)` columns within that
+     * line, matching `inner.getCursor().col`/`moveCursorToColumn`'s coordinate space. */
     private findChip;
     private chipInfo;
-    /** True once the number of `[Pasted: ...]`-shaped substrings in the document no longer matches
-     * `textChips.length` -- meaning at least one of them isn't backed by a real registry entry
-     * anymore. This happens because Editor's undo stack has no idea our chip markers are meant to be
-     * one atomic unit: deleting a chip is several synthetic Backspace keypresses (`deleteBackward`),
-     * each its own undo step, so undoing *some* of them (not all the way back to before the paste)
-     * resurrects the marker's literal text with no way to restore its `textChips` entry alongside it.
-     * Once desynced, positional mapping (`textChips[index]`) can no longer be trusted for *any* text
-     * chip on the line -- with more matches than registry entries, it doesn't just show the dead one
-     * as its own label, it can misattribute a later, still-live chip's real content to the dead one
-     * and leave the live one showing its own label instead (a content swap, not merely "plain text").
-     * So every text chip falls back to its own literal label instead, uniformly, until a further edit
-     * (e.g. deleting the resurrected text) brings the count back in sync. */
-    private textChipsDesynced;
-    /** How many `[Pasted: ...]` chips appear before (line, col) -- the index into `textChips`,
-     * since chip labels carry no id and are only distinguishable by document order. */
-    private textChipCountBefore;
-    private lineText;
+    /** The content pasted under `label`, or undefined for a contentless slot. Checking the label
+     * again here is a last safety net: a slot never resolves to content pasted under another label. */
+    private textContent;
     private resolveForSubmit;
+    /** Called from inside Pi's submitValue, before `innerInput` gets to sync(): `this.synced.slots`
+     * still describes the text being sent (Pi only trims it, which never removes a label). */
     private deliverSubmit;
+    /** Submit starts a new draft, and Pi clears its undo stack, so nothing can bring these back. */
     private resetChips;
 }
 export declare function fitPopupLine(text: string, width: number): string;

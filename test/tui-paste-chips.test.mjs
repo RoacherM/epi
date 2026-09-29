@@ -314,37 +314,207 @@ test("Alt+D (word-delete forward) at a chip's start removes the whole chip", () 
   assert.equal(editor.getText(), " x");
 });
 
-// Pre-merge review, item 5: Editor's own undo stack has no idea a chip's Backspace-deletion (17
-// synthetic Backspace keypresses, deleteBackward) was meant to be one atomic step -- undoing some of
-// them, not all the way back to before the paste, resurrects the marker's literal text with the
-// registry entry for it already gone. If a *different*, still-live chip sits elsewhere in the same
-// document, naive positional lookup (this.textChips[index]) then misattributes: the resurrected dead
-// text "claims" the live chip's real content, and the live chip falls back to its own literal label
-// instead of its actual content -- a content swap, not merely "the dead one shows as plain text".
-// Once desynced, every text chip must fall back to its own label uniformly instead.
-test("undo resurrecting a deleted chip's label doesn't swap content with a different, still-live chip", () => {
+// ── registry vs undo and multi-character deletes ────────────────────────────
+//
+// Invariant (src/tui/paste-chips.ts module comment): for every chip label in the document, in
+// order, the registry holds exactly that chip's content, and no label resolves to another chip's
+// content. Pi's undo restores an exact earlier state, so undo must restore the chips' content with
+// it. The five sequences below are from the pre-merge review of b7195ea, which failed all of them.
+
+const A = "a1\na2\na3\na4";
+const B = "b1\nb2\nb3\nb4\nb5";
+const UNDO = "\x1f"; // Ctrl+-
+const HOME = "\x01";
+const RIGHT = "\x1b[C";
+const LEFT = "\x1b[D";
+
+function submitted(editor) {
+  let sent;
+  editor.onSubmitImages = (text) => { sent = text; };
+  editor.handleInput(ENTER);
+  return sent;
+}
+
+test("undo a paste, then paste another chip: Enter sends the new chip's content", () => {
   const editor = makeEditor();
-  paste(editor, "a1\na2\na3\na4"); // chip A
-  editor.handleInput(" ");
-  paste(editor, "b1\nb2\nb3\nb4\nb5"); // chip B
-  editor.handleInput("\x01"); // Home
-  editor.handleInput("\x1b[C"); // Right: snaps onto A's own end
-  editor.handleInput(BACKSPACE); // delete chip A entirely; B is untouched
-  assert.equal(editor.getExpandedText(), " b1\nb2\nb3\nb4\nb5");
-  for (let i = 0; i < 17; i += 1) editor.handleInput("\x1f"); // undo (ctrl+-), resurrecting A's label text
-  assert.equal(editor.getText(), "[Pasted: 4 lines] [Pasted: 5 lines]");
-  // Must not swap: neither chip's real content ends up attached to the other's label.
-  const expanded = editor.getExpandedText();
-  assert.doesNotMatch(expanded, /b1\nb2\nb3\nb4\nb5/); // B's real content didn't leak onto A's dead label
-  assert.equal(expanded, "[Pasted: 4 lines] [Pasted: 5 lines]"); // both fall back to their own literal labels
-  // Recovery: deleting the resurrected dead label (the obvious next move) must bring the document
-  // back in sync with the registry, not also eat B's real entry -- deleteChipSpan/expandTextChip
-  // skip the registry splice entirely while desynced, so B's own entry is exactly where it was.
-  editor.handleInput("\x01"); // Home
-  editor.handleInput("\x1b[C"); // Right: snaps onto dead A's own end
-  editor.handleInput(BACKSPACE); // delete the resurrected dead label; doc and registry realign
-  assert.equal(editor.getExpandedText(), " b1\nb2\nb3\nb4\nb5"); // B expands correctly again
+  paste(editor, A);
+  editor.handleInput(UNDO);
+  assert.equal(editor.getText(), "");
+  paste(editor, B);
+  assert.equal(submitted(editor), B);
 });
+
+test("undoing only the second paste keeps the first chip's content", () => {
+  const editor = makeEditor();
+  paste(editor, A);
+  editor.handleInput(" ");
+  paste(editor, B);
+  editor.handleInput(UNDO);
+  assert.equal(editor.getText(), "[Pasted: 4 lines] ");
+  assert.equal(submitted(editor), A);
+});
+
+test("undo after deleting a chip brings back both chips' content exactly", () => {
+  const editor = makeEditor();
+  paste(editor, A);
+  editor.handleInput(" ");
+  paste(editor, B);
+  editor.handleInput(BACKSPACE); // deletes chip B
+  assert.equal(editor.getExpandedText(), `${A} `);
+  for (let i = 0; i < 17; i += 1) editor.handleInput(UNDO);
+  assert.equal(editor.getText(), "[Pasted: 4 lines] [Pasted: 5 lines]");
+  assert.equal(editor.getExpandedText(), `${A} ${B}`);
+});
+
+test("after undo brings a chip back, deleting the other chip keeps the right content", () => {
+  const editor = makeEditor();
+  paste(editor, A);
+  editor.handleInput(" ");
+  paste(editor, B);
+  editor.handleInput(BACKSPACE);
+  for (let i = 0; i < 17; i += 1) editor.handleInput(UNDO);
+  editor.handleInput(HOME);
+  editor.handleInput(RIGHT); // snaps to A's end
+  editor.handleInput(BACKSPACE); // deletes chip A
+  assert.equal(editor.getText(), " [Pasted: 5 lines]");
+  assert.equal(editor.getExpandedText(), ` ${B}`); // B's own content, A's is gone
+});
+
+test("Ctrl+U over a chip on line 1 keeps the chip on line 0", () => {
+  const editor = makeEditor();
+  paste(editor, A);
+  editor.handleInput("\n");
+  paste(editor, B);
+  editor.handleInput("\x15"); // Ctrl+U
+  assert.equal(editor.getText(), "[Pasted: 4 lines]\n");
+  assert.equal(editor.getExpandedText(), `${A}\n`);
+});
+
+test("undo lands on the right chip even when an earlier state had the same text", () => {
+  // "[Pasted: 4 lines]" backed by A, then the same text backed by C: undoing back to A's state
+  // must bring back A's content, not the most recent chip with that label.
+  const C = "c1\nc2\nc3\nc4";
+  const editor = makeEditor();
+  paste(editor, A);
+  editor.handleInput(BACKSPACE);
+  paste(editor, C);
+  assert.equal(editor.getExpandedText(), C);
+  const states = [];
+  while (editor.getText() !== "[Pasted: 4 lines]" || states.length === 0) {
+    editor.handleInput(UNDO);
+    states.push(editor.getText());
+    assert.ok(states.length < 40, `undo never got back to A: ${JSON.stringify(states)}`);
+  }
+  assert.equal(editor.getExpandedText(), A);
+});
+
+test("Ctrl+K from a chip's start deletes that chip and keeps the one before it", () => {
+  const editor = makeEditor();
+  paste(editor, A);
+  editor.handleInput(" ");
+  paste(editor, B);
+  editor.handleInput(LEFT); // snaps to B's start
+  editor.handleInput("\x0b"); // Ctrl+K
+  assert.equal(editor.getText(), "[Pasted: 4 lines] ");
+  assert.equal(editor.getExpandedText(), `${A} `);
+});
+
+test("Ctrl+W with a space after a chip deletes the whole chip, not leaving a fragment", () => {
+  const editor = makeEditor();
+  paste(editor, A);
+  editor.handleInput(" ");
+  editor.handleInput("\x17"); // Ctrl+W: Pi deletes "] ", the rest of the label must go too
+  assert.equal(editor.getText(), "");
+  assert.equal(editor.getExpandedText(), "");
+});
+
+test("Alt+D with a space before a chip deletes the whole chip, not leaving a fragment", () => {
+  const editor = makeEditor();
+  editor.handleInput(" ");
+  paste(editor, A);
+  editor.handleInput(HOME);
+  editor.handleInput("\x1bd"); // Alt+D: Pi deletes " [", the rest of the label must go too
+  assert.equal(editor.getText(), "");
+  assert.equal(editor.getExpandedText(), "");
+});
+
+test("deleting one of two identical adjacent labels keeps the other's content", () => {
+  const A2 = "x1\nx2\nx3\nx4";
+  const editor = makeEditor();
+  paste(editor, A);
+  editor.handleInput("x"); // ends the just-pasted window, so the next paste isn't "paste again"
+  editor.handleInput(BACKSPACE);
+  paste(editor, A2);
+  assert.equal(editor.getText(), "[Pasted: 4 lines][Pasted: 4 lines]");
+  editor.handleInput(HOME);
+  editor.handleInput("\x1b[3~"); // Delete at A's start
+  assert.equal(editor.getExpandedText(), A2);
+});
+
+test("a label typed or yanked back as text stays literal instead of picking up old content", () => {
+  const editor = makeEditor();
+  paste(editor, A);
+  editor.handleInput("\x15"); // Ctrl+U kills the chip's label into the kill ring
+  assert.equal(editor.getText(), "");
+  editor.handleInput("\x19"); // Ctrl+Y yanks the label text back
+  assert.equal(editor.getText(), "[Pasted: 4 lines]");
+  assert.equal(editor.getExpandedText(), "[Pasted: 4 lines]");
+  editor.handleInput(" [Pasted: 4 lines]"); // typed by hand
+  assert.equal(editor.getExpandedText(), "[Pasted: 4 lines] [Pasted: 4 lines]");
+});
+
+test("leaving history browsing brings the draft's chips back with their content", () => {
+  const editor = makeEditor();
+  editor.addToHistory("an older prompt");
+  paste(editor, A);
+  editor.handleInput(HOME); // Pi only enters history from column 0 of a non-empty draft
+  editor.handleInput("\x1b[A"); // Up: recall the older prompt
+  assert.equal(editor.getText(), "an older prompt");
+  assert.equal(editor.getExpandedText(), "an older prompt");
+  editor.handleInput("\x1b[B"); // Down: back to the draft
+  assert.equal(editor.getText(), "[Pasted: 4 lines]");
+  assert.equal(editor.getExpandedText(), A);
+});
+
+test("a label-shaped text in a recalled history entry doesn't pick up the draft chip's content", () => {
+  const editor = makeEditor();
+  editor.addToHistory("[Pasted: 4 lines] was typed literally");
+  paste(editor, A);
+  editor.handleInput(" draft");
+  editor.handleInput(HOME);
+  editor.handleInput("\x1b[A"); // Up: the entry starts with the same label text as the draft
+  assert.equal(editor.getExpandedText(), "[Pasted: 4 lines] was typed literally");
+});
+
+test("undo after setText brings back the old draft with its chips", () => {
+  const editor = makeEditor();
+  paste(editor, A);
+  editor.setText("something else");
+  editor.handleInput(UNDO);
+  assert.equal(editor.getText(), "[Pasted: 4 lines]");
+  assert.equal(editor.getExpandedText(), A);
+});
+
+test("a deleted image chip brought back by undo is attached again", () => {
+  const editor = makeEditor();
+  editor.insertImageChip(ONE_PIXEL_PNG, "image/png");
+  editor.handleInput(BACKSPACE);
+  assert.equal(editor.getText(), "");
+  for (let i = 0; i < 10 && editor.getText() !== "[Image #1]"; i += 1) editor.handleInput(UNDO);
+  assert.equal(editor.getText(), "[Image #1]");
+  assert.equal(editor.getImageAttachments().length, 1);
+});
+
+test("text pasted inside an expanded chip that looks like a label stays literal", () => {
+  const editor = makeEditor();
+  const inner = "p1\n[Pasted: 4 lines]\np3\np4";
+  paste(editor, inner);
+  editor.handleInput(LEFT); // onto the chip
+  editor.handleInput(ENTER); // expand
+  assert.equal(editor.getText(), inner);
+  assert.equal(editor.getExpandedText(), inner);
+});
+
 
 test("pasting again while the just-pasted popup is showing expands the chip instead of pasting twice", () => {
   const editor = makeEditor();

@@ -659,15 +659,21 @@ export async function runTuiApp(options) {
         const agent = session.agent;
         const savedSteeringMode = agent.steeringMode;
         const savedFollowUpMode = agent.followUpMode;
+        let firstPeeked;
+        let secondPeeked;
         agent.steeringMode = "all";
         agent.followUpMode = "all";
-        // peekQueuedMessages() returns steering's own messages when non-empty, else follow-up's; after
-        // clearSteeringQueue() empties it, a second call reaches follow-up's either way.
-        const firstPeeked = agent.peekQueuedMessages();
-        agent.clearSteeringQueue();
-        const secondPeeked = agent.peekQueuedMessages();
-        agent.steeringMode = savedSteeringMode;
-        agent.followUpMode = savedFollowUpMode;
+        try {
+            // peekQueuedMessages() returns steering's own messages when non-empty, else follow-up's; after
+            // clearSteeringQueue() empties it, a second call reaches follow-up's either way.
+            firstPeeked = agent.peekQueuedMessages();
+            agent.clearSteeringQueue();
+            secondPeeked = agent.peekQueuedMessages();
+        }
+        finally {
+            agent.steeringMode = savedSteeringMode;
+            agent.followUpMode = savedFollowUpMode;
+        }
         const { steering, followUp } = session.clearQueue();
         const steeringImages = imagesFor(steering, firstPeeked);
         const followUpImages = imagesFor(followUp, secondPeeked);
