@@ -74,11 +74,28 @@ export declare class ChipEditor {
     render(width: number): string[];
     invalidate(): void;
     getText(): string;
+    getCursor(): {
+        line: number;
+        col: number;
+    };
     addToHistory(text: string): void;
     setAutocompleteProvider(provider: AutocompleteProvider): void;
     isShowingAutocomplete(): boolean;
+    /** Callers that put back text they just read from this same editor -- restoring a queued
+     * message ahead of the current draft on Esc/Ctrl+C/Alt+Up (keys.ts, session-tree-commands.ts),
+     * or the /fork editor-slot restore -- read the raw, unexpanded text (`getEditorText`, not
+     * `getExpandedText`) and prepend to it, so every chip already in it is still there, unchanged.
+     * Keep the registries in that case instead of wiping them (which would otherwise turn a live
+     * chip into dead bracket text that can no longer expand or attach an image). A real new draft
+     * (submit's `setText("")`, /new, Ctrl+G's external-editor result, an extension's setEditorText)
+     * has a different chip count and correctly resets. */
     setText(text: string): void;
+    private sameChipsAs;
     insertTextAtCursor(text: string): void;
+    /** Ctrl+V with text on the clipboard: goes through the same fold-or-not decision as a terminal
+     * bracketed paste (docs/tui-design.md 4.3), unlike `insertTextAtCursor` (used for programmatic,
+     * not-a-paste insertions, e.g. an extension's `pasteToEditor`), which never folds. */
+    pasteText(text: string): void;
     /** Text chips expanded to their full content, image chips stripped out entirely (they're sent
      * as attachments, not inlined -- docs/tui-design.md 4.3's 发送 row). Non-destructive: safe to
      * call more than once before the caller decides what to do with the result (e.g. keys.ts reads
@@ -95,6 +112,13 @@ export declare class ChipEditor {
     chipAtCursor(): ChipInfo | undefined;
     handleInput(data: string): void;
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
+    /** Editor's own cursor movement (arrows, word/Home/End jumps, a single click) has no idea our
+     * chip markers are meant to be one atomic unit, so it can land the caret strictly inside one --
+     * and typing there would break the marker's regex match, shifting every later chip's index in
+     * `textChips`/`imageChips` and misattributing their content on submit (not merely a cosmetic
+     * gap). After any such move, if the caret ended up inside a span, step it the rest of the way to
+     * whichever boundary it was heading toward (nearer one, for a click with no direction). */
+    private snapOutOfChipSpan;
     /** Buffers a bracketed-paste sequence ourselves (mirroring Editor's own, private, buffering) so
      * we can decide chip-or-not *before* the inner editor ever applies its own (different) fold. */
     private bufferPaste;

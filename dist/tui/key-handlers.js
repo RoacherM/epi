@@ -69,7 +69,7 @@ export async function pasteClipboard(host) {
             return;
         }
         if (paste.kind === "text")
-            host.insertEditorText(paste.text);
+            host.pasteText(paste.text);
     }
     catch (error) {
         host.notice(`Could not read the clipboard: ${errorText(error)}`, "error");

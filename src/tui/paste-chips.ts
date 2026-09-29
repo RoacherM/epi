@@ -13,12 +13,13 @@
 // into the inner editor's buffer, `render()` needs no translation step: what's stored is exactly
 // what's displayed, and Pi's own word-wrap/cursor-highlight code runs unmodified over it.
 //
-// What isn't reproduced: true per-grapheme atomicity for plain arrow-key movement (Pi's version
-// lives in the private `segment()` override, unreachable from here). A caret can visually rest
-// inside a chip's bracket text after arrowing into it. Backspace, Enter, double-click, "paste
-// again", and cursor-on-chip detection all treat any caret position within a chip's span as "on
-// it", which covers every interaction the spec and tests exercise; only mid-span arrow-stepping is
-// left un-atomic, and it recovers on the next chip-aware action. History recall (Editor's own
+// Pi's own per-grapheme atomicity lives in the private `segment()` override, unreachable from
+// here, so arrow keys, word/Home/End jumps and a single click all move the caret with no idea a
+// chip is meant to be one unit. `snapOutOfChipSpan` corrects that after every such move: if the
+// caret landed strictly inside a span, it's stepped the rest of the way to whichever boundary the
+// move was heading toward. This matters beyond looks -- a caret resting mid-span and then typing
+// there would break the marker's regex match, which shifts every later chip's index in
+// `textChips`/`imageChips` and misattributes their content on submit. History recall (Editor's own
 // Up/Down, entirely inside its private navigateHistory) is likewise unreachable from here; it's
 // harmless because history entries are always plain, already-expanded text (chips are resolved
 // before addToHistory() is ever called) -- except for the edge case of pasting a new chip while an
@@ -49,6 +50,7 @@ const TEXT_CHIP_SOURCE = String.raw`\[Pasted: (?:\d+ lines|\d+(?:\.\d+)? KB)\]`;
 const IMAGE_CHIP_SOURCE = String.raw`\[Image #(\d+)\]`;
 const CHIP_REGEX_G = new RegExp(`${TEXT_CHIP_SOURCE}|${IMAGE_CHIP_SOURCE}`, "g");
 const TEXT_CHIP_REGEX_G = new RegExp(TEXT_CHIP_SOURCE, "g");
+const IMAGE_CHIP_REGEX_G = new RegExp(IMAGE_CHIP_SOURCE, "g");
 const IMAGE_CHIP_SINGLE = new RegExp(`^${IMAGE_CHIP_SOURCE}$`);
 
 const LEFT_ARROW = "\x1b[D";
@@ -166,6 +168,10 @@ export class ChipEditor {
     return this.inner.getText();
   }
 
+  getCursor(): { line: number; col: number } {
+    return this.inner.getCursor();
+  }
+
   addToHistory(text: string): void {
     this.inner.addToHistory(text);
   }
@@ -178,13 +184,34 @@ export class ChipEditor {
     return this.inner.isShowingAutocomplete();
   }
 
+  /** Callers that put back text they just read from this same editor -- restoring a queued
+   * message ahead of the current draft on Esc/Ctrl+C/Alt+Up (keys.ts, session-tree-commands.ts),
+   * or the /fork editor-slot restore -- read the raw, unexpanded text (`getEditorText`, not
+   * `getExpandedText`) and prepend to it, so every chip already in it is still there, unchanged.
+   * Keep the registries in that case instead of wiping them (which would otherwise turn a live
+   * chip into dead bracket text that can no longer expand or attach an image). A real new draft
+   * (submit's `setText("")`, /new, Ctrl+G's external-editor result, an extension's setEditorText)
+   * has a different chip count and correctly resets. */
   setText(text: string): void {
     this.inner.setText(text);
-    this.resetChips();
+    if (!this.sameChipsAs(text)) this.resetChips();
+  }
+
+  private sameChipsAs(text: string): boolean {
+    if ([...text.matchAll(TEXT_CHIP_REGEX_G)].length !== this.textChips.length) return false;
+    const imageIds = [...text.matchAll(IMAGE_CHIP_REGEX_G)].map((match) => Number(match[1]));
+    return imageIds.length === this.imageChips.size && imageIds.every((id) => this.imageChips.has(id));
   }
 
   insertTextAtCursor(text: string): void {
     this.inner.insertTextAtCursor(text);
+  }
+
+  /** Ctrl+V with text on the clipboard: goes through the same fold-or-not decision as a terminal
+   * bracketed paste (docs/tui-design.md 4.3), unlike `insertTextAtCursor` (used for programmatic,
+   * not-a-paste insertions, e.g. an extension's `pasteToEditor`), which never folds. */
+  pasteText(text: string): void {
+    this.handlePaste(text);
   }
 
   /** Text chips expanded to their full content, image chips stripped out entirely (they're sent
@@ -238,10 +265,25 @@ export class ChipEditor {
     // is "cursor landed on it later", not "still fresh from the paste" -- a different popup hint.
     this.lastPastedChip = undefined;
     if (this.interceptChipKey(data)) return;
+    const before = this.inner.getCursor();
     this.inner.handleInput(data);
+    this.snapOutOfChipSpan(before);
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type === "press") {
+      // Claim the press ourselves (Editor's own "just focus" pattern) unless the autocomplete
+      // dropdown wants it first. pi-tui's alt-screen only lets a component see "click" events with
+      // a real clickCount (its own double-click detection lives in the captured-target path) once
+      // something has claimed the press; otherwise a second click at the same spot is consumed by
+      // the screen's own double-click-selects-the-word-under-the-cursor behavior before it ever
+      // reaches us. Editor.handleMouse deliberately declines press so ordinary prompt text can
+      // still be drag-selected; a chip isn't ordinary text, so this trades that drag-select away
+      // (for the whole editor, not just chip spans -- there's no cheap way to tell which a press
+      // will land on before Editor positions the cursor) for double-click-to-expand actually working.
+      return this.inner.handleMouse(event) ?? { handled: true, focus: true, capture: true };
+    }
+    const before = this.inner.getCursor();
     const result = this.inner.handleMouse(event);
     if (event.type === "click" && (event.clickCount ?? 1) >= 2) {
       const chip = this.chipAtCursor();
@@ -250,7 +292,23 @@ export class ChipEditor {
         return { ...result, handled: true, render: true };
       }
     }
+    this.snapOutOfChipSpan(before);
     return result;
+  }
+
+  /** Editor's own cursor movement (arrows, word/Home/End jumps, a single click) has no idea our
+   * chip markers are meant to be one atomic unit, so it can land the caret strictly inside one --
+   * and typing there would break the marker's regex match, shifting every later chip's index in
+   * `textChips`/`imageChips` and misattributing their content on submit (not merely a cosmetic
+   * gap). After any such move, if the caret ended up inside a span, step it the rest of the way to
+   * whichever boundary it was heading toward (nearer one, for a click with no direction). */
+  private snapOutOfChipSpan(before: { line: number; col: number }): void {
+    const after = this.inner.getCursor();
+    if (after.line !== before.line) return; // a vertical move onto a chip on another line: rare, accepted gap
+    const match = this.findChip(after.line, (start, end) => after.col > start && after.col < end);
+    if (!match) return;
+    const target = after.col >= before.col ? match.end : match.start;
+    this.moveCursorToColumn(after.line, target);
   }
 
   // ── paste interception ──────────────────────────────────────────────────

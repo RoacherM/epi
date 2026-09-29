@@ -76,7 +76,7 @@ export async function pasteClipboard(host: CommandHost): Promise<void> {
       host.insertImage(paste.bytes, paste.mimeType);
       return;
     }
-    if (paste.kind === "text") host.insertEditorText(paste.text);
+    if (paste.kind === "text") host.pasteText(paste.text);
   } catch (error) {
     host.notice(`Could not read the clipboard: ${errorText(error)}`, "error");
   }

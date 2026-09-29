@@ -106,6 +106,35 @@ test("moving the cursor off the chip hides it, moving back onto it shows it agai
   assert.notEqual(editor.chipAtCursor(), undefined);
 });
 
+test("arrowing into a chip never leaves the caret strictly inside it (atomic for cursor movement)", () => {
+  const editor = makeEditor();
+  paste(editor, "line1\nline2\nline3\nline4"); // cursor now at the chip's end
+  const chipEnd = editor.getText().length;
+  // Left-arrow one step at a time from just past the chip's end to just before its start: the
+  // caret must be AT the boundary or on the opposite side every step, never in [start+1, end-1].
+  for (let col = chipEnd; col >= 0; col -= 1) {
+    const cursor = editor.getCursor();
+    assert.ok(cursor.col === 0 || cursor.col === chipEnd, `col=${cursor.col} is strictly inside the chip`);
+    editor.handleInput("\x1b[D");
+  }
+});
+
+test("typing after navigating past one chip doesn't corrupt a later chip's content", () => {
+  const editor = makeEditor();
+  paste(editor, "AAAA\nAAAA\nAAAA\nAAAA"); // chip #1
+  editor.handleInput(" ");
+  paste(editor, "BBBB\nBBBB\nBBBB\nBBBB"); // chip #2, cursor now at its end
+  // Walk left through chip #2, past the space, into chip #1, typing along the way -- exactly the
+  // corruption vector: without snapping, this could plant characters inside chip #1's marker.
+  for (let i = 0; i < 25; i += 1) editor.handleInput("\x1b[D");
+  editor.handleInput("X");
+  // getExpandedText() resolves chips without needing Enter, which would expand instead of submit
+  // if navigating landed the caret back on a chip.
+  const expanded = editor.getExpandedText();
+  assert.match(expanded, /AAAA\nAAAA\nAAAA\nAAAA/);
+  assert.match(expanded, /BBBB\nBBBB\nBBBB\nBBBB/);
+});
+
 test("Enter on a text chip expands it instead of submitting", () => {
   const editor = makeEditor();
   let submitted;

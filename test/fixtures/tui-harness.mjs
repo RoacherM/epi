@@ -62,6 +62,20 @@ for (const [kind, value] of steps) {
     onInput(KEYS[value]);
     await sleep(50);
   }
+  // Real SGR mouse press+release bytes (1-based column/row), routed through the app's actual
+  // mouse dispatch (dispatchMouseToLayout) and pi-tui's own click-count/double-click timing --
+  // not a synthesized TuiMouseEvent -- so this proves a click really reaches the target component.
+  // `value` is `{x, y, clicks}` (0-based column/row, `clicks` repeats press+release well inside
+  // pi-tui's 500ms double-click window).
+  else if (kind === "mouse") {
+    const { x, y, clicks = 1 } = value;
+    for (let i = 0; i < clicks; i += 1) {
+      onInput(`\x1b[<0;${x + 1};${y + 1}M`);
+      await sleep(20);
+      onInput(`\x1b[<0;${x + 1};${y + 1}m`);
+      await sleep(20);
+    }
+  }
 }
 const code = await Promise.race([running, sleep(5000).then(() => "did not exit")]);
 // Writes to a pipe are asynchronous; exiting before the callback truncates large outputs.

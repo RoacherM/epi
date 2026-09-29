@@ -31,8 +31,12 @@ export interface CommandHost {
     /** Image attachments currently represented by `[Image #N]` chips in the editor (docs/tui-design.md
      * 4.3); pass alongside `getExpandedEditorText()`'s result to `session.prompt`/`steer`/`followUp`. */
     getEditorImages(): ImageContent[];
-    /** Insert text at the editor's cursor, e.g. a pasted plain-text clipboard value. */
+    /** Insert text at the editor's cursor without folding it into a chip, e.g. an extension's
+     * programmatic snippet insertion. Ctrl+V's text case uses `pasteText` instead. */
     insertEditorText(text: string): void;
+    /** Ctrl+V with text on the clipboard: same fold-or-not decision as a terminal bracketed paste
+     * (docs/tui-design.md 4.3), so a large clipboard paste chips exactly like a large terminal one. */
+    pasteText(text: string): void;
     /** Ctrl+V with an image on the clipboard, or an image file path dropped/pasted in: adds an
      * `[Image #N]` chip at the cursor (docs/tui-design.md 4.3). */
     insertImage(bytes: Uint8Array, mimeType: string): void;

@@ -18,11 +18,25 @@ import { runResume } from "./session-commands.js";
 import { Transcript } from "./transcript.js";
 // One instance per layout slot: the layout engine keys slots by component identity.
 const blank = () => ({ render: () => [""], invalidate() { } });
-/** grok's horizontal margin: two columns on each side. */
+/** grok's horizontal margin: two columns on each side.
+ *
+ * Also forwards mouse events: pi-tui's alt-screen mouse dispatch (dispatchMouseToLayout) only
+ * descends into components that implement its layout-node protocol (Stack/ScrollView); a plain
+ * `{render, invalidate}` wrapper like this one is an opaque leaf, so without this, a click over
+ * `editorSlot` would never reach PromptFrame's own handleMouse (docs/tui-design.md 4.3's
+ * double-click-to-expand a chip). Every other `inset()` caller (header, footer, ...) just gets an
+ * always-undefined result back from its wrapped component's absent handleMouse, harmlessly. */
 function inset(component, columns = 2) {
     return {
         render: (width) => component.render(Math.max(1, width - columns * 2)).map((line) => `${" ".repeat(columns)}${line}`),
         invalidate: () => component.invalidate(),
+        handleMouse: (event) => {
+            const width = Math.max(1, event.width - columns * 2);
+            const x = event.x - columns;
+            if (x < 0 || x >= width)
+                return undefined;
+            return component.handleMouse?.({ ...event, x, width });
+        },
     };
 }
 function readGitBranch(cwd) {
@@ -76,7 +90,9 @@ export async function runTuiApp(options) {
     }, () => (text) => theme.fg(turn === undefined ? "border" : "borderAccent", text));
     editorSlot.addChild(prompt);
     // Preview popup for a paste/image chip (docs/tui-design.md 4.3), placed right above the prompt.
-    const pastePreviewWidget = pastePreview(theme, () => editor.chipAtCursor());
+    // Hidden while a dialog occupies the editor slot (e.g. /model): the chip it would describe is
+    // no longer what's on screen, matching the footer's own editorSlotHasDialog gate below.
+    const pastePreviewWidget = pastePreview(theme, () => (editorSlotHasDialog ? undefined : editor.chipAtCursor()));
     const header = headerBar(theme, () => {
         const usage = session.getContextUsage();
         return {
@@ -240,6 +256,10 @@ export async function runTuiApp(options) {
         getEditorImages: () => editor.getImageAttachments(),
         insertEditorText: (text) => {
             editor.insertTextAtCursor(text);
+            tui.requestRender();
+        },
+        pasteText: (text) => {
+            editor.pasteText(text);
             tui.requestRender();
         },
         insertImage: (bytes, mimeType) => {

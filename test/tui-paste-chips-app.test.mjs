@@ -121,6 +121,37 @@ test("submitting after the chip sends the full pasted text to the model, not the
   assert.match(marks.sent, /ECHO:before line1\s+line2\s+line3\s+line4 after/);
 });
 
+test("a chip pasted into the draft survives Alt+Up restoring a queued follow-up ahead of it", (t) => {
+  // restoreQueuedMessagesToEditor (keys.ts) reads the *raw* editor text (chip markers intact) and
+  // prepends the queued message, then calls setEditorText -- which must keep this chip's registry
+  // entry, not just its marker text, or the chip becomes dead text that "expands" to its own
+  // literal label instead of the original paste.
+  const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
+    ["wait", 2500], ["type", "go"], ["key", "enter"], // starts a streamed turn
+    ["wait", 500], ["type", "queueme"], ["key", "enter"], // queues a follow-up while streaming
+    ["wait", 300], paste, ["wait", 300], // a fresh, unsubmitted chip now sits in the draft
+    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
+    ["key", "enter"], ["wait", 300], ["mark", "expanded"], // Enter on the chip should still expand it
+    ["key", "ctrl+c"], ["wait", 300], ["wait", 4000], ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.restored, /queueme/);
+  assert.match(marks.restored, /\[Pasted: 4 lines\]/);
+  const redrawnByExpand = since(marks.restored, marks.expanded);
+  assert.match(redrawnByExpand, /line1/);
+  assert.match(redrawnByExpand, /line4/);
+});
+
+test("Ctrl+V with a big block of text on the clipboard folds into a chip too, same as a terminal paste", (t) => {
+  const clipboardFile = join(mkdtempSync(join(tmpdir(), "mmp-clipboard-text-")), "clipboard.txt");
+  t.after(() => rmSync(clipboardFile, { recursive: true, force: true }));
+  writeFileSync(clipboardFile, PASTE_LINES.join("\n"));
+  const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
+    ["wait", 2500], ["key", "ctrl+v"], ["wait", 300], ["mark", "afterPaste"],
+    ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  assert.match(marks.afterPaste, /\[Pasted: 4 lines\]/);
+});
+
 test("Ctrl+V with an image on the clipboard (via the test seam) becomes an [Image #1] chip with a dimensioned preview, and is sent as an attachment", (t) => {
   const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-image-"));
   t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
@@ -160,6 +191,31 @@ test("an @image argument is attached as an image to the initial message", (t) =>
   assert.equal(result.status, 0, result.stderr);
   const parsed = JSON.parse(result.stdout);
   assert.match(parsed.marks.afterStartup, /ECHO:.*describe it\|IMAGES:image\/png/s);
+});
+
+test("double-click on the chip through the real mouse-dispatch path expands it (not just PromptFrame.handleMouse in isolation)", (t) => {
+  // Fixed layout with no messages, no queue, not streaming, one-line editor: from the bottom of
+  // a `rows`-row screen the VStack is [... blank, footerSlot(1), editorSlot(3: border/content/
+  // border), pastePreviewWidget(6: paste's popup box for a 4-line chip), widgetsAbove(0), blank(1),
+  // ...] (app.ts's tui.setLayoutRoot list), so the editor's content row is `rows - 4`. Column is
+  // the 2-column inset() margin + PromptFrame's PROMPT_COLUMNS(4) + the chip's offset in the text
+  // (0, since the chip is the only thing in the editor).
+  const rows = 40;
+  const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
+    ["wait", 2500], paste, ["wait", 300], ["mark", "pasted"],
+    ["mouse", { x: 2 + 4 + 2, y: rows - 4, clicks: 2 }],
+    ["wait", 300], ["mark", "afterClick"],
+    ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],
+  ], { rows });
+  // The first click of the pair also repositions the caret onto the chip, which legitimately
+  // redraws that row (with the marker still there, cursor moved) before the second click expands
+  // it -- so this only checks for the expansion itself, not for the marker never reappearing.
+  const redrawn = since(marks.pasted, marks.afterClick);
+  assert.match(redrawn, /line1/);
+  assert.match(redrawn, /line2/);
+  assert.match(redrawn, /line3/);
+  assert.match(redrawn, /line4/);
+  assert.match(marks.afterClick, /Shift\+Tab:thinking/); // footer back to normal: chip is gone
 });
 
 for (const columns of [40, 80, 120]) {
