@@ -2,7 +2,7 @@
 
 > Compose Pi your way.
 
-MMP (Make My Pi) 是基于固定版本 Pi SDK 的显式、确定性 Harness。它复用 Pi 的 Agent Loop、模型、认证、Session、TUI、基础工具和 Auto Compact；MMP 只负责配置装配、项目信任、Task、MCP 与 Hooks。
+MMP (Make My Pi) 是基于固定版本 Pi SDK 的显式、确定性 Harness。它复用 Pi 的 Agent Loop、模型、认证、Session、TUI 组件、基础工具和 Auto Compact；交互界面是 MMP 自己写的第 4 层（`src/tui/`），`mmp` 是唯一的启动入口。MMP 只负责配置装配、项目信任、Task、MCP 与 Hooks。
 
 当前固定版本：
 
@@ -23,13 +23,13 @@ curl --proto '=https' --tlsv1.2 -fsSL \
 
 安装器检查 Node.js/npm，验证发行包的 SHA-256 后再执行全局安装，不会自动使用 `sudo`。不希望把脚本直接交给 shell 时，可以先下载并审阅 `install.sh`。
 
-### 试用新界面（开发中）
+### 交互界面
 
 ```bash
-MMP_TUI=v2 mmp
+mmp
 ```
 
-这是按 grok-build 重写的交互界面，还在开发中，默认仍是经典界面。目前能做的：全屏界面、MMP 启动页、`/login`、`/logout`、`/model`、对话和流式输出、工具调用、Esc 中止、Ctrl+C / Ctrl+D 退出、扩展的对话框和面板（`select`、`custom` 等）、`/new`、`/quit`。还不能做的：`/resume`、`/compact`、`/reload` 等其它 Pi 内置命令、`!` bash、grok 样式的消息块（目前沿用 Pi 的组件）。两种界面共用 `~/.mmp/pi` 里的登录信息。
+`mmp` 唯一的交互入口是它自己按 grok-build 设计写的第 4 层界面（设计见 [docs/tui-design.md](docs/tui-design.md)），不再启动 Pi 自带的经典交互界面。全屏布局、MMP 启动页、`/login`、`/logout`、`/model`、`/new`、`/resume`、`/compact`、`/reload`、`/trust`、对话和流式输出、工具调用、`!` bash、Esc 中止、Ctrl+C / Ctrl+D 退出、扩展的对话框和面板（`select`、`custom` 等）均已支持；未接线的 Pi 内置命令在补全里标 `(not yet)`，输入后会提示尚未支持。`--print`、`--mode json/rpc`、`--help`、`--list-models`、`--export`、Pi 的 CLI 子命令和非 TTY 运行仍然不变地走 `piMain`。
 
 ### 升级
 
@@ -83,7 +83,7 @@ mmp --dry-run
 # 非交互运行
 mmp --model openai/gpt-4o-mini --no-session --print "Reply exactly: MMP_OK"
 
-# 启动 Pi TUI
+# 启动 MMP 自己的交互界面
 mmp --model openai/gpt-4o-mini
 ```
 

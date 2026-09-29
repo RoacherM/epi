@@ -31,6 +31,7 @@ import { installKeybindings } from "./keybindings.js";
 import { createKeyActions } from "./keys.js";
 import { piTui } from "./pi-tui.js";
 import { crossProjectRefusal, type ProjectIdentity } from "./project-guard.js";
+import { runResume } from "./session-commands.js";
 import { Transcript } from "./transcript.js";
 
 export interface TuiAppOptions {
@@ -45,6 +46,9 @@ export interface TuiAppOptions {
   /** Pi CLI positional messages (docs/tui-design.md §15): sent as prompts, in order, once the app
    * is up. Mirrors Pi's own interactive mode sequencing them after startup diagnostics. */
   initialMessages?: string[];
+  /** `--resume`: open the same session selector `/resume` uses, once, right after startup and
+   * before any initial message, mirroring Pi's own `--resume` (start.ts's `startupOptionsFromPiArgs`). */
+  resumeOnStart?: boolean;
   terminal?: Terminal;
 }
 
@@ -537,6 +541,9 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     throw error;
   }
   ready = true;
+  if (options.resumeOnStart === true) {
+    await runResume(commandHost);
+  }
   // Only on the very first bind: /new, /resume and /reload also call bind() and must not replay it.
   for (const message of options.initialMessages ?? []) {
     if (exiting) break;

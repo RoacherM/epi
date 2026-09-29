@@ -65,34 +65,33 @@ function createSettingsManager(cwd: string, agentDir: string): SettingsManager {
 }
 
 /**
- * Which Pi CLI arguments MMP's TUI v2 host understands, in one place, so it's easy to see what's
+ * Which Pi CLI arguments MMP's TUI host understands, in one place, so it's easy to see what's
  * missing. `isInteractivePiRun` (../interactive.ts) already keeps `--print`/`-p`, `--mode`,
- * `--help`/`-h`, `--list-models` and `--export` off this path entirely (those fall back to
- * classic `pi` interactive/print mode instead of reaching here). Resource flags (`--extension`,
+ * `--help`/`-h`, `--list-models` and `--export` off this path entirely (those go through piMain's
+ * print/non-interactive modes instead of reaching here). Resource flags (`--extension`,
  * `--skill`, `--theme`, `--system-prompt`, ...) are rejected even earlier, in parseMmpArgs
  * (../args.ts), before Pi's own parser ever sees them.
  *
  * Supported here (mirrors Pi's own handling in dist/main.js and dist/cli/args.js):
  *   --provider, --model, --thinking, --continue/-c, --session, --session-id, --session-dir,
  *   --no-session, --fork, --name/-n, --models, --tools/-t, --exclude-tools/-xt, --no-tools/-nt,
- *   --no-builtin-tools/-nbt, --api-key, --offline, and positional messages (sent as the first
- *   prompt once the TUI is up; see start.ts's `initialMessagesFromPiArgs`).
+ *   --no-builtin-tools/-nbt, --api-key, --offline, --resume (opens the same session selector
+ *   `/resume` uses, once the TUI has started; see start.ts's `startupOptionsFromPiArgs` and
+ *   session-commands.ts's `runResume`), and positional messages (sent as the first prompt once
+ *   the TUI is up).
  *
  * Anything else Pi's parser can set is unsupported: this throws before the TUI starts rather
  * than silently dropping it.
  */
-const UNSUPPORTED_PI_ARGS: ReadonlyArray<{ present: (parsed: ParsedPiArgs) => boolean; flag: string }> = [
-  { present: (parsed) => parsed.resume === true, flag: "--resume" },
-  { present: (parsed) => parsed.verbose === true, flag: "--verbose" },
-  { present: (parsed) => parsed.useTheme !== undefined, flag: "--use-theme" },
-  { present: (parsed) => parsed.tuiMode !== undefined, flag: "--tui-mode" },
-  { present: (parsed) => parsed.fileArgs.length > 0, flag: "@file arguments" },
+const UNSUPPORTED_PI_ARGS: ReadonlyArray<{ present: (parsed: ParsedPiArgs) => boolean; flag: string; reason: string }> = [
+  { present: (parsed) => parsed.verbose === true, flag: "--verbose", reason: "verbose startup output isn't part of MMP's TUI" },
+  { present: (parsed) => parsed.useTheme !== undefined, flag: "--use-theme", reason: "MMP has its own theme" },
+  { present: (parsed) => parsed.tuiMode !== undefined, flag: "--tui-mode", reason: "MMP's TUI is fullscreen only" },
+  { present: (parsed) => parsed.fileArgs.length > 0, flag: "@file arguments", reason: "turning them into the first message is not exposed by Pi's SDK" },
 ];
 
-function unsupportedFlagError(flag: string): MmpArgumentError {
-  return new MmpArgumentError(
-    `${flag} is not supported by MMP's TUI v2 host (MMP_TUI=v2). Run without MMP_TUI=v2 to use it.`,
-  );
+function unsupportedFlagError(flag: string, reason: string): MmpArgumentError {
+  return new MmpArgumentError(`${flag} is not supported by MMP: ${reason}.`);
 }
 
 function validateSupportedPiArgs(parsed: ParsedPiArgs): void {
@@ -100,9 +99,9 @@ function validateSupportedPiArgs(parsed: ParsedPiArgs): void {
   if (fatal !== undefined) {
     throw new MmpArgumentError(fatal.message);
   }
-  for (const { present, flag } of UNSUPPORTED_PI_ARGS) {
+  for (const { present, flag, reason } of UNSUPPORTED_PI_ARGS) {
     if (present(parsed)) {
-      throw unsupportedFlagError(flag);
+      throw unsupportedFlagError(flag, reason);
     }
   }
 }
@@ -114,6 +113,7 @@ function validateSessionFlagCombinations(parsed: ParsedPiArgs): void {
     const conflicts = [
       parsed.session !== undefined ? "--session" : undefined,
       parsed.continue === true ? "--continue" : undefined,
+      parsed.resume === true ? "--resume" : undefined,
       parsed.noSession === true ? "--no-session" : undefined,
     ].filter((flag): flag is string => flag !== undefined);
     if (conflicts.length > 0) {
@@ -124,6 +124,7 @@ function validateSessionFlagCombinations(parsed: ParsedPiArgs): void {
     const conflicts = [
       parsed.session !== undefined ? "--session" : undefined,
       parsed.continue === true ? "--continue" : undefined,
+      parsed.resume === true ? "--resume" : undefined,
     ].filter((flag): flag is string => flag !== undefined);
     if (conflicts.length > 0) {
       throw new MmpArgumentError(`--session-id cannot be combined with ${conflicts.join(", ")}`);

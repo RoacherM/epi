@@ -83,7 +83,7 @@ test("TUI v2 refuses Pi built-in commands it does not implement yet, keeping the
     ["wait", 2500], ["type", "/tree"], ["key", "enter"], ["wait", 800], ["key", "ctrl+c"], ["wait", 200],
     ["key", "ctrl+d"],
   ]);
-  assert.match(out, /\/tree is not in MMP TUI v2 yet/);
+  assert.match(out, /\/tree is not available in MMP yet/);
   assert.match(out, /EXIT=0/);
 });
 

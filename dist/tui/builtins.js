@@ -37,7 +37,7 @@ export function findBuiltin(name) {
     if (command !== undefined)
         return { kind: "run", command };
     if (name in PLANNED)
-        return { kind: "planned", message: `/${name} is not in MMP TUI v2 yet; use classic mmp (without MMP_TUI=v2) for now.` };
+        return { kind: "planned", message: `/${name} is not available in MMP yet.` };
     if (name in NOT_IN_MMP)
         return { kind: "excluded", message: `/${name} is not available in MMP. ${NOT_IN_MMP[name]}` };
     return undefined;
@@ -46,7 +46,7 @@ export function findBuiltin(name) {
 export function slashCompletions(session) {
     const builtins = [
         ...BUILTIN_COMMANDS.map(({ name, description, argumentHint }) => ({ name, description, ...(argumentHint === undefined ? {} : { argumentHint }) })),
-        ...Object.entries(PLANNED).map(([name, description]) => ({ name, description: `${description} (not in v2 yet)` })),
+        ...Object.entries(PLANNED).map(([name, description]) => ({ name, description: `${description} (not yet)` })),
     ];
     const taken = new Set([...builtins.map((command) => command.name), ...Object.keys(NOT_IN_MMP)]);
     const templates = session.promptTemplates.map((template) => ({

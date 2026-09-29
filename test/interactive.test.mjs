@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { isInteractivePiRun } from "../dist/interactive.js";
@@ -43,4 +46,27 @@ for (const subcommand of ["auth", "config", "install", "remove", "uninstall", "u
 test("a plain interactive run with no special args is interactive", () => {
   assert.equal(isInteractivePiRun([], true, true), true);
   assert.equal(isInteractivePiRun(["--model", "openai/gpt-4o-mini"], true, true), true);
+});
+
+// src/host.ts's `runMmp` dispatches on exactly this: `isInteractivePiRun(...)` true takes MMP's
+// own TUI (src/tui/start.ts), false goes to piMain unchanged (docs/decisions.md D3). There is no
+// environment variable gate any more (docs/decisions.md M5 supersedes M2's `MMP_TUI=v2` switch),
+// so a plain interactive `mmp` run reaches the TUI with no env var set at all, per this same check.
+test("a plain interactive run takes MMP's TUI path with no environment variable involved", () => {
+  assert.equal(isInteractivePiRun([], true, true), true);
+  assert.equal(isInteractivePiRun(["-p", "hi"], true, true), false);
+});
+
+test("no source file reads MMP_TUI any more: the interactive/piMain split is the only switch", () => {
+  const srcRoot = fileURLToPath(new URL("../src", import.meta.url));
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.name.endsWith(".ts") && readFileSync(path, "utf8").includes("MMP_TUI")) offenders.push(path);
+    }
+  };
+  walk(srcRoot);
+  assert.deepEqual(offenders, []);
 });

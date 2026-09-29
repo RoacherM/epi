@@ -1,7 +1,7 @@
 // First-run "trust this project?" prompt (DEVELOPMENT.md 8.2). Interactive runs only: when a
 // project .mmp/mmp.json is found and nothing (flag or saved decision) has decided its trust yet,
-// MMP asks before resolving its own assembly, in both classic mode and TUI v2 (src/host.ts). The
-// TUI v2 `/trust` command (src/tui/commands.ts) reuses projectTrustOptions for the same choices.
+// MMP asks before resolving its own assembly and starting the TUI (src/host.ts). The TUI's
+// `/trust` command (src/tui/commands.ts) reuses projectTrustOptions for the same choices.
 import { dirname } from "node:path";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 /** Pure so the decision can be unit-tested without a terminal, a project, or a trust store. */

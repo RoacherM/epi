@@ -37,7 +37,9 @@ Environment:
 
 Rules, skills, and extensions are manifest-owned. Ambient themes, prompt
 templates, and context files are disabled. Direct Pi resource flags are rejected;
-all other arguments are passed to pinned Pi 0.87 unchanged.
+all other arguments are honoured by pinned Pi 0.87 -- unchanged for non-interactive
+runs (piMain), or by MMP's own TUI for interactive runs (see mmp --help output above
+and the README for what the TUI does not support).
 
 Pi options:
 `;
@@ -127,7 +129,7 @@ export function prepareMmpRun(
 /**
  * Interactive first run into a new (undecided) project: ask, then fold the answer into the same
  * --approve/--no-approve override `resolveAssembly` already understands (DEVELOPMENT.md 8.2). Runs
- * before assembly, ahead of both classic mode and TUI v2. A no-op for print/json/rpc/help/non-TTY
+ * before assembly, ahead of starting MMP's TUI. A no-op for print/json/rpc/help/non-TTY
  * runs, `--no-project`, and runs that already carry an explicit trust decision.
  */
 async function maybeAskProjectTrust(
@@ -225,13 +227,13 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
   }
 
   process.env.PI_CODING_AGENT_DIR = prepared.agentDir;
-  // MMP's own interactive host (docs/tui-design.md), opt-in until it reaches parity.
-  if (process.env.MMP_TUI === "v2") {
+  // Every interactive run takes MMP's own TUI (docs/tui-design.md); no environment switch. All
+  // other runs (print/json/rpc, --help, --list-models, --export, Pi CLI subcommands, non-TTY)
+  // keep going through piMain unchanged (docs/decisions.md D3).
+  if (isInteractivePiRun(args.passthrough, process.stdin.isTTY === true, process.stdout.isTTY === true)) {
     const tui = await import("./tui/start.js");
-    if (tui.shouldUseTuiV2(process.env, args.passthrough, process.stdin.isTTY === true, process.stdout.isTTY === true)) {
-      process.exitCode = await tui.runTuiV2(prepared, extensionFactories);
-      return;
-    }
+    process.exitCode = await tui.runTuiV2(prepared, extensionFactories);
+    return;
   }
   await piMain(prepared.piArgs, { extensionFactories });
 }
