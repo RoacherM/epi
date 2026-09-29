@@ -240,7 +240,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 
 | 类型 | 样式 | Pi 组件能否复用 |
 |---|---|---|
-| 用户消息 | `❯` 加整块底色 `userMessageBg`，上下各 1 行内边距。带 OSC 133 标记，全屏下可以跳到上一条/下一条提示 | 不复用，自己写。Pi 的 `UserMessageComponent` 样式不同 |
+| 用户消息 | `❯` 加整块底色 `userMessageBg`，上下各 1 行内边距。带 OSC 133 标记，全屏下可以跳到上一条/下一条提示。超过 3 **逻辑行**（不是屏幕上折行后的行数——窄屏下一整行很长也不会因为折行超过 3 行就被折叠）折叠成前 3 行 + `…`，`Ctrl+O` 展开（2026-09-30 用户在真实终端里实测 grok 1.0.44：粘贴 12 行内容发送后，气泡里只显示前 3 行再加一行 `…`）。图片内容块显示成 `[Image #N]`，`@file` 内联的 `<file name="...">...</file>`（file-arguments.ts）显示成 `[File: 文件名]`；都只影响这里的显示，模型收到的还是完整内容 | 不复用，自己写。Pi 的 `UserMessageComponent` 样式不同 |
 | 助手消息 | markdown，没有标题行 | 复用 `AssistantMessageComponent`（导出），传入扩展的 markdown 变换 |
 | thinking | 折叠成一行 `◆ Thought for 2.0s`，可以单独展开 | 用 `AssistantMessageComponent` 自带的参数：`hideThinking=true` 加 `hiddenLabel="Thought for 2.0s"`。展开某一条消息，就用 `hideThinking=false` 重新创建这条消息的组件。thinking 和正文在一条消息里交错出现，交给这个组件处理最简单。grok 的"运行中显示最后 3 行"要自己遍历内容块，放到 v1.1 |
 | 工具调用 | 运行中：左侧 `┃` 竖条用 `accent` 色；结束：`◆` 加标题一行，失败时标题用 `error` 色。三种状态：折叠、截断、展开 | 自己写卡片外框，内容见下 |
@@ -258,7 +258,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 
 扩展注册的工具（比如 MCP 工具）用它们自己的 `renderCall` / `renderResult`，放进同一个卡片外框里。既没有内置样式也没有自带渲染器的工具，用通用样式：显示参数 JSON 和结果文本。
 
-**折叠。** `Ctrl+O` 切换所有工具块，`Ctrl+T` 切换所有 thinking。单个块用鼠标点标题行切换。v1 不做键盘逐块选中（grok 的 scrollback 焦点模式），放到 v1.1。
+**折叠。** `Ctrl+O` 切换所有工具块和折叠的用户消息（上面那行），`Ctrl+T` 切换所有 thinking。单个块用鼠标点标题行切换。快捷键栏对应显示 `Ctrl+o:expand`（不再是 `tools`，因为现在也展开用户消息）。v1 不做键盘逐块选中（grok 的 scrollback 焦点模式），放到 v1.1。
 
 ### 4.3 输入框和阻塞卡片
 
@@ -278,7 +278,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | 何时变成标签 | 一次粘贴 ≥4 行 → `[Pasted: N lines]`；>10KB → `[Pasted: 12 KB]` | Ctrl+V 贴图片、`@图片`、拖进终端的图片路径 → `[Image #N]` |
 | 标签 | 原子：光标不能停在标签中间，退格一次删掉整个标签 | 同左 |
 | 预览浮窗 | 刚粘贴完、或光标落在标签上时，在输入框上方显示：前 3 行、`⋮ (N more lines)`、后 3 行，底边提示 `enter or double-click to expand`（刚粘贴时提示 `paste again or double-click to expand`）。光标离开就消失 | 光标落在标签上时显示，标题 `Image #1 ─ PNG · 64x40 · 5.0 KB`，框里用终端图形协议画图（pi-tui 的 `Image` 组件）；终端不支持图形时只显示标题行 |
-| 展开 | 光标在标签上按 Enter、双击标签、或刚粘贴时再粘贴一次 → 标签换成全文。此时底栏显示 `Enter:expand` | 不展开；Enter 照常发送 |
+| 展开 | 光标**真正落在**标签上（不是刚粘贴完、光标停在标签末尾那一下——grok 1.0.44 里两者不同：刚粘贴完底栏是 `Enter:send`、浮窗提示 `paste again or double-click to expand`；光标移到标签上后底栏才变成 `Enter:expand │ Shift+Enter:newline`、浮窗提示 `enter or double-click to expand`）时按 Enter、双击标签、或刚粘贴时再粘贴一次 → 标签换成全文 | 不展开；Enter 照常发送 |
 | 发送 | 标签换成全文后发给模型 | 图片作为图片附在消息里（`session.prompt(text, { images })`），不再让模型用 read 工具去读文件 |
 
 ### 4.4 状态行
@@ -545,7 +545,7 @@ M2 结束时就能日常使用，只是样子还接近 Pi。M4 才换成 grok �
 | M1 探针 | 并进 M2 一起做。已验证：S2（扩展消息只显示一次）、S3（全局主题和 MMP 的 Theme 颜色一致，有测试）、S5（MCP adapter 在新宿主里正常连接；`custom()` 面板和 `tui.select.*` 键位正常，用测试扩展验证，因为 MMP 的配置方式下 `/mcp` 不弹面板）。未做：S1（Pi 的选择器组件，M3 用到时验证）、S4（各终端表现）、S6（缺 fd/rg）、S7（查询终端背景色） |
 | M2 最小可用版本 | 完成 v0，当时放在 `MMP_TUI=v2` 开关后面（经典界面仍是默认，因为 `/login` 还只有经典界面有）。代码在 `src/tui/`，约 1,080 行。**开关已在 2026-09-29 去掉**（见 [decisions.md](decisions.md) M5）：交互模式只走这条路径，不再有经典界面可退回 |
 | M3 内置命令 | P0 完成（`Ctrl+T` 除外，随 M4 做）：补全、`/compact` `/resume` `/thinking` `/copy` `/reload`、`!` 命令、常用键位和排队显示。由 3 个 Sonnet subagent 分别在独立 worktree 里写，审查后合并。P1 完成（2026-09-29，另一个 Sonnet subagent）：`/tree` `/fork` `/clone` `/name` `/session` `/export` `/import` `/hotkeys`，以及原计划不做后来改口的 `/share` `/bug` `/changelog`、连带做掉的 `/scoped-models`；新文件 `session-tree-commands.ts`、`info-commands.ts`、`export-commands.ts`、`share-commands.ts`，对照表见 4.6 节。P2 只剩 `/settings` 未做 |
-| M4 grok 界面 | 进行中。已完成：顶栏（分支、缩短的路径、上下文占用）、用户消息块、运行状态行、圆角输入框（底边是模型和思考档位）、快捷键栏（`src/tui/chrome.ts`）；工具块用 `┃` 竖条和 `◆`，去掉 Pi 的底色框（`src/tui/tools/block.ts`，内置工具和扩展工具都套用）；7 个内置工具的渲染器（agy 写，审查后合并）；4.3 节的粘贴标签和预览浮窗（`src/tui/paste-chips.ts`、`src/tui/paste-preview.ts`：Pi 的 `Editor` 把折叠/原子/展开/校验都写成私有方法，无法子类化覆盖，改成包一层，只用它公开的 `getText`/`getLines`/`getCursor`/`insertTextAtCursor`/`handleInput`/`handleMouse`/`render`，退格和展开靠合成方向键/退格键调用达到"整块删除"效果；图片走 `session.prompt(text, {images})`，`ImageContent` 来自 `@earendil-works/pi-ai`；双击展开一度不生效——pi-tui 的鼠标分发要么走 overlay，要么走 `dispatchMouseToLayout` 按 `currentLayout` 里登记过布局节点（Stack/ScrollView）的组件找目标，`inset()` 这种裸 `{render, invalidate}` 包装对象不登记子结构，点到 `editorSlot` 也传不进 `PromptFrame`，补了 `inset()` 自己的 `handleMouse` 转发才通；补上后连续两次点击又被屏幕级"双击选词"抢先吃掉（`Editor.handleMouse` 故意不处理 press，让拖选文本能用），改成 `ChipEditor` 自己在 press 阶段先认领，用真实 SGR 鼠标序列在 `test/tui-paste-chips-app.test.mjs` 里端到端验证过，不只是单测坐标换算。`setText()` 原样清空过 Alt+Up/Esc 的队列回填，导致回填出的文字还原样保留标签但内容已经跟丢；现在按标签数目对不对得上决定是不是真的要清）。已知偏差：方向键/主页键/单击可能落在标签中间，用 `snapOutOfChipSpan` 顺着移动方向纠正，未覆盖的只剩跨行移动；`[Image #N]` 删除后不重排号，会有空档；Ctrl+G 外部编辑器里展开文本会把图片标签整个丢掉。未做：thinking 折叠成 `Thought for Ns`、连续只读工具合并、完成闪烁、`▼` 新内容提示、矮屏降级 |
+| M4 grok 界面 | 进行中。已完成：顶栏（分支、缩短的路径、上下文占用）、用户消息块、运行状态行、圆角输入框（底边是模型和思考档位）、快捷键栏（`src/tui/chrome.ts`）；工具块用 `┃` 竖条和 `◆`，去掉 Pi 的底色框（`src/tui/tools/block.ts`，内置工具和扩展工具都套用）；7 个内置工具的渲染器（agy 写，审查后合并）；4.3 节的粘贴标签和预览浮窗（`src/tui/paste-chips.ts`、`src/tui/paste-preview.ts`：Pi 的 `Editor` 把折叠/原子/展开/校验都写成私有方法，无法子类化覆盖，改成包一层，用它公开的 `getText`/`getCursor`/`insertTextAtCursor`/`setText`/`handleInput`/`handleMouse`/`render`，外加一个私有字段 `state`：`[Pasted: …]` 标签没有编号，内容表按"文档里第几个标签"对应，这张表挂在 `Editor.state` 上，Pi 的撤销（`pushUndoSnapshot` 克隆、`undo` 恢复）和历史浏览（`historyDraft`）会连同文字一起克隆、恢复它，所以撤销后每个标签的内容和当时完全一致；其他编辑按光标处的前后缀比对决定哪些标签还在，新出现的同形文字（手打、Ctrl+Y 贴回）不带内容；删掉半个标签的操作（退格、Delete、Ctrl+W、Alt+D、Ctrl+U、Ctrl+K）顺带删掉剩下的半个；展开靠合成方向键/退格键调用；图片走 `session.prompt(text, {images})`，`ImageContent` 来自 `@earendil-works/pi-ai`；双击展开一度不生效——pi-tui 的鼠标分发要么走 overlay，要么走 `dispatchMouseToLayout` 按 `currentLayout` 里登记过布局节点（Stack/ScrollView）的组件找目标，`inset()` 这种裸 `{render, invalidate}` 包装对象不登记子结构，点到 `editorSlot` 也传不进 `PromptFrame`，补了 `inset()` 自己的 `handleMouse` 转发才通；补上后连续两次点击又被屏幕级"双击选词"抢先吃掉（`Editor.handleMouse` 故意不处理 press，让拖选文本能用），改成 `ChipEditor` 自己在 press 阶段先认领，用真实 SGR 鼠标序列在 `test/tui-paste-chips-app.test.mjs` 里端到端验证过，不只是单测坐标换算。`setText()` 原样清空过 Alt+Up/Esc 的队列回填，导致回填出的文字还原样保留标签但内容已经跟丢；现在 `setText()` 也按前后缀比对，没改动部分里的标签保留内容）。已知偏差：方向键/主页键/单击可能落在标签中间，用 `snapOutOfChipSpan` 顺着移动方向纠正，未覆盖的只剩跨行移动；`[Image #N]` 删除后不重排号，会有空档；Ctrl+G 外部编辑器里展开文本会把图片标签整个丢掉。未做：thinking 折叠成 `Thought for Ns`、连续只读工具合并、完成闪烁、`▼` 新内容提示、矮屏降级 |
 
 M2 验收依据（都可重跑）：
 - `test/tui-services.test.mjs`：SDK 路径给模型的 system prompt 和 `piMain` 路径逐字一致；项目 `.pi/settings.json` 不生效。
