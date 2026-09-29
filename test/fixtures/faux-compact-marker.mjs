@@ -24,6 +24,9 @@ export default function (pi) {
   const generation = existsSync(genPath) ? Number(readFileSync(genPath, "utf8")) + 1 : 0;
   writeFileSync(genPath, `${generation}`);
   const log = (context) => appendFileSync(logPath, `gen${generation}:${lastUserText(context)}\n`);
+  // A turn can start on a session that is disposed before its model request goes out, so model calls
+  // alone can miss a message sent into the outgoing session; the turn start still shows it.
+  pi.on("before_agent_start", (event) => appendFileSync(logPath, `gen${generation}:turn:${event.prompt}\n`));
   const summary = Array.from({ length: 24 }, (_, index) => `sum${index}`).join(" ");
   registerFaux(pi, {
     models: ["compactor"],
