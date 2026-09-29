@@ -7,14 +7,16 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import { MmpArgumentError } from "./errors.js";
 
-const RELEASES_API = "https://api.github.com/repos/RoacherM/mmp/releases/latest";
+// Shared with src/tui/share-commands.ts (/bug, /changelog): one place names MMP's GitHub repo.
+export const MMP_REPO = "RoacherM/mmp";
+const RELEASES_API = `https://api.github.com/repos/${MMP_REPO}/releases/latest`;
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 3_000;
 
 export const UPDATE_COMMAND = "mmp update";
 
 export function installerUrl(version: string): string {
-  return `https://github.com/RoacherM/mmp/releases/download/v${version}/install.sh`;
+  return `https://github.com/${MMP_REPO}/releases/download/v${version}/install.sh`;
 }
 
 export interface UpdateCache {

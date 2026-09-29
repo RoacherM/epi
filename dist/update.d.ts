@@ -1,3 +1,4 @@
+export declare const MMP_REPO = "RoacherM/mmp";
 export declare const UPDATE_COMMAND = "mmp update";
 export declare function installerUrl(version: string): string;
 export interface UpdateCache {

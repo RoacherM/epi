@@ -18,8 +18,10 @@ export interface CommandHost {
   readonly projectIdentity: ProjectIdentity;
   /** The current session; it changes after /new, /resume, /reload and forks. */
   session(): AgentSession;
-  /** Show a component where the editor is; the returned function puts the editor back. */
-  takeEditorSlot(component: Component): () => void;
+  /** Show a component where the editor is; the returned function puts the editor back. `focus`
+   * targets keyboard input at a child instead of `component` itself, for a component (like Pi's
+   * UserMessageSelectorComponent) whose own handleInput lives only on a sub-component. */
+  takeEditorSlot(component: Component, focus?: Component): () => void;
   notice(text: string, tone?: NoticeTone): void;
   /** Append a block to the transcript (command output, info panels). */
   addBlock(component: Component): void;
@@ -42,4 +44,8 @@ export interface CommandHost {
    * through AgentSessionRuntime, so it skips setBeforeSessionInvalidate/setRebindSession. This
    * redoes the host-owned parts of docs/tui-design.md 6.3 (widgets, autocomplete, keybindings). */
   reloadSession(): Promise<void>;
+  /** Clear the transcript and replay `session.messages` from scratch. `session.navigateTree()`
+   * (unlike /new, /resume, /reload) moves the leaf without going through AgentSessionRuntime, so
+   * it never triggers `setRebindSession`; /tree calls this itself afterward (docs/tui-design.md §15). */
+  resetTranscript(): void;
 }

@@ -188,10 +188,14 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   const surface: HostSurface = {
     tui,
     theme,
-    takeEditorSlot(component) {
+    // `focus` lets a caller display a Container whose own keyboard handling lives on a child
+    // (UserMessageSelectorComponent's handleInput is only on its inner getMessageList(), unlike
+    // e.g. TreeSelectorComponent, which delegates internally) -- Pi's own showSelector supports
+    // the same {component, focus} split (session-tree-commands.ts's /fork).
+    takeEditorSlot(component, focus) {
       editorSlot.clear();
       editorSlot.addChild(component);
-      tui.setFocus(component);
+      tui.setFocus(focus ?? component);
       editorSlotHasDialog = true;
       tui.requestRender();
       return () => {
@@ -261,7 +265,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     runtime,
     projectIdentity: options.projectIdentity,
     session: () => session,
-    takeEditorSlot: (component) => surface.takeEditorSlot(component),
+    takeEditorSlot: (component, focus) => surface.takeEditorSlot(component, focus),
     notice: (text, tone) => transcript.notice(text, tone ?? "info"),
     addBlock: (component) => transcript.addBlock(component),
     getEditorText: () => editor.getText(),
@@ -277,6 +281,9 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     toggleToolsExpanded: () => surface.setToolsExpanded(!toolsExpanded),
     exit: (code) => exit(code),
     reloadSession: () => reloadSession(),
+    // navigateTree (session-tree-commands.ts's /tree) stays on the same AgentSession instance, so
+    // setRebindSession never fires for it; this is the same replay bind() does after a real switch.
+    resetTranscript: () => transcript.reset(session),
   };
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
@@ -388,7 +395,16 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
         waitForIdle: () => session.waitForIdle(),
         newSession: (actionOptions) => runtime.newSession(actionOptions),
         fork: (entryId, actionOptions) => runtime.fork(entryId, actionOptions),
-        navigateTree: (targetId, actionOptions) => session.navigateTree(targetId, actionOptions),
+        navigateTree: async (targetId, actionOptions) => {
+          // Same gap as the /tree command above: session.navigateTree() never triggers
+          // setRebindSession, so an extension calling this action directly needs the same replay.
+          const result = await session.navigateTree(targetId, actionOptions);
+          if (!result.cancelled && !result.aborted) {
+            transcript.reset(session);
+            tui.requestRender();
+          }
+          return result;
+        },
         switchSession: async (sessionPath, actionOptions) => {
           try {
             // Check before the runtime tears down the current session (docs/tui-design.md §15): a

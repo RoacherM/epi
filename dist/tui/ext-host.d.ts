@@ -4,8 +4,9 @@ import type { AutocompleteProvider, Component, TUI } from "@earendil-works/pi-tu
 export interface HostSurface {
     readonly tui: TUI;
     readonly theme: Theme;
-    /** Put a component where the editor is and focus it; returns a function restoring the editor. */
-    takeEditorSlot(component: Component): () => void;
+    /** Put a component where the editor is and focus it (or `focus`, for a component whose own
+     * keyboard handling lives on a child); returns a function restoring the editor. */
+    takeEditorSlot(component: Component, focus?: Component): () => void;
     setHeader(component: Component | undefined): void;
     setFooter(component: Component | undefined): void;
     setWidget(key: string, component: Component | undefined, placement: "aboveEditor" | "belowEditor"): void;
