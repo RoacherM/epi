@@ -4,6 +4,7 @@
 import type { CommandHost } from "./command-host.js";
 import { runModel } from "./commands.js";
 import { openExternalEditor, pasteClipboard, suspendToShell } from "./key-handlers.js";
+import { runCopy } from "./session-commands.js";
 
 export interface KeyAction {
   /** Pi keybinding id, e.g. "app.model.select". */
@@ -108,6 +109,10 @@ export function createKeyActions(): KeyAction[] {
     {
       id: "app.suspend",
       run: (host) => suspendToShell(host),
+    },
+    {
+      id: "app.message.copy",
+      run: (host) => runCopy(host),
     },
   ];
 }

@@ -31,4 +31,8 @@ export interface CommandHost {
   isWorking(): boolean;
   toggleToolsExpanded(): void;
   exit(code?: number): Promise<void>;
+  /** `session.reload()` rebuilds resources and the extension runtime in place; it does not go
+   * through AgentSessionRuntime, so it skips setBeforeSessionInvalidate/setRebindSession. This
+   * redoes the host-owned parts of docs/tui-design.md 6.3 (widgets, autocomplete, keybindings). */
+  reloadSession(): Promise<void>;
 }

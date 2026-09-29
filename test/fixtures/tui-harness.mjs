@@ -8,7 +8,7 @@ import { createRuntimeFromPrepared } from "../../dist/tui/start.js";
 import { detectAppearance, installMmpTheme } from "../../dist/tui/theme.js";
 
 const KEYS = {
-  enter: "\r", esc: "\x1b", "ctrl+c": "\x03", "ctrl+d": "\x04", down: "\x1b[B", up: "\x1b[A",
+  enter: "\r", esc: "\x1b", "ctrl+c": "\x03", "ctrl+d": "\x04", "ctrl+x": "\x18", down: "\x1b[B", up: "\x1b[A",
   "alt+enter": "\x1b\r", "alt+up": "\x1b[1;3A", "ctrl+l": "\x0c", "ctrl+g": "\x07", "ctrl+v": "\x16",
 };
 const { steps } = JSON.parse(process.env.MMP_TUI_HARNESS);

@@ -118,7 +118,9 @@ export class Transcript {
         this.tool(event.toolName, event.toolCallId).updateResult({ ...event.result, isError: event.isError }, false);
         break;
       case "compaction_end":
-        if (event.errorMessage !== undefined) this.notice(`Compaction failed: ${event.errorMessage}`, "error");
+        // event.errorMessage already reads e.g. "Compaction failed: ..." or "Auto-compaction
+        // failed: ..." (agent-session.js); Pi's own interactive mode shows it verbatim too.
+        if (event.errorMessage !== undefined) this.notice(event.errorMessage, "error");
         else if (!event.aborted) this.notice("Context compacted.");
         break;
       case "auto_retry_start":
