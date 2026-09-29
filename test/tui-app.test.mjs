@@ -80,10 +80,10 @@ test("TUI v2 hosts extension custom() and select() dialogs", (t) => {
 
 test("TUI v2 refuses Pi built-in commands it does not implement yet, keeping the text", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["type", "/tree"], ["key", "enter"], ["wait", 800], ["key", "ctrl+c"], ["wait", 200],
+    ["wait", 2500], ["type", "/settings"], ["key", "enter"], ["wait", 800], ["key", "ctrl+c"], ["wait", 200],
     ["key", "ctrl+d"],
   ]);
-  assert.match(out, /\/tree is not available in MMP yet/);
+  assert.match(out, /\/settings is not available in MMP yet/);
   assert.match(out, /EXIT=0/);
 });
 

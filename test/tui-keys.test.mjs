@@ -29,12 +29,13 @@ test("keybindings.json is read from MMP's agent dir", (t) => {
   assert.equal(keybindings.matches(CTRL_L, "app.model.select"), false);
 });
 
-test("built-in lookup separates wired, planned and excluded commands", () => {
+test("built-in lookup separates wired and planned commands", () => {
   assert.equal(findBuiltin("login")?.kind, "run");
   assert.equal(findBuiltin("resume")?.kind, "run");
-  assert.equal(findBuiltin("tree")?.kind, "planned");
+  assert.equal(findBuiltin("tree")?.kind, "run");
+  assert.equal(findBuiltin("share")?.kind, "run");
   assert.equal(findBuiltin("trust")?.kind, "run");
-  assert.match(findBuiltin("share")?.message ?? "", /not part of MMP/);
+  assert.equal(findBuiltin("settings")?.kind, "planned");
   assert.equal(findBuiltin("mmp"), undefined);
 });
 

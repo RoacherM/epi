@@ -1,5 +1,9 @@
 import { runLogin, runLogout, runModel, runTrust } from "./commands.js";
+import { runExport, runImport } from "./export-commands.js";
+import { runHotkeys, runName, runScopedModels, runSession } from "./info-commands.js";
 import { runCompact, runCopy, runReload, runResume, runThinking } from "./session-commands.js";
+import { runClone, runFork, runTree } from "./session-tree-commands.js";
+import { runBug, runChangelog, runShare } from "./share-commands.js";
 export const BUILTIN_COMMANDS = [
     { name: "login", description: "Log in to a model provider", argumentHint: "<provider>", run: (host, args) => runLogin(host, args) },
     { name: "logout", description: "Remove stored credentials", run: (host) => runLogout(host) },
@@ -12,26 +16,25 @@ export const BUILTIN_COMMANDS = [
     { name: "copy", description: "Copy the last assistant message", run: (host) => runCopy(host) },
     { name: "reload", description: "Reload extensions, skills, prompts and context files", run: (host) => runReload(host) },
     { name: "trust", description: "Trust or distrust the current project's .mmp/mmp.json", run: (host) => runTrust(host) },
+    { name: "tree", description: "Navigate the session tree", run: (host) => runTree(host) },
+    { name: "fork", description: "Fork from a previous user message", run: (host) => runFork(host) },
+    { name: "clone", description: "Duplicate the current session", run: (host) => runClone(host) },
+    { name: "name", description: "Set or show the session name", argumentHint: "[name]", run: (host, args) => runName(host, args) },
+    { name: "session", description: "Show session info and stats", run: (host) => runSession(host) },
+    { name: "export", description: "Export the session (HTML or JSONL)", argumentHint: "[path]", run: (host, args) => runExport(host, args) },
+    { name: "import", description: "Replace the current session from a JSONL file", argumentHint: "<path>", run: (host, args) => runImport(host, args) },
+    { name: "hotkeys", description: "Show keyboard shortcuts", run: (host) => runHotkeys(host) },
+    { name: "scoped-models", description: "Choose models for Ctrl+P cycling", run: (host) => runScopedModels(host) },
+    { name: "share", description: "Share the session as a private gist", run: (host) => runShare(host) },
+    { name: "changelog", description: "Show MMP's release notes", run: (host) => runChangelog(host) },
+    { name: "bug", description: "Report an MMP bug on GitHub", argumentHint: "[description]", run: (host, args) => runBug(host, args) },
 ];
-/** Pi built-ins not wired yet, in the priority order agreed for M3 (P0, then P1, then P2). */
+/** Pi built-ins not wired yet. */
 const PLANNED = {
-    tree: "Navigate the session tree",
-    fork: "Fork from a previous user message",
-    clone: "Duplicate the current session",
-    name: "Set the session name",
-    session: "Show session info and stats",
-    export: "Export the session (HTML or JSONL)",
-    import: "Import a session from a JSONL file",
-    hotkeys: "Show keyboard shortcuts",
     settings: "Open settings",
-    "scoped-models": "Choose models for model cycling",
 };
 /** Pi built-ins MMP leaves out on purpose, with the reason shown to the user. */
-const NOT_IN_MMP = {
-    share: "Sharing sessions to a gist is not part of MMP.",
-    bug: "/bug reports to the Pi developers; report MMP issues on MMP's GitHub instead.",
-    changelog: "Run mmp update to see and install new MMP releases.",
-};
+const NOT_IN_MMP = {};
 export function findBuiltin(name) {
     const command = BUILTIN_COMMANDS.find((candidate) => candidate.name === name);
     if (command !== undefined)

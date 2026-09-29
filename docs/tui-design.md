@@ -304,11 +304,29 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | P0 ✓ | `!命令`、`!!命令` | `session.executeBash` + `BashExecutionComponent`（导出） |
 | P0 ✓ | 键位：`Ctrl+L`、`Alt+Enter`、`Alt+↑`、`Ctrl+G`、`Ctrl+V`、`Ctrl+Z`，以及运行中排队消息的显示 | 各自一个 SDK 调用或 pi-tui 功能 |
 | P0 | `Ctrl+T` 折叠 thinking | 和 M4 的 `Thought for Ns` 一起做 |
-| P1 | `/tree`、`/fork`、`/clone`、`/name`、`/session`、`/export`、`/import`、`/hotkeys` | 组件都有导出，主要是接线 |
-| P2 | `/settings`、`/scoped-models` | `/settings` 里有些项只对 Pi 自己的界面有意义，要先挑出适用于 MMP 的 |
+| P1 ✓ | `/tree`、`/fork`、`/clone`、`/name`、`/session`、`/export`、`/import`、`/hotkeys` | `session-tree-commands.ts`（`/tree`、`/fork`、`/clone`）、`info-commands.ts`（`/name`、`/session`、`/hotkeys`、`/scoped-models`）、`export-commands.ts`（`/export`、`/import`）；见下方"2026-09-29 补充"表 |
+| P2 | `/settings` | 里面有些项只对 Pi 自己的界面有意义，要先挑出适用于 MMP 的；`/scoped-models` 已随 P1 一起做完（见下） |
 
-**不做**：
-- `/share`、`/bug`（上报给 Pi 开发者）、`/changelog`（用 `mmp update`）、彩蛋命令。
+**2026-09-29 补充（推翻原先的"不做"）**：`/share`、`/bug`、`/changelog` 原计划不做，用户当天改口要求实现，语义和 Pi 不同：`/share` 跟 Pi 一样（去掉 Pi 专属的 Radius 上传和预览页，只保留 `gh gist create` 分支）；`/bug` 不上报给 Pi 开发者，改成在 MMP 自己的 GitHub 仓库开一个预填内容的 issue 链接；`/changelog` 读 MMP 自己仓库的 GitHub Releases，不是 Pi 的内置更新日志文件。实现在 `share-commands.ts`。彩蛋命令仍然不做。
+
+**2026-09-29 补充：P1/P2 命令的接线细节和与 Pi 的差异**
+
+| 命令 | 对应的 Pi 函数 | 复用 | 和 Pi 的差异 |
+|---|---|---|---|
+| `/tree` | `showTreeSelector` | `TreeSelectorComponent`（导出） | `session.navigateTree` 不走 `AgentSessionRuntime`，不会触发 `setRebindSession`；`CommandHost.resetTranscript()`（新增，app.ts 里就是 `transcript.reset(session)`）在导航成功后手动重放，`commandContextActions.navigateTree`（扩展用的同一个动作）也包了一层做同样的事。分支摘要的"总结中"状态用一条 notice 代替 Pi 的 `BranchSummaryStatusIndicator`（未导出） |
+| `/fork` | `showUserMessageSelector` | `UserMessageSelectorComponent`（导出） | 这个组件的按键处理只在内部的 `getMessageList()` 上，不在外层容器；`CommandHost.takeEditorSlot` 加了第二个可选参数 `focus`，对齐 Pi `showSelector` 的 `{component, focus}` |
+| `/clone` | `handleCloneCommand` | — | 一致 |
+| `/name` | `handleNameCommand` | — | 一致 |
+| `/session` | `handleSessionCommand` | — | 按模型的费用明细自己按 `getEntries()` 分组求和（每条 assistant 消息自带 `usage.cost`，不用查价目表），比 Pi 内部的 `getUsageCostBreakdown` 简单；缓存浪费和 Cache Warming 两节没做（`computeCacheWaste`、`formatCacheWarmingStatus` 都没导出） |
+| `/export` | `handleExportCommand` | `session.exportToHtml`/`exportToJsonl` | 路径参数只支持整段或整段加引号，不支持 Pi 那种"带引号的一部分 + 后续参数"写法 |
+| `/import` | `handleImportCommand` | — | 复用 `/resume` 的 `crossProjectRefusal`；`MissingSessionCwdError`（没导出）直接显示错误，不做 Pi 那个"缺 cwd 时手动选一个"的对话框 |
+| `/hotkeys` | `handleHotkeysCommand` | `keyText`（导出） | 不照抄 Pi 固定的大表，只列 MMP 实际接线的键（`src/tui/keys.ts` 的动作 id 去重 + 编辑器一部分常用键），键位经过安装好的 `KeybindingsManager` 解析，用户的 remap 会显示出来 |
+| `/scoped-models` | `showModelsSelector` | `ScopedModelsSelectorComponent`（**未在包的 `exports` 字段里**，和 `KeybindingsManager` 一样从 Pi 安装目录按文件路径直接 import） | 用公开的 `modelRuntime.refresh()` 打开前刷新一次模型目录，不是 Pi 内部 `refreshModelCatalogs` 那种带实时状态文字、可超时中止的后台刷新 |
+| `/share` | `shareSession` | `BorderedLoader`（导出）+ `session.exportToHtml` | 不做 Radius 上传（Pi 自己的托管服务，MMP 没有对应身份）；成功后打印原始 gist URL，不是 Pi 的 `getShareViewerUrl` 预览页（没导出）。Pi 本来就没有确认对话框，只有 loader 的 Esc 取消，这点照抄 |
+| `/bug` | 不对应 Pi 的 `/bug`（那个上传给 Pi 开发者） | `session.summarizeForBugReport`（导出）、`BorderedLoader` | 同意 → 描述（可选）→ 是否附加当前模型写的摘要 → 在 MMP 自己仓库开一个预填标题/正文的 `issues/new` 链接，打印出来并尝试用系统默认方式打开；正文按 URL 长度上限截断并注明 |
+| `/changelog` | 不对应 Pi 的 `/changelog`（那个读 Pi 自带的更新日志文件） | 复用 `src/update.ts` 的仓库常量（新增 `MMP_REPO` 导出） | 读 GitHub Releases 列表（`/releases`），不是 `mmp update` 用的 `/releases/latest`；离线（`PI_OFFLINE`）时给出明确提示，不发请求 |
+
+测试：`test/tui-commands-session-tree.test.mjs`、`test/tui-commands-export-import.test.mjs`、`test/tui-commands-info.test.mjs`、`test/tui-commands-share.test.mjs`。
 
 扩展命令、prompt 模板和 skill 命令不用宿主执行，交给 `session.prompt("/名字 参数")` 即可（SDK 笔记第 4 节）。宿主只拦截自己的内置命令。
 
@@ -394,7 +412,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 
 ### 6.2 绑定扩展时必须传的东西
 
-- `commandContextActions`：`waitForIdle`、`newSession`、`fork`、`navigateTree`、`switchSession`、`reload`。不传的话，扩展命令里的 `ctx.newSession()` 什么都不做，也不报错。`fork` 和 `navigateTree` 在 v1 里还没有对应的界面命令，但 SDK 调用要先接上。
+- `commandContextActions`：`waitForIdle`、`newSession`、`fork`、`navigateTree`、`switchSession`、`reload`。不传的话，扩展命令里的 `ctx.newSession()` 什么都不做，也不报错。`fork` 和 `navigateTree` 现在也有对应的界面命令了（`/fork`、`/tree`，2026-09-29，见 4.6 节）；`navigateTree` 这个动作和 `/tree` 命令一样，手动重放 transcript（`session.navigateTree` 不触发 `setRebindSession`）。
 - `abortHandler`、`shutdownHandler`、`onError`。
 - `mode: "tui"`。扩展靠它判断能不能调 `custom()`。
 - 时序：`bindExtensions` 最后会触发 `session_start`，扩展可能在那里就调用界面方法，所以 `uiContext` 必须在绑定前全部可用。
@@ -439,7 +457,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 
 **以后再说**：grok 的权限模式切换（MMP 没有工具审批）、多会话和 Dashboard、子代理全屏视图、Minimal 模式、`/btw`、语音、草稿暂存、图片 chip。
 
-**不做**：资源清单页、更新提示、遥测、`/share`、`/bug`、`/changelog`、Mermaid、Pi 内置的 llama.cpp 扩展。
+**不做**：资源清单页、遥测、Mermaid、Pi 内置的 llama.cpp 扩展、彩蛋命令。`/share`、`/bug`、`/changelog` 已改为做（2026-09-29，见 4.6 节），更新提示见 4.5 节（`pi-upgrade-design.md`）。
 
 ## 9. 第 0 阶段：升级 Pi 到 0.87.x
 
@@ -516,7 +534,7 @@ M2 结束时就能日常使用，只是样子还接近 Pi。M4 才换成 grok �
 | M0 升级 Pi | 完成（0.87.1），见 [decisions.md](decisions.md) P0 |
 | M1 探针 | 并进 M2 一起做。已验证：S2（扩展消息只显示一次）、S3（全局主题和 MMP 的 Theme 颜色一致，有测试）、S5（MCP adapter 在新宿主里正常连接；`custom()` 面板和 `tui.select.*` 键位正常，用测试扩展验证，因为 MMP 的配置方式下 `/mcp` 不弹面板）。未做：S1（Pi 的选择器组件，M3 用到时验证）、S4（各终端表现）、S6（缺 fd/rg）、S7（查询终端背景色） |
 | M2 最小可用版本 | 完成 v0，当时放在 `MMP_TUI=v2` 开关后面（经典界面仍是默认，因为 `/login` 还只有经典界面有）。代码在 `src/tui/`，约 1,080 行。**开关已在 2026-09-29 去掉**（见 [decisions.md](decisions.md) M5）：交互模式只走这条路径，不再有经典界面可退回 |
-| M3 内置命令 | P0 完成（`Ctrl+T` 除外，随 M4 做）：补全、`/compact` `/resume` `/thinking` `/copy` `/reload`、`!` 命令、常用键位和排队显示。由 3 个 Sonnet subagent 分别在独立 worktree 里写，审查后合并。P1、P2 未做 |
+| M3 内置命令 | P0 完成（`Ctrl+T` 除外，随 M4 做）：补全、`/compact` `/resume` `/thinking` `/copy` `/reload`、`!` 命令、常用键位和排队显示。由 3 个 Sonnet subagent 分别在独立 worktree 里写，审查后合并。P1 完成（2026-09-29，另一个 Sonnet subagent）：`/tree` `/fork` `/clone` `/name` `/session` `/export` `/import` `/hotkeys`，以及原计划不做后来改口的 `/share` `/bug` `/changelog`、连带做掉的 `/scoped-models`；新文件 `session-tree-commands.ts`、`info-commands.ts`、`export-commands.ts`、`share-commands.ts`，对照表见 4.6 节。P2 只剩 `/settings` 未做 |
 | M4 grok 界面 | 进行中。已完成：顶栏（分支、缩短的路径、上下文占用）、用户消息块、运行状态行、圆角输入框（底边是模型和思考档位）、快捷键栏（`src/tui/chrome.ts`）；工具块用 `┃` 竖条和 `◆`，去掉 Pi 的底色框（`src/tui/tools/block.ts`，内置工具和扩展工具都套用）；7 个内置工具的渲染器（agy 写，审查后合并）。未做：thinking 折叠成 `Thought for Ns`、连续只读工具合并、完成闪烁、`▼` 新内容提示、矮屏降级 |
 
 M2 验收依据（都可重跑）：
@@ -546,6 +564,8 @@ M2 验收依据（都可重跑）：
 - **测试会碰真实剪贴板**：`/copy` 直接调用 Pi 的 `copyToClipboard`，Ctrl+V 读真实剪贴板（还可能在 tmpdir 留下图片文件）。改法：加一个 `src/tui/clipboard.ts`，设了 `MMP_TEST_CLIPBOARD_FILE` 时读写这个文件而不是系统剪贴板，只有测试会设这个变量。
 - **一个测不出失败的测试**：`test/tui-keys-actions.test.mjs` 里 "Ctrl+L opens the model selector" 只断言了 `EXIT=0`，选择器开没开都能过。下一条测试已经用真实内容（模型名、"Enter to select"）验证了同一个按键，删掉前一条。
 - **`mutating.ts` 里的死代码**：`writeRenderers.renderResult` 判断 `details.diff` 的分支永远不会走到（Pi 的 write 工具固定返回 `details: undefined`，见 `dist/core/tools/write.js`）；`parseDiffString` 里解析"无行号"unified diff 的兜底分支也是死代码（Pi 的 edit 工具只会输出带行号的行或 `   ...`，见 `edit.js`/`edit-diff.js` 的 `generateDiffString`）。两处都删掉了。`errorText()` 在 `commands.ts`、`session-commands.ts` 里各定义一份，`app.ts`、`key-handlers.ts`、`bash-block.ts` 里内联同样的三元表达式；抽到 `src/tui/errors.ts` 一份。
+- **`/tree`/`/fork` 暴露了两处宿主接口的缺口（2026-09-29）**：`CommandHost.takeEditorSlot(component)` 只有一个参数，默认把键盘焦点给 `component` 本身；但 Pi 的 `UserMessageSelectorComponent`（`/fork` 用）自己不处理按键，只有内部的 `getMessageList()` 处理，这一点在 Pi 自己的 `showSelector` 里是通过 `{component, focus}` 两个字段分开处理的。加了一个可选的第二参数 `focus`，`ext-host.ts` 的 `HostSurface.takeEditorSlot` 和 `app.ts` 的实现一起改，向后兼容（不传就是原来的行为）。另外 `session.navigateTree`（`/tree` 用）和 `session.reload()` 一样，不走 `AgentSessionRuntime` 的会话替换流程，从不触发 `setRebindSession`，所以导航后画面不会自动重放；加了 `CommandHost.resetTranscript()`，`app.ts` 里就是 `() => transcript.reset(session)`，`/tree` 命令和 `commandContextActions.navigateTree`（扩展也能调这个动作）都在导航成功后调用它。测试见 `test/tui-commands-session-tree.test.mjs`。
+- **测试里证明"内容真的变了"不能只看两次 `mark` 之间的差异**：pi-tui 只重画内容变化了的屏幕行；`/tree` 导航后再发新消息，如果新旧内容在同一行位置渲染出一样的文本（比如没变化的第一轮对话），这部分不会重新写入输出流。断言"某段文字消失了"必须挑一个已经确定不会再合法出现的时间点之后的窗口（比如从上一次它还合法出现的 mark 开始切），而不是假设某次操作之后立刻会有完整重绘；`/export` 的 HTML 输出也不能直接 grep 文本——Pi 的导出模板把会话内容编码成 base64 塞进一个 `<script id="session-data">` 标签给前端 JS 解码，不是纯文本。
 
 ## 14. 为什么不走皮肤路线
 
