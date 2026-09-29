@@ -13,6 +13,9 @@ export interface TuiAppOptions {
     /** Pi CLI positional messages (docs/tui-design.md §15): sent as prompts, in order, once the app
      * is up. Mirrors Pi's own interactive mode sequencing them after startup diagnostics. */
     initialMessages?: string[];
+    /** `--resume`: open the same session selector `/resume` uses, once, right after startup and
+     * before any initial message, mirroring Pi's own `--resume` (start.ts's `startupOptionsFromPiArgs`). */
+    resumeOnStart?: boolean;
     terminal?: Terminal;
 }
 export declare function runTuiApp(options: TuiAppOptions): Promise<number>;

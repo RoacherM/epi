@@ -1,23 +1,13 @@
-// Entry of MMP's own interactive host (docs/tui-design.md). Gated behind MMP_TUI=v2 until it
-// reaches parity; classic Pi interactive mode stays the default meanwhile.
+// Entry of MMP's own interactive host (docs/tui-design.md): the only interactive path host.ts
+// dispatches to (docs/decisions.md M5). Non-interactive runs never reach this module.
 import { type AgentSessionRuntime, type InlineExtension, parseArgs } from "@earendil-works/pi-coding-agent";
 
 import { buildInlineExtensions } from "../extensions/index.js";
 import type { PreparedMmpRun } from "../host.js";
-import { isInteractivePiRun } from "../interactive.js";
 import { runTuiApp } from "./app.js";
 import type { ProjectIdentity } from "./project-guard.js";
 import { createMmpRuntime } from "./services.js";
 import { detectAppearance, installMmpTheme } from "./theme.js";
-
-export function shouldUseTuiV2(
-  environment: NodeJS.ProcessEnv,
-  piArgs: readonly string[],
-  stdinIsTTY: boolean,
-  stdoutIsTTY: boolean,
-): boolean {
-  return environment.MMP_TUI === "v2" && isInteractivePiRun(piArgs, stdinIsTTY, stdoutIsTTY);
-}
 
 /** Same Manifest assembly as the piMain path, handed to the SDK instead of Pi's CLI. */
 export async function createRuntimeFromPrepared(
@@ -49,11 +39,25 @@ export function projectIdentityFromPrepared(prepared: PreparedMmpRun): ProjectId
   };
 }
 
-/** Pi CLI positional messages (services.ts's TUI_V2 argument table), sent as the initial prompts
- * once the app is up. `@file` arguments are rejected earlier as unsupported, so only plain text
- * messages reach here. */
-export function initialMessagesFromPiArgs(piArgs: readonly string[]): string[] {
-  return parseArgs([...piArgs]).messages;
+export interface TuiStartupOptions {
+  /** Pi CLI positional messages (services.ts's TUI_V2 argument table), sent as the initial prompts
+   * once the app is up. `@file` arguments are rejected earlier as unsupported, so only plain text
+   * messages ever end up here. */
+  initialMessages: string[];
+  /** `--resume`: app.ts opens the same session selector `/resume` uses, right after startup, as
+   * Pi's own `--resume` does. Only when no other flag already picked a session -- services.ts's
+   * `buildSessionManager` gives `--session`/`--continue`/`--no-session` precedence over `--resume`
+   * exactly like Pi's own `createSessionManager` (dist/main.js) does. */
+  resumeOnStart: boolean;
+}
+
+export function startupOptionsFromPiArgs(piArgs: readonly string[]): TuiStartupOptions {
+  const parsed = parseArgs([...piArgs]);
+  return {
+    initialMessages: parsed.messages,
+    resumeOnStart: parsed.resume === true &&
+      parsed.session === undefined && parsed.continue !== true && parsed.noSession !== true,
+  };
 }
 
 export async function runTuiV2(prepared: PreparedMmpRun, extensionFactories: InlineExtension[]): Promise<number> {
@@ -61,7 +65,7 @@ export async function runTuiV2(prepared: PreparedMmpRun, extensionFactories: Inl
   // Pi's exported components read the global theme; it must exist before any of them is built.
   const theme = installMmpTheme(prepared.agentDir, detectAppearance(process.env));
   const runtime = await createRuntimeFromPrepared(prepared, cwd, extensionFactories);
-  const initialMessages = initialMessagesFromPiArgs(prepared.args.passthrough);
+  const { initialMessages, resumeOnStart } = startupOptionsFromPiArgs(prepared.args.passthrough);
   return runTuiApp({
     runtime,
     theme,
@@ -69,6 +73,7 @@ export async function runTuiV2(prepared: PreparedMmpRun, extensionFactories: Inl
     agentDir: prepared.agentDir,
     logDirectory: prepared.agentDir,
     projectIdentity: projectIdentityFromPrepared(prepared),
+    resumeOnStart,
     ...(initialMessages.length > 0 ? { initialMessages } : {}),
   });
 }

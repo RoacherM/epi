@@ -80,7 +80,6 @@ test("--no-session leaves no file under the sessions directory after a turn", (t
 });
 
 for (const [flag, args] of [
-  ["--resume", ["--no-project", "--resume"]],
   ["--verbose", ["--no-project", "--verbose"]],
   ["--use-theme", ["--no-project", "--use-theme", "dark"]],
   ["--tui-mode", ["--no-project", "--tui-mode", "fullscreen"]],
@@ -92,6 +91,25 @@ for (const [flag, args] of [
     assert.notEqual(result.status, 0, result.stdout);
     assert.match(result.stderr, new RegExp(flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.equal(result.stdout, "");
+  });
+}
+
+test("--resume no longer needs MMP_TUI=v2 and builds a session normally on the SDK path", (t) => {
+  const f = fixture(t);
+  const result = runSdkPath(f, { args: ["--no-project", "--resume"], prompt: "hi" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /ECHO:hi/);
+});
+
+for (const [flag, args] of [
+  ["--fork", ["--no-project", "--fork", "abc", "--resume"]],
+  ["--session-id", ["--no-project", "--session-id", "abc", "--resume"]],
+]) {
+  test(`${flag} combined with --resume is refused, naming both flags`, (t) => {
+    const f = fixture(t);
+    const result = runSdkPath(f, { args, prompt: "hi" });
+    assert.notEqual(result.status, 0, result.stdout);
+    assert.match(result.stderr, new RegExp(`${flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*--resume`));
   });
 }
 

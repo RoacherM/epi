@@ -1,14 +1,10 @@
-// Entry of MMP's own interactive host (docs/tui-design.md). Gated behind MMP_TUI=v2 until it
-// reaches parity; classic Pi interactive mode stays the default meanwhile.
+// Entry of MMP's own interactive host (docs/tui-design.md): the only interactive path host.ts
+// dispatches to (docs/decisions.md M5). Non-interactive runs never reach this module.
 import { parseArgs } from "@earendil-works/pi-coding-agent";
 import { buildInlineExtensions } from "../extensions/index.js";
-import { isInteractivePiRun } from "../interactive.js";
 import { runTuiApp } from "./app.js";
 import { createMmpRuntime } from "./services.js";
 import { detectAppearance, installMmpTheme } from "./theme.js";
-export function shouldUseTuiV2(environment, piArgs, stdinIsTTY, stdoutIsTTY) {
-    return environment.MMP_TUI === "v2" && isInteractivePiRun(piArgs, stdinIsTTY, stdoutIsTTY);
-}
 /** Same Manifest assembly as the piMain path, handed to the SDK instead of Pi's CLI. */
 export async function createRuntimeFromPrepared(prepared, cwd, extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly)) {
     return createMmpRuntime({
@@ -28,18 +24,20 @@ export function projectIdentityFromPrepared(prepared) {
         globalManifestPath: prepared.assembly.globalManifest,
     };
 }
-/** Pi CLI positional messages (services.ts's TUI_V2 argument table), sent as the initial prompts
- * once the app is up. `@file` arguments are rejected earlier as unsupported, so only plain text
- * messages reach here. */
-export function initialMessagesFromPiArgs(piArgs) {
-    return parseArgs([...piArgs]).messages;
+export function startupOptionsFromPiArgs(piArgs) {
+    const parsed = parseArgs([...piArgs]);
+    return {
+        initialMessages: parsed.messages,
+        resumeOnStart: parsed.resume === true &&
+            parsed.session === undefined && parsed.continue !== true && parsed.noSession !== true,
+    };
 }
 export async function runTuiV2(prepared, extensionFactories) {
     const cwd = process.cwd();
     // Pi's exported components read the global theme; it must exist before any of them is built.
     const theme = installMmpTheme(prepared.agentDir, detectAppearance(process.env));
     const runtime = await createRuntimeFromPrepared(prepared, cwd, extensionFactories);
-    const initialMessages = initialMessagesFromPiArgs(prepared.args.passthrough);
+    const { initialMessages, resumeOnStart } = startupOptionsFromPiArgs(prepared.args.passthrough);
     return runTuiApp({
         runtime,
         theme,
@@ -47,6 +45,7 @@ export async function runTuiV2(prepared, extensionFactories) {
         agentDir: prepared.agentDir,
         logDirectory: prepared.agentDir,
         projectIdentity: projectIdentityFromPrepared(prepared),
+        resumeOnStart,
         ...(initialMessages.length > 0 ? { initialMessages } : {}),
     });
 }

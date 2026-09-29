@@ -12,6 +12,7 @@ import { installKeybindings } from "./keybindings.js";
 import { createKeyActions } from "./keys.js";
 import { piTui } from "./pi-tui.js";
 import { crossProjectRefusal } from "./project-guard.js";
+import { runResume } from "./session-commands.js";
 import { Transcript } from "./transcript.js";
 // One instance per layout slot: the layout engine keys slots by component identity.
 const blank = () => ({ render: () => [""], invalidate() { } });
@@ -497,6 +498,9 @@ export async function runTuiApp(options) {
         throw error;
     }
     ready = true;
+    if (options.resumeOnStart === true) {
+        await runResume(commandHost);
+    }
     // Only on the very first bind: /new, /resume and /reload also call bind() and must not replay it.
     for (const message of options.initialMessages ?? []) {
         if (exiting)

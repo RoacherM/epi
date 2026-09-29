@@ -114,6 +114,47 @@ test("/resume lists sessions from MMP's own agent dir and replays a previous one
   assert.equal(files.length, 2);
 });
 
+test("mmp --resume opens the same selector at startup, without typing /resume, and replays the picked session", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "mmp-tui-resume-flag-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("faux-echo.mjs")] }));
+  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" };
+
+  function run(steps, args) {
+    const result = spawnSync(process.execPath, [harness], {
+      cwd: root,
+      env: { ...env, MMP_TUI_HARNESS: JSON.stringify({ ...(args === undefined ? {} : { args }), steps }) },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  }
+
+  // Seed one session in this cwd, from a plain run with no --resume. A brand-new session is never
+  // written to disk before its first message (SessionManager.newSession's `flushed` stays false
+  // until something is appended), so relaunching below finds exactly this one session, not also an
+  // empty one from the relaunch itself.
+  run([
+    ["wait", 2500],
+    ["type", "first message"], ["key", "enter"], ["wait", 800],
+    ["key", "ctrl+d"],
+  ]);
+
+  const { marks, exit } = run([
+    ["wait", 1500], ["mark", "selectorOpen"],
+    ["key", "enter"], ["wait", 800], ["mark", "afterResume"],
+    ["key", "ctrl+d"],
+  ], ["--no-project", "--resume"]);
+
+  assert.match(marks.selectorOpen, /Resume Session/);
+  assert.match(marks.afterResume.slice(marks.selectorOpen.length), /Resumed session\./);
+  assert.match(marks.afterResume.slice(marks.selectorOpen.length), /ECHO:first message/);
+  assert.equal(exit, 0);
+});
+
 test("/compact compacts the session, shows the notice, and reports a second compact without doubling the prefix", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-compact.mjs")], [
     ["wait", 2500],

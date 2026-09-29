@@ -6,7 +6,7 @@
 - 目标依赖：`@earendil-works/pi-coding-agent@0.87.1`；Node.js `>=22.19.0`
 - 当前验证环境：Pi `0.87.1` 已通过全部契约测试、ambient 隔离测试和离线 MCP 验收；真实模型冒烟和 benchmark adapter 冒烟是 Pi `0.83.0` 时做的，`0.87.1` 上还没重做。OMP `17.1.3` 仅作能力边界参考，不是运行依赖
 - Pi 升级：设计见 `docs/pi-upgrade-design.md`（版本锁死、升级自动化，草案待定）
-- 新交互界面：设计见 `docs/tui-design.md`，代码在 `src/tui/`，用 `MMP_TUI=v2 mmp` 试用（经典界面仍是默认），进度见设计文档第 15 节
+- 交互界面：设计见 `docs/tui-design.md`，代码在 `src/tui/`，是 `mmp` 唯一的交互入口（不再启动 Pi 经典交互界面），进度见设计文档第 15 节
 - 最后更新：2026-09-29
 
 ## 1. 产品定义

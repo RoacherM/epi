@@ -4,7 +4,7 @@
 // Prints the exit code, the marks, and everything the app wrote (ANSI stripped) as JSON.
 import { prepareMmpRun } from "../../dist/host.js";
 import { runTuiApp } from "../../dist/tui/app.js";
-import { createRuntimeFromPrepared, initialMessagesFromPiArgs, projectIdentityFromPrepared } from "../../dist/tui/start.js";
+import { createRuntimeFromPrepared, projectIdentityFromPrepared, startupOptionsFromPiArgs } from "../../dist/tui/start.js";
 import { detectAppearance, installMmpTheme } from "../../dist/tui/theme.js";
 
 const KEYS = {
@@ -32,7 +32,7 @@ const terminal = {
 const prepared = prepareMmpRun(args);
 const theme = installMmpTheme(prepared.agentDir, detectAppearance(process.env));
 const runtime = await createRuntimeFromPrepared(prepared, process.cwd());
-const initialMessages = initialMessagesFromPiArgs(prepared.args.passthrough);
+const { initialMessages, resumeOnStart } = startupOptionsFromPiArgs(prepared.args.passthrough);
 const running = runTuiApp({
   runtime,
   theme,
@@ -40,6 +40,7 @@ const running = runTuiApp({
   agentDir: prepared.agentDir,
   logDirectory: prepared.agentDir,
   projectIdentity: projectIdentityFromPrepared(prepared),
+  resumeOnStart,
   ...(initialMessages.length > 0 ? { initialMessages } : {}),
   terminal,
 });
