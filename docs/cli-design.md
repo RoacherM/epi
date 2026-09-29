@@ -25,7 +25,7 @@ MMP 是**改名叫 mmp 的定制版 Pi**：
 
 ## 2. 参数清单
 
-MMP 自己维护这份清单。清单外的参数一律报错退出，不再原样交给 Pi。`mmp --help` 只打印 MMP 自己的帮助文本，覆盖下表所有参数，不再附上 Pi 的帮助。
+MMP 自己维护这份清单。清单外的短参数（`-x`）一律报错退出。清单外的长参数（`--foo`）不会立刻报错：和 Pi 自己的 `parseArgs`（`unknownFlags`）一样先原样保留，交给两条路径各自的运行时（`-p` 等非交互走 `piMain`；MMP 自己的界面走 `src/tui/services.ts`）在扩展加载完之后核对——某个已加载的扩展用 `pi.registerFlag` 声明过这个参数就接受，否则在启动界面前按参数名报错退出（Pi 的 `agent-session-services.js` `applyExtensionFlagValues`）。`mmp --help` 打印 MMP 自己的帮助文本，覆盖下表所有参数，不附上 Pi 的帮助；如果 Manifest 里的扩展注册了参数，额外打印一段"Extension options"（和 Pi 自己的 `--help` 一样，为此会先加载一遍扩展——只加载扩展，不建会话/连模型；加载失败就跳过这一段，`--help` 本身始终成功）。
 
 | 参数 | 和 Pi 对齐 | 说明 |
 |---|---|---|
@@ -43,6 +43,8 @@ MMP 自己维护这份清单。清单外的参数一律报错退出，不再原�
 | `-e/--extension`、`--skill`、`--prompt-template`、`--theme`、`--system-prompt`、`--append-system-prompt`、`--no-extensions`、`--no-skills`、`--no-prompt-templates`、`--no-themes`、`--no-context-files` | **不提供** | 资源只由 Manifest 声明；传入时报错并提示改 Manifest |
 
 ## 3. 子命令
+
+`mmp update / install / remove / uninstall / list / config / auth` 都支持 `--help`（和 `-h`）打印各自的用法说明，用 MMP 自己的说法（Manifest 而不是 settings.json），不报错。
 
 | 子命令 | 和 Pi 对齐 | MMP 的做法 |
 |---|---|---|

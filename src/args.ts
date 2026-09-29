@@ -42,6 +42,17 @@ const UNSUPPORTED_FLAGS: Readonly<Record<string, string>> = {
   "--tui-mode": "MMP's TUI is full-screen only",
 };
 
+/** Matches `--flag` and, since neither of these takes a bare boolean form in Pi, `--flag=value`
+ * too -- otherwise that spelling would fall through to the "hold back for extensions" branch below
+ * and produce a worse, unrelated error. */
+function findUnsupportedFlagReason(argument: string): string | undefined {
+  if (UNSUPPORTED_FLAGS[argument] !== undefined) {
+    return UNSUPPORTED_FLAGS[argument];
+  }
+  const flag = Object.keys(UNSUPPORTED_FLAGS).find((candidate) => argument.startsWith(`${candidate}=`));
+  return flag === undefined ? undefined : UNSUPPORTED_FLAGS[flag];
+}
+
 type FlagArity = "none" | "value";
 
 /**
@@ -62,9 +73,13 @@ interface FlagTableEntry {
 
 /**
  * The one table of every flag `mmp` accepts (docs/cli-design.md §2): drives parsing (this file),
- * validation (unknown flags below fail loudly), and `mmp --help` (renderHelp, below). A flag not
- * in this table, not a reserved resource flag, and not in UNSUPPORTED_FLAGS is rejected outright --
- * MMP never forwards an argument it hasn't recognized.
+ * validation, and `mmp --help` (renderHelp, below). A short flag (`-x`) not in this table, not a
+ * reserved resource flag, and not in UNSUPPORTED_FLAGS is rejected outright. A long flag (`--foo`)
+ * in none of those is held back instead (Pi's own `parseArgs` `unknownFlags`, cli/args.js) and
+ * forwarded on both paths -- it may be one an extension registers with `pi.registerFlag`, which
+ * only loading extensions can confirm; downstream (agent-session-services.js's
+ * applyExtensionFlagValues, run on both the TUI path and piMain) errors by name if nothing claims
+ * it.
  */
 export const MMP_FLAG_TABLE: readonly FlagTableEntry[] = [
   { flags: ["--provider"], arity: "value", handler: "forward", help: "--provider <name>              Provider name" },
@@ -157,14 +172,24 @@ export function parseMmpArgs(argv: readonly string[]): MmpArgs {
       continue;
     }
 
-    const unsupportedReason = UNSUPPORTED_FLAGS[argument];
+    const unsupportedReason = findUnsupportedFlagReason(argument);
     if (unsupportedReason !== undefined) {
       throw new MmpArgumentError(`${argument} is not supported by MMP: ${unsupportedReason}.`);
     }
 
     const entry = FLAG_LOOKUP.get(argument);
     if (entry === undefined) {
-      throw new MmpArgumentError(`Unknown option: ${argument}`);
+      if (!argument.startsWith("--")) {
+        throw new MmpArgumentError(`Unknown option: ${argument}`);
+      }
+      // Extension-registered flag candidate (Pi's parseArgs `unknownFlags`, cli/args.js): held back
+      // here, not rejected -- Pi's own parser re-parses `passthrough` on both paths (piMain directly;
+      // MMP's TUI via services.ts's `parseArgs`) and matches it against what loaded extensions
+      // actually registered (agent-session-services.js's applyExtensionFlagValues), erroring by name
+      // if nobody did. MMP never guesses this flag's arity itself: the next token (its value, or the
+      // start of the next flag/message) simply falls through this same loop unchanged.
+      passthrough.push(argument);
+      continue;
     }
 
     switch (entry.handler) {
@@ -217,9 +242,39 @@ export function parseMmpArgs(argv: readonly string[]): MmpArgs {
   };
 }
 
+/** The shape of Pi's own `ExtensionFlag` (core/extensions/types.ts) that renderHelp's extension
+ * section needs -- named locally so this file stays free of an SDK import, matching its existing
+ * style (its only import is ./errors.js). */
+export interface ExtensionFlagLike {
+  name: string;
+  type: "boolean" | "string";
+  description?: string;
+  extensionPath: string;
+}
+
+/** Mirrors Pi's own `printHelp`'s extension-flags block (dist/cli/args.js): one line per flag a
+ * loaded extension registered with `pi.registerFlag`, padded the same way, falling back to "Registered
+ * by <path>" when the extension gave no description. Empty when nothing registered a flag. */
+function renderExtensionOptions(extensionFlags: readonly ExtensionFlagLike[]): string {
+  if (extensionFlags.length === 0) {
+    return "";
+  }
+  const lines = extensionFlags
+    .map((flag) => {
+      const value = flag.type === "string" ? " <value>" : "";
+      const description = flag.description ?? `Registered by ${flag.extensionPath}`;
+      return `  --${flag.name}${value}`.padEnd(32) + description;
+    })
+    .join("\n");
+  return `\nExtension options:\n${lines}\n`;
+}
+
 /** `mmp --help`: MMP's own help text, generated from MMP_FLAG_TABLE plus its subcommands. Covers
- * every table flag; never mentions Pi's own CLI or appends Pi's own help (docs/cli-design.md §2). */
-export function renderHelp(): string {
+ * every table flag; never mentions Pi's own CLI or appends Pi's own help (docs/cli-design.md §2).
+ * `extensionFlags` (Pi's `resourceLoader.getExtensions().extensions[].flags`, gathered by host.ts
+ * before calling this, since collecting them means loading extensions) adds an "Extension options"
+ * section the same way Pi's own `--help` does -- omitted when no loaded extension registered one. */
+export function renderHelp(extensionFlags: readonly ExtensionFlagLike[] = []): string {
   const flagLines = MMP_FLAG_TABLE.map((entry) => `  ${entry.help}`).join("\n");
   return `mmp - AI coding assistant with read, bash, edit, write tools
 
@@ -235,13 +290,16 @@ Subcommands:
   mmp list                                                    List Manifest-declared rules, skills, extensions
   mmp config [-l]                                             Edit the Manifest in $VISUAL/$EDITOR
   mmp auth print-api-key|print-bearer-token|check              Print or check provider credentials
+  mmp <subcommand> --help                                      Show help for that subcommand
 
 Options:
 ${flagLines}
-
+${renderExtensionOptions(extensionFlags)}
 Rules, Skills, and Extensions are declared by the Manifest only (mmp install/remove/list/config).
 Ambient themes, prompt templates, context files, and resource CLI flags (--extension, --skill,
---theme, --system-prompt, ...) are rejected; edit the Manifest instead.
+--theme, --system-prompt, ...) are rejected; edit the Manifest instead. A --long flag not in this
+list is held for extensions the Manifest declares (Pi's own pi.registerFlag); one nothing
+registers fails by name before startup.
 
 Environment:
   MMP_HOME                   Absolute MMP configuration root (default: ~/.mmp)

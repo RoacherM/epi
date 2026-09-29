@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -146,11 +146,16 @@ test("help prints only MMP's own help, covers every table flag, without loading 
   assert.equal(result.stderr, "");
 });
 
-test("mmp --help documents every flag in the MMP_FLAG_TABLE", async () => {
+test("mmp --help documents every flag in the MMP_FLAG_TABLE", async (t) => {
   const { MMP_FLAG_TABLE } = await import("../dist/args.js");
+  // Isolated HOME/MMP_HOME: --help now loads extensions to build its "Extension options" section
+  // (collectExtensionHelpFlags, host.ts), so it must not touch the developer's real ~/.mmp.
+  const home = mkdtempSync(join(tmpdir(), "mmp-foundation-help-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
   const result = spawnSync(process.execPath, [cliPath.pathname, "--help"], {
     cwd: projectRoot,
     encoding: "utf8",
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp") },
   });
   assert.equal(result.status, 0, result.stderr);
   for (const entry of MMP_FLAG_TABLE) {
@@ -160,14 +165,36 @@ test("mmp --help documents every flag in the MMP_FLAG_TABLE", async () => {
   }
 });
 
-test("an unknown flag fails with a clear error and non-zero exit, nothing forwarded", () => {
+test("a long unknown flag with no extension to claim it fails by name, not forwarded silently", (t) => {
+  // Isolated MMP_HOME/HOME: the flag is now held back for extensions (args.ts) instead of being
+  // rejected on sight, so this run goes all the way through piMain's own runtime creation
+  // (agent-session-services.js's applyExtensionFlagValues) -- a real ~/.mmp manifest must not
+  // change the outcome.
+  const home = mkdtempSync(join(tmpdir(), "mmp-foundation-home-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
   const result = spawnSync(process.execPath, [cliPath.pathname, "--totally-unknown-flag"], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    input: "",
+    timeout: 15_000,
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp") },
+  });
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stdout, "");
+  // No loaded extension registered "--totally-unknown-flag", so Pi's own applyExtensionFlagValues
+  // (agent-session-services.js, run from piMain for this non-interactive path) names it; Pi's own
+  // main.js prints that diagnostic itself and exits before cli.ts's `mmp: ` wrapper ever runs.
+  assert.match(result.stderr, /Unknown option: --totally-unknown-flag/);
+});
+
+test("a short unknown flag still fails immediately, before any extension loads", () => {
+  const result = spawnSync(process.execPath, [cliPath.pathname, "-zz"], {
     cwd: projectRoot,
     encoding: "utf8",
   });
   assert.notEqual(result.status, 0);
   assert.equal(result.stdout, "");
-  assert.match(result.stderr, /^mmp: Unknown option: --totally-unknown-flag/);
+  assert.match(result.stderr, /^mmp: Unknown option: -zz/);
 });
 
 test("--use-theme and --tui-mode are rejected with MMP's reason, not forwarded to Pi", () => {

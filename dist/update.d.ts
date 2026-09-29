@@ -39,6 +39,11 @@ export interface UpdateCommandArgs {
     target: UpdateTarget;
     source?: string;
 }
+/** Mirrors Pi's `printPackageCommandHelp("update")` (dist/package-manager-cli.js), in MMP's own
+ * words: `--extensions`/`<source>` clears the Manifest's extension package cache instead of
+ * updating settings.json entries, and there's no `--force` (MMP's own update always re-verifies
+ * the installer's checksum; see docs/cli-design.md §3). */
+export declare function renderUpdateHelp(): string;
 /** `mmp update [--self|--extensions|--models|--all] [<source>]` (docs/cli-design.md §3). A bare
  * `<source>` with no flag means "update this one extension", same as `--extensions <source>`. */
 export declare function parseUpdateArgs(argv: readonly string[]): UpdateCommandArgs;

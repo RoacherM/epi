@@ -1,4 +1,4 @@
-import { VERSION as PI_VERSION, main as piMain, } from "@earendil-works/pi-coding-agent";
+import { createAgentSessionServices, SettingsManager, VERSION as PI_VERSION, main as piMain, } from "@earendil-works/pi-coding-agent";
 import { resolveAssembly, } from "./assembly.js";
 import { parseMmpArgs, renderHelp } from "./args.js";
 import { runAuthCommand } from "./commands/auth-cli.js";
@@ -88,6 +88,46 @@ export function prepareMmpRun(argv, environment = process.env, cwd = process.cwd
     return prepareParsedMmpRun(parseMmpArgs(argv), environment, cwd);
 }
 /**
+ * `mmp --help`'s "Extension options" section: mirrors Pi's own `--help` (dist/main.js), which
+ * builds its whole runtime -- extensions included -- before printing help, then lists whatever
+ * `pi.registerFlag` calls its `resourceLoader.getExtensions()` picked up. This only needs the
+ * resource loader, not a session or model, so it calls `createAgentSessionServices` directly
+ * instead of the fuller `createAgentSessionRuntime` src/tui/services.ts's normal path uses.
+ *
+ * Never throws: like Pi (whose `--help` never checks `runtime.diagnostics` for errors -- see
+ * dist/main.js, the `parsed.help` branch runs before that check), an invalid Manifest, untrusted
+ * project, or bad MMP_HOME just means an empty section, not a failed `--help`.
+ */
+async function collectExtensionHelpFlags(args, environment, cwd) {
+    try {
+        const prepared = prepareParsedMmpRun(args, environment, cwd);
+        process.env.PI_CODING_AGENT_DIR = prepared.agentDir;
+        const extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly);
+        const services = await createAgentSessionServices({
+            cwd,
+            agentDir: prepared.agentDir,
+            settingsManager: SettingsManager.create(cwd, prepared.agentDir, { projectTrusted: false }),
+            modelRuntimeSignal: AbortSignal.timeout(15_000),
+            resourceLoaderOptions: {
+                // Same isolation as BASE_PI_RESOURCE_ARGS: only the Manifest's own extensions load.
+                noExtensions: true,
+                noSkills: true,
+                noPromptTemplates: true,
+                noThemes: true,
+                noContextFiles: true,
+                systemPrompt: "",
+                appendSystemPrompt: [""],
+                additionalExtensionPaths: prepared.assembly.externalExtensions.map((extension) => extension.value),
+                extensionFactories,
+            },
+        });
+        return services.resourceLoader.getExtensions().extensions.flatMap((extension) => Array.from(extension.flags.values()));
+    }
+    catch {
+        return [];
+    }
+}
+/**
  * Interactive first run into a new (undecided) project: ask, then fold the answer into the same
  * --approve/--no-approve override `resolveAssembly` already understands (DEVELOPMENT.md 8.2). Runs
  * before assembly, ahead of starting MMP's TUI. A no-op for print/json/rpc/help/non-TTY
@@ -146,7 +186,12 @@ export async function runMmp(argv) {
     }
     if (args.passthrough.includes("--help") ||
         args.passthrough.includes("-h")) {
-        process.stdout.write(MMP_HELP);
+        const extensionFlags = await collectExtensionHelpFlags(args, process.env, process.cwd());
+        // Collecting extensionFlags just ran every declared extension's factory (mmp:mcp among them,
+        // which can open a real connection to a configured MCP server) -- the same reason Pi's own
+        // `--help` calls `process.exit(0)` right after printing (dist/main.js: "so bad extensions
+        // cannot keep one-shot commands alive") instead of returning and letting the event loop drain.
+        process.stdout.write(renderHelp(extensionFlags), () => process.exit(0));
         return;
     }
     await maybeAskProjectTrust(args, process.env, process.cwd());
