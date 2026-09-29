@@ -8,7 +8,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { MmpArgumentError, MmpConfigError } from "../errors.js";
 import { resolveManifest } from "../manifest.js";
 import { resolveMmpPaths } from "../paths.js";
-import { findNearestProjectManifest } from "../project.js";
+import { findNearestProjectManifest, readProjectTrustDecision } from "../project.js";
 function globalTarget() {
     return { path: resolveMmpPaths(process.env).globalManifest, source: "global" };
 }
@@ -64,20 +64,27 @@ function writeManifest(target, mutate) {
 function extensionsOf(json) {
     return Array.isArray(json.extensions) ? json.extensions.filter((entry) => typeof entry === "string") : [];
 }
-/** Validates the source before it's ever written to the Manifest (docs/cli-design.md §3): an
- * `npm:`/`git:` source needs a non-empty package spec; a local path must exist relative to the
- * Manifest that will declare it, exactly like manifest.ts resolves it at run time. */
-function validateSource(source, manifestDir) {
+/**
+ * Validates the source before it's ever written to the Manifest (docs/cli-design.md §3), and
+ * returns the value to actually store. An `npm:`/`git:` source needs a non-empty package spec and
+ * is stored as-is. A local path is resolved against the current directory -- where the user typing
+ * `mmp install ./ext.mjs` is standing, same as Pi's own `install` -- not against the Manifest's own
+ * directory (`~/.mmp/` for a global install, or the project root with `-l`, neither of which is
+ * where a relative path on the command line means anything); the absolute result is stored, so
+ * manifest.ts's own manifest-relative resolution never re-resolves it against the wrong base.
+ */
+function validateAndResolveSource(source) {
     if (source.startsWith("npm:") || source.startsWith("git:")) {
         if (source.slice(source.indexOf(":") + 1).length === 0) {
             throw new MmpArgumentError(`extension package source is empty: ${source}`);
         }
-        return;
+        return source;
     }
-    const resolved = isAbsolute(source) ? source : resolve(manifestDir, source);
+    const resolved = isAbsolute(source) ? source : resolve(process.cwd(), source);
     if (!existsSync(resolved)) {
         throw new MmpArgumentError(`extension path does not exist: ${resolved}`);
     }
+    return resolved;
 }
 function parseSourceArgs(argv, commandName) {
     let source;
@@ -101,9 +108,9 @@ function parseSourceArgs(argv, commandName) {
     return { source, local };
 }
 export async function runInstallCommand(argv) {
-    const { source, local } = parseSourceArgs(argv, "install");
+    const { source: rawSource, local } = parseSourceArgs(argv, "install");
     const target = local ? projectTarget(process.cwd()) : globalTarget();
-    validateSource(source, dirname(target.path));
+    const source = validateAndResolveSource(rawSource);
     writeManifest(target, (json) => {
         const extensions = extensionsOf(json);
         if (!extensions.includes(source))
@@ -156,11 +163,20 @@ export function runListCommand(argv) {
     const lines = [];
     describeManifest("Global", resolveManifest(global.path, "global"), lines);
     const projectCandidate = findNearestProjectManifest(process.cwd(), global.path);
-    if (projectCandidate !== undefined) {
-        describeManifest("Project", resolveManifest(projectCandidate.manifestPath, "project"), lines);
+    if (projectCandidate === undefined) {
+        lines.push("Project: (none found)");
     }
     else {
-        lines.push("Project: (none found)");
+        // Same rule as every real run (DEVELOPMENT.md §8.2 rule 1): before a trust decision, at most
+        // check the Manifest exists -- never read its declared Rules/Skills/Extensions.
+        const agentDir = resolveMmpPaths(process.env).agentDir;
+        const trusted = readProjectTrustDecision(agentDir, process.cwd()) === true;
+        if (!trusted) {
+            lines.push(`Project (${projectCandidate.manifestPath}): not trusted -- not read (mmp --approve or /trust)`);
+        }
+        else {
+            describeManifest("Project", resolveManifest(projectCandidate.manifestPath, "project"), lines);
+        }
     }
     process.stdout.write(`${lines.join("\n")}\n`);
     return 0;

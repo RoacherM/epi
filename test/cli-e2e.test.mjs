@@ -3,7 +3,7 @@
 // invocation, and never touches ~/.pi/agent.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,6 +67,24 @@ test("mmp install -l writes the project Manifest instead of the global one", (t)
   assert.deepEqual(manifest, { version: 1, extensions: ["npm:proj-extension"] });
 });
 
+test("mmp install resolves a relative local source against the current directory, not the Manifest's", (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.project, "ext.mjs"), "export default function () {}\n");
+  const result = run(f, ["install", "./ext.mjs"]);
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = JSON.parse(readFileSync(globalManifestPath(f), "utf8"));
+  assert.equal(manifest.extensions[0], join(realpathSync(f.project), "ext.mjs"));
+});
+
+test("mmp install -l also resolves a relative local source against the current directory", (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.project, "ext.mjs"), "export default function () {}\n");
+  const result = run(f, ["install", "./ext.mjs", "-l"]);
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = JSON.parse(readFileSync(projectManifestPath(f), "utf8"));
+  assert.equal(manifest.extensions[0], join(realpathSync(f.project), "ext.mjs"));
+});
+
 test("mmp install rejects a local source that does not exist, before writing anything", (t) => {
   const f = fixture(t);
   const result = run(f, ["install", "./does-not-exist.mjs"]);
@@ -118,6 +136,17 @@ test("mmp list on an empty setup reports both Manifests as not found", (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Global .*\(not found\)/s);
   assert.match(result.stdout, /Project: \(none found\)/);
+});
+
+test("mmp list never reads an untrusted project Manifest's declared sources", (t) => {
+  const f = fixture(t);
+  mkdirSync(join(f.project, ".mmp"), { recursive: true });
+  writeFileSync(projectManifestPath(f), JSON.stringify({ version: 1, extensions: ["npm:untrusted-source"] }));
+  // No trust.json planted: this project has never been approved (DEVELOPMENT.md §8.2 rule 1).
+  const result = run(f, ["list"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /npm:untrusted-source/);
+  assert.match(result.stdout, /not trusted/);
 });
 
 test("mmp config edits the Manifest with $EDITOR and validates the result", (t) => {
