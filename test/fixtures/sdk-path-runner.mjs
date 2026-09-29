@@ -1,16 +1,28 @@
 // Runs MMP's SDK path (src/tui) without a terminal, for startup-contract tests. It assembles the
 // Manifest exactly like `mmp` does, then builds the session the way the new interactive host will.
-// Usage: MMP_SDK_RUNNER='<json {prompt?}>' node sdk-path-runner.mjs   (MMP_HOME/HOME set by caller)
+// Usage: MMP_SDK_RUNNER='<json {args?, prompt?, dumpTools?}>' node sdk-path-runner.mjs
+// (MMP_HOME/HOME set by caller). `args` replaces the default `--no-project` entirely (not appended
+// to it), so tests that need real project discovery (e.g. --approve) can pass their own.
+import { MmpPreflightError } from "../../dist/errors.js";
 import { prepareMmpRun } from "../../dist/host.js";
 import { createRuntimeFromPrepared } from "../../dist/tui/start.js";
 
 const options = JSON.parse(process.env.MMP_SDK_RUNNER ?? "{}");
-const runtime = await createRuntimeFromPrepared(prepareMmpRun(["--no-project"]), process.cwd());
-await runtime.session.bindExtensions({ mode: "print" });
-// bindExtensions re-registers extension providers, which starts another un-awaited auth refresh.
-await runtime.services.modelRuntime.refresh({ allowNetwork: false });
-if (options.prompt !== undefined) {
-  await runtime.session.prompt(options.prompt);
-  process.stdout.write(`${runtime.session.getLastAssistantText() ?? ""}\n`);
+
+try {
+  const runtime = await createRuntimeFromPrepared(prepareMmpRun(options.args ?? ["--no-project"]), process.cwd());
+  await runtime.session.bindExtensions({ mode: "print" });
+  // bindExtensions re-registers extension providers, which starts another un-awaited auth refresh.
+  await runtime.services.modelRuntime.refresh({ allowNetwork: false });
+  if (options.dumpTools === true) {
+    process.stdout.write(`${JSON.stringify(runtime.session.getActiveToolNames())}\n`);
+  }
+  if (options.prompt !== undefined) {
+    await runtime.session.prompt(options.prompt);
+    process.stdout.write(`${runtime.session.getLastAssistantText() ?? ""}\n`);
+  }
+  await runtime.dispose();
+} catch (error) {
+  process.stderr.write(`mmp: ${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = error instanceof MmpPreflightError ? error.exitCode : 1;
 }
-await runtime.dispose();
