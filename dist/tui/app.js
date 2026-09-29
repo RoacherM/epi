@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getSelectListTheme, } from "@earendil-works/pi-coding-agent";
+import { runUserBash } from "./bash-block.js";
 import { headerBar, PromptFrame, shortcutsBar, TurnStatus } from "./chrome.js";
 import { findBuiltin, slashCompletions } from "./builtins.js";
 import { createExtensionUIContext } from "./ext-host.js";
@@ -321,11 +322,8 @@ export async function runTuiApp(options) {
             editor.setText(text);
             return;
         }
-        if (trimmed.startsWith("!")) {
-            transcript.notice("! bash commands are not in MMP TUI v2 yet.", "warning");
-            editor.setText(text);
+        if (await runUserBash(commandHost, trimmed))
             return;
-        }
         try {
             await session.prompt(text, session.isStreaming ? { streamingBehavior: "followUp" } : undefined);
         }

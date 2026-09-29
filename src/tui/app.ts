@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteProvider, Component, Container, Editor, Terminal } from "@earendil-works/pi-tui";
 
+import { runUserBash } from "./bash-block.js";
 import { headerBar, PromptFrame, type Shortcut, shortcutsBar, type TurnState, TurnStatus } from "./chrome.js";
 import { findBuiltin, slashCompletions } from "./builtins.js";
 import type { CommandHost } from "./command-host.js";
@@ -351,11 +352,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       editor.setText(text);
       return;
     }
-    if (trimmed.startsWith("!")) {
-      transcript.notice("! bash commands are not in MMP TUI v2 yet.", "warning");
-      editor.setText(text);
-      return;
-    }
+    if (await runUserBash(commandHost, trimmed)) return;
     try {
       await session.prompt(text, session.isStreaming ? { streamingBehavior: "followUp" } : undefined);
     } catch (error) {

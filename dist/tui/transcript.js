@@ -1,6 +1,7 @@
 // Session events -> transcript blocks. v0 reuses Pi's exported message components; grok-style
 // blocks replace them in M4 (docs/tui-design.md 4.2).
 import { AssistantMessageComponent, CustomMessageComponent, getMarkdownTheme, ToolExecutionComponent, } from "@earendil-works/pi-coding-agent";
+import { UserBashBlock } from "./bash-block.js";
 import { UserMessageBlock } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
 import { toolBlock } from "./tools/block.js";
@@ -145,6 +146,9 @@ export class Transcript {
                 break;
             case "toolResult":
                 this.tool(message.toolName, message.toolCallId).updateResult(message, false);
+                break;
+            case "bashExecution":
+                this.add(UserBashBlock.fromMessage(this.theme, message));
                 break;
             case "custom":
                 if (message.display) {

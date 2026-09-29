@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Component, Container, TUI } from "@earendil-works/pi-tui";
 
+import { UserBashBlock } from "./bash-block.js";
 import { UserMessageBlock } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
 import { toolBlock } from "./tools/block.js";
@@ -164,6 +165,9 @@ export class Transcript {
         break;
       case "toolResult":
         this.tool(message.toolName, message.toolCallId).updateResult(message, false);
+        break;
+      case "bashExecution":
+        this.add(UserBashBlock.fromMessage(this.theme, message));
         break;
       case "custom":
         if (message.display) {

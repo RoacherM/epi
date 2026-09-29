@@ -16,9 +16,11 @@ export function createKeyActions(): KeyAction[] {
   let lastCtrlC = 0;
   return [
     {
+      // Pi's order (interactive-mode.js onEscape): a running turn takes priority over a running
+      // user bash command.
       id: "app.interrupt",
-      when: (host) => host.session().isStreaming,
-      run: (host) => host.session().abort(),
+      when: (host) => host.session().isStreaming || host.session().isBashRunning,
+      run: (host) => (host.session().isStreaming ? host.session().abort() : host.session().abortBash()),
     },
     {
       // Pi: clear the editor. MMP also aborts a running turn and quits on a second press (4.7).
