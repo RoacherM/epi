@@ -1,6 +1,8 @@
 // Terminal-free construction of the Pi session for MMP's own interactive host. Everything that
 // decides what the model sees lives here, so it can be tested without a terminal.
-import { resolve as resolvePath } from "node:path";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve as resolvePath } from "node:path";
 import { createAgentSessionFromServices, createAgentSessionRuntime, createAgentSessionServices, parseArgs, resolveCliModel, resolveModelScopeWithDiagnostics, SessionManager, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { MmpArgumentError } from "../errors.js";
 import { importFromPi } from "./pi-tui.js";
@@ -25,6 +27,20 @@ async function configureHttp(settingsManager) {
 function createSettingsManager(cwd, agentDir) {
     // Project .pi/settings.json is Pi's config, never MMP's (docs/decisions.md C1).
     return SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+}
+/**
+ * Mirrors the tilde-expansion half of Pi's own `normalizePath` (utils/paths.js, not exported by
+ * the SDK): `~` and `~/...` only. SessionManager's own statics already call the real
+ * `normalizePath` on whatever sessionDir they're given, so this only has to get `~` out of the way
+ * before MMP's own pre-SessionManager code (resolveSessionArg, below) touches the same string.
+ */
+function expandTilde(value) {
+    if (value === "~")
+        return homedir();
+    if (value.startsWith("~/") || (process.platform === "win32" && value.startsWith("~\\"))) {
+        return join(homedir(), value.slice(2));
+    }
+    return value;
 }
 /**
  * Which Pi CLI arguments MMP's TUI host understands, in one place, so it's easy to see what's
@@ -120,6 +136,11 @@ async function buildSessionManager(parsed, cwd, sessionDir, projectIdentity) {
         return SessionManager.inMemory(cwd, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
     }
     if (parsed.fork !== undefined) {
+        // Mirrors Pi's own createSessionManager check (main.js ~289-294): --fork --session-id <id> that
+        // already names a local session would otherwise silently fork over/alongside it.
+        if (parsed.sessionId !== undefined && SessionManager.findById(cwd, parsed.sessionId, sessionDir) !== undefined) {
+            throw new MmpArgumentError(`Session already exists with id '${parsed.sessionId}'`);
+        }
         const resolved = await resolveSessionArg(parsed.fork, cwd, sessionDir);
         if (resolved.type === "not_found") {
             throw new MmpArgumentError(`No session found matching '${parsed.fork}'`);
@@ -174,7 +195,8 @@ export async function createMmpRuntime(options) {
     if (parsed.name !== undefined && parsed.name.trim() === "") {
         throw new MmpArgumentError("--name requires a non-empty value");
     }
-    await configureHttp(createSettingsManager(options.cwd, options.agentDir));
+    const startupSettingsManager = createSettingsManager(options.cwd, options.agentDir);
+    await configureHttp(startupSettingsManager);
     const noTools = parsed.noTools ? "all" : parsed.noBuiltinTools ? "builtin" : undefined;
     const createRuntime = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
         const services = await createAgentSessionServices({
@@ -213,9 +235,12 @@ export async function createMmpRuntime(options) {
             diagnostics.push({ type: "warning", message: cli.warning });
         if (cli?.error !== undefined)
             diagnostics.push({ type: "error", message: cli.error });
+        // Without --models, scope to the enabled-models setting, like main.js's own modelPatterns
+        // (~641: `parsed.models ?? settingsManager.getEnabledModels()`).
+        const modelPatterns = parsed.models ?? services.settingsManager.getEnabledModels();
         let scopedModels = [];
-        if (parsed.models !== undefined && parsed.models.length > 0) {
-            const scoped = await resolveModelScopeWithDiagnostics(parsed.models, services.modelRuntime, {
+        if (modelPatterns !== undefined && modelPatterns.length > 0) {
+            const scoped = await resolveModelScopeWithDiagnostics(modelPatterns, services.modelRuntime, {
                 signal: AbortSignal.timeout(15_000),
             });
             scopedModels = scoped.scopedModels;
@@ -224,15 +249,29 @@ export async function createMmpRuntime(options) {
         let initialModel = cli?.model;
         let initialThinking = cli?.thinkingLevel;
         const hasHistory = sessionManager.buildSessionContext().messages.length > 0;
-        // Simplified from Pi's buildSessionOptions (main.js): picks the first scoped model rather than
-        // preferring a saved default that happens to be in scope. Documented deviation.
         if (initialModel === undefined && scopedModels.length > 0 && !hasHistory) {
-            initialModel = scopedModels[0].model;
-            initialThinking ??= scopedModels[0].thinkingLevel;
+            // Pi's buildSessionOptions (main.js ~382-401): prefer the saved default model when it's in
+            // scope, otherwise fall back to the first scoped model. `modelsAreEqual` isn't part of the
+            // SDK's export surface, so provider+id is compared directly instead.
+            const savedProvider = services.settingsManager.getDefaultProvider();
+            const savedModelId = services.settingsManager.getDefaultModel();
+            const savedModel = savedProvider !== undefined && savedModelId !== undefined
+                ? services.modelRuntime.getModel(savedProvider, savedModelId)
+                : undefined;
+            const savedInScope = savedModel === undefined
+                ? undefined
+                : scopedModels.find((scopedModel) => scopedModel.model.provider === savedModel.provider && scopedModel.model.id === savedModel.id);
+            const picked = savedInScope ?? scopedModels[0];
+            initialModel = picked.model;
+            initialThinking ??= picked.thinkingLevel;
         }
         if (parsed.thinking !== undefined) {
             initialThinking = parsed.thinking;
         }
+        // Whether a CLI-originated thinking level (an explicit --thinking, or a --model
+        // pattern:thinking shorthand) needs re-applying once the session has a real model attached
+        // (main.js ~667's cliThinkingOverride/cliThinkingFromModel).
+        const cliThinkingOverride = parsed.thinking !== undefined || cli?.thinkingLevel !== undefined;
         if (parsed.apiKey !== undefined) {
             if (initialModel === undefined) {
                 diagnostics.push({
@@ -244,10 +283,10 @@ export async function createMmpRuntime(options) {
                 await services.modelRuntime.setRuntimeApiKey(initialModel.provider, parsed.apiKey);
             }
         }
-        for (const diagnostic of diagnostics) {
-            if (diagnostic.type === "warning")
-                process.stderr.write(`mmp: ${diagnostic.message}\n`);
-        }
+        // Warnings/info used to go straight to stderr here, which runs on every /new and /resume, not
+        // just startup -- after the TUI's alt screen is up, that writes raw over the fullscreen UI. Pi
+        // shows startup diagnostics in the transcript instead (interactive-mode.js ~817); MMP's `bind()`
+        // does the same with `runtime.diagnostics`, so nothing is dropped, it just isn't printed here.
         const errors = diagnostics.filter((diagnostic) => diagnostic.type === "error");
         if (errors.length > 0) {
             throw new Error(errors.map((diagnostic) => diagnostic.message).join("\n"));
@@ -263,15 +302,42 @@ export async function createMmpRuntime(options) {
             ...(parsed.excludeTools === undefined ? {} : { excludeTools: [...parsed.excludeTools] }),
             ...(noTools === undefined ? {} : { noTools }),
         });
+        // Re-apply a CLI-originated thinking level once the session has a real model (main.js ~670-673).
+        // Note: createAgentSession (sdk.js) already clamps thinkingLevel to the model's supported levels
+        // using the same clampThinkingLevel as setThinkingLevel, so this rarely changes the effective
+        // level; it mirrors Pi's own call site anyway, for whatever persistence/event-emission edge case
+        // (a scoped model's or extension's thinking-level metadata resolving differently at this later
+        // point) motivated Pi to add it.
+        if (created.session.model !== undefined && cliThinkingOverride) {
+            created.session.setThinkingLevel(created.session.thinkingLevel);
+        }
         return { ...created, services, diagnostics };
     };
-    const sessionDir = parsed.sessionDir !== undefined ? resolvePath(options.cwd, parsed.sessionDir) : undefined;
+    // Pi's own resolution order (main.js ~536-539): --session-dir, then PI_SESSION_DIR, then the
+    // sessionDir setting. `~` is expanded here; SessionManager's own statics expand it again
+    // (harmless) for whatever they resolve without going through this function.
+    const envSessionDir = process.env.PI_SESSION_DIR;
+    const sessionDir = (parsed.sessionDir !== undefined ? expandTilde(parsed.sessionDir) : undefined) ??
+        (envSessionDir !== undefined && envSessionDir !== "" ? expandTilde(envSessionDir) : undefined) ??
+        startupSettingsManager.getSessionDir();
     const sessionManager = await buildSessionManager(parsed, options.cwd, sessionDir, options.projectIdentity);
     if (parsed.name !== undefined) {
         sessionManager.appendSessionInfo(parsed.name.trim());
     }
+    // Pi prompts to continue in the launch cwd when a stored session's cwd is missing (main.js
+    // ~541-554's getMissingSessionCwdIssue/promptForMissingSessionCwd), before the TUI exists to
+    // prompt in. MMP fails fast here instead, pre-TUI, naming the fix Pi's own prompt offers.
+    const sessionCwd = sessionManager.getCwd();
+    if (sessionManager.getSessionFile() !== undefined && !existsSync(sessionCwd)) {
+        throw new MmpArgumentError(`Session working directory does not exist: ${sessionCwd}\n` +
+            `Current working directory: ${options.cwd}\n` +
+            `Use --fork instead of --session/--continue/--session-id to copy it into the current directory.`);
+    }
     return createAgentSessionRuntime(createRuntime, {
-        cwd: options.cwd,
+        // Pi's main.js (~682): the runtime's cwd is the session's cwd, not the launch cwd -- otherwise
+        // a --session target in a subfolder builds tools/system prompt for the launch cwd while the
+        // header and !pwd (which read session.sessionManager.getCwd()) show the session's own cwd.
+        cwd: sessionCwd,
         agentDir: options.agentDir,
         sessionManager,
     });

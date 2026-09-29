@@ -12,7 +12,7 @@ import { installKeybindings } from "./keybindings.js";
 import { createKeyActions } from "./keys.js";
 import { piTui } from "./pi-tui.js";
 import { crossProjectRefusal } from "./project-guard.js";
-import { runResume } from "./session-commands.js";
+import { confirmMissingSessionCwd, missingSessionCwdIssue, runResume } from "./session-commands.js";
 import { Transcript } from "./transcript.js";
 // One instance per layout slot: the layout engine keys slots by component identity.
 const blank = () => ({ render: () => [""], invalidate() { } });
@@ -231,6 +231,7 @@ export async function runTuiApp(options) {
         },
         addToHistory: (text) => editor.addToHistory(text),
         submit: (text) => submit(text),
+        restoreQueuedMessagesToEditor: () => restoreQueuedMessagesToEditor(),
         isWorking: () => turn !== undefined,
         toggleToolsExpanded: () => surface.setToolsExpanded(!toolsExpanded),
         exit: (code) => exit(code),
@@ -266,6 +267,79 @@ export async function runTuiApp(options) {
     process.on("SIGHUP", onSignal);
     process.on("uncaughtException", onCrash);
     process.on("unhandledRejection", onCrash);
+    // ── session-replacement guard (bugs 4, 7) ───────────────────────────────────
+    // True for the duration of an actual runtime.newSession/switchSession/fork call (teardown through
+    // rebind), not any UI shown around it (e.g. the missing-cwd confirm below runs before any
+    // teardown, so a compaction ending naturally during it must still flush normally).
+    let sessionReplacementInFlight = false;
+    async function withSessionReplacement(action) {
+        sessionReplacementInFlight = true;
+        try {
+            return await action();
+        }
+        finally {
+            sessionReplacementInFlight = false;
+        }
+    }
+    /** Mirrors Pi's handleFatalRuntimeError (interactive-mode.js ~1557): once a session-replacing
+     * call fails after teardown started, the old session is disposed and there is nothing left to
+     * continue running -- leave the alternate screen cleanly, report why, and exit. Never routes
+     * through `exit()`: that calls `runtime.dispose()`, which would dispose an already-disposed
+     * session. */
+    function fatal(prefix, error) {
+        if (!exiting) {
+            exiting = true;
+            turnStatus.stop();
+            tui.stop();
+            process.stderr.write(`mmp: ${prefix}: ${errorText(error)}\n`);
+        }
+        process.exit(1);
+    }
+    // Wrapping these three in one place covers every call site that can replace the session --
+    // app.ts's own commandContextActions below, MMP's /new builtin (builtins.ts calls
+    // host.runtime.newSession() directly), and session-commands.ts's /resume -- without each of them
+    // repeating the same failure handling.
+    const originalNewSession = runtime.newSession.bind(runtime);
+    const originalFork = runtime.fork.bind(runtime);
+    const originalSwitchSession = runtime.switchSession.bind(runtime);
+    runtime.newSession = async (newSessionOptions) => {
+        try {
+            return await withSessionReplacement(() => originalNewSession(newSessionOptions));
+        }
+        catch (error) {
+            return fatal("Failed to create session", error);
+        }
+    };
+    runtime.fork = async (entryId, forkOptions) => {
+        try {
+            return await withSessionReplacement(() => originalFork(entryId, forkOptions));
+        }
+        catch (error) {
+            return fatal("Failed to fork session", error);
+        }
+    };
+    runtime.switchSession = async (sessionPath, switchOptions) => {
+        try {
+            return await withSessionReplacement(() => originalSwitchSession(sessionPath, switchOptions));
+        }
+        catch (error) {
+            // Thrown by assertSessionCwdExists before any teardown (agent-session-runtime.js): the
+            // current session is untouched, so this offers a retry instead of treating it as fatal (Pi's
+            // handleResumeSession, interactive-mode.js ~4658-4691).
+            const issue = missingSessionCwdIssue(error);
+            if (issue === undefined)
+                return fatal("Failed to switch session", error);
+            const selectedCwd = await confirmMissingSessionCwd(commandHost, issue);
+            if (selectedCwd === undefined)
+                return { cancelled: true };
+            try {
+                return await withSessionReplacement(() => originalSwitchSession(sessionPath, { ...switchOptions, cwdOverride: selectedCwd }));
+            }
+            catch (retryError) {
+                return fatal("Failed to switch session", retryError);
+            }
+        }
+    };
     // ── session binding (also after /new, /resume, /reload) ───────────────────
     let unsubscribe;
     function onEvent(event) {
@@ -313,7 +387,12 @@ export async function runTuiApp(options) {
                     turn = undefined;
                 // Pi flushes its compaction queue unconditionally here, whether compaction succeeded,
                 // failed, or was aborted by Esc; a message typed while it ran still deserves sending.
-                void flushCompactionQueue();
+                // Except: this same event also fires as a side effect of tearing down this very session for
+                // replacement (teardownCurrent aborts any running compaction before disposing the session) --
+                // flushing then would send into a session about to be disposed. bind()'s unconditional
+                // `compactionQueue = []` already covers dropping it (bug 4).
+                if (!sessionReplacementInFlight)
+                    void flushCompactionQueue();
                 break;
             case "auto_retry_start":
                 turn = turn === undefined
@@ -331,10 +410,19 @@ export async function runTuiApp(options) {
     }
     async function bind(next) {
         session = next;
+        // Pi's renderCurrentSessionState (interactive-mode.js ~1615), called on every rebind: a message
+        // queued during the outgoing session's compaction belongs to a session that no longer exists.
+        compactionQueue = [];
         branch = readGitBranch(session.sessionManager.getCwd());
         unsubscribe?.();
         unsubscribe = session.subscribe(onEvent);
         transcript.reset(session);
+        // Pi shows startup diagnostics in the transcript, not stderr (interactive-mode.js ~817-828);
+        // `runtime.diagnostics` reflects whichever session this bind() is for (AgentSessionRuntime.apply
+        // runs before rebindSession fires), so this covers /new and /resume too, not just startup.
+        for (const diagnostic of runtime.diagnostics) {
+            transcript.notice(diagnostic.message, diagnostic.type);
+        }
         queued = { steering: session.getSteeringMessages(), followUp: session.getFollowUpMessages() };
         await session.bindExtensions({
             uiContext,
@@ -345,24 +433,34 @@ export async function runTuiApp(options) {
                 fork: (entryId, actionOptions) => runtime.fork(entryId, actionOptions),
                 navigateTree: (targetId, actionOptions) => session.navigateTree(targetId, actionOptions),
                 switchSession: async (sessionPath, actionOptions) => {
+                    // Check before the runtime tears down the current session (docs/tui-design.md §15): a
+                    // refused switch must leave the running session exactly as it was. crossProjectRefusal
+                    // can itself throw (a malformed session file); runtime.switchSession below cannot -- it's
+                    // wrapped (see the session-replacement guard, above) to handle MissingSessionCwdError and
+                    // any other failure itself (bug 7).
+                    let refusal;
                     try {
-                        // Check before the runtime tears down the current session (docs/tui-design.md §15): a
-                        // refused switch must leave the running session exactly as it was.
-                        const refusal = crossProjectRefusal(sessionPath, options.projectIdentity);
-                        if (refusal !== undefined) {
-                            transcript.notice(refusal, "warning");
-                            return { cancelled: true };
-                        }
-                        return await runtime.switchSession(sessionPath, actionOptions);
+                        refusal = crossProjectRefusal(sessionPath, options.projectIdentity);
                     }
                     catch (error) {
                         transcript.notice(`Could not switch session: ${errorText(error)}`, "error");
                         return { cancelled: true };
                     }
+                    if (refusal !== undefined) {
+                        transcript.notice(refusal, "warning");
+                        return { cancelled: true };
+                    }
+                    return runtime.switchSession(sessionPath, actionOptions);
                 },
                 reload: () => reloadSession(),
             },
             shutdownHandler: () => void exit(0),
+            // Pi's own abortHandler (interactive-mode.js ~1437-1439): an extension calling ctx.abort()
+            // must not drop whatever is queued, and must abort even when nothing was queued.
+            abortHandler: () => {
+                restoreQueuedMessagesToEditor();
+                void session.abort();
+            },
             onError: (error) => transcript.notice(`Extension error (${error.extensionPath}, ${error.event}): ${error.error}`, "error"),
         });
         // bindExtensions re-registers extension providers, which starts an un-awaited auth refresh in Pi.
@@ -404,21 +502,81 @@ export async function runTuiApp(options) {
     // a session whose extensions aren't bound yet. `ready` mirrors that gate; flips true once the
     // first bind() below resolves.
     let ready = false;
-    /** Pi's flushCompactionQueue: sent once compaction_end fires, in submission order. The first
-     * call starts a normal turn; later ones steer/follow-up into the turn it just started. */
+    /** Pi's isExtensionCommand (interactive-mode.js ~3788-3795): an extension-registered slash
+     * command, which runs immediately even during compaction instead of queuing. */
+    function isExtensionCommandText(text) {
+        const [, command] = /^\/(\S+)/.exec(text.trim()) ?? [];
+        return command !== undefined &&
+            session.extensionRunner.getRegisteredCommands().some((registered) => registered.invocationName === command);
+    }
+    /** Pi's clearAllQueues (interactive-mode.js ~3729): the session's own steering/follow-up queue
+     * plus app.ts's own compaction queue, combined and cleared. */
+    function clearAllQueues() {
+        const { steering, followUp } = session.clearQueue();
+        const compactionSteering = compactionQueue.filter((message) => message.mode === "steer").map((message) => message.text);
+        const compactionFollowUp = compactionQueue.filter((message) => message.mode === "followUp").map((message) => message.text);
+        compactionQueue = [];
+        return { steering: [...steering, ...compactionSteering], followUp: [...followUp, ...compactionFollowUp] };
+    }
+    /** Pi's restoreQueuedMessagesToEditor (interactive-mode.js ~3761): put any queued steering/
+     * follow-up text back in the editor (ahead of whatever the user already typed). Shared by Esc,
+     * Ctrl+C, Alt+Up (via CommandHost) and an extension's ctx.abort() (the abortHandler above), so a
+     * turn or compaction can never be aborted with its queue silently discarded. */
+    function restoreQueuedMessagesToEditor() {
+        const { steering, followUp } = clearAllQueues();
+        const queued = [...steering, ...followUp];
+        if (queued.length === 0)
+            return 0;
+        const queuedText = queued.join("\n\n");
+        const current = editor.getText();
+        editor.setText([queuedText, current].filter((text) => text.trim() !== "").join("\n\n"));
+        tui.requestRender();
+        return queued.length;
+    }
+    /** Pi's flushCompactionQueue (interactive-mode.js ~3796-3866), the non-retry branch: extension
+     * commands ahead of the first real prompt run immediately; the first real prompt starts a turn
+     * without being awaited; anything after it steers/follows-up into that same turn instead of
+     * waiting and starting a separate one. On failure, the messages go back into the compaction queue
+     * (not the editor) with a notice, like Pi's restoreQueue. */
     async function flushCompactionQueue() {
         if (compactionQueue.length === 0)
             return;
         const messages = compactionQueue;
         compactionQueue = [];
         tui.requestRender();
-        for (const message of messages) {
-            try {
-                await session.prompt(message.text, session.isStreaming ? { streamingBehavior: message.mode } : undefined);
+        const restoreQueue = (error) => {
+            session.clearQueue();
+            compactionQueue = messages;
+            tui.requestRender();
+            transcript.notice(`Failed to send queued message${messages.length > 1 ? "s" : ""}: ${errorText(error)}`, "error");
+        };
+        try {
+            const firstPromptIndex = messages.findIndex((message) => !isExtensionCommandText(message.text));
+            if (firstPromptIndex === -1) {
+                for (const message of messages)
+                    await session.prompt(message.text);
+                return;
             }
-            catch (error) {
-                transcript.notice(errorText(error), "error");
+            const preCommands = messages.slice(0, firstPromptIndex);
+            const firstPrompt = messages[firstPromptIndex];
+            const rest = messages.slice(firstPromptIndex + 1);
+            for (const message of preCommands)
+                await session.prompt(message.text);
+            const promptPromise = session
+                .prompt(firstPrompt.text, session.isStreaming ? { streamingBehavior: firstPrompt.mode } : undefined)
+                .catch((error) => restoreQueue(error));
+            for (const message of rest) {
+                if (isExtensionCommandText(message.text))
+                    await session.prompt(message.text);
+                else if (message.mode === "followUp")
+                    await session.followUp(message.text);
+                else
+                    await session.steer(message.text);
             }
+            void promptPromise;
+        }
+        catch (error) {
+            restoreQueue(error);
         }
     }
     async function submit(text) {
@@ -456,7 +614,18 @@ export async function runTuiApp(options) {
             return;
         if (session.isCompacting) {
             // session.prompt() throws while compaction is running (Pi's queueCompactionMessage);
-            // MMP's Enter is Pi's Alt+Enter follow-up semantics (docs/tui-design.md 4.7 table).
+            // MMP's Enter is Pi's Alt+Enter follow-up semantics (docs/tui-design.md 4.7 table). An
+            // extension command runs immediately even during compaction instead of queuing (Pi's
+            // handleFollowUp/handleSubmit, interactive-mode.js ~2604-2611/~3530-3538).
+            if (isExtensionCommand) {
+                try {
+                    await session.prompt(text);
+                }
+                catch (error) {
+                    transcript.notice(errorText(error), "error");
+                }
+                return;
+            }
             compactionQueue.push({ text, mode: "followUp" });
             transcript.notice("Queued message for after compaction.");
             tui.requestRender();
@@ -502,10 +671,18 @@ export async function runTuiApp(options) {
         await runResume(commandHost);
     }
     // Only on the very first bind: /new, /resume and /reload also call bind() and must not replay it.
+    // Pi's own interactive-mode.js (~855-864): sent directly through session.prompt(), not through
+    // submit()'s full pipeline -- submit() clears the editor/history and runs MMP's built-ins (e.g.
+    // `mmp /new`), which would wipe whatever the startup gate above just put back into the editor.
     for (const message of options.initialMessages ?? []) {
         if (exiting)
             break;
-        await submit(message);
+        try {
+            await session.prompt(message);
+        }
+        catch (error) {
+            transcript.notice(errorText(error), "error");
+        }
     }
     const code = await finished;
     process.off("SIGTERM", onSignal);

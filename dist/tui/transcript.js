@@ -111,7 +111,12 @@ export class Transcript {
                 // failed: ..." (agent-session.js); Pi's own interactive mode shows it verbatim too.
                 if (event.errorMessage !== undefined)
                     this.notice(event.errorMessage, "error");
-                else if (!event.aborted)
+                // Pi's own Esc-during-compaction notice (interactive-mode.js ~2883-2889): "Compaction
+                // cancelled" for a manual /compact the user stopped, "Auto-compaction cancelled" (a lower
+                // key, since nothing the user asked for was lost) for one the agent started on its own.
+                else if (event.aborted)
+                    this.notice(event.reason === "manual" ? "Compaction cancelled" : "Auto-compaction cancelled", event.reason === "manual" ? "error" : "info");
+                else
                     this.notice("Context compacted.");
                 break;
             case "auto_retry_start":

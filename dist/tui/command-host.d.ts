@@ -30,6 +30,12 @@ export interface CommandHost {
     addToHistory(text: string): void;
     /** Run the submit pipeline (built-ins, `!`, `session.prompt`) as if Enter were pressed. */
     submit(text: string): Promise<void>;
+    /** Pi's restoreQueuedMessagesToEditor/clearAllQueues (interactive-mode.js ~3729, ~3761): clears
+     * both the session's own steering/follow-up queue and app.ts's compaction queue, puts their text
+     * back in the editor (ahead of anything already typed), and returns how many messages that was.
+     * Shared by Esc/Ctrl+C (app.interrupt/app.clear), Alt+Up (app.message.dequeue), and the extension
+     * abort handler, so none of them can see only one of the two queues. */
+    restoreQueuedMessagesToEditor(): number;
     /** True while an agent turn is running. */
     isWorking(): boolean;
     toggleToolsExpanded(): void;

@@ -75,3 +75,31 @@ test("Ctrl+C on a running turn also restores the queue instead of dropping it", 
   assert.doesNotMatch(afterAbort, /Follow-up:/);
   assert.doesNotMatch(out, /SECOND-REPLY/);
 });
+
+// Bug 3 (docs/tui-design.md §15): bindExtensions() got no `abortHandler`, so an extension calling
+// ctx.abort() fell back to the SDK's own plain `session.abort()` (agent-session.js's `abort:` action,
+// used only when no `_extensionAbortHandler` is set), which drops the queue exactly like the
+// pre-fix Esc/Ctrl+C did above. Pi wires abortHandler to its own restoreQueuedMessagesToEditor
+// (interactive-mode.js ~1437-1439); this fails before app.ts's bindExtensions() call gets the same
+// abortHandler, and passes after.
+test("an extension's ctx.abort() restores the queue too, not just Esc/Ctrl+C", (t) => {
+  const { marks, text: out } = runApp(t, [fixture("faux-queue.mjs"), fixture("abort-command-extension.mjs")], [
+    ["wait", 2500], ["type", "go"], ["key", "enter"],
+    ["wait", 1000], ["type", "later"], ["key", "enter"],
+    ["wait", 300], ["mark", "queued"],
+    ["type", "/doabort"], ["key", "enter"],
+    ["wait", 600],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.queued, /Follow-up: later/);
+  // Typing "/doabort" itself re-renders the (still-queued) "Follow-up: later" line on every
+  // autocomplete keystroke, so the meaningful check is the settled tail once the command has
+  // actually run, not the whole cumulative output since "queued" (which would still contain those
+  // now-stale frames either way). Ctrl+D only quits with an empty editor -- "later" ends up back in
+  // it -- so, like the other tests in this file's sibling (tui-pi-args.test.mjs's initial-message
+  // test), this run needs the timeout; there is nothing to assert about EXIT.
+  const settled = out.slice(-2000);
+  assert.match(settled, /❯ later\s/);
+  assert.doesNotMatch(settled, /Follow-up:/);
+  assert.doesNotMatch(out, /SECOND-REPLY/);
+});

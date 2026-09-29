@@ -76,7 +76,7 @@ test("crossProjectRefusal blocks a different project's session and allows the sa
   const bSession = files.find((file) => file.cwd === f.projectB);
   assert.ok(aSession && subSession && bSession, JSON.stringify(files));
 
-  const identity = projectIdentityFromPrepared(prepareMmpRun(["--approve"], f.env, f.projectA));
+  const identity = projectIdentityFromPrepared(prepareMmpRun(["--approve"], f.env, f.projectA), f.projectA);
   assert.equal(identity.root, f.projectA);
 
   const refusal = crossProjectRefusal(bSession.path, identity);
@@ -179,5 +179,47 @@ test("/resume itself refuses a session picked from another project, and leaves t
   assert.doesNotMatch(afterResume, /Resumed session\./);
   // The current session (A) is unaffected: it still answers, still as A's echo model.
   assert.match(marks.stillA.slice(marks.afterResumeAttempt.length), /ECHO:still A\?/);
+  assert.match(out, /EXIT=0/);
+});
+
+// Bug 5 (docs/tui-design.md §15): `identity.root` used to come from `assembly.projectManifest?.root`,
+// which is undefined whenever the project manifest isn't loaded -- not just when there really is no
+// project (discovery "none"), but also with `--no-project` (discovery "disabled") or an untrusted
+// project (discovery "ignored"), even though a `.mmp/mmp.json` genuinely exists there. A session
+// created in that very folder then looked like it belonged to "a different project" (undefined vs.
+// its own real root). Fixed by computing `root` straight from `findNearestProjectManifest`,
+// independent of whether the manifest actually got loaded (src/tui/start.ts).
+test("--no-project still identifies the launch folder as its own project (a manifest exists, it's just not loaded)", (t) => {
+  const f = fixture(t);
+  seedSession(f.env, f.projectA);
+  const sessionsDir = join(f.home, ".mmp", "pi", "sessions");
+  const aSession = allSessionFiles(sessionsDir).find((file) => file.cwd === f.projectA);
+  assert.ok(aSession, "no A session seeded");
+
+  const identity = projectIdentityFromPrepared(prepareMmpRun(["--no-project"], f.env, f.projectA), f.projectA);
+  assert.equal(identity.root, f.projectA);
+  assert.equal(crossProjectRefusal(aSession.path, identity), undefined);
+});
+
+test("--no-project still allows resuming a session from the launch folder itself, end to end", (t) => {
+  const f = fixture(t);
+  // --no-project disables projectA's own manifest, so the model here comes from the global one
+  // instead (never gated by --no-project or trust).
+  writeFileSync(join(f.home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [switchtoExtension] }));
+  seedSession(f.env, f.projectA);
+  const sessionsDir = join(f.home, ".mmp", "pi", "sessions");
+  const aSession = allSessionFiles(sessionsDir).find((file) => file.cwd === f.projectA);
+  assert.ok(aSession, "no A session seeded");
+
+  const { marks, text: out } = runHarness(t, f.projectA, f.env, ["--no-project"], [
+    ["wait", 2500],
+    ["type", "hello A"], ["key", "enter"], ["wait", 800], ["mark", "aReply"],
+    ["type", `/switchto ${aSession.path}`], ["key", "enter"], ["wait", 800], ["mark", "afterSwitch"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.aReply, /ECHO:hello A/);
+  const afterSwitch = marks.afterSwitch.slice(marks.aReply.length);
+  assert.doesNotMatch(afterSwitch, /different project/);
+  assert.doesNotMatch(afterSwitch, /SWITCH-CANCELLED/);
   assert.match(out, /EXIT=0/);
 });

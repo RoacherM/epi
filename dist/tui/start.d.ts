@@ -4,8 +4,13 @@ import type { ProjectIdentity } from "./project-guard.js";
 /** Same Manifest assembly as the piMain path, handed to the SDK instead of Pi's CLI. */
 export declare function createRuntimeFromPrepared(prepared: PreparedMmpRun, cwd: string, extensionFactories?: InlineExtension[]): Promise<AgentSessionRuntime>;
 /** The project this process assembled its manifest from (project-guard.ts): fixed for the whole
- * run, since manifest extensions cannot be hot-loaded (DEVELOPMENT.md §8.2). */
-export declare function projectIdentityFromPrepared(prepared: PreparedMmpRun): ProjectIdentity;
+ * run, since manifest extensions cannot be hot-loaded (DEVELOPMENT.md §8.2).
+ *
+ * `root` is recomputed from `cwd` directly, independent of `--no-project`/trust: with
+ * `--no-project` (or an untrusted/missing manifest), `prepared.assembly.projectManifest` is
+ * undefined even when a `.mmp/mmp.json` really does exist above `cwd`, which made a session
+ * started in that very folder look like "a different project" to project-guard.ts. */
+export declare function projectIdentityFromPrepared(prepared: PreparedMmpRun, cwd: string): ProjectIdentity;
 export interface TuiStartupOptions {
     /** Pi CLI positional messages (services.ts's TUI_V2 argument table), sent as the initial prompts
      * once the app is up. `@file` arguments are rejected earlier as unsupported, so only plain text
