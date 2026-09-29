@@ -78,13 +78,20 @@ export async function runCompact(host: CommandHost, customInstructions: string):
   }
 }
 
+/** What the session selector actually did: `"resumed"` picked a session (whether or not it went on
+ * to actually switch -- resumeSession reports its own refusals via a notice); `"cancelled"` is Esc,
+ * matching Pi's own selectSession returning no path; `"exited"` is Ctrl+D, which already quit the
+ * app itself (host.exit(0), below) -- distinguished from `"cancelled"` so a caller like app.ts's
+ * `--resume`-at-startup handling (bug 8) doesn't print its own message on top of an unrelated quit. */
+export type ResumeOutcome = "resumed" | "cancelled" | "exited";
+
 /** `/resume`: session selector for the current cwd (Tab switches to "all", like Pi's). Picking a
  * session hands off to `runtime.switchSession`, whose rebind callback (app.ts's `bind`) replays
  * the transcript. Sessions only ever come from the session manager's own directory, which MMP
  * points at `~/.mmp/pi/sessions` (never Pi's `~/.pi/agent`); see services.ts and paths.ts. */
-export async function runResume(host: CommandHost): Promise<void> {
+export async function runResume(host: CommandHost): Promise<ResumeOutcome> {
   const sessionManager = host.session().sessionManager;
-  await new Promise<void>((resolve) => {
+  return new Promise<ResumeOutcome>((resolve) => {
     let restore: () => void = () => {};
     const selector = new SessionSelectorComponent(
       (onProgress, signal) => SessionManager.list(sessionManager.getCwd(), sessionManager.getSessionDir(), onProgress, signal),
@@ -93,15 +100,15 @@ export async function runResume(host: CommandHost): Promise<void> {
         : SessionManager.listAll(sessionManager.getSessionDir(), onProgress, signal),
       (sessionPath) => {
         restore();
-        void resumeSession(host, sessionPath).then(resolve);
+        void resumeSession(host, sessionPath).then(() => resolve("resumed"));
       },
       () => {
         restore();
-        resolve();
+        resolve("cancelled");
       },
       () => {
         restore();
-        resolve();
+        resolve("exited");
         void host.exit(0);
       },
       () => host.tui.requestRender(),

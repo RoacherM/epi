@@ -6,11 +6,14 @@
 // re-inserted (matching Pi's queueCompactionMessage) or, if the user typed again, silently lost.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+
+import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
@@ -188,6 +191,79 @@ test("/new during compaction drops the queued message instead of flushing it int
   // The real proof, independent of whether a stray reply happens to surface in the transcript
   // before or after the old session gets disposed: "queued-msg" was never actually sent to any
   // model call, generation 0 (the outgoing, compacting session) or generation 1 (the new one).
+  const log = readFileSync(logPath, "utf8");
+  assert.doesNotMatch(log, /queued-msg/);
+  assert.match(log, /gen0:go/);
+  assert.match(log, /gen1:still alive/);
+});
+
+// Bug 1 (docs/tui-design.md §15): /import called host.runtime.importFromJsonl directly instead of
+// going through app.ts's session-replacement guard, so sessionReplacementInFlight was never set for
+// it. This test does NOT discriminate the fix, unlike the /new case above -- confirmed empirically
+// (instrumented flushCompactionQueue and compared pre-/post-fix runs of this exact scenario): Pi's
+// own compact() clears its compaction state and emits compaction_end (AgentSession.compact,
+// "compaction_end listeners may submit queued prompts, so expose idle state before notifying them")
+// *before* teardownCurrent's later steps dispose the outgoing session, so calling session.prompt()
+// from flushCompactionQueue at that moment is idle and doesn't throw either way; pre-fix it's
+// actually called (confirmed via added instrumentation) and pre-fix or post-fix the queued text
+// never reaches any model (this session's turn is cut off by disposal before the request goes out),
+// so the model log and transcript look identical whether the fix is present or not. Kept anyway as a
+// regression check on the actually-fixed *end state* (import finishes cleanly, the app stays usable,
+// no spurious failure notice); test/tui-fatal-errors.test.mjs's /import case is what discriminates
+// bug 1 itself.
+test("/import during compaction leaves the app usable afterward, without a spurious failure notice", (t) => {
+  const logDir = mkdtempSync(join(tmpdir(), "mmp-compact-log-"));
+  const logPath = join(logDir, "log.txt");
+  t.after(() => rmSync(logDir, { recursive: true, force: true }));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mmp-tui-compaction-import-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("faux-compact-marker.mjs")] }));
+  mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
+  writeFileSync(join(home, ".mmp", "pi", "settings.json"), JSON.stringify(KEEP_NO_RECENT.settings));
+  const sessionFile = join(root, "imported.jsonl");
+  const header = { type: "session", version: CURRENT_SESSION_VERSION, id: randomUUID(), timestamp: new Date().toISOString(), cwd: root };
+  writeFileSync(sessionFile, `${JSON.stringify(header)}\n`);
+  const result = spawnSync(process.execPath, [harness], {
+    cwd: root,
+    env: {
+      PATH: process.env.PATH,
+      HOME: home,
+      MMP_HOME: join(home, ".mmp"),
+      PI_OFFLINE: "1",
+      MMP_TEST_COMPACT_LOG: logPath,
+      MMP_TUI_HARNESS: JSON.stringify({
+        args: ["--no-project"],
+        steps: [
+          ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 1500],
+          ["type", "/compact"], ["key", "enter"], ["wait", 400],
+          ["type", "queued-msg"], ["key", "enter"],
+          ["wait", 300], ["mark", "queuedDuringCompaction"],
+          ["type", `/import ${sessionFile}`], ["key", "enter"], ["wait", 400],
+          // The confirm dialog opens with "Yes" highlighted; Enter accepts it.
+          ["key", "enter"],
+          ["wait", 1000], ["mark", "afterImport"],
+          ["type", "still alive"], ["key", "enter"], ["wait", 1500], ["mark", "afterStillAlive"],
+          ["key", "ctrl+d"],
+        ],
+      }),
+    },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const { marks, exit } = JSON.parse(result.stdout);
+  const out = `EXIT=${exit}\n${marks.afterStillAlive}`;
+  assert.equal(exit, 0);
+  assert.match(marks.queuedDuringCompaction, /Follow-up: queued-msg/);
+  assert.doesNotMatch(out, /Failed to send queued message/);
+  assert.match(out, /Session imported from:/);
+  // The imported session is fully usable: it answers a fresh prompt normally (faux-compact-marker.mjs's
+  // factory reruns for the imported session -- generation 1 -- so its response queue starts over).
+  assert.match(marks.afterStillAlive.slice(marks.afterImport.length), /BEFORE-COMPACT/);
+  // The real proof: "queued-msg" was never actually sent to any model call, generation 0 (the
+  // outgoing, compacting session) or generation 1 (the imported one).
   const log = readFileSync(logPath, "utf8");
   assert.doesNotMatch(log, /queued-msg/);
   assert.match(log, /gen0:go/);

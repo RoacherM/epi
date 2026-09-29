@@ -108,6 +108,25 @@ test("/bug declined at the consent prompt does nothing", (t) => {
   assert.match(out, /EXIT=0/);
 });
 
+// Bug 7: the consent prompt said "Nothing is sent automatically", but opening the browser (below,
+// unconditionally, once the report is filed) already hands the whole URL -- title, description,
+// versions, and any summary -- to the browser and OS, whether or not the user goes on to click
+// Submit on GitHub's page. Fixed by saying exactly what the URL carries before asking for consent,
+// instead of a reassurance that undersold what "opening a prefilled URL" already does.
+test("/bug's consent prompt says what the URL actually carries, not that nothing is sent", (t) => {
+  const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
+    ["wait", 2500],
+    ["type", "/bug"], ["key", "enter"], ["wait", 500], ["mark", "consentShown"],
+    ["key", "down"], ["wait", 100], ["key", "enter"], ["wait", 300],
+    ["key", "ctrl+d"],
+  ]);
+  assert.doesNotMatch(marks.consentShown, /Nothing is sent automatically/);
+  assert.match(marks.consentShown, /URL itself carries your/);
+  assert.match(marks.consentShown, /description/);
+  assert.match(marks.consentShown, /versions/);
+  assert.match(marks.consentShown, /summary/);
+});
+
 test("/bug [description], declining the summary, prints a prefilled GitHub issue URL with MMP's repo and versions", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-echo.mjs")], [
     ["wait", 2500],

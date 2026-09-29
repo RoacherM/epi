@@ -315,10 +315,13 @@ export async function createMmpRuntime(options) {
         }
         return { ...created, services, diagnostics };
     };
-    // Pi's own resolution order (main.js ~536-539): --session-dir, then PI_SESSION_DIR, then the
-    // sessionDir setting. `~` is expanded here; SessionManager's own statics expand it again
-    // (harmless) for whatever they resolve without going through this function.
-    const envSessionDir = process.env.PI_SESSION_DIR;
+    // Pi's own resolution order (main.js ~536-539): --session-dir, then its ENV_SESSION_DIR
+    // (PI_CODING_AGENT_SESSION_DIR), then the sessionDir setting. MMP never reads Pi's variable here --
+    // a Pi user's own PI_CODING_AGENT_SESSION_DIR must not silently redirect MMP's sessions (no shared
+    // config, docs/cli-design.md §2) -- so this is MMP_SESSION_DIR instead, same semantics. `~` is
+    // expanded here; SessionManager's own statics expand it again (harmless) for whatever they resolve
+    // without going through this function.
+    const envSessionDir = process.env.MMP_SESSION_DIR;
     const sessionDir = (parsed.sessionDir !== undefined ? expandTilde(parsed.sessionDir) : undefined) ??
         (envSessionDir !== undefined && envSessionDir !== "" ? expandTilde(envSessionDir) : undefined) ??
         startupSettingsManager.getSessionDir();

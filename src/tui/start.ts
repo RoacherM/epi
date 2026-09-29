@@ -3,6 +3,7 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { type AgentSessionRuntime, type InlineExtension, parseArgs } from "@earendil-works/pi-coding-agent";
 
+import { passthroughHasFlag } from "../args.js";
 import { buildInlineExtensions } from "../extensions/index.js";
 import { buildTuiInitialMessages } from "../file-arguments.js";
 import type { PreparedMmpRun } from "../host.js";
@@ -25,7 +26,7 @@ export async function createRuntimeFromPrepared(
     prepared.runtimeIdentity,
     prepared.resolveAssembly,
     undefined,
-    prepared.args.passthrough.includes("--verbose"),
+    passthroughHasFlag(prepared.args.passthrough, "--verbose"),
   ),
 ): Promise<AgentSessionRuntime> {
   return createMmpRuntime({

@@ -83,7 +83,6 @@ export async function runImport(host: CommandHost, args: string): Promise<void> 
     }
     host.notice(`Session imported from: ${inputPath}`);
   } catch (error) {
-    // Pi offers a cwd picker for MissingSessionCwdError (not exported); MMP shows the error instead.
     host.notice(`Failed to import session: ${errorText(error)}`, "error");
   }
 }

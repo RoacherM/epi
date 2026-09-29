@@ -1,4 +1,5 @@
 import { parseArgs } from "@earendil-works/pi-coding-agent";
+import { passthroughHasFlag } from "../args.js";
 import { buildInlineExtensions } from "../extensions/index.js";
 import { buildTuiInitialMessages } from "../file-arguments.js";
 import { findNearestProjectManifest } from "../project.js";
@@ -10,7 +11,7 @@ export async function createRuntimeFromPrepared(prepared, cwd,
 // Mirrors host.ts's own construction (same flag, same default undefined updateCheck) so a caller
 // that builds a runtime straight from `prepared` (tests; host.ts always passes its own factories
 // explicitly) still gets `--verbose` support.
-extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly, undefined, prepared.args.passthrough.includes("--verbose"))) {
+extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly, undefined, passthroughHasFlag(prepared.args.passthrough, "--verbose"))) {
     return createMmpRuntime({
         cwd,
         agentDir: prepared.agentDir,

@@ -176,9 +176,11 @@ export async function runBug(host: CommandHost, args: string): Promise<void> {
   const consent = await confirm(
     host,
     "Report a bug",
-    "Opens a prefilled GitHub issue on MMP's repo with your description, the MMP and pinned Pi " +
-      "versions, and, if you choose, a short summary of this session written by the current model. " +
-      "Nothing is sent automatically -- review and submit it yourself in the browser.\n\nContinue?",
+    "Opens a prefilled GitHub 'new issue' page on MMP's repo. The URL itself carries your " +
+      "description, the MMP and pinned Pi versions, and, if you choose, a short summary of this " +
+      "session written by the current model -- that's everything the browser (and your OS) sees the " +
+      "moment it opens, whether or not you go on to submit it. GitHub itself only gets it if you " +
+      "review the page and click Submit.\n\nContinue?",
   );
   if (!consent) {
     host.notice("Bug report cancelled.");

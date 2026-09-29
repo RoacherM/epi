@@ -152,9 +152,11 @@ export function fitIssueBody(title, body) {
  * prefilled "new issue" URL on MMP's own GitHub repo -- never Pi's upload. The URL is always
  * printed (it's the actual deliverable in a headless run); opening a browser is best-effort. */
 export async function runBug(host, args) {
-    const consent = await confirm(host, "Report a bug", "Opens a prefilled GitHub issue on MMP's repo with your description, the MMP and pinned Pi " +
-        "versions, and, if you choose, a short summary of this session written by the current model. " +
-        "Nothing is sent automatically -- review and submit it yourself in the browser.\n\nContinue?");
+    const consent = await confirm(host, "Report a bug", "Opens a prefilled GitHub 'new issue' page on MMP's repo. The URL itself carries your " +
+        "description, the MMP and pinned Pi versions, and, if you choose, a short summary of this " +
+        "session written by the current model -- that's everything the browser (and your OS) sees the " +
+        "moment it opens, whether or not you go on to submit it. GitHub itself only gets it if you " +
+        "review the page and click Submit.\n\nContinue?");
     if (!consent) {
         host.notice("Bug report cancelled.");
         return;

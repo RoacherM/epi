@@ -155,6 +155,46 @@ test("mmp --resume opens the same selector at startup, without typing /resume, a
   assert.equal(exit, 0);
 });
 
+// Bug 8: Pi's own `--resume`, given Esc at the selector (nothing picked), prints "No session
+// selected" and exits (main.js ~327-336's selectSession/process.exit(0)) instead of silently
+// carrying on in a fresh session -- which is what MMP used to do, since bind() above already sets
+// one up before the selector even opens. Fixed by exiting the same way when the selector reports
+// "cancelled" (session-commands.ts's ResumeOutcome).
+test("mmp --resume, given Esc at the selector, prints \"No session selected\" and exits, like Pi", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "mmp-tui-resume-flag-esc-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("faux-echo.mjs")] }));
+  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" };
+
+  function run(steps, args) {
+    const result = spawnSync(process.execPath, [harness], {
+      cwd: root,
+      env: { ...env, MMP_TUI_HARNESS: JSON.stringify({ ...(args === undefined ? {} : { args }), steps }) },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    return result;
+  }
+
+  // Seed one session so the selector has something to show (and Esc, not "no sessions at all", is
+  // what's actually being exercised).
+  run([
+    ["wait", 2500],
+    ["type", "first message"], ["key", "enter"], ["wait", 800],
+    ["key", "ctrl+d"],
+  ]);
+
+  const result = run([
+    ["wait", 1500], ["mark", "selectorOpen"],
+    ["key", "esc"], ["wait", 800],
+  ], ["--no-project", "--resume"]);
+
+  assert.equal(result.status, 0, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+  assert.match(result.stdout, /No session selected/);
+});
+
 test("/compact compacts the session, shows the notice, and reports a second compact without doubling the prefix", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-compact.mjs")], [
     ["wait", 2500],

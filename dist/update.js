@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { passthroughHasFlag } from "./args.js";
 import { MmpArgumentError } from "./errors.js";
 // Shared with src/tui/share-commands.ts (/bug, /changelog): one place names MMP's GitHub repo.
 export const MMP_REPO = "RoacherM/mmp";
@@ -78,12 +79,14 @@ export async function refreshUpdateCache(options) {
     writeFileSync(cachePath(options.mmpHome), `${JSON.stringify(next, null, 2)}\n`);
     return next;
 }
-/** Update checks never run for reproducible or offline runs. */
+/** Update checks never run for reproducible or offline runs. `--offline` after a bare `--` is a
+ * message, not the flag (Pi's own parseArgs, cli/args.js, stops interpreting flags at `--`; bug 9's
+ * passthroughHasFlag respects that same boundary). */
 export function updateCheckDisabled(environment, piArguments) {
     return (environment.MMP_DISABLE_UPDATE_CHECK !== undefined ||
         environment.PI_OFFLINE !== undefined ||
         environment.CI !== undefined ||
-        piArguments.includes("--offline"));
+        passthroughHasFlag(piArguments, "--offline"));
 }
 export function updateNotice(cache, currentVersion) {
     const latest = cache?.latestVersion;
@@ -133,7 +136,8 @@ Update mmp itself, Manifest-declared extension packages, or the model catalog.
 
 Options:
   --self          Update mmp, including its pinned Pi core (default when no target is given)
-  --extensions    Clear the cached extension packages so Manifest-declared sources refetch
+  --extensions    Clear the whole cached extension package directory so every Manifest-declared
+                  source refetches (there is no per-source cache to clear individually -- see below)
   --models        Refresh the model catalog
   --all           Do all three
 
@@ -141,11 +145,15 @@ Examples:
   mmp update                  Update mmp only
   mmp update --all            Update mmp and refresh Manifest extensions and models
   mmp update --models         Refresh the model catalog only
-  mmp update <source>         Refetch one Manifest-declared extension (same as --extensions <source>)
+  mmp update <source>         Same as --extensions: <source> is not validated or used to scope the
+                               clear, it only shows up in the printed message; every Manifest-declared
+                               extension is refetched on the next run, not only the one named here.
 `;
 }
 /** `mmp update [--self|--extensions|--models|--all] [<source>]` (docs/cli-design.md §3). A bare
- * `<source>` with no flag means "update this one extension", same as `--extensions <source>`. */
+ * `<source>` with no flag is the same as `--extensions <source>`: it does not scope the clear to
+ * that one extension (there is no per-source cache to target -- see clearExtensionPackageCache's
+ * doc comment), it just gets echoed in the printed message. */
 export function parseUpdateArgs(argv) {
     let target;
     let source;
@@ -238,7 +246,9 @@ export async function runMmpUpdateCommand(argv, options) {
             ? cleared
                 ? "Cleared cached extension packages; they will be fetched fresh on the next run.\n"
                 : "No cached extension packages to clear.\n"
-            : `Cleared cached extension packages (including ${source}); they will be fetched fresh on the next run.\n`);
+            // There's no per-source cache to target (see clearExtensionPackageCache's doc comment):
+            // this clears every Manifest-declared extension's cache, not only `source`'s.
+            : `Cleared cached extension packages (all of them, not only ${source}); they will be fetched fresh on the next run.\n`);
     }
     if (target === "models" || target === "all") {
         await refreshModelCatalog(options.agentDir);

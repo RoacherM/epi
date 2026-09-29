@@ -192,6 +192,18 @@ export function parseMmpArgs(argv) {
         passthrough,
     };
 }
+/**
+ * Whether `flag` appears in `passthrough` before a `--` separator, not after it. Pi's own parseArgs
+ * (cli/args.js) stops interpreting flags entirely at `--`, treating everything after it as positional
+ * messages/`@file` arguments -- `mmp -- --help` sends the literal text "--help" as a message, it
+ * doesn't print help (bug 9). `passthrough` always contains the `--` token itself (parseMmpArgs,
+ * above, pushes it through unchanged), so this only has to find that one marker.
+ */
+export function passthroughHasFlag(passthrough, flag) {
+    const dashDashIndex = passthrough.indexOf("--");
+    const beforeDashDash = dashDashIndex === -1 ? passthrough : passthrough.slice(0, dashDashIndex);
+    return beforeDashDash.includes(flag);
+}
 /** Mirrors Pi's own `printHelp`'s extension-flags block (dist/cli/args.js): one line per flag a
  * loaded extension registered with `pi.registerFlag`, padded the same way, falling back to "Registered
  * by <path>" when the extension gave no description. Empty when nothing registered a flag. */
@@ -222,14 +234,14 @@ Usage:
   mmp <subcommand> [options]
 
 Subcommands:
-  mmp update [--self|--extensions|--models|--all] [<source>]  Update mmp, extensions, or the model catalog
-  mmp install <source> [-l]                                   Add an extension source to the Manifest
-  mmp remove <source> [-l]                                    Remove an extension source from the Manifest
-  mmp uninstall <source> [-l]                                 Alias for remove
-  mmp list                                                    List Manifest-declared rules, skills, extensions
-  mmp config [-l]                                             Edit the Manifest in $VISUAL/$EDITOR
-  mmp auth print-api-key|print-bearer-token|check              Print or check provider credentials
-  mmp <subcommand> --help                                      Show help for that subcommand
+  mmp update [--self|--extensions|--models|--all] [<source>]     Update mmp, extensions, or the model catalog
+  mmp install <source> [-l] [--approve|--no-approve]             Add an extension source to the Manifest
+  mmp remove <source> [-l] [--approve|--no-approve]              Remove an extension source from the Manifest
+  mmp uninstall <source> [-l] [--approve|--no-approve]           Alias for remove
+  mmp list                                                       List Manifest-declared rules, skills, extensions
+  mmp config [-l] [--approve|--no-approve]                       Edit the Manifest in $VISUAL/$EDITOR
+  mmp auth print-api-key|print-bearer-token|check                Print or check provider credentials
+  mmp <subcommand> --help                                        Show help for that subcommand
 
 Options:
 ${flagLines}
