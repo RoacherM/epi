@@ -1,4 +1,4 @@
-// Built-in commands MMP's host implements itself: /login, /logout, /model (docs/tui-design.md 4.6).
+// /login, /logout, /model (docs/tui-design.md 4.6); registered in builtins.ts.
 // The flows follow Pi's interactive mode, built from the components Pi exports.
 import { CredentialSynchronizationError, ExtensionSelectorComponent, LoginDialogComponent, ModelSelectorComponent, OAuthSelectorComponent, resolveCliModel, } from "@earendil-works/pi-coding-agent";
 const CANCELLED = "Login cancelled";

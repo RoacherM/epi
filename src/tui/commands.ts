@@ -1,4 +1,4 @@
-// Built-in commands MMP's host implements itself: /login, /logout, /model (docs/tui-design.md 4.6).
+// /login, /logout, /model (docs/tui-design.md 4.6); registered in builtins.ts.
 // The flows follow Pi's interactive mode, built from the components Pi exports.
 import {
   type AgentSession,
@@ -9,15 +9,8 @@ import {
   OAuthSelectorComponent,
   resolveCliModel,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
 
-export interface CommandHost {
-  readonly tui: TUI;
-  session(): AgentSession;
-  /** Show a component where the editor is; the returned function puts the editor back. */
-  takeEditorSlot(component: Component): () => void;
-  notice(text: string, tone?: "info" | "warning" | "error"): void;
-}
+import type { CommandHost } from "./command-host.js";
 
 type Model = NonNullable<AgentSession["model"]>;
 type LoginOption = ConstructorParameters<typeof OAuthSelectorComponent>[1][number];

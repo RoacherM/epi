@@ -46,5 +46,5 @@ export async function runTuiV2(prepared: PreparedMmpRun, extensionFactories: Inl
   // Pi's exported components read the global theme; it must exist before any of them is built.
   const theme = installMmpTheme(prepared.agentDir, detectAppearance(process.env));
   const runtime = await createRuntimeFromPrepared(prepared, cwd, extensionFactories);
-  return runTuiApp({ runtime, theme, cwd, logDirectory: prepared.agentDir });
+  return runTuiApp({ runtime, theme, cwd, agentDir: prepared.agentDir, logDirectory: prepared.agentDir });
 }

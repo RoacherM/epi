@@ -76,6 +76,12 @@ export class Transcript {
     this.tui.requestRender();
   }
 
+  /** A block from the host (command output, info panels), separated like any other message. */
+  addBlock(component: Component): void {
+    this.add(component);
+    this.tui.requestRender();
+  }
+
   handle(event: AgentSessionEvent): void {
     switch (event.type) {
       case "message_start":

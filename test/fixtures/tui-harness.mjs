@@ -27,7 +27,7 @@ const terminal = {
 const prepared = prepareMmpRun(["--no-project"]);
 const theme = installMmpTheme(prepared.agentDir, detectAppearance(process.env));
 const runtime = await createRuntimeFromPrepared(prepared, process.cwd());
-const running = runTuiApp({ runtime, theme, cwd: process.cwd(), logDirectory: prepared.agentDir, terminal });
+const running = runTuiApp({ runtime, theme, cwd: process.cwd(), agentDir: prepared.agentDir, logDirectory: prepared.agentDir, terminal });
 
 const strip = (text) => text.replace(/\x1b\[[0-9;?<>=:]*[a-zA-Z~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[=>]/g, "");
 const marks = {};

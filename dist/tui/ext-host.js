@@ -38,8 +38,7 @@ export function createExtensionUIContext(surface) {
         confirm: (title, message, opts) => dialog((done) => new ExtensionSelectorComponent(`${title}\n${message}`, ["Yes", "No"], (choice) => done(choice === "Yes"), () => done(false)), false, opts),
         input: (title, placeholder, opts) => dialog((done) => new ExtensionInputComponent(title, placeholder, done, () => done(undefined)), undefined, opts),
         editor: (title, prefill) => dialog((done) => new ExtensionEditorComponent(surface.tui, 
-        // Pi types this as its app-level KeybindingsManager (not exported); the pi-tui manager is
-        // structurally the same minus app.* ids, which only affect the external-editor key here.
+        // Pi's app-level KeybindingsManager, installed as pi-tui's global map by keybindings.ts.
         piTui.getKeybindings(), title, prefill, done, () => done(undefined)), undefined, undefined),
         notify: (message, type) => surface.notify(message, type ?? "info"),
         onTerminalInput: (handler) => surface.tui.addInputListener(handler),

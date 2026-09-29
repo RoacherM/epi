@@ -290,22 +290,25 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 
 **命令面板**：`Ctrl+P` 打开浮层，模糊搜索所有命令，分组显示（会话、模型、上下文、其它），右侧显示快捷键。数据来自动作表和扩展注册的命令。
 
-**v1 的内置命令**：
+**优先级**（2026-09-29 与用户确认）。Pi 有 24 个内置命令，都要在 MMP 里重新接线。命令表在 `src/tui/builtins.ts`，键位表在 `src/tui/keys.ts`；未接线的命令在补全里标 `(not in v2 yet)`，输入后提示用经典界面。
 
-| 命令 | 实现 |
-|---|---|
-| `/model`、`/thinking` | `ModelSelectorComponent`、`ThinkingSelectorComponent`（导出） |
-| `/login`、`/logout` | `modelRuntime.login/logout` + `OAuthSelectorComponent`、`LoginDialogComponent`（导出）。流程接线约 400 行，参照 Pi |
-| `/new`、`/resume` | runtime 的 `newSession`、`switchSession`；`SessionSelectorComponent` |
-| `/compact` | `session.compact` |
-| `/reload` | `session.reload()`，然后重建宿主状态（6.3 节） |
-| `/copy` | `getLastAssistantText` + `copyToClipboard` |
-| `/quit` | 退出流程（第 7 节） |
-| `/mmp` | MMP 已有，由 `mmp:runtime` 注册，不用改 |
+| 级别 | 内容 | 实现 |
+|---|---|---|
+| 已完成 | `/login`、`/logout`、`/model`、`/new`、`/quit` | `commands.ts`；`runtime.newSession` |
+| P0 | 补全列出全部命令、prompt 模板和 `/skill:*` | `slashCompletions`（已完成） |
+| P0 | `/compact [指令]` | `session.compact` |
+| P0 | `/resume` | `SessionSelectorComponent`（导出）+ `runtime.switchSession` |
+| P0 | `/thinking [档位]` | `ThinkingSelectorComponent`（导出） |
+| P0 | `/copy`、`Ctrl+X` | `getLastAssistantText` + `copyToClipboard` |
+| P0 | `/reload` | `session.reload()`，然后重建宿主状态（6.3 节） |
+| P0 | `!命令`、`!!命令` | `session.executeBash` + `BashExecutionComponent`（导出） |
+| P0 | 键位：`Ctrl+L`、`Alt+Enter`、`Alt+↑`、`Ctrl+G`、`Ctrl+T`、`Ctrl+V`、`Ctrl+Z` | 各自一个 SDK 调用或 pi-tui 功能 |
+| P1 | `/tree`、`/fork`、`/clone`、`/name`、`/session`、`/export`、`/import`、`/hotkeys` | 组件都有导出，主要是接线 |
+| P2 | `/settings`、`/scoped-models` | `/settings` 里有些项只对 Pi 自己的界面有意义，要先挑出适用于 MMP 的 |
 
-**v1.1**：`/tree`、`/fork`、`/clone`、`/export`、`/import`、`/name`、`/session`、`/hotkeys`、`/settings`、`/scoped-models`、`/trust`。组件都有导出，主要是接线。
-
-**不做**：`/share`、`/bug`（上报给 Pi 开发者，不适合 MMP）、`/changelog`、彩蛋命令。
+**不做**：
+- `/trust`：它保存的是 Pi 的项目信任，而 MMP 从不把项目信任交给 Pi（3.3 节）。MMP 的信任只有 `--approve`。
+- `/share`、`/bug`（上报给 Pi 开发者）、`/changelog`（用 `mmp update`）、彩蛋命令。
 
 扩展命令、prompt 模板和 skill 命令不用宿主执行，交给 `session.prompt("/名字 参数")` 即可（SDK 笔记第 4 节）。宿主只拦截自己的内置命令。
 

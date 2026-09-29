@@ -1,5 +1,5 @@
 import { type AgentSession, type AgentSessionEvent, type Theme } from "@earendil-works/pi-coding-agent";
-import type { Container, TUI } from "@earendil-works/pi-tui";
+import type { Component, Container, TUI } from "@earendil-works/pi-tui";
 export declare class Transcript {
     private readonly tui;
     private readonly theme;
@@ -18,6 +18,8 @@ export declare class Transcript {
     reset(session: AgentSession): void;
     setToolsExpanded(expanded: boolean): void;
     notice(text: string, tone?: "info" | "warning" | "error"): void;
+    /** A block from the host (command output, info panels), separated like any other message. */
+    addBlock(component: Component): void;
     handle(event: AgentSessionEvent): void;
     /** `gap: false` for components that already start with a blank row (Pi's assistant and tool components). */
     private add;

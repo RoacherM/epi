@@ -79,8 +79,7 @@ export function createExtensionUIContext(surface: HostSurface): ExtensionUIConte
       dialog<string | undefined>(
         (done) => new ExtensionEditorComponent(
           surface.tui,
-          // Pi types this as its app-level KeybindingsManager (not exported); the pi-tui manager is
-          // structurally the same minus app.* ids, which only affect the external-editor key here.
+          // Pi's app-level KeybindingsManager, installed as pi-tui's global map by keybindings.ts.
           piTui.getKeybindings() as never,
           title,
           prefill,

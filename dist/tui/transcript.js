@@ -62,6 +62,11 @@ export class Transcript {
         this.add(new piTui.Text(this.theme.fg(color, text), 1, 0));
         this.tui.requestRender();
     }
+    /** A block from the host (command output, info panels), separated like any other message. */
+    addBlock(component) {
+        this.add(component);
+        this.tui.requestRender();
+    }
     handle(event) {
         switch (event.type) {
             case "message_start":

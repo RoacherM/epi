@@ -13,23 +13,20 @@ import {
 import type { AutocompleteProvider, Component, Container, Editor, Terminal } from "@earendil-works/pi-tui";
 
 import { headerBar, PromptFrame, type Shortcut, shortcutsBar, type TurnState, TurnStatus } from "./chrome.js";
-import { type CommandHost, runLogin, runLogout, runModel } from "./commands.js";
+import { findBuiltin, slashCompletions } from "./builtins.js";
+import type { CommandHost } from "./command-host.js";
 import { createExtensionUIContext, type HostSurface } from "./ext-host.js";
+import { installKeybindings } from "./keybindings.js";
+import { createKeyActions } from "./keys.js";
 import { piTui } from "./pi-tui.js";
 import { Transcript } from "./transcript.js";
-
-// Pi's built-in slash commands are implemented inside its own interactive mode, which MMP replaces.
-// MMP implements /quit, /new, /login, /logout and /model; the rest arrive in M3 (tui-design 4.6).
-const PI_BUILTIN_COMMANDS = new Set([
-  "settings", "model", "tree", "thinking", "scoped-models", "export", "import", "share", "bug", "copy",
-  "name", "session", "changelog", "hotkeys", "fork", "clone", "trust", "login", "logout", "new",
-  "compact", "resume", "reload", "quit",
-]);
 
 export interface TuiAppOptions {
   runtime: AgentSessionRuntime;
   theme: Theme;
   cwd: string;
+  /** MMP's Pi state directory (~/.mmp/pi): keybindings.json is read from here. */
+  agentDir: string;
   logDirectory: string;
   terminal?: Terminal;
 }
@@ -59,6 +56,7 @@ function readGitBranch(cwd: string): string | undefined {
 export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   const { runtime, theme, cwd } = options;
   const terminal = options.terminal ?? new piTui.ProcessTerminal();
+  const keybindings = installKeybindings(options.agentDir);
   const tui = new piTui.TuiAltScreen(terminal, false, options.logDirectory, {
     scrollToEndIndicator: () => theme.bg("selectedBg", theme.fg("text", " ↓ Jump to latest ")),
   });
@@ -71,7 +69,6 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   let turn: TurnState | undefined;
   let workingMessage: string | undefined;
   let workingVisible = true;
-  let lastCtrlC = 0;
   let branch = readGitBranch(cwd);
 
   // ── layout (grok notes 2.2): header, transcript, turn status, prompt, shortcuts ──
@@ -141,18 +138,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   // ── autocomplete ──────────────────────────────────────────────────────────
   let autocomplete: AutocompleteProvider = new piTui.CombinedAutocompleteProvider([], cwd, null);
   function resetAutocomplete(): void {
-    const commands = [
-      { name: "quit", description: "Quit MMP" },
-      { name: "new", description: "Start a new session" },
-      { name: "login", description: "Log in to a model provider" },
-      { name: "logout", description: "Remove stored credentials" },
-      { name: "model", description: "Select a model" },
-      ...session.extensionRunner.getRegisteredCommands().map((command) => ({
-        name: command.invocationName,
-        ...(command.description === undefined ? {} : { description: command.description }),
-      })),
-    ];
-    autocomplete = new piTui.CombinedAutocompleteProvider(commands, cwd, null);
+    autocomplete = new piTui.CombinedAutocompleteProvider(slashCompletions(session), cwd, null);
     editor.setAutocompleteProvider(autocomplete);
   }
 
@@ -221,9 +207,18 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   const uiContext = createExtensionUIContext(surface);
   const commandHost: CommandHost = {
     tui,
+    theme,
+    cwd,
+    runtime,
     session: () => session,
     takeEditorSlot: (component) => surface.takeEditorSlot(component),
     notice: (text, tone) => transcript.notice(text, tone ?? "info"),
+    addBlock: (component) => transcript.addBlock(component),
+    getEditorText: () => editor.getText(),
+    setEditorText: (text) => surface.setEditorText(text),
+    isWorking: () => turn !== undefined,
+    toggleToolsExpanded: () => surface.setToolsExpanded(!toolsExpanded),
+    exit: (code) => exit(code),
   };
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
@@ -338,22 +333,21 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     if (trimmed === "") return;
     editor.addToHistory(text);
     editor.setText("");
-    if (trimmed === "/quit") {
-      await exit(0);
-      return;
-    }
-    if (trimmed === "/new") {
-      await runtime.newSession();
-      return;
-    }
     const [, command, commandArgs = ""] = /^\/(\S+)\s*([\s\S]*)$/.exec(trimmed) ?? [];
-    if (command === "login") return runLogin(commandHost, commandArgs);
-    if (command === "logout") return runLogout(commandHost);
-    if (command === "model") return runModel(commandHost, commandArgs);
+    const builtin = command === undefined ? undefined : findBuiltin(command);
+    if (builtin?.kind === "run") {
+      try {
+        await builtin.command.run(commandHost, commandArgs);
+      } catch (error) {
+        transcript.notice(`/${command} failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
+      return;
+    }
+    // A planned or excluded built-in name may still be an extension's command.
     const isExtensionCommand = command !== undefined &&
       session.extensionRunner.getRegisteredCommands().some((registered) => registered.invocationName === command);
-    if (command !== undefined && !isExtensionCommand && PI_BUILTIN_COMMANDS.has(command)) {
-      transcript.notice(`/${command} is not in MMP TUI v2 yet; use classic mmp (without MMP_TUI=v2) for now.`, "warning");
+    if (builtin !== undefined && !isExtensionCommand) {
+      transcript.notice(builtin.message, "warning");
       editor.setText(text);
       return;
     }
@@ -372,39 +366,15 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   }
   editor.onSubmit = (text) => void submit(text);
 
+  const keyActions = createKeyActions();
   tui.addInputListener((data) => {
-    if (piTui.matchesKey(data, "escape") && session.isStreaming) {
-      void session.abort();
-      return { consume: true };
-    }
-    if (piTui.matchesKey(data, "ctrl+c")) {
-      if (editor.getText() !== "") {
-        editor.setText("");
-      } else if (session.isStreaming) {
-        void session.abort();
-      } else if (Date.now() - lastCtrlC < 1000) {
-        void exit(0);
-      } else {
-        lastCtrlC = Date.now();
-        transcript.notice("Press Ctrl+C again to quit.");
-      }
-      tui.requestRender();
-      return { consume: true };
-    }
-    if (piTui.matchesKey(data, "shift+tab") && turn === undefined) {
-      session.cycleThinkingLevel();
-      tui.requestRender();
-      return { consume: true };
-    }
-    if (piTui.matchesKey(data, "ctrl+o")) {
-      surface.setToolsExpanded(!toolsExpanded);
-      return { consume: true };
-    }
-    if (piTui.matchesKey(data, "ctrl+d") && editor.getText() === "") {
-      void exit(0);
-      return { consume: true };
-    }
-    return undefined;
+    const action = keyActions.find((candidate) =>
+      keybindings.matches(data, candidate.id as never) && (candidate.when?.(commandHost) ?? true));
+    if (action === undefined) return undefined;
+    void Promise.resolve(action.run(commandHost)).catch((error: unknown) =>
+      transcript.notice(error instanceof Error ? error.message : String(error), "error"));
+    tui.requestRender();
+    return { consume: true };
   });
 
   tui.start();

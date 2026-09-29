@@ -1,12 +1,4 @@
-import { type AgentSession } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
-export interface CommandHost {
-    readonly tui: TUI;
-    session(): AgentSession;
-    /** Show a component where the editor is; the returned function puts the editor back. */
-    takeEditorSlot(component: Component): () => void;
-    notice(text: string, tone?: "info" | "warning" | "error"): void;
-}
+import type { CommandHost } from "./command-host.js";
 /** Like Pi: first the method (account or API key), then the providers offering it. */
 export declare function runLogin(host: CommandHost, providerRef: string): Promise<void>;
 export declare function runLogout(host: CommandHost): Promise<void>;

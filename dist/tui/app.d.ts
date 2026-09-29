@@ -4,6 +4,8 @@ export interface TuiAppOptions {
     runtime: AgentSessionRuntime;
     theme: Theme;
     cwd: string;
+    /** MMP's Pi state directory (~/.mmp/pi): keybindings.json is read from here. */
+    agentDir: string;
     logDirectory: string;
     terminal?: Terminal;
 }
