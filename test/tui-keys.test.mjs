@@ -33,7 +33,8 @@ test("built-in lookup separates wired, planned and excluded commands", () => {
   assert.equal(findBuiltin("login")?.kind, "run");
   assert.equal(findBuiltin("resume")?.kind, "run");
   assert.equal(findBuiltin("tree")?.kind, "planned");
-  assert.match(findBuiltin("trust")?.message ?? "", /never hands project trust to Pi/);
+  assert.equal(findBuiltin("trust")?.kind, "run");
+  assert.match(findBuiltin("share")?.message ?? "", /not part of MMP/);
   assert.equal(findBuiltin("mmp"), undefined);
 });
 
@@ -52,7 +53,6 @@ test("slash completions list built-ins, templates, extension commands and skills
     assert.ok(names.includes(name), name);
   }
   assert.equal(names.filter((name) => name === "resume").length, 1);
-  assert.ok(!names.includes("trust"));
   session.settingsManager.getEnableSkillCommands = () => false;
   assert.ok(!slashCompletions(session).some((command) => command.name.startsWith("skill:")));
 });

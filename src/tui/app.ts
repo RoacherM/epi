@@ -222,6 +222,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     tui,
     theme,
     cwd,
+    agentDir: options.agentDir,
     runtime,
     session: () => session,
     takeEditorSlot: (component) => surface.takeEditorSlot(component),

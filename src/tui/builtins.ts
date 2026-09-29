@@ -4,7 +4,7 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
 import type { CommandHost } from "./command-host.js";
-import { runLogin, runLogout, runModel } from "./commands.js";
+import { runLogin, runLogout, runModel, runTrust } from "./commands.js";
 import { runCompact, runCopy, runReload, runResume, runThinking } from "./session-commands.js";
 
 export interface BuiltinCommand {
@@ -25,6 +25,7 @@ export const BUILTIN_COMMANDS: BuiltinCommand[] = [
   { name: "thinking", description: "Set thinking level", argumentHint: "[level]", run: (host, args) => runThinking(host, args) },
   { name: "copy", description: "Copy the last assistant message", run: (host) => runCopy(host) },
   { name: "reload", description: "Reload extensions, skills, prompts and context files", run: (host) => runReload(host) },
+  { name: "trust", description: "Trust or distrust the current project's .mmp/mmp.json", run: (host) => runTrust(host) },
 ];
 
 /** Pi built-ins not wired yet, in the priority order agreed for M3 (P0, then P1, then P2). */
@@ -43,7 +44,6 @@ const PLANNED: Record<string, string> = {
 
 /** Pi built-ins MMP leaves out on purpose, with the reason shown to the user. */
 const NOT_IN_MMP: Record<string, string> = {
-  trust: "MMP never hands project trust to Pi; use mmp --approve for the MMP manifest.",
   share: "Sharing sessions to a gist is not part of MMP.",
   bug: "/bug reports to the Pi developers; report MMP issues on MMP's GitHub instead.",
   changelog: "Run mmp update to see and install new MMP releases.",

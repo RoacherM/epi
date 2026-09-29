@@ -417,8 +417,12 @@ MMP 使用 Pi 导出的 `ProjectTrustStore` API，不直接解析 `trust.json`�
   -> 本次运行读取项目 .mmp；不交给 Pi
 
 无 override
+  -> 交互模式下第一次遇到还没决定的项目：先问（Trust / Trust parent folder (<parent>) / Trust
+     (this run only) / Do not trust / Do not trust (this run only)），答案写入
+     ProjectTrustStore（"this run only" 的两个选项不写盘，只影响这次运行），见
+     `src/trust-prompt.ts`
   -> ProjectTrustStore.get(projectRoot) === true 才读取
-  -> false 或 unknown 都忽略项目 .mmp
+  -> false 或 unknown（非交互模式，还没问过）都忽略项目 .mmp
 ```
 
 安全要求：
@@ -426,8 +430,8 @@ MMP 使用 Pi 导出的 `ProjectTrustStore` API，不直接解析 `trust.json`�
 1. trust 决策前最多检查 `.mmp/mmp.json` 是否存在，不能读取其内容；
 2. 未信任时不得读取项目 Rules、Skills、Agents、Extensions、MCP 或 Hooks；
 3. MMP 自己消费 `--approve` 和 `--no-approve`，不传给 Pi；Pi 固定收到 `--no-approve`，项目 `.pi/` 永远不可信（2026-09-29 起，原因见 8.1 节的已修复问题）；
-4. Pi 不再弹原生 trust prompt。要长期信任项目 `.mmp`，在 `mmp` 里用 `/trust` 保存（写入同一个 `ProjectTrustStore`），重启后生效；
-5. non-interactive 模式不额外弹 MMP prompt；unknown 默认不加载项目 `.mmp`。
+4. Pi 不再弹原生 trust prompt。要信任或撤销项目 `.mmp`：交互模式第一次进入未决定的项目会自动问；随时可以在 `mmp` 里用 `/trust` 改。两条路径都写入同一个 `ProjectTrustStore`，重启 `mmp` 后生效（Manifest 里的 Extensions 不能热加载）；
+5. non-interactive 模式（`--dry-run`、`-p`、`--mode json/rpc`、非 TTY、Pi 子命令）不弹 MMP prompt；unknown 默认不加载项目 `.mmp`。
 
 不保留旧的 `--trust-project`。沿用 Pi 的 `--approve` / `--no-approve` 这两个名字，用户不用学新开关；但它们只作用于 `.mmp`。
 

@@ -188,6 +188,7 @@ export async function runTuiApp(options) {
         tui,
         theme,
         cwd,
+        agentDir: options.agentDir,
         runtime,
         session: () => session,
         takeEditorSlot: (component) => surface.takeEditorSlot(component),

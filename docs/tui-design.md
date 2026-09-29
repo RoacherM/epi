@@ -294,7 +294,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 
 | 级别 | 内容 | 实现 |
 |---|---|---|
-| 已完成 | `/login`、`/logout`、`/model`、`/new`、`/quit` | `commands.ts`；`runtime.newSession` |
+| 已完成 | `/login`、`/logout`、`/model`、`/new`、`/quit`、`/trust` | `commands.ts`；`runtime.newSession`；`/trust` 复用 `src/trust-prompt.ts`（DEVELOPMENT.md 8.2 节） |
 | P0 ✓ | 补全列出全部命令、prompt 模板和 `/skill:*` | `slashCompletions`（已完成） |
 | P0 ✓ | `/compact [指令]` | `session.compact` |
 | P0 ✓ | `/resume` | `SessionSelectorComponent`（导出）+ `runtime.switchSession` |
@@ -308,7 +308,6 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | P2 | `/settings`、`/scoped-models` | `/settings` 里有些项只对 Pi 自己的界面有意义，要先挑出适用于 MMP 的 |
 
 **不做**：
-- `/trust`：它保存的是 Pi 的项目信任，而 MMP 从不把项目信任交给 Pi（3.3 节）。MMP 的信任只有 `--approve`。
 - `/share`、`/bug`（上报给 Pi 开发者）、`/changelog`（用 `mmp update`）、彩蛋命令。
 
 扩展命令、prompt 模板和 skill 命令不用宿主执行，交给 `session.prompt("/名字 参数")` 即可（SDK 笔记第 4 节）。宿主只拦截自己的内置命令。

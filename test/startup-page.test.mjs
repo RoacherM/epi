@@ -91,7 +91,24 @@ test("wide startup page presents the Make My Pi brand and assembly controls", ()
   assert.match(output, /manifest\s+not configured/);
   assert.match(output, /\/fixture\/\.mmp\/mmp\.json/);
   assert.match(output, /\/mmp inspect · \/login authenticate/);
-  assert.match(output, /mmp --approve/);
+  assert.match(output, /\/trust/);
+});
+
+test("startup page shows an explicitly untrusted project", () => {
+  const untrusted = {
+    ...identity,
+    manifests: {
+      ...identity.manifests,
+      project: {
+        discovery: "ignored",
+        path: "/repo/.mmp/mmp.json",
+        trusted: false,
+        loaded: false,
+      },
+    },
+  };
+  const output = renderMmpStartupPage(untrusted, theme, 120).join("\n");
+  assert.match(output, /not trusted · \/trust/);
 });
 
 test("narrow startup page remains within the terminal width", () => {

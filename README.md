@@ -131,7 +131,7 @@ MMP_HOME=/absolute/path/to/mmp-home mmp --dry-run
 └── hooks.json
 ```
 
-项目文件只有在统一 Project Trust 决策为可信后才会读取。`--approve` 与 `--no-approve` 是本次运行覆盖；要长期信任某个项目，在 `mmp` 里用 `/trust` 保存，重启后生效。`--no-project` 连发现都禁用。先执行 `mmp --dry-run` 可核对 `projectDiscovery`、`trusted`、`loaded` 与每项资源的 provenance。
+项目文件只有在统一 Project Trust 决策为可信后才会读取。`--approve` 与 `--no-approve` 是本次运行覆盖。交互模式下第一次进入带 `.mmp/mmp.json` 且还没决定过的项目会弹出选择（信任 / 信任父目录 / 仅本次信任 / 不信任 / 仅本次不信任）；随时也可以在 `mmp` 里用 `/trust` 改。两者都保存到同一个信任记录，重启后生效（Extensions 不能热加载）。`--no-project` 连发现都禁用；非交互模式（`-p`、`--mode json/rpc` 等）不会弹这个选择。先执行 `mmp --dry-run` 可核对 `projectDiscovery`、`trusted`、`loaded` 与每项资源的 provenance。
 
 ## Manifest
 
