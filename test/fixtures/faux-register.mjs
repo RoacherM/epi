@@ -3,7 +3,7 @@
 // provider's auth only lands after an un-awaited background refresh, which races the first prompt.
 import { createFauxCore } from "@earendil-works/pi-ai";
 
-export function registerFaux(pi, { models, responses, tokensPerSecond }) {
+export function registerFaux(pi, { models, responses, tokensPerSecond, reasoning = false }) {
   const core = createFauxCore({
     provider: "mmp-faux",
     models: models.map((id) => ({ id })),
@@ -18,7 +18,7 @@ export function registerFaux(pi, { models, responses, tokensPerSecond }) {
     models: core.models.map((model) => ({
       id: model.id,
       name: model.name,
-      reasoning: false,
+      reasoning,
       input: ["text"],
       cost: model.cost,
       contextWindow: model.contextWindow,

@@ -194,6 +194,7 @@ export async function runTuiApp(options) {
         isWorking: () => turn !== undefined,
         toggleToolsExpanded: () => surface.setToolsExpanded(!toolsExpanded),
         exit: (code) => exit(code),
+        reloadSession: () => reloadSession(),
     };
     // ── lifecycle ─────────────────────────────────────────────────────────────
     let exiting = false;
@@ -276,7 +277,7 @@ export async function runTuiApp(options) {
                 fork: (entryId, actionOptions) => runtime.fork(entryId, actionOptions),
                 navigateTree: (targetId, actionOptions) => session.navigateTree(targetId, actionOptions),
                 switchSession: (sessionPath, actionOptions) => runtime.switchSession(sessionPath, actionOptions),
-                reload: () => session.reload(),
+                reload: () => reloadSession(),
             },
             shutdownHandler: () => void exit(0),
             onError: (error) => transcript.notice(`Extension error (${error.extensionPath}, ${error.event}): ${error.error}`, "error"),
@@ -286,15 +287,33 @@ export async function runTuiApp(options) {
         resetAutocomplete();
         tui.requestRender();
     }
-    runtime.setBeforeSessionInvalidate(() => {
+    /** Widget/header/footer/status state an extension sets up again on `session_start`; cleared
+     * before that fires so nothing stale from the old session lingers (docs/tui-design.md 6.3). */
+    function clearExtensionUiState() {
         statuses.clear();
         widgets.aboveEditor.clear();
         widgets.belowEditor.clear();
         rebuildWidgets();
         surface.setHeader(undefined);
         surface.setFooter(undefined);
-    });
+    }
+    runtime.setBeforeSessionInvalidate(clearExtensionUiState);
     runtime.setRebindSession(bind);
+    // `session.reload()` keeps the same AgentSession instance (no `switchSession`/`newSession`
+    // replacement), so `setBeforeSessionInvalidate`/`setRebindSession` never fire for it; Pi's own
+    // handleReloadCommand does the equivalent host-side work inline, which this mirrors.
+    async function reloadSession() {
+        clearExtensionUiState();
+        // The message components already in the transcript hold markdown transformers and tool
+        // renderers captured from the extension runner reload() is about to replace; rebuild them
+        // against the new one, like Pi's handleReloadCommand's own beforeSessionStart callback does.
+        await session.reload({ beforeSessionStart: () => transcript.reset(session) });
+        // Re-registering extension providers on reload can race an un-awaited auth refresh, same as bind().
+        await runtime.services.modelRuntime.refresh({ allowNetwork: false });
+        keybindings.reload();
+        resetAutocomplete();
+        tui.requestRender();
+    }
     // ── input ─────────────────────────────────────────────────────────────────
     async function submit(text) {
         const trimmed = text.trim();

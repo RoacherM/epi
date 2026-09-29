@@ -2,6 +2,7 @@
 // Pi's defaults and the user's ~/.mmp/pi/keybindings.json both apply. The first matching action
 // whose `when` holds consumes the key; otherwise it goes to the focused component (editor, dialog).
 import type { CommandHost } from "./command-host.js";
+import { runCopy } from "./session-commands.js";
 
 export interface KeyAction {
   /** Pi keybinding id, e.g. "app.model.select". */
@@ -49,6 +50,10 @@ export function createKeyActions(): KeyAction[] {
     {
       id: "app.tools.expand",
       run: (host) => host.toggleToolsExpanded(),
+    },
+    {
+      id: "app.message.copy",
+      run: (host) => runCopy(host),
     },
   ];
 }

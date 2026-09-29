@@ -5,6 +5,7 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
 import type { CommandHost } from "./command-host.js";
 import { runLogin, runLogout, runModel } from "./commands.js";
+import { runCompact, runCopy, runReload, runResume, runThinking } from "./session-commands.js";
 
 export interface BuiltinCommand {
   name: string;
@@ -19,15 +20,15 @@ export const BUILTIN_COMMANDS: BuiltinCommand[] = [
   { name: "model", description: "Select a model", argumentHint: "<provider/model>", run: (host, args) => runModel(host, args) },
   { name: "new", description: "Start a new session", run: async (host) => void (await host.runtime.newSession()) },
   { name: "quit", description: "Quit MMP", run: (host) => host.exit(0) },
+  { name: "compact", description: "Compact the session context", argumentHint: "[instructions]", run: (host, args) => runCompact(host, args) },
+  { name: "resume", description: "Resume a different session", run: (host) => runResume(host) },
+  { name: "thinking", description: "Set thinking level", argumentHint: "[level]", run: (host, args) => runThinking(host, args) },
+  { name: "copy", description: "Copy the last assistant message", run: (host) => runCopy(host) },
+  { name: "reload", description: "Reload extensions, skills, prompts and context files", run: (host) => runReload(host) },
 ];
 
 /** Pi built-ins not wired yet, in the priority order agreed for M3 (P0, then P1, then P2). */
 const PLANNED: Record<string, string> = {
-  compact: "Compact the session context",
-  resume: "Resume a different session",
-  thinking: "Set thinking level",
-  copy: "Copy the last assistant message",
-  reload: "Reload extensions, skills, prompts and context files",
   tree: "Navigate the session tree",
   fork: "Fork from a previous user message",
   clone: "Duplicate the current session",

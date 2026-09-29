@@ -1,3 +1,4 @@
+import { runCopy } from "./session-commands.js";
 const DOUBLE_PRESS_MS = 1000;
 export function createKeyActions() {
     let lastCtrlC = 0;
@@ -39,6 +40,10 @@ export function createKeyActions() {
         {
             id: "app.tools.expand",
             run: (host) => host.toggleToolsExpanded(),
+        },
+        {
+            id: "app.message.copy",
+            run: (host) => runCopy(host),
         },
     ];
 }

@@ -7,7 +7,7 @@ import { runTuiApp } from "../../dist/tui/app.js";
 import { createRuntimeFromPrepared } from "../../dist/tui/start.js";
 import { detectAppearance, installMmpTheme } from "../../dist/tui/theme.js";
 
-const KEYS = { enter: "\r", esc: "\x1b", "ctrl+c": "\x03", "ctrl+d": "\x04", down: "\x1b[B", up: "\x1b[A" };
+const KEYS = { enter: "\r", esc: "\x1b", "ctrl+c": "\x03", "ctrl+d": "\x04", "ctrl+x": "\x18", down: "\x1b[B", up: "\x1b[A" };
 const { steps } = JSON.parse(process.env.MMP_TUI_HARNESS);
 
 let output = "";

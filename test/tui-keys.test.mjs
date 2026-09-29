@@ -31,7 +31,8 @@ test("keybindings.json is read from MMP's agent dir", (t) => {
 
 test("built-in lookup separates wired, planned and excluded commands", () => {
   assert.equal(findBuiltin("login")?.kind, "run");
-  assert.equal(findBuiltin("resume")?.kind, "planned");
+  assert.equal(findBuiltin("resume")?.kind, "run");
+  assert.equal(findBuiltin("tree")?.kind, "planned");
   assert.match(findBuiltin("trust")?.message ?? "", /never hands project trust to Pi/);
   assert.equal(findBuiltin("mmp"), undefined);
 });
