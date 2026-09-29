@@ -21,10 +21,11 @@
 | 2026-09-29 | U4 | MMP 自己消费 `--approve` / `--no-approve`，不再转给 Pi；固定给 Pi 传 `--no-approve`。长期信任项目用 `/trust` | 以前 `mmp --approve` 会让项目 `.pi/settings.json` 在运行阶段生效（实测），违反 C1 | 保持转发（沿用 Pi 的语义） | 已定（已完成） | DEVELOPMENT.md 8.2 节 |
 | 2026-09-29 | U5 | 支持 `mmp update`，交互模式下在底栏提示 `Update available! Run: mmp update`；启动时关掉 Pi 自带的更新提示 | 你的要求（参照 Claude Code）；Pi 自带的提示会让用户去跑 `pi update`，升的不是 MMP 锁定的那份 | 只在提示里给 curl 命令 | 已定（已完成） | [pi-upgrade-design.md](pi-upgrade-design.md) 5.1 节；`src/update.ts` |
 | 2026-09-29 | U6 | 不做后台自动安装 | 你的决定 | 像 Claude Code 那样后台自动更新 | 已定 | pi-upgrade-design 5.1 节 |
-| 2026-09-29 | M3 | 内置命令按 P0 → P1 → P2 做（tui-design 4.6）：P0 是补全、`/compact`、`/resume`、`/thinking`、`/copy`、`/reload`、`!` 命令和常用键位。不做 `/trust`、`/share`、`/bug`、`/changelog` | 先做每天用、只需薄包装 SDK 的；`/trust` 保存的是 Pi 的项目信任，和 C1 冲突 | 按 Pi 列表顺序全做 | 已定 | tui-design 4.6 节 |
+| 2026-09-29 | M3 | 内置命令按 P0 → P1 → P2 做（tui-design 4.6）：P0 是补全、`/compact`、`/resume`、`/thinking`、`/copy`、`/reload`、`!` 命令和常用键位。不做 `/share`、`/bug`、`/changelog` | 先做每天用、只需薄包装 SDK 的 | 按 Pi 列表顺序全做 | 已定 | tui-design 4.6 节 |
 | 2026-09-29 | K1 | `Ctrl+P` 给命令面板（grok 的入口），切模型用 `Ctrl+L` 或 `/model`；运行中 `Enter` 排队、`Alt+Enter` 插入当前这轮 | 你同意了推荐 | 保留 Pi 的 `Ctrl+P` 轮换模型 | 按推荐推进 | tui-design 4.7 节 |
 | 2026-09-29 | K2 | 键位用 Pi 自己的键位表（从 Pi 包内文件加载），读 `~/.mmp/pi/keybindings.json` | 默认键位随 Pi 升级自动同步；测试在文件位置变化时报错 | 复制 Pi 的键位定义（约 114 行） | 我定的做法，你可以改 | `src/tui/keybindings.ts` |
 | 2026-09-29 | M2 | 新界面开始开发：M1 的探针并进 M2 一起做；新界面放在 `MMP_TUI=v2` 开关后面，经典界面保持默认，直到 `/login` 等命令做完 | 你问为什么还没开始写；先交出能试用的东西。开关期间经典界面是唯一能登录的入口 | 先单独跑完所有探针；直接替换经典界面 | 我定的做法，你可以改 | tui-design 第 15 节 |
+| 2026-09-29 | T2 | 交互模式下首次进入带 `.mmp/mmp.json` 的项目时询问是否信任并记住（选项同 Pi）；非交互模式不问 | 用户决定 | 只靠 `--approve` | 已定 | DEVELOPMENT.md 8.2 节 |
 
 ## 待定
 

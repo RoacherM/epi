@@ -58,6 +58,27 @@ export function findNearestProjectManifest(
   }
 }
 
+/**
+ * The trust store's raw decision for a project root: true/false once someone has decided,
+ * null when no one has (yet). Skips even opening the store when trust.json does not exist,
+ * so an unknown project never causes MMP's agentDir to be created.
+ */
+export function readProjectTrustDecision(
+  agentDir: string,
+  root: string,
+): boolean | null {
+  const trustPath = join(agentDir, "trust.json");
+  if (!existsSync(trustPath)) {
+    return null;
+  }
+  try {
+    return new ProjectTrustStore(agentDir).get(root);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new MmpConfigError(`failed to resolve project trust: ${detail}`);
+  }
+}
+
 export function resolveProjectManifest(
   options: ResolveProjectOptions,
 ): ProjectResolution {
@@ -73,18 +94,8 @@ export function resolveProjectManifest(
     return { discovery: "none", state: undefined, manifest: undefined };
   }
 
-  let trusted = options.trustOverride === true;
-  if (options.trustOverride === undefined) {
-    const trustPath = join(options.agentDir, "trust.json");
-    if (existsSync(trustPath)) {
-      try {
-        trusted = new ProjectTrustStore(options.agentDir).get(candidate.root) === true;
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        throw new MmpConfigError(`failed to resolve project trust: ${detail}`);
-      }
-    }
-  }
+  const trusted = options.trustOverride ??
+    readProjectTrustDecision(options.agentDir, candidate.root) === true;
 
   if (!trusted) {
     return {

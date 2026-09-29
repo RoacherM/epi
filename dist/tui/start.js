@@ -1,17 +1,13 @@
 // Entry of MMP's own interactive host (docs/tui-design.md). Gated behind MMP_TUI=v2 until it
 // reaches parity; classic Pi interactive mode stays the default meanwhile.
-import { parseArgs } from "@earendil-works/pi-coding-agent";
+import {} from "@earendil-works/pi-coding-agent";
 import { buildInlineExtensions } from "../extensions/index.js";
+import { isInteractivePiRun } from "../interactive.js";
 import { runTuiApp } from "./app.js";
 import { createMmpRuntime } from "./services.js";
 import { detectAppearance, installMmpTheme } from "./theme.js";
-/** Pi's resolveAppMode, plus the commands Pi's CLI handles itself (they stay on piMain). */
 export function shouldUseTuiV2(environment, piArgs, stdinIsTTY, stdoutIsTTY) {
-    if (environment.MMP_TUI !== "v2" || !stdinIsTTY || !stdoutIsTTY)
-        return false;
-    const parsed = parseArgs([...piArgs]);
-    return parsed.mode === undefined && !parsed.print && !parsed.help &&
-        parsed.listModels === undefined && parsed.export === undefined;
+    return environment.MMP_TUI === "v2" && isInteractivePiRun(piArgs, stdinIsTTY, stdoutIsTTY);
 }
 /** Same Manifest assembly as the piMain path, handed to the SDK instead of Pi's CLI. */
 export async function createRuntimeFromPrepared(prepared, cwd, extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly)) {

@@ -7,4 +7,6 @@ export declare function runModel(host: CommandHost, query: string, options?: {
     persist?: boolean;
     title?: string;
 }): Promise<void>;
+/** `/trust`: same options and store as the first-run prompt (src/trust-prompt.ts), for the current project root. */
+export declare function runTrust(host: CommandHost): Promise<void>;
 //# sourceMappingURL=commands.d.ts.map

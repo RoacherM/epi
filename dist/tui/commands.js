@@ -1,6 +1,9 @@
 // /login, /logout, /model (docs/tui-design.md 4.6); registered in builtins.ts.
 // The flows follow Pi's interactive mode, built from the components Pi exports.
 import { CredentialSynchronizationError, ExtensionSelectorComponent, LoginDialogComponent, ModelSelectorComponent, OAuthSelectorComponent, resolveCliModel, } from "@earendil-works/pi-coding-agent";
+import { resolveMmpPaths } from "../paths.js";
+import { findNearestProjectManifest } from "../project.js";
+import { projectTrustOptions, saveProjectTrustChoice } from "../trust-prompt.js";
 const CANCELLED = "Login cancelled";
 function errorText(error) {
     return error instanceof Error ? error.message : String(error);
@@ -246,6 +249,39 @@ export async function runModel(host, query, options = {}) {
             void (model === undefined ? Promise.resolve() : selectModel(host, model, persist)).then(resolve);
         };
         const selector = new ModelSelectorComponent(host.tui, session.model, session.modelRuntime, session.scopedModels, (model) => finish(model, options.persist ?? false), () => finish(undefined, false), trimmed === "" ? undefined : trimmed, (model) => finish(model, true));
+        restore = host.takeEditorSlot(selector);
+    });
+}
+/** `/trust`: same options and store as the first-run prompt (src/trust-prompt.ts), for the current project root. */
+export async function runTrust(host) {
+    const candidate = findNearestProjectManifest(host.cwd, resolveMmpPaths(process.env).globalManifest);
+    if (candidate === undefined) {
+        host.notice("No .mmp/mmp.json project found from the current directory.", "warning");
+        return;
+    }
+    const choices = projectTrustOptions(candidate.root);
+    await new Promise((resolve) => {
+        let restore = () => { };
+        const selector = new ExtensionSelectorComponent("Trust project folder?", choices.map((choice) => choice.label), (label) => {
+            restore();
+            const choice = choices.find((option) => option.label === label);
+            if (choice !== undefined) {
+                if (choice.updates.length > 0) {
+                    saveProjectTrustChoice(host.agentDir, choice);
+                    host.notice(`Saved: ${choice.label}. Takes effect after restarting mmp (manifest extensions cannot be hot-loaded).`);
+                }
+                else {
+                    host.notice(`${choice.label}: not saved.`);
+                }
+            }
+            resolve();
+        }, () => {
+            restore();
+            resolve();
+        }, {
+            description: `${candidate.root}\n` +
+                "This lets MMP read .mmp/mmp.json and load its rules, skills and extensions (extensions run code).",
+        });
         restore = host.takeEditorSlot(selector);
     });
 }

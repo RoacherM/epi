@@ -82,8 +82,8 @@ function projectState(identity) {
     if (project.loaded) {
         return "loaded";
     }
-    if (project.path !== null && project.trusted === false) {
-        return "waiting for approval";
+    if (project.path !== null) {
+        return "not trusted · /trust";
     }
     return "none found";
 }
@@ -117,7 +117,7 @@ function assemblyRows(identity, theme, width) {
         heading("CONFIGURE", theme),
         theme.fg("mdCode", identity.manifests.global.path),
         `${theme.fg("mdCode", "/mmp")} inspect · ${theme.fg("mdCode", "/login")} authenticate`,
-        `${theme.fg("mdCode", "mmp --approve")} project manifest`,
+        `${theme.fg("mdCode", "/trust")} project manifest`,
         `${theme.fg("dim", "/reload Rules + Skills · restart Extensions")}`,
     ];
 }

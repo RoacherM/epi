@@ -2,8 +2,11 @@ import { VERSION as PI_VERSION, main as piMain, } from "@earendil-works/pi-codin
 import { resolveAssembly, } from "./assembly.js";
 import { parseMmpArgs } from "./args.js";
 import { buildInlineExtensions } from "./extensions/index.js";
+import { isInteractivePiRun } from "./interactive.js";
 import { resolveMmpPaths } from "./paths.js";
+import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { createMmpRuntimeIdentity, } from "./runtime-identity.js";
+import { askProjectTrust, saveProjectTrustChoice, shouldAskProjectTrust } from "./trust-prompt.js";
 import { runMmpUpdate, updateCheckDisabled } from "./update.js";
 export const MMP_VERSION = "0.1.4";
 export const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
@@ -77,6 +80,37 @@ function prepareParsedMmpRun(args, environment, cwd) {
 export function prepareMmpRun(argv, environment = process.env, cwd = process.cwd()) {
     return prepareParsedMmpRun(parseMmpArgs(argv), environment, cwd);
 }
+/**
+ * Interactive first run into a new (undecided) project: ask, then fold the answer into the same
+ * --approve/--no-approve override `resolveAssembly` already understands (DEVELOPMENT.md 8.2). Runs
+ * before assembly, ahead of both classic mode and TUI v2. A no-op for print/json/rpc/help/non-TTY
+ * runs, `--no-project`, and runs that already carry an explicit trust decision.
+ */
+async function maybeAskProjectTrust(args, environment, cwd) {
+    const interactive = isInteractivePiRun(args.passthrough, process.stdin.isTTY === true, process.stdout.isTTY === true);
+    if (!interactive || args.dryRun || args.noProject || args.projectTrustOverride !== undefined) {
+        return;
+    }
+    const paths = resolveMmpPaths(environment);
+    const candidate = findNearestProjectManifest(cwd, paths.globalManifest);
+    if (candidate === undefined) {
+        return;
+    }
+    const savedDecision = readProjectTrustDecision(paths.agentDir, candidate.root);
+    if (!shouldAskProjectTrust({
+        interactive,
+        dryRun: args.dryRun,
+        noProject: args.noProject,
+        trustOverride: args.projectTrustOverride,
+        projectRoot: candidate.root,
+        savedDecision,
+    })) {
+        return;
+    }
+    const choice = await askProjectTrust({ root: candidate.root });
+    saveProjectTrustChoice(paths.agentDir, choice);
+    args.projectTrustOverride = choice.trusted;
+}
 export async function runMmp(argv) {
     const args = parseMmpArgs(argv);
     if (args.update) {
@@ -97,6 +131,7 @@ export async function runMmp(argv) {
         });
         return;
     }
+    await maybeAskProjectTrust(args, process.env, process.cwd());
     const prepared = prepareParsedMmpRun(args, process.env, process.cwd());
     const updateCheck = {
         mmpHome: prepared.mmpHome,

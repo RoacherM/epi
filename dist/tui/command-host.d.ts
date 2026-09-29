@@ -5,6 +5,8 @@ export interface CommandHost {
     readonly tui: TUI;
     readonly theme: Theme;
     readonly cwd: string;
+    /** MMP's Pi state directory (~/.mmp/pi): where /trust's ProjectTrustStore lives. */
+    readonly agentDir: string;
     readonly runtime: AgentSessionRuntime;
     /** The current session; it changes after /new, /resume, /reload and forks. */
     session(): AgentSession;
