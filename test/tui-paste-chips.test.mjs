@@ -210,6 +210,43 @@ test("two chips on two different lines keep separate content and don't mix coord
   assert.match(expanded, /BBBB\nBBBB\nBBBB\nBBBB/);
 });
 
+// Pre-merge review, MUST FIX: two chips directly adjacent on the *same* line (A.end === B.start, no
+// character between them) -- findChip returns the first chip whose span contains the caret, and at
+// the shared boundary that's always A (start <= col <= end is true for A there, checked before B is
+// even reached), so chipAtCursor's exclusion of a text chip's own `end` (item 2) stopped instead of
+// trying B, the chip whose *start* that position actually is. A RIGHT arrow key ends the "just
+// pasted" window without moving the caret (it's already at the end of the buffer), so it's used here
+// purely to make the second paste insert a genuinely separate, adjacent chip instead of triggering
+// "paste again" and expanding the first one.
+test("two adjacent chips (A.end === B.start) resolve to B at the shared boundary, not neither", () => {
+  const editor = makeEditor();
+  paste(editor, "a1\na2\na3\na4");
+  editor.handleInput("\x1b[C"); // ends the "just pasted" window without moving the caret
+  paste(editor, "b1\nb2\nb3\nb4\nb5");
+  assert.equal(editor.getText(), "[Pasted: 4 lines][Pasted: 5 lines]");
+  editor.handleInput("\x1b[D"); // left, from B's end, lands exactly on the shared boundary
+  const chip = editor.chipAtCursor();
+  assert.equal(chip?.kind, "text");
+  assert.equal(chip.content, "b1\nb2\nb3\nb4\nb5"); // B, not A
+  let submitted;
+  editor.onSubmitImages = (text) => { submitted = text; };
+  editor.handleInput(ENTER);
+  assert.equal(submitted, undefined); // expanded in place, not sent
+  assert.equal(editor.getText(), "[Pasted: 4 lines]b1\nb2\nb3\nb4\nb5");
+});
+
+test("an image chip directly before a text chip also resolves to the text chip at their boundary", () => {
+  const editor = makeEditor();
+  editor.insertImageChip(ONE_PIXEL_PNG, "image/png");
+  paste(editor, "a1\na2\na3\na4");
+  editor.handleInput("\x1b[D"); // left, from the text chip's end, lands on the image/text boundary
+  const chip = editor.chipAtCursor();
+  assert.equal(chip?.kind, "text");
+  assert.equal(chip.content, "a1\na2\na3\na4");
+  editor.handleInput(ENTER); // expands the text chip; the image chip is untouched
+  assert.equal(editor.getText(), "[Image #1]a1\na2\na3\na4");
+});
+
 // Item 2 (docs/tui-design.md 4.3): grok sends on Enter right after a paste (footer reads
 // "Enter:send", popup hint "paste again or double-click to expand") and only expands once the
 // caret has actually moved onto the chip (footer "Enter:expand", hint "enter or double-click to
@@ -246,6 +283,69 @@ test("backspace deletes the whole chip in one keystroke", () => {
   assert.equal(editor.chipAtCursor(), undefined);
 });
 
+// Pre-merge review, item 5: forward-delete and word-delete must remove the whole chip too, the same
+// as Backspace already does -- otherwise they eat into the marker one character/word at a time
+// (Editor has no idea it's meant to be atomic) and leave a corrupted fragment like "Pasted: 4 lines]"
+// or "[Pasted: 4 lines" instead of either the label or the chip.
+test("Delete (forward) at a chip's start removes the whole chip, not just one character", () => {
+  const editor = makeEditor();
+  paste(editor, "line1\nline2\nline3\nline4");
+  editor.handleInput(" x");
+  for (let i = 0; i < 2 + "[Pasted: 4 lines]".length; i += 1) editor.handleInput("\x1b[D"); // caret to the chip's start
+  editor.handleInput("\x1b[3~"); // Delete (forward)
+  assert.equal(editor.getText(), " x");
+  assert.equal(editor.getExpandedText(), " x");
+});
+
+test("Ctrl+W (word-delete backward) at a chip's end removes the whole chip, not a fragment", () => {
+  const editor = makeEditor();
+  paste(editor, "line1\nline2\nline3\nline4");
+  editor.handleInput("\x17"); // Ctrl+W
+  assert.equal(editor.getText(), "");
+  assert.equal(editor.getExpandedText(), "");
+});
+
+test("Alt+D (word-delete forward) at a chip's start removes the whole chip", () => {
+  const editor = makeEditor();
+  paste(editor, "line1\nline2\nline3\nline4");
+  editor.handleInput(" x");
+  for (let i = 0; i < 2 + "[Pasted: 4 lines]".length; i += 1) editor.handleInput("\x1b[D"); // caret to the chip's start
+  editor.handleInput("\x1bd"); // Alt+D
+  assert.equal(editor.getText(), " x");
+});
+
+// Pre-merge review, item 5: Editor's own undo stack has no idea a chip's Backspace-deletion (17
+// synthetic Backspace keypresses, deleteBackward) was meant to be one atomic step -- undoing some of
+// them, not all the way back to before the paste, resurrects the marker's literal text with the
+// registry entry for it already gone. If a *different*, still-live chip sits elsewhere in the same
+// document, naive positional lookup (this.textChips[index]) then misattributes: the resurrected dead
+// text "claims" the live chip's real content, and the live chip falls back to its own literal label
+// instead of its actual content -- a content swap, not merely "the dead one shows as plain text".
+// Once desynced, every text chip must fall back to its own label uniformly instead.
+test("undo resurrecting a deleted chip's label doesn't swap content with a different, still-live chip", () => {
+  const editor = makeEditor();
+  paste(editor, "a1\na2\na3\na4"); // chip A
+  editor.handleInput(" ");
+  paste(editor, "b1\nb2\nb3\nb4\nb5"); // chip B
+  editor.handleInput("\x01"); // Home
+  editor.handleInput("\x1b[C"); // Right: snaps onto A's own end
+  editor.handleInput(BACKSPACE); // delete chip A entirely; B is untouched
+  assert.equal(editor.getExpandedText(), " b1\nb2\nb3\nb4\nb5");
+  for (let i = 0; i < 17; i += 1) editor.handleInput("\x1f"); // undo (ctrl+-), resurrecting A's label text
+  assert.equal(editor.getText(), "[Pasted: 4 lines] [Pasted: 5 lines]");
+  // Must not swap: neither chip's real content ends up attached to the other's label.
+  const expanded = editor.getExpandedText();
+  assert.doesNotMatch(expanded, /b1\nb2\nb3\nb4\nb5/); // B's real content didn't leak onto A's dead label
+  assert.equal(expanded, "[Pasted: 4 lines] [Pasted: 5 lines]"); // both fall back to their own literal labels
+  // Recovery: deleting the resurrected dead label (the obvious next move) must bring the document
+  // back in sync with the registry, not also eat B's real entry -- deleteChipSpan/expandTextChip
+  // skip the registry splice entirely while desynced, so B's own entry is exactly where it was.
+  editor.handleInput("\x01"); // Home
+  editor.handleInput("\x1b[C"); // Right: snaps onto dead A's own end
+  editor.handleInput(BACKSPACE); // delete the resurrected dead label; doc and registry realign
+  assert.equal(editor.getExpandedText(), " b1\nb2\nb3\nb4\nb5"); // B expands correctly again
+});
+
 test("pasting again while the just-pasted popup is showing expands the chip instead of pasting twice", () => {
   const editor = makeEditor();
   paste(editor, "line1\nline2\nline3\nline4");
@@ -257,11 +357,16 @@ test("pasting again while the just-pasted popup is showing expands the chip inst
 // something else scrolls, e.g.) must not end the "just pasted" window -- only a deliberate press
 // does (see handleMouse's own comment). Otherwise an incidental wheel event between a paste and the
 // user's next paste-again gesture would silently turn it into a second chip instead of expanding.
-test("an incidental wheel event over the editor doesn't break the paste-again-to-expand gesture", () => {
+// Checks the state directly (justPasted survives the wheel event), not just the end-to-end outcome,
+// so this fails specifically when a mouse event other than "press" clears it -- not just when
+// something else entirely unrelated breaks paste-again.
+test("an incidental wheel event over the editor doesn't clear the just-pasted window", () => {
   const editor = makeEditor();
   paste(editor, "line1\nline2\nline3\nline4");
+  assert.equal(editor.chipForPopup()?.justPasted, true); // sanity: freshly pasted
   editor.handleMouse({ type: "wheel", button: "none", x: 2, y: 1, screenX: 2, screenY: 1, width: 80, height: 3, shift: false, alt: false, ctrl: false, wheelDelta: -1 });
-  paste(editor, "line1\nline2\nline3\nline4");
+  assert.equal(editor.chipForPopup()?.justPasted, true); // still "just pasted" after an incidental wheel event
+  paste(editor, "line1\nline2\nline3\nline4"); // "paste again" gesture must still expand, not insert a 2nd chip
   assert.equal(editor.getText(), "line1\nline2\nline3\nline4");
 });
 
@@ -294,23 +399,34 @@ function press(editor, x) {
   return editor.handleMouse({ type: "press", button: "left", x, y: 1, screenX: x, screenY: 1, width: 80, height: 3, shift: false, alt: false, ctrl: false });
 }
 
-test("pressing away from any chip does not claim the gesture, so drag-select still works there", () => {
+// One test, not two: pressing on the chip *and* pressing away from it need different outcomes for
+// this to actually prove the fix discriminates between them. A test that only presses on the chip
+// would also pass against the old "claim every press unconditionally" code (it trivially claims a
+// press that happens to land on a chip too); only checking both positions together, and that they
+// differ, rules that out.
+test("a press only claims the gesture when it lands on a chip, not on ordinary text", () => {
   const editor = makeEditor();
-  editor.handleInput("just some ordinary text, no chip here");
-  assert.equal(press(editor, 2), undefined);
+  editor.handleInput("just some ordinary text, ");
+  paste(editor, "line1\nline2\nline3\nline4");
+  const chipStart = editor.getText().indexOf("[Pasted");
+  assert.equal(press(editor, 2), undefined); // ordinary text: not claimed, drag-select still works
+  const onChip = press(editor, chipStart + 2);
+  assert.equal(onChip?.handled, true);
+  assert.equal(onChip?.capture, true);
 });
 
-test("pressing on a chip claims the gesture, so a following click carries a real clickCount", () => {
+// Pre-merge review, item 6 (minor): the probe used to decide "would this land on a chip" moves the
+// caret to check, even for a press that ends up unclaimed -- before this fix, an ordinary click on
+// plain text silently left the caret at the probed position instead of where it was, even though the
+// alt-screen goes on to treat the gesture as an unclaimed drag-select/plain-click. Restoring it (same
+// line only -- there's no cheap way to do it across lines, an accepted, narrower gap) keeps an
+// unclaimed press from moving anything on its own.
+test("an unclaimed press on ordinary text restores the caret instead of leaving it at the probed spot", () => {
   const editor = makeEditor();
-  paste(editor, "line1\nline2\nline3\nline4");
-  editor.handleInput(" "); // move off, same setup as the double-click test above
-  const chipStart = editor.getText().indexOf("[Pasted");
-  const result = press(editor, chipStart + 2);
-  assert.equal(result?.handled, true);
-  assert.equal(result?.capture, true);
-  // Landing the press onto the chip also moves the caret there (the probe click), same as a real
-  // click would -- chipAtCursor() should already see it, not just the claim.
-  assert.equal(editor.chipAtCursor()?.kind, "text");
+  editor.handleInput("just some ordinary text here"); // caret now at the end of the line
+  const before = editor.getCursor();
+  press(editor, 2); // lands well before the caret's current column; unclaimed (no chip here)
+  assert.deepEqual(editor.getCursor(), before);
 });
 
 test("submit expands the chip to full text and sends no images", () => {

@@ -11,8 +11,11 @@ export interface HeaderState {
 }
 export declare function headerBar(theme: Theme, state: () => HeaderState): Component;
 /** Full-width `userMessageBg` block with one row of padding, `❯ text` and the time on the right.
- * Collapses past `COLLAPSED_LINES` wrapped rows to `…` (grok shows the first 3 lines then that),
- * expanded back with Ctrl+O -- the same toggle that expands tool output (item 5). */
+ * Collapses past `COLLAPSED_LINES` *logical* lines (not wrapped rows) to `…` -- observed in grok
+ * 1.0.44 (docs/tui-design.md 4.2/4.3): a sent 12-line paste renders as its first 3 lines then `…`.
+ * Counting logical lines, not wrapped rows, means a single long line never collapses just because a
+ * narrow terminal wraps it into more than 3 screen rows. Expanded back with Ctrl+O -- the same
+ * toggle that expands tool output (item 5). */
 export declare class UserMessageBlock implements Component {
     private readonly theme;
     private readonly time;

@@ -57,6 +57,20 @@ test("a long user message collapses to 3 lines plus an ellipsis, and Ctrl+O expa
   assert.match(expanded, /line5/);
 });
 
+// Pre-merge review, item 4: collapse must count *logical* lines (message.content's own "\n"s), not
+// wrapped screen rows -- otherwise a single long line, with no logical line breaks at all, would
+// wrongly collapse on a narrow terminal just because wrapping happens to spread it across more than
+// 3 rows there.
+test("a single long line never collapses, even wrapped across many rows on a narrow terminal", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  const longLine = Array.from({ length: 30 }, (_, i) => `word${i}`).join(" "); // one logical line
+  transcript.handle({ type: "message_start", message: { role: "user", content: longLine, timestamp: Date.now() } });
+  const rendered = transcript.root.render(20).join("\n"); // narrow enough to wrap into >3 rows
+  assert.match(rendered, /word0/);
+  assert.match(rendered, /word29/); // the very last word still shows: never collapsed
+  assert.doesNotMatch(rendered, /…/);
+});
+
 test("a user message's image content parts show as [Image #N], not silently dropped", () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   transcript.handle({

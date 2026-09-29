@@ -101,6 +101,29 @@ test("Alt+Up restores a queued follow-up to the editor", (t) => {
   assert.doesNotMatch(afterDequeue, /Follow-up:/);
 });
 
+// Item 2 (pre-merge review, MUST FIX): clearAllQueues used to count how many queued messages its
+// image-recovery attempt couldn't verify and show a notice whenever that was more than zero -- which
+// fired on *every* Alt+Up/Esc/Ctrl+C with two or more queued messages, even when none of them had an
+// image at all. clearAllQueues no longer has an "unresolved" count (switching the Agent's own
+// steeringMode/followUpMode to "all" before peeking recovers every queued message's real content,
+// not just the first), so two plain-text follow-ups restore with no notice.
+test("Alt+Up restores two plain-text queued follow-ups with no false image notice", (t) => {
+  const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
+    ["wait", 2500], ["type", "go"], ["key", "enter"],
+    ["wait", 1000], ["type", "first"], ["key", "enter"],
+    ["wait", 300], ["type", "second"], ["key", "enter"],
+    ["wait", 300], ["mark", "queued"],
+    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
+    ["key", "ctrl+c"], ["wait", 300],
+    ["wait", 4000], ["key", "ctrl+d"],
+  ]);
+  const afterDequeue = marks.restored.slice(marks.queued.length);
+  assert.match(afterDequeue, /first/);
+  assert.match(afterDequeue, /second/);
+  assert.doesNotMatch(afterDequeue, /Couldn't check/);
+  assert.doesNotMatch(afterDequeue, /Follow-up:/);
+});
+
 test("Alt+Enter steer sends the editor's expanded text, not a collapsed paste marker", (t) => {
   // pi-tui collapses a paste over 1000 chars into a "[paste #1 N chars]" marker in the editor;
   // Pi's own handleFollowUp expands it before sending, and Alt+Enter steer must do the same.

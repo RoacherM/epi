@@ -231,23 +231,85 @@ test("Alt+Up restores an image queued as a follow-up while streaming, not just t
 });
 
 // Pi's own queue (PendingMessageQueue, pi-agent-core) defaults to "one-at-a-time": peekQueuedMessages()
-// only ever exposes the *first* queued message's real content, not a second one queued in the same
-// turn. The first message's image is still recovered (matching the test above); the second message
-// here has no image, but the fix can't tell that from here (see clearAllQueues's imagesFor) -- so it
-// must say so rather than silently claim nothing was lost.
-test("Alt+Up notices when a second queued follow-up's images couldn't be checked", (t) => {
+// only ever exposes the *first* queued message's real content on its own. clearAllQueues (app.ts)
+// works around this by switching the Agent's steeringMode/followUpMode to "all" before peeking, so a
+// *second* follow-up queued in the same turn is fully recoverable too, including its image -- not
+// just the first one (covered by the single-message test above).
+test("Alt+Up restores a second queued follow-up's image too, not just the first message's", (t) => {
+  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-second-queued-"));
+  t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
+  const clipboardFile = join(clipboardDir, "clipboard.png");
+  writeFileSync(clipboardFile, ONE_PIXEL_PNG);
   const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
     ["wait", 2500], ["type", "go"], ["key", "enter"], // starts a streamed turn
-    ["wait", 500], ["type", "first"], ["key", "enter"], // queues follow-up #1 (peekQueuedMessages sees this one)
-    ["wait", 300], ["type", "second"], ["key", "enter"], // queues follow-up #2 (not visible to peekQueuedMessages)
+    ["wait", 500], ["type", "first"], ["key", "enter"], // queues follow-up #1 (plain text)
+    ["wait", 300], ["type", "second "], ["key", "ctrl+v"], ["key", "enter"], // follow-up #2: text + [Image #1]
     ["wait", 300], ["mark", "queued"],
     ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
     ["key", "ctrl+c"], ["wait", 300], ["wait", 4000], ["key", "ctrl+d"],
-  ]);
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   const afterRestore = since(marks.queued, marks.restored);
   assert.match(afterRestore, /first/);
   assert.match(afterRestore, /second/);
-  assert.match(afterRestore, /Couldn't check 1 other queued message for images/);
+  assert.match(afterRestore, /\[Image #\d+\]/);
+  assert.doesNotMatch(afterRestore, /Couldn't check/);
+});
+
+// Item 3 (pre-merge review): an extension's ctx.sendMessage (AgentSession.sendCustomMessage,
+// agent-session.js ~1496) queues straight into the Agent's own queue with no entry in the plain-text
+// follow-up array app.ts's clearAllQueues reads for restore. Pairing the peeked Agent message back to
+// that text entry by *position* would misattribute here -- the injected message lands in the Agent's
+// queue first, so a positional pairing would match it to the real follow-up's text and conclude
+// (wrongly) that the real message had no image, losing it. Pairing by content instead (does a peeked
+// message's own text equal this queued text) finds the real message correctly regardless of order.
+test("a queued follow-up's image isn't lost or misattributed to an extension's injected followUp custom message", (t) => {
+  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-inject-"));
+  t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
+  const clipboardFile = join(clipboardDir, "clipboard.png");
+  writeFileSync(clipboardFile, ONE_PIXEL_PNG);
+  const { marks } = runApp(t, [fixture("faux-queue.mjs"), fixture("inject-custom-queue-message.mjs")], [
+    ["wait", 2500],
+    ["type", "/schedule-inject followUp"], ["key", "enter"], // schedules pi.sendMessage ~800ms from now
+    ["wait", 300],
+    ["type", "go"], ["key", "enter"], // starts a streamed turn
+    ["wait", 1200], // the scheduled injection lands here, mid-stream
+    ["type", "real "], ["key", "ctrl+v"], ["key", "enter"], // real queued follow-up: text + [Image #1]
+    ["wait", 300], ["mark", "queued"],
+    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
+    ["key", "ctrl+c"], ["wait", 300], ["wait", 4000], ["key", "ctrl+d"],
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  const afterRestore = since(marks.queued, marks.restored);
+  assert.match(afterRestore, /real/);
+  assert.match(afterRestore, /\[Image #\d+\]/);
+});
+
+// Second must-fix from the pre-merge review of the first pairing fix: sendCustomMessage's *default*
+// deliverAs is "steer" (agent-session.js), not "followUp" -- an injected message with no explicit
+// deliverAs lands in the Agent's own steering queue, with (as above) no entry in AgentSession's own
+// text arrays. Gating clearAllQueues's steering peek/clear on session.getSteeringMessages() being
+// non-empty (which it never is here, since this message never touches that array) used to skip
+// clearing steering, so the one peekQueuedMessages() call left standing returned the injected
+// *steering* content instead of the real queued follow-up -- losing its image the same way, just
+// through the fix's own new gate rather than the original positional-pairing bug.
+test("a queued follow-up's image survives an injected custom message using the default (steer) delivery", (t) => {
+  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-inject-default-"));
+  t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
+  const clipboardFile = join(clipboardDir, "clipboard.png");
+  writeFileSync(clipboardFile, ONE_PIXEL_PNG);
+  const { marks } = runApp(t, [fixture("faux-queue.mjs"), fixture("inject-custom-queue-message.mjs")], [
+    ["wait", 2500],
+    ["type", "/schedule-inject"], ["key", "enter"], // no argument: default deliverAs (steer)
+    ["wait", 300],
+    ["type", "go"], ["key", "enter"], // starts a streamed turn
+    ["wait", 1200], // the scheduled injection lands here, mid-stream, into the steering queue
+    ["type", "real "], ["key", "ctrl+v"], ["key", "enter"], // real queued follow-up: text + [Image #1]
+    ["wait", 300], ["mark", "queued"],
+    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
+    ["key", "ctrl+c"], ["wait", 300], ["wait", 4000], ["key", "ctrl+d"],
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  const afterRestore = since(marks.queued, marks.restored);
+  assert.match(afterRestore, /real/);
+  assert.match(afterRestore, /\[Image #\d+\]/);
 });
 
 test("Ctrl+V with an image on the clipboard (via the test seam) becomes an [Image #1] chip with a dimensioned preview, and is sent as an attachment", (t) => {

@@ -90,8 +90,11 @@ function displayText(content: unknown): string {
 const COLLAPSED_LINES = 3;
 
 /** Full-width `userMessageBg` block with one row of padding, `❯ text` and the time on the right.
- * Collapses past `COLLAPSED_LINES` wrapped rows to `…` (grok shows the first 3 lines then that),
- * expanded back with Ctrl+O -- the same toggle that expands tool output (item 5). */
+ * Collapses past `COLLAPSED_LINES` *logical* lines (not wrapped rows) to `…` -- observed in grok
+ * 1.0.44 (docs/tui-design.md 4.2/4.3): a sent 12-line paste renders as its first 3 lines then `…`.
+ * Counting logical lines, not wrapped rows, means a single long line never collapses just because a
+ * narrow terminal wraps it into more than 3 screen rows. Expanded back with Ctrl+O -- the same
+ * toggle that expands tool output (item 5). */
 export class UserMessageBlock implements Component {
   private readonly text: string;
   private expanded = false;
@@ -112,10 +115,11 @@ export class UserMessageBlock implements Component {
     const paint = (content: string) => this.theme.bg("userMessageBg", content + " ".repeat(Math.max(0, width - visibleWidth(content))));
     const clock = this.theme.fg("muted", this.time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
     const bodyWidth = Math.max(1, width - 4 - visibleWidth(clock) - 3);
-    const wrapped = piTui.wrapTextWithAnsi(this.text, bodyWidth);
-    const lines = this.expanded || wrapped.length <= COLLAPSED_LINES
-      ? wrapped
-      : [...wrapped.slice(0, COLLAPSED_LINES), "…"];
+    const logicalLines = this.text.split("\n");
+    const source = this.expanded || logicalLines.length <= COLLAPSED_LINES
+      ? this.text
+      : [...logicalLines.slice(0, COLLAPSED_LINES), "…"].join("\n");
+    const lines = piTui.wrapTextWithAnsi(source, bodyWidth);
     const rows = lines.map((text, index) => {
       const prefix = index === 0 ? `${this.theme.fg("muted", "❯")} ` : "  ";
       const left = `  ${prefix}${this.theme.fg("userMessageText", text)}`;

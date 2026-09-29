@@ -240,7 +240,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 
 | 类型 | 样式 | Pi 组件能否复用 |
 |---|---|---|
-| 用户消息 | `❯` 加整块底色 `userMessageBg`，上下各 1 行内边距。带 OSC 133 标记，全屏下可以跳到上一条/下一条提示 | 不复用，自己写。Pi 的 `UserMessageComponent` 样式不同 |
+| 用户消息 | `❯` 加整块底色 `userMessageBg`，上下各 1 行内边距。带 OSC 133 标记，全屏下可以跳到上一条/下一条提示。超过 3 **逻辑行**（不是屏幕上折行后的行数——窄屏下一整行很长也不会因为折行超过 3 行就被折叠）折叠成前 3 行 + `…`，`Ctrl+O` 展开（2026-09-30 用户在真实终端里实测 grok 1.0.44：粘贴 12 行内容发送后，气泡里只显示前 3 行再加一行 `…`）。图片内容块显示成 `[Image #N]`，`@file` 内联的 `<file name="...">...</file>`（file-arguments.ts）显示成 `[File: 文件名]`；都只影响这里的显示，模型收到的还是完整内容 | 不复用，自己写。Pi 的 `UserMessageComponent` 样式不同 |
 | 助手消息 | markdown，没有标题行 | 复用 `AssistantMessageComponent`（导出），传入扩展的 markdown 变换 |
 | thinking | 折叠成一行 `◆ Thought for 2.0s`，可以单独展开 | 用 `AssistantMessageComponent` 自带的参数：`hideThinking=true` 加 `hiddenLabel="Thought for 2.0s"`。展开某一条消息，就用 `hideThinking=false` 重新创建这条消息的组件。thinking 和正文在一条消息里交错出现，交给这个组件处理最简单。grok 的"运行中显示最后 3 行"要自己遍历内容块，放到 v1.1 |
 | 工具调用 | 运行中：左侧 `┃` 竖条用 `accent` 色；结束：`◆` 加标题一行，失败时标题用 `error` 色。三种状态：折叠、截断、展开 | 自己写卡片外框，内容见下 |
@@ -258,7 +258,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 
 扩展注册的工具（比如 MCP 工具）用它们自己的 `renderCall` / `renderResult`，放进同一个卡片外框里。既没有内置样式也没有自带渲染器的工具，用通用样式：显示参数 JSON 和结果文本。
 
-**折叠。** `Ctrl+O` 切换所有工具块，`Ctrl+T` 切换所有 thinking。单个块用鼠标点标题行切换。v1 不做键盘逐块选中（grok 的 scrollback 焦点模式），放到 v1.1。
+**折叠。** `Ctrl+O` 切换所有工具块和折叠的用户消息（上面那行），`Ctrl+T` 切换所有 thinking。单个块用鼠标点标题行切换。快捷键栏对应显示 `Ctrl+o:expand`（不再是 `tools`，因为现在也展开用户消息）。v1 不做键盘逐块选中（grok 的 scrollback 焦点模式），放到 v1.1。
 
 ### 4.3 输入框和阻塞卡片
 

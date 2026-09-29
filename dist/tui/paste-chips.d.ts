@@ -118,13 +118,16 @@ export declare class ChipEditor {
      * chip at the cursor. `bytes` are kept as-is; AgentSession resizes for the model at send time
      * (agent-session.js's `_normalizePromptImages`), so there's no need to do it here too. */
     insertImageChip(bytes: Uint8Array, mimeType: string): void;
-    /** The chip the caret sits *on*. Image chips (no Enter-conflict -- they never expand) keep the
-     * original inclusive-at-`end` span, matching the existing "popup shows right after inserting one"
-     * behavior. Text chips are stricter (`start <= col < end`, excluding `end`): right after a fresh
-     * paste the caret sits at `end`, and Enter there must send like grok, not expand (docs/tui-design.md
-     * 4.3) -- only actually landing on the chip (arrowing back onto it, or a click, which Editor
-     * positions inside/at the start of the clicked grapheme) does. Drives Enter-to-expand, the
-     * footer's `Enter:expand` shortcut, and double-click. */
+    /** The chip the caret sits *on*. Two passes, so two adjacent chips (`A.end === B.start`, no
+     * character between them) resolve consistently to the second one at their shared boundary instead
+     * of getting stuck on the first: (1) a chip that strictly contains the caret (`start <= col <
+     * end`) always wins, checked in document order, so at a shared boundary this finds B (the first
+     * chip for which the boundary column is strictly `< end`) rather than A (for which it's `===
+     * end`, no longer "in" it -- see below); (2) only if nothing does, an image chip's own `end` still
+     * counts (no Enter-conflict, they never expand, so there's nothing to protect there) -- but never
+     * a text chip's, whose `end` right after a fresh paste is deliberately not "on the chip" (item 2,
+     * docs/tui-design.md 4.3): Enter there must send like grok, not expand. Drives Enter-to-expand,
+     * the footer's `Enter:expand` shortcut, and double-click. */
     chipAtCursor(): ChipInfo | undefined;
     /** `chipAtCursor()`, or -- if the caret is still exactly where the most recent paste left it --
      * the chip that paste just created. For the preview popup (still shown right after pasting, per
@@ -161,6 +164,19 @@ export declare class ChipEditor {
      * prefix -- that one's correct as is. */
     private findChip;
     private chipInfo;
+    /** True once the number of `[Pasted: ...]`-shaped substrings in the document no longer matches
+     * `textChips.length` -- meaning at least one of them isn't backed by a real registry entry
+     * anymore. This happens because Editor's undo stack has no idea our chip markers are meant to be
+     * one atomic unit: deleting a chip is several synthetic Backspace keypresses (`deleteBackward`),
+     * each its own undo step, so undoing *some* of them (not all the way back to before the paste)
+     * resurrects the marker's literal text with no way to restore its `textChips` entry alongside it.
+     * Once desynced, positional mapping (`textChips[index]`) can no longer be trusted for *any* text
+     * chip on the line -- with more matches than registry entries, it doesn't just show the dead one
+     * as its own label, it can misattribute a later, still-live chip's real content to the dead one
+     * and leave the live one showing its own label instead (a content swap, not merely "plain text").
+     * So every text chip falls back to its own literal label instead, uniformly, until a further edit
+     * (e.g. deleting the resurrected text) brings the count back in sync. */
+    private textChipsDesynced;
     /** How many `[Pasted: ...]` chips appear before (line, col) -- the index into `textChips`,
      * since chip labels carry no id and are only distinguishable by document order. */
     private textChipCountBefore;
