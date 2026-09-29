@@ -192,4 +192,25 @@ export function shortcutsBar(theme, state) {
         return right === "" ? fit(left, width) : spread(left, right, width);
     });
 }
+/**
+ * Messages queued while a turn runs (4.1 排队区), between the turn status row and the prompt.
+ * At most 3 lines: Pi's `Steering:` / `Follow-up:` lines, plus an Alt+Up hint if there is room.
+ */
+export function queuedMessagesBar(theme, state) {
+    return {
+        render(width) {
+            const { steering, followUp } = state();
+            const lines = [
+                ...steering.map((message) => `Steering: ${message}`),
+                ...followUp.map((message) => `Follow-up: ${message}`),
+            ].slice(0, 3);
+            if (lines.length === 0)
+                return [];
+            if (lines.length < 3)
+                lines.push("↳ Alt+Up to edit all queued messages");
+            return lines.map((text) => fit(theme.fg("dim", text), width));
+        },
+        invalidate() { },
+    };
+}
 //# sourceMappingURL=chrome.js.map

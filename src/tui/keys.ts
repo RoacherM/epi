@@ -2,6 +2,8 @@
 // Pi's defaults and the user's ~/.mmp/pi/keybindings.json both apply. The first matching action
 // whose `when` holds consumes the key; otherwise it goes to the focused component (editor, dialog).
 import type { CommandHost } from "./command-host.js";
+import { runModel } from "./commands.js";
+import { openExternalEditor, pasteClipboard, suspendToShell } from "./key-handlers.js";
 
 export interface KeyAction {
   /** Pi keybinding id, e.g. "app.model.select". */
@@ -51,6 +53,61 @@ export function createKeyActions(): KeyAction[] {
     {
       id: "app.tools.expand",
       run: (host) => host.toggleToolsExpanded(),
+    },
+    {
+      id: "app.model.select",
+      run: (host) => runModel(host, ""),
+    },
+    {
+      // K1: MMP swaps Pi's Enter/Alt+Enter semantics while a turn runs. Enter already queues a
+      // follow-up (submit() in app.ts); Alt+Enter steers it into the current turn instead.
+      id: "app.message.followUp",
+      when: (host) => host.session().isStreaming,
+      run: async (host) => {
+        const text = host.getExpandedEditorText();
+        if (text.trim() === "") return;
+        host.addToHistory(text);
+        host.setEditorText("");
+        try {
+          await host.session().prompt(text, { streamingBehavior: "steer" });
+        } catch (error) {
+          host.notice(error instanceof Error ? error.message : String(error), "error");
+          if (host.getEditorText() === "") host.setEditorText(text);
+        }
+      },
+    },
+    {
+      // Idle: Alt+Enter submits like plain Enter (Pi's handleFollowUp does the same).
+      id: "app.message.followUp",
+      when: (host) => !host.session().isStreaming,
+      run: (host) => host.submit(host.getExpandedEditorText()),
+    },
+    {
+      id: "app.message.dequeue",
+      run: (host) => {
+        const { steering, followUp } = host.session().clearQueue();
+        const queued = [...steering, ...followUp];
+        if (queued.length === 0) {
+          host.notice("No queued messages to restore.");
+          return;
+        }
+        const queuedText = queued.join("\n\n");
+        const current = host.getEditorText();
+        host.setEditorText([queuedText, current].filter((text) => text.trim() !== "").join("\n\n"));
+        host.notice(`Restored ${queued.length} queued message${queued.length > 1 ? "s" : ""} to editor.`);
+      },
+    },
+    {
+      id: "app.editor.external",
+      run: (host) => openExternalEditor(host),
+    },
+    {
+      id: "app.clipboard.pasteImage",
+      run: (host) => pasteClipboard(host),
+    },
+    {
+      id: "app.suspend",
+      run: (host) => suspendToShell(host),
     },
   ];
 }

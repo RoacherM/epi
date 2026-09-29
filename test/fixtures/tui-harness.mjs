@@ -7,7 +7,10 @@ import { runTuiApp } from "../../dist/tui/app.js";
 import { createRuntimeFromPrepared } from "../../dist/tui/start.js";
 import { detectAppearance, installMmpTheme } from "../../dist/tui/theme.js";
 
-const KEYS = { enter: "\r", esc: "\x1b", "ctrl+c": "\x03", "ctrl+d": "\x04", down: "\x1b[B", up: "\x1b[A" };
+const KEYS = {
+  enter: "\r", esc: "\x1b", "ctrl+c": "\x03", "ctrl+d": "\x04", down: "\x1b[B", up: "\x1b[A",
+  "alt+enter": "\x1b\r", "alt+up": "\x1b[1;3A", "ctrl+l": "\x0c", "ctrl+g": "\x07", "ctrl+v": "\x16",
+};
 const { steps } = JSON.parse(process.env.MMP_TUI_HARNESS);
 
 let output = "";
@@ -36,6 +39,8 @@ for (const [kind, value] of steps) {
   if (kind === "mark") marks[value] = strip(output);
   else if (kind === "wait") await sleep(value);
   else if (kind === "type") for (const char of value) { onInput(char); await sleep(10); }
+  // A real terminal delivers a paste as one bracketed chunk, not keystroke by keystroke.
+  else if (kind === "paste") onInput(`\x1b[200~${value}\x1b[201~`);
   else if (kind === "key") { onInput(KEYS[value]); await sleep(50); }
 }
 const code = await Promise.race([running, sleep(5000).then(() => "did not exit")]);

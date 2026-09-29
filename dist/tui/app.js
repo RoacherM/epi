@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getSelectListTheme, } from "@earendil-works/pi-coding-agent";
 import { runUserBash } from "./bash-block.js";
-import { headerBar, PromptFrame, shortcutsBar, TurnStatus } from "./chrome.js";
+import { headerBar, PromptFrame, queuedMessagesBar, shortcutsBar, TurnStatus, } from "./chrome.js";
 import { findBuiltin, slashCompletions } from "./builtins.js";
 import { createExtensionUIContext } from "./ext-host.js";
 import { installKeybindings } from "./keybindings.js";
@@ -45,6 +45,7 @@ export async function runTuiApp(options) {
     const widgets = { aboveEditor: new Map(), belowEditor: new Map() };
     let toolsExpanded = false;
     let turn;
+    let queued = { steering: [], followUp: [] };
     let workingMessage;
     let workingVisible = true;
     let branch = readGitBranch(cwd);
@@ -71,10 +72,11 @@ export async function runTuiApp(options) {
     const defaultFooter = shortcutsBar(theme, () => {
         const shortcuts = turn === undefined
             ? [{ key: "Shift+Tab", label: "thinking" }, { key: "Ctrl+o", label: "tools" }, { key: "/", label: "commands" }, { key: "Ctrl+d", label: "quit" }]
-            : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "tools" }];
+            : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "tools" }, { key: "Alt+Enter", label: "steer" }];
         return { shortcuts, right: theme.fg("muted", [...statuses.values()].join(" · ")) };
     });
     footerSlot.addChild(defaultFooter);
+    const queueDisplay = queuedMessagesBar(theme, () => queued);
     const scroll = new piTui.ScrollView(inset(transcript.root), { follow: "end", primary: true, scrollbar: "auto" });
     const turnGap = { render: () => (turn === undefined ? [] : [""]), invalidate() { } };
     tui.setLayoutRoot(new piTui.VStack([
@@ -84,6 +86,7 @@ export async function runTuiApp(options) {
         { component: scroll, basis: 0, grow: 1, shrink: 1, minSize: 1 },
         { component: turnGap, basis: "auto", grow: 0, shrink: 1, minSize: 0 },
         { component: inset(turnStatus), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+        { component: inset(queueDisplay), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
         { component: blank(), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
         { component: inset(widgetsAbove), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
         { component: inset(editorSlot), basis: "auto", grow: 0, shrink: 1, minSize: 3 },
@@ -192,6 +195,13 @@ export async function runTuiApp(options) {
         addBlock: (component) => transcript.addBlock(component),
         getEditorText: () => editor.getText(),
         setEditorText: (text) => surface.setEditorText(text),
+        getExpandedEditorText: () => editor.getExpandedText(),
+        insertEditorText: (text) => {
+            editor.insertTextAtCursor(text);
+            tui.requestRender();
+        },
+        addToHistory: (text) => editor.addToHistory(text),
+        submit: (text) => submit(text),
         isWorking: () => turn !== undefined,
         toggleToolsExpanded: () => surface.setToolsExpanded(!toolsExpanded),
         exit: (code) => exit(code),
@@ -238,6 +248,9 @@ export async function runTuiApp(options) {
                 turn = undefined;
                 workingMessage = undefined;
                 break;
+            case "queue_update":
+                queued = { steering: event.steering, followUp: event.followUp };
+                break;
             case "message_update": {
                 const kind = event.assistantMessageEvent.type;
                 setActivity(kind.startsWith("thinking") ? "Thinking…" : kind.startsWith("toolcall") ? "Preparing tool call…" : "Responding…");
@@ -268,6 +281,7 @@ export async function runTuiApp(options) {
         unsubscribe?.();
         unsubscribe = session.subscribe(onEvent);
         transcript.reset(session);
+        queued = { steering: session.getSteeringMessages(), followUp: session.getFollowUpMessages() };
         await session.bindExtensions({
             uiContext,
             mode: "tui",

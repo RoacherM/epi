@@ -13,7 +13,16 @@ import {
 import type { AutocompleteProvider, Component, Container, Editor, Terminal } from "@earendil-works/pi-tui";
 
 import { runUserBash } from "./bash-block.js";
-import { headerBar, PromptFrame, type Shortcut, shortcutsBar, type TurnState, TurnStatus } from "./chrome.js";
+import {
+  headerBar,
+  PromptFrame,
+  type QueuedMessagesState,
+  queuedMessagesBar,
+  type Shortcut,
+  shortcutsBar,
+  type TurnState,
+  TurnStatus,
+} from "./chrome.js";
 import { findBuiltin, slashCompletions } from "./builtins.js";
 import type { CommandHost } from "./command-host.js";
 import { createExtensionUIContext, type HostSurface } from "./ext-host.js";
@@ -68,6 +77,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   const widgets = { aboveEditor: new Map<string, Component>(), belowEditor: new Map<string, Component>() };
   let toolsExpanded = false;
   let turn: TurnState | undefined;
+  let queued: QueuedMessagesState = { steering: [], followUp: [] };
   let workingMessage: string | undefined;
   let workingVisible = true;
   let branch = readGitBranch(cwd);
@@ -100,10 +110,11 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   const defaultFooter = shortcutsBar(theme, () => {
     const shortcuts: Shortcut[] = turn === undefined
       ? [{ key: "Shift+Tab", label: "thinking" }, { key: "Ctrl+o", label: "tools" }, { key: "/", label: "commands" }, { key: "Ctrl+d", label: "quit" }]
-      : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "tools" }];
+      : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "tools" }, { key: "Alt+Enter", label: "steer" }];
     return { shortcuts, right: theme.fg("muted", [...statuses.values()].join(" · ")) };
   });
   footerSlot.addChild(defaultFooter);
+  const queueDisplay = queuedMessagesBar(theme, () => queued);
 
   const scroll = new piTui.ScrollView(inset(transcript.root), { follow: "end", primary: true, scrollbar: "auto" });
   const turnGap: Component = { render: () => (turn === undefined ? [] : [""]), invalidate() {} };
@@ -114,6 +125,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     { component: scroll, basis: 0, grow: 1, shrink: 1, minSize: 1 },
     { component: turnGap, basis: "auto", grow: 0, shrink: 1, minSize: 0 },
     { component: inset(turnStatus), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: inset(queueDisplay), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
     { component: blank(), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
     { component: inset(widgetsAbove), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
     { component: inset(editorSlot), basis: "auto", grow: 0, shrink: 1, minSize: 3 },
@@ -217,6 +229,13 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     addBlock: (component) => transcript.addBlock(component),
     getEditorText: () => editor.getText(),
     setEditorText: (text) => surface.setEditorText(text),
+    getExpandedEditorText: () => editor.getExpandedText(),
+    insertEditorText: (text) => {
+      editor.insertTextAtCursor(text);
+      tui.requestRender();
+    },
+    addToHistory: (text) => editor.addToHistory(text),
+    submit: (text) => submit(text),
     isWorking: () => turn !== undefined,
     toggleToolsExpanded: () => surface.setToolsExpanded(!toolsExpanded),
     exit: (code) => exit(code),
@@ -266,6 +285,9 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
         turn = undefined;
         workingMessage = undefined;
         break;
+      case "queue_update":
+        queued = { steering: event.steering, followUp: event.followUp };
+        break;
       case "message_update": {
         const kind = event.assistantMessageEvent.type;
         setActivity(kind.startsWith("thinking") ? "Thinking…" : kind.startsWith("toolcall") ? "Preparing tool call…" : "Responding…");
@@ -298,6 +320,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     unsubscribe?.();
     unsubscribe = session.subscribe(onEvent);
     transcript.reset(session);
+    queued = { steering: session.getSteeringMessages(), followUp: session.getFollowUpMessages() };
     await session.bindExtensions({
       uiContext,
       mode: "tui",

@@ -63,4 +63,13 @@ export declare function shortcutsBar(theme: Theme, state: () => {
     shortcuts: Shortcut[];
     right: string;
 }): Component;
+export interface QueuedMessagesState {
+    steering: readonly string[];
+    followUp: readonly string[];
+}
+/**
+ * Messages queued while a turn runs (4.1 排队区), between the turn status row and the prompt.
+ * At most 3 lines: Pi's `Steering:` / `Follow-up:` lines, plus an Alt+Up hint if there is room.
+ */
+export declare function queuedMessagesBar(theme: Theme, state: () => QueuedMessagesState): Component;
 //# sourceMappingURL=chrome.d.ts.map

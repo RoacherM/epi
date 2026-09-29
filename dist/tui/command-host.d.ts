@@ -15,6 +15,15 @@ export interface CommandHost {
     addBlock(component: Component): void;
     getEditorText(): string;
     setEditorText(text: string): void;
+    /** Editor text with large-paste markers (`[paste #1 +N lines]`) expanded to their full content;
+     * use this, not `getEditorText`, for anything actually sent (submit, steer, external editor). */
+    getExpandedEditorText(): string;
+    /** Insert text at the editor's cursor, e.g. a pasted clipboard image's file path. */
+    insertEditorText(text: string): void;
+    /** Record text in the editor's up-arrow history without submitting it. */
+    addToHistory(text: string): void;
+    /** Run the submit pipeline (built-ins, `!`, `session.prompt`) as if Enter were pressed. */
+    submit(text: string): Promise<void>;
     /** True while an agent turn is running. */
     isWorking(): boolean;
     toggleToolsExpanded(): void;
