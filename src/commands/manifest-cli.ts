@@ -99,6 +99,72 @@ function validateAndResolveSource(source: string): string {
   return resolved;
 }
 
+/** `-h`/`--help` anywhere in argv, matching Pi's own subcommand help check (dist/main.js's
+ * `isAuthCommandHelp`, dist/package-manager-cli.js's `rest.includes("-h") || rest.includes("--help")`)
+ * -- MMP's own `mmp auth --help` (auth-cli.ts) already works this way. */
+function isHelpRequested(argv: readonly string[]): boolean {
+  return argv.includes("-h") || argv.includes("--help");
+}
+
+/** Mirrors Pi's `printPackageCommandHelp("install")` (dist/package-manager-cli.js), in MMP's own
+ * words: a Manifest instead of settings.json, no --approve/--no-approve (parseSourceArgs doesn't
+ * accept them -- project trust for `mmp install -l` is decided once, at `mmp --approve`/`/trust`,
+ * not per command). */
+function renderInstallHelp(): string {
+  return `Usage:
+  mmp install <source> [-l]
+
+Add an extension source to the Manifest.
+
+Options:
+  -l    Write the project Manifest (.mmp/mmp.json) instead of the global one (~/.mmp/mmp.json)
+
+Examples:
+  mmp install npm:@foo/bar
+  mmp install git:github.com/user/repo
+  mmp install ./local/path
+`;
+}
+
+/** Mirrors Pi's `printPackageCommandHelp("remove")`. */
+function renderRemoveHelp(commandName: "remove" | "uninstall"): string {
+  return `Usage:
+  mmp ${commandName} <source> [-l]
+
+Remove an extension source from the Manifest.
+Alias: mmp ${commandName === "remove" ? "uninstall" : "remove"} <source> [-l]
+
+Options:
+  -l    Remove from the project Manifest (.mmp/mmp.json) instead of the global one (~/.mmp/mmp.json)
+
+Examples:
+  mmp ${commandName} npm:@foo/bar
+`;
+}
+
+/** Mirrors Pi's `printPackageCommandHelp("list")`. */
+function renderListHelp(): string {
+  return `Usage:
+  mmp list
+
+List the Rules, Skills, and Extensions declared by the global and project Manifest.
+`;
+}
+
+/** Mirrors Pi's `printConfigCommandHelp` (dist/package-manager-cli.js). */
+function renderConfigHelp(): string {
+  return `Usage:
+  mmp config [-l]
+
+Open the Manifest in $VISUAL or $EDITOR.
+Without -l, edits the global Manifest (~/.mmp/mmp.json). Saved changes are re-validated; an
+invalid result is discarded and the previous Manifest kept.
+
+Options:
+  -l    Edit the project Manifest (.mmp/mmp.json) instead of the global one
+`;
+}
+
 function parseSourceArgs(argv: readonly string[], commandName: string): { source: string; local: boolean } {
   let source: string | undefined;
   let local = false;
@@ -122,6 +188,10 @@ function parseSourceArgs(argv: readonly string[], commandName: string): { source
 }
 
 export async function runInstallCommand(argv: readonly string[]): Promise<number> {
+  if (isHelpRequested(argv)) {
+    process.stdout.write(renderInstallHelp());
+    return 0;
+  }
   const { source: rawSource, local } = parseSourceArgs(argv, "install");
   const target = local ? projectTarget(process.cwd()) : globalTarget();
   const source = validateAndResolveSource(rawSource);
@@ -135,6 +205,10 @@ export async function runInstallCommand(argv: readonly string[]): Promise<number
 }
 
 export async function runRemoveCommand(argv: readonly string[], commandName: "remove" | "uninstall"): Promise<number> {
+  if (isHelpRequested(argv)) {
+    process.stdout.write(renderRemoveHelp(commandName));
+    return 0;
+  }
   const { source, local } = parseSourceArgs(argv, commandName);
   const target = local ? projectTarget(process.cwd()) : globalTarget();
   let removed = false;
@@ -167,6 +241,10 @@ function describeManifest(label: string, manifest: ResolvedManifest, lines: stri
 }
 
 export function runListCommand(argv: readonly string[]): number {
+  if (isHelpRequested(argv)) {
+    process.stdout.write(renderListHelp());
+    return 0;
+  }
   if (argv.length > 0) {
     throw new MmpArgumentError("mmp list takes no arguments");
   }
@@ -192,6 +270,10 @@ export function runListCommand(argv: readonly string[]): number {
 }
 
 export async function runConfigCommand(argv: readonly string[]): Promise<number> {
+  if (isHelpRequested(argv)) {
+    process.stdout.write(renderConfigHelp());
+    return 0;
+  }
   let local = false;
   for (const argument of argv) {
     if (argument === "-l") {

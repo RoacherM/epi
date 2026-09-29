@@ -121,6 +121,29 @@ export async function runMmpUpdate(options) {
         rmSync(directory, { recursive: true, force: true });
     }
 }
+/** Mirrors Pi's `printPackageCommandHelp("update")` (dist/package-manager-cli.js), in MMP's own
+ * words: `--extensions`/`<source>` clears the Manifest's extension package cache instead of
+ * updating settings.json entries, and there's no `--force` (MMP's own update always re-verifies
+ * the installer's checksum; see docs/cli-design.md §3). */
+export function renderUpdateHelp() {
+    return `Usage:
+  mmp update [--self|--extensions|--models|--all] [<source>]
+
+Update mmp itself, Manifest-declared extension packages, or the model catalog.
+
+Options:
+  --self          Update mmp, including its pinned Pi core (default when no target is given)
+  --extensions    Clear the cached extension packages so Manifest-declared sources refetch
+  --models        Refresh the model catalog
+  --all           Do all three
+
+Examples:
+  mmp update                  Update mmp only
+  mmp update --all            Update mmp and refresh Manifest extensions and models
+  mmp update --models         Refresh the model catalog only
+  mmp update <source>         Refetch one Manifest-declared extension (same as --extensions <source>)
+`;
+}
 /** `mmp update [--self|--extensions|--models|--all] [<source>]` (docs/cli-design.md §3). A bare
  * `<source>` with no flag means "update this one extension", same as `--extensions <source>`. */
 export function parseUpdateArgs(argv) {
@@ -200,6 +223,10 @@ export async function refreshModelCatalog(agentDir) {
  * model catalog; `--all` does all three. Returns the process exit code. */
 export async function runMmpUpdateCommand(argv, options) {
     const write = options.write ?? ((text) => process.stdout.write(text));
+    if (argv.includes("-h") || argv.includes("--help")) {
+        write(renderUpdateHelp());
+        return 0;
+    }
     const { target, source } = parseUpdateArgs(argv);
     let exitCode = 0;
     if (target === "self" || target === "all") {

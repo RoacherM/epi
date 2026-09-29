@@ -266,6 +266,39 @@ test("mmp auth help prints usage and exits 0", (t) => {
   assert.match(result.stdout, /mmp auth print-api-key/);
 });
 
+test("mmp install|remove|uninstall|list|config --help (and -h) print usage instead of failing", (t) => {
+  const f = fixture(t);
+  const cases = [
+    { argv: ["install", "--help"], expect: /mmp install <source> \[-l\]/ },
+    { argv: ["install", "-h"], expect: /mmp install <source> \[-l\]/ },
+    { argv: ["remove", "--help"], expect: /mmp remove <source> \[-l\]/ },
+    { argv: ["remove", "-h"], expect: /mmp remove <source> \[-l\]/ },
+    { argv: ["uninstall", "--help"], expect: /mmp uninstall <source> \[-l\]/ },
+    { argv: ["list", "--help"], expect: /mmp list/ },
+    { argv: ["list", "-h"], expect: /mmp list/ },
+    { argv: ["config", "--help"], expect: /mmp config \[-l\]/ },
+    { argv: ["config", "-h"], expect: /mmp config \[-l\]/ },
+  ];
+  for (const { argv, expect } of cases) {
+    const result = run(f, argv);
+    assert.equal(result.status, 0, `${argv.join(" ")}: ${result.stderr}`);
+    assert.match(result.stdout, expect, argv.join(" "));
+    assert.equal(result.stderr, "", argv.join(" "));
+  }
+  // No Manifest was ever written by any of these.
+  assert.equal(existsSync(globalManifestPath(f)), false);
+});
+
+test("mmp update --help (and -h) prints usage instead of failing", (t) => {
+  const f = fixture(t);
+  for (const flag of ["--help", "-h"]) {
+    const result = run(f, ["update", flag]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /mmp update \[--self\|--extensions\|--models\|--all\]/);
+    assert.equal(result.stderr, "");
+  }
+});
+
 test("nothing in the subcommand paths reads or writes ~/.pi/agent", (t) => {
   const f = fixture(t);
   mkdirSync(join(f.home, ".pi", "agent"), { recursive: true });
