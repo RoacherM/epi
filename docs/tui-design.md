@@ -242,7 +242,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 |---|---|---|
 | 用户消息 | `❯` 加整块底色 `userMessageBg`，上下各 1 行内边距。带 OSC 133 标记，全屏下可以跳到上一条/下一条提示。超过 3 **逻辑行**（不是屏幕上折行后的行数——窄屏下一整行很长也不会因为折行超过 3 行就被折叠）折叠成前 3 行 + `…`，`Ctrl+O` 展开（2026-09-30 用户在真实终端里实测 grok 1.0.44：粘贴 12 行内容发送后，气泡里只显示前 3 行再加一行 `…`）。图片内容块显示成 `[Image #N]`，`@file` 内联的 `<file name="...">...</file>`（file-arguments.ts）显示成 `[File: 文件名]`；都只影响这里的显示，模型收到的还是完整内容 | 不复用，自己写。Pi 的 `UserMessageComponent` 样式不同 |
 | 助手消息 | markdown，没有标题行 | 复用 `AssistantMessageComponent`（导出），传入扩展的 markdown 变换 |
-| thinking | 折叠成一行 `◆ Thought for 2.0s`，可以单独展开 | 用 `AssistantMessageComponent` 自带的参数：`hideThinking=true` 加 `hiddenLabel="Thought for 2.0s"`。展开某一条消息，就用 `hideThinking=false` 重新创建这条消息的组件。thinking 和正文在一条消息里交错出现，交给这个组件处理最简单。grok 的"运行中显示最后 3 行"要自己遍历内容块，放到 v1.1 |
+| thinking | 见下面"M4 视觉细节" | `AssistantMessageComponent` 的 `hideThinking` + `hiddenLabel` 可以做折叠；运行中显示最后 3 行要自己处理 |
 | 工具调用 | 运行中：左侧 `┃` 竖条用 `accent` 色；结束：`◆` 加标题一行，失败时标题用 `error` 色。三种状态：折叠、截断、展开 | 自己写卡片外框，内容见下 |
 | 连续只读工具 | 连续折叠的 read、grep、find、ls 合并成一行：`◆ Read 2 files, Searched 1 pattern`；中间插入其它工具就断开 | 自己写 |
 | 用户 `!` / `!!` 命令 | 流式输出，截断成前 2 行 + `… +N lines` + 后 3 行 | 参照 `BashExecutionComponent`（导出），外框自己写 |
@@ -259,6 +259,17 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 扩展注册的工具（比如 MCP 工具）用它们自己的 `renderCall` / `renderResult`，放进同一个卡片外框里。既没有内置样式也没有自带渲染器的工具，用通用样式：显示参数 JSON 和结果文本。
 
 **折叠。** `Ctrl+O` 切换所有工具块和折叠的用户消息（上面那行），`Ctrl+T` 切换所有 thinking。单个块用鼠标点标题行切换。快捷键栏对应显示 `Ctrl+o:expand`（不再是 `tools`，因为现在也展开用户消息）。v1 不做键盘逐块选中（grok 的 scrollback 焦点模式），放到 v1.1。
+
+**M4 视觉细节**（2026-09-30 与用户确认。"实测"= 在 Herdr 里跑 grok 1.0.44 看到的；"笔记"= [grok 源码笔记](notes/research-grok-build-tui.md)）
+
+| 项 | 做法 | 来源 |
+|---|---|---|
+| 助手消息时间 | 助手消息第一行右侧显示时间（和用户消息一样） | 实测 |
+| `Worked for Ns` | 每轮 agent 结束后，在最后一块下面加一行 `Worked for 6.6s`（muted），时长从 `agent_start` 算到 `agent_end`；中止的轮次写 `Stopped after Ns` | 实测（中止的写法是我定的） |
+| thinking | 运行中：`◆ Thinking…` 下面显示 thinking 的最后 3 行（dim）；结束后折叠成一行 `◆ Thought for 2.0s`（◆ 灰色，Thought 粗体 muted），时长从第一个 thinking 事件算到最后一个。`Ctrl+T`（Pi 的 `app.thinking.toggle`）切换全部 thinking 展开/折叠；单击这一行只切换这一条 | 笔记（运行中 3 行、折叠文字和颜色）；Ctrl+T 是 Pi 的键 |
+| 连续只读工具合并 | 连续的已折叠 read、grep、find、ls 合并成一行：`◈ Read 3 files`，多种时 `◈ Read 2 files, Searched 1 pattern, Listed 1 dir`；运行中 `Reading… · 2 completed`，失败的写 `· 1 failed`（error 色）；中间出现别的工具、正文或 thinking 就断开；组内超过 10 项时末尾 `◈ N more`；`Ctrl+O` 展开时恢复成逐个工具块 | 实测（`◈ Read 3 files`）+ 笔记（其余） |
+| 完成闪烁 | 工具或 thinking 结束时竖条闪一次 `success` 色，400ms | 笔记 |
+| 矮屏降级 | 终端 ≤16 行时去掉顶栏和快捷键栏；≤12 行时输入框最多 1 行 | 笔记（16 行）；12 行是我定的 |
 
 ### 4.3 输入框和阻塞卡片
 
