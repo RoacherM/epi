@@ -3,7 +3,6 @@
 import {
   type AgentSession,
   type AgentSessionEvent,
-  AssistantMessageComponent,
   CustomMessageComponent,
   getMarkdownTheme,
   type Theme,
@@ -11,8 +10,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Component, Container, TUI } from "@earendil-works/pi-tui";
 
+import { AssistantBlock } from "./assistant-block.js";
 import { UserBashBlock } from "./bash-block.js";
-import { UserMessageBlock } from "./chrome.js";
+import { formatDuration, UserMessageBlock } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
 import { toolBlock } from "./tools/block.js";
 import { builtInToolRenderers } from "./tools/index.js";
@@ -30,8 +30,14 @@ export class Transcript {
   private messageCount = 0;
   private readonly tools = new Map<string, ToolExecutionComponent>();
   private readonly userMessages: UserMessageBlock[] = [];
-  private streaming: AssistantMessageComponent | undefined;
+  private readonly assistantBlocks: AssistantBlock[] = [];
+  private streaming: AssistantBlock | undefined;
   private toolsExpanded = false;
+  private thinkingExpanded = false;
+  /** Set on `agent_start`, read (and cleared) on `agent_end`/`auto_retry_end` for the `Worked
+   * for Ns` footer (item 2) -- this process's own clock, not anything from the event stream, since
+   * neither event carries a timestamp. */
+  private turnStartedAt: number | undefined;
 
   constructor(
     private readonly tui: TUI,
@@ -52,7 +58,12 @@ export class Transcript {
     this.messageCount = 0;
     this.tools.clear();
     this.userMessages.length = 0;
+    this.assistantBlocks.length = 0;
     this.streaming = undefined;
+    // A turn from the outgoing session can never reach its agent_end here; drop it rather than
+    // print a "Worked for" footer timed against the wrong session (and, per docs/tui-design.md
+    // 4.2, replayed history doesn't get one anyway).
+    this.turnStartedAt = undefined;
     for (const message of session.messages) {
       this.addFinishedMessage(message);
     }
@@ -64,6 +75,14 @@ export class Transcript {
     this.toolsExpanded = expanded;
     for (const tool of this.tools.values()) tool.setExpanded(expanded);
     for (const block of this.userMessages) block.setExpanded(expanded);
+  }
+
+  /** Ctrl+T (docs/tui-design.md 4.2/4.6, `app.thinking.toggle`): expands or collapses every
+   * thinking run in every assistant message at once, independent of Ctrl+O's tool/user-message
+   * toggle. */
+  setThinkingExpanded(expanded: boolean): void {
+    this.thinkingExpanded = expanded;
+    for (const block of this.assistantBlocks) block.setGlobalExpanded(expanded);
   }
 
   /**
@@ -94,7 +113,7 @@ export class Transcript {
       case "message_update":
         if (event.message.role === "assistant") {
           this.streaming ??= this.assistant(event.message, true);
-          this.streaming.updateContent(event.message, true);
+          this.streaming.updateContent(event.message, true, event.assistantMessageEvent);
           this.syncToolCalls(event.message, false);
         }
         break;
@@ -106,6 +125,18 @@ export class Transcript {
         } else if (event.message.role === "custom") {
           this.addFinishedMessage(event.message);
         }
+        break;
+      case "agent_start":
+        this.turnStartedAt = Date.now();
+        break;
+      case "agent_end":
+        // A run about to auto-retry isn't over yet (docs/tui-design.md 4.2's "each agent turn" is
+        // this one from the user's point of view too): the footer waits for the retry's own
+        // agent_end, or -- if the retry gives up -- auto_retry_end below.
+        if (!event.willRetry) this.turnFooter(event.messages);
+        break;
+      case "auto_retry_end":
+        if (!event.success) this.turnFooter([]);
         break;
       case "tool_execution_start":
         this.tool(event.toolName, event.toolCallId, event.args).markExecutionStarted();
@@ -149,18 +180,26 @@ export class Transcript {
     if (counts) this.messageCount += 1;
   }
 
-  private assistant(message: Extract<AgentMessage, { role: "assistant" }>, streaming: boolean): AssistantMessageComponent {
-    const component = new AssistantMessageComponent(
-      undefined,
-      false,
-      getMarkdownTheme(),
-      undefined,
-      CONTENT_PAD,
-      this.session.extensionRunner.getMarkdownTransformers(),
-    );
-    component.updateContent(message, streaming);
+  private assistant(message: Extract<AgentMessage, { role: "assistant" }>, streaming: boolean): AssistantBlock {
+    const component = new AssistantBlock(this.theme, message, this.session.extensionRunner.getMarkdownTransformers());
+    component.setGlobalExpanded(this.thinkingExpanded);
+    this.assistantBlocks.push(component);
     this.add(component, false);
     return component;
+  }
+
+  /** Item 2 (docs/tui-design.md 4.2): `Worked for Ns` below the last block of a settled turn,
+   * `Stopped after Ns` for one that ended aborted. `messages` is `agent_end`'s own payload (this
+   * run's messages, not the whole session) so the scan for the last assistant reply's `stopReason`
+   * only ever looks at this turn -- an empty array (auto_retry_end giving up with no final
+   * assistant message at all) just falls back to "Worked for". */
+  private turnFooter(messages: readonly { role: string; stopReason?: string }[]): void {
+    if (this.turnStartedAt === undefined) return;
+    const duration = Date.now() - this.turnStartedAt;
+    this.turnStartedAt = undefined;
+    const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+    const label = lastAssistant?.stopReason === "aborted" ? "Stopped after" : "Worked for";
+    this.add(new piTui.Text(this.theme.fg("muted", `${label} ${formatDuration(duration)}`), CONTENT_PAD, 0), true, false);
   }
 
   private addFinishedMessage(message: AgentMessage): void {

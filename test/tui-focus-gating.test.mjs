@@ -110,12 +110,12 @@ test("the shortcuts bar shows the dialog's keys while it occupies the editor slo
     ["key", "esc"], ["wait", 300], ["mark", "closedAgain"],
     ["key", "ctrl+d"],
   ]);
-  assert.match(marks.idleEditor, /Ctrl\+d:quit/);
+  assert.match(marks.idleEditor, /Ctrl\+t:thinking/);
   const openedDelta = marks.dialogOpen.slice(marks.idleEditor.length);
   assert.match(openedDelta, /↑↓:select/);
   assert.match(openedDelta, /Enter:confirm/);
   assert.match(openedDelta, /Esc:cancel/);
-  assert.doesNotMatch(openedDelta, /Ctrl\+d:quit/);
+  assert.doesNotMatch(openedDelta, /Ctrl\+t:thinking/);
   const closedDelta = marks.closedAgain.slice(marks.dialogOpen.length);
-  assert.match(closedDelta, /Ctrl\+d:quit/);
+  assert.match(closedDelta, /Ctrl\+t:thinking/);
 });

@@ -1,8 +1,14 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorComponent, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
+/** Shared with assistant-block.ts (the assistant-message timestamp reuses this row layout). */
+export declare function fit(text: string, width: number): string;
+/** Left and right segments on one row; the left side is truncated first. */
+export declare function spread(left: string, right: string, width: number): string;
 /** grok: `~` for home, middle components shortened to their first letter, last two kept full. */
 export declare function shortenPath(path: string, home?: string): string;
 export declare function formatTokens(count: number): string;
+/** Shared with transcript.ts (turn footer) and assistant-block.ts (thinking duration). */
+export declare function formatDuration(ms: number): string;
 export interface HeaderState {
     branch: string | undefined;
     cwd: string;
@@ -58,7 +64,8 @@ export declare class PromptFrame implements Component {
     readonly editor: EditorComponent;
     private readonly label;
     private readonly borderColor;
-    constructor(theme: Theme, editor: EditorComponent, label: () => string, borderColor: () => (text: string) => string);
+    private readonly maxContentRows;
+    constructor(theme: Theme, editor: EditorComponent, label: () => string, borderColor: () => (text: string) => string, maxContentRows?: () => number | undefined);
     get focused(): boolean;
     set focused(value: boolean);
     /** Finds the editor's own top/bottom border rows within its rendered output at `inner` width,
@@ -68,7 +75,11 @@ export declare class PromptFrame implements Component {
     handleInput(data: string): void;
     /** Forwards a click/double-click inside the content rows to the editor, translated into its own
      * coordinate space (docs/tui-design.md 4.3: double-click on a chip expands it). Clicks on the
-     * border or the autocomplete dropdown below it are left unhandled, matching prior behavior. */
+     * border or the autocomplete dropdown below it are left unhandled, matching prior behavior.
+     * Known gap: at the ≤12-row cap (`maxContentRows`), this still maps against the *uncropped*
+     * content height, so a click lands on the row it would be on without the cap, not the row drawn on
+     * screen. Not fixed here -- a terminal that short makes precise mouse targeting essentially moot,
+     * and the editor stays fully usable from the keyboard either way. */
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
     invalidate(): void;
 }

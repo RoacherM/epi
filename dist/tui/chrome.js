@@ -4,11 +4,12 @@ import { homedir } from "node:os";
 import { basename, sep } from "node:path";
 import { piTui } from "./pi-tui.js";
 const { truncateToWidth, visibleWidth } = piTui;
-function fit(text, width) {
+/** Shared with assistant-block.ts (the assistant-message timestamp reuses this row layout). */
+export function fit(text, width) {
     return truncateToWidth(text, Math.max(0, width), "…");
 }
 /** Left and right segments on one row; the left side is truncated first. */
-function spread(left, right, width) {
+export function spread(left, right, width) {
     const rightWidth = visibleWidth(right);
     if (rightWidth >= width)
         return fit(right, width);
@@ -29,7 +30,8 @@ export function formatTokens(count) {
     const thousands = count / 1000;
     return thousands >= 100 ? `${Math.round(thousands)}K` : `${thousands.toFixed(1).replace(/\.0$/, "")}K`;
 }
-function formatDuration(ms) {
+/** Shared with transcript.ts (turn footer) and assistant-block.ts (thinking duration). */
+export function formatDuration(ms) {
     const seconds = ms / 1000;
     if (seconds < 60)
         return `${seconds.toFixed(1)}s`;
@@ -171,16 +173,29 @@ function isBorderRule(text) {
     const plain = plainText(text);
     return plain.includes("─") && /^[─↑↓\d\s a-z]+$/.test(plain);
 }
+/** Item 4 (docs/tui-design.md 4.1/4.2): at ≤12 rows, crop the editor's content down to the row
+ * holding the cursor (its reverse-video marker, same as the Editor itself emits it) instead of an
+ * arbitrary window -- the point of the cap is to keep editing visible, not just short. Falls back to
+ * the last row (unfocused editors don't mark a cursor at all) so this never returns nothing. */
+function cropToCursor(lines, maxRows) {
+    if (lines.length <= maxRows)
+        return [...lines];
+    const cursorIndex = lines.findIndex((line) => line.includes("\x1b[7m"));
+    const end = Math.min(lines.length, Math.max(maxRows, (cursorIndex === -1 ? lines.length - 1 : cursorIndex) + 1));
+    return lines.slice(end - maxRows, end);
+}
 export class PromptFrame {
     theme;
     editor;
     label;
     borderColor;
-    constructor(theme, editor, label, borderColor) {
+    maxContentRows;
+    constructor(theme, editor, label, borderColor, maxContentRows = () => undefined) {
         this.theme = theme;
         this.editor = editor;
         this.label = label;
         this.borderColor = borderColor;
+        this.maxContentRows = maxContentRows;
     }
     get focused() {
         return this.editor.focused ?? false;
@@ -220,9 +235,11 @@ export class PromptFrame {
         };
         const bottomLabel = [hint(lines[bottom] ?? ""), this.label()].filter((part) => part !== "").join(" · ");
         const out = [border("╭", "╮", hint(lines[top] ?? ""))];
-        lines.slice(top + 1, bottom).forEach((content, index) => {
+        const maxRows = this.maxContentRows();
+        const content = maxRows === undefined ? lines.slice(top + 1, bottom) : cropToCursor(lines.slice(top + 1, bottom), maxRows);
+        content.forEach((line, index) => {
             const prompt = index === 0 ? this.theme.fg("muted", "❯ ") : "  ";
-            const padded = content + " ".repeat(Math.max(0, inner - visibleWidth(content)));
+            const padded = line + " ".repeat(Math.max(0, inner - visibleWidth(line)));
             out.push(`${color("│")} ${prompt}${padded} ${color("│")}`);
         });
         // grok puts the model label on the right of the bottom border.
@@ -240,7 +257,11 @@ export class PromptFrame {
     }
     /** Forwards a click/double-click inside the content rows to the editor, translated into its own
      * coordinate space (docs/tui-design.md 4.3: double-click on a chip expands it). Clicks on the
-     * border or the autocomplete dropdown below it are left unhandled, matching prior behavior. */
+     * border or the autocomplete dropdown below it are left unhandled, matching prior behavior.
+     * Known gap: at the ≤12-row cap (`maxContentRows`), this still maps against the *uncropped*
+     * content height, so a click lands on the row it would be on without the cap, not the row drawn on
+     * screen. Not fixed here -- a terminal that short makes precise mouse targeting essentially moot,
+     * and the editor stays fully usable from the keyboard either way. */
     handleMouse(event) {
         const inner = Math.max(1, event.width - 6);
         const { top, bottom } = this.contentBounds(inner);

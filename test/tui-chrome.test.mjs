@@ -114,6 +114,28 @@ test("prompt frame keeps multi-line input inside the rails", () => {
   assert.deepEqual(lines.slice(1, -1).map((line) => line.slice(0, 9)), ["│ ❯ one  ", "│   two  ", "│   three"]);
 });
 
+// Item 4 (docs/tui-design.md 4.1/4.2): a ≤12-row terminal caps the editor to one content row.
+// `maxContentRows` is app.ts's hook for that; PromptFrame itself just has to honor it.
+test("prompt frame caps content rows to maxContentRows, keeping the row with the cursor", () => {
+  const editor = new piTui.Editor(fakeTui(), { borderColor: (text) => text, selectList: getSelectListTheme() });
+  editor.focused = true;
+  const frame = new PromptFrame(theme, editor, () => "m (off)", () => (text) => text, () => 1);
+  editor.setText("one\ntwo\nthree");
+  const lines = frame.render(40).map(plain);
+  const content = lines.slice(1, -1);
+  assert.equal(content.length, 1, "expected exactly one content row");
+  assert.match(content[0], /three/, "expected the row holding the cursor (end of the typed text)");
+  assertFits(frame);
+});
+
+test("prompt frame draws every content row when maxContentRows is unset or not exceeded", () => {
+  const editor = new piTui.Editor(fakeTui(), { borderColor: (text) => text, selectList: getSelectListTheme() });
+  const frame = new PromptFrame(theme, editor, () => "m (off)", () => (text) => text);
+  editor.setText("one\ntwo\nthree");
+  const lines = frame.render(40).map(plain);
+  assert.equal(lines.slice(1, -1).length, 3);
+});
+
 test("shortcuts bar joins key:label pairs and keeps statuses right", () => {
   const bar = shortcutsBar(theme, () => ({ shortcuts: [{ key: "Esc", label: "stop" }, { key: "Ctrl+o", label: "tools" }], right: "mcp: 3" }));
   assert.match(plain(bar.render(60)[0]), /^Esc:stop {2}│ {2}Ctrl\+o:tools +mcp: 3$/);

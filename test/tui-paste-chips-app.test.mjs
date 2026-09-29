@@ -375,7 +375,7 @@ test("double-click on the chip through the real mouse-dispatch path expands it (
   assert.match(redrawn, /line2/);
   assert.match(redrawn, /line3/);
   assert.match(redrawn, /line4/);
-  assert.match(marks.afterClick, /Shift\+Tab:thinking/); // footer back to normal: chip is gone
+  assert.match(marks.afterClick, /Ctrl\+t:thinking/); // footer back to normal: chip is gone
 });
 
 // Item 3's press fix has a subtle regression risk: the press branch probes with a synthetic click
@@ -399,7 +399,7 @@ test("a single click on the chip (not a double-click) still shows the popup and 
   // occurrence of the idle footer/just-pasted hint, proving the settled state -- not a stale one --
   // is the on-chip one.
   assert.ok(
-    marks.afterClick.lastIndexOf("Enter:expand") > marks.afterClick.lastIndexOf("Shift+Tab:thinking"),
+    marks.afterClick.lastIndexOf("Enter:expand") > marks.afterClick.lastIndexOf("Ctrl+t:thinking"),
     "the settled footer should show Enter:expand, not have fallen back to idle",
   );
   assert.ok(

@@ -76,7 +76,9 @@ test("Esc stops a running compaction instead of being ignored", (t) => {
   // The last frame drawn is idle: the status row is gone and the idle shortcuts are back.
   const lastFrame = marks.settled.slice(marks.settled.lastIndexOf("╭"));
   assert.doesNotMatch(lastFrame, /Compacting…/);
-  assert.match(lastFrame, /Shift\+Tab:thinking/);
+  // M4 (docs/tui-design.md 4.2/4.6) replaced the idle "Shift+Tab:thinking" hint's wording, but
+  // "Ctrl+t:thinking" is exactly as idle-only as it was: still absent whenever a turn is running.
+  assert.match(lastFrame, /Ctrl\+t:thinking/);
   // Cancelled, not completed: no compaction summary was produced.
   assert.doesNotMatch(out, /Context compacted\./);
   // A notice like Pi's own manual-compaction Esc handling (interactive-mode.js ~2883-2885's
