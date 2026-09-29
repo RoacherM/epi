@@ -57,3 +57,18 @@ test("slash completions list built-ins, templates, extension commands and skills
   session.settingsManager.getEnableSkillCommands = () => false;
   assert.ok(!slashCompletions(session).some((command) => command.name.startsWith("skill:")));
 });
+
+test("Esc during compaction or a /tree branch summary aborts both (Pi's isCompacting covers both)", async () => {
+  const { createKeyActions } = await import("../dist/tui/keys.js");
+  const calls = [];
+  const session = {
+    isIdle: false, isStreaming: false, isCompacting: true, isBashRunning: false,
+    abortCompaction: () => calls.push("compaction"),
+    abortBranchSummary: () => calls.push("branchSummary"),
+  };
+  const host = { session: () => session };
+  const interrupt = createKeyActions().find((action) => action.id === "app.interrupt");
+  assert.equal(interrupt.when(host), true);
+  await interrupt.run(host);
+  assert.deepEqual(calls.sort(), ["branchSummary", "compaction"]);
+});

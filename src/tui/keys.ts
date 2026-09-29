@@ -31,7 +31,9 @@ export function createKeyActions(): KeyAction[] {
           host.restoreQueuedMessagesToEditor();
           void session.abort();
         } else if (session.isCompacting) {
+          // Pi's isCompacting also covers /tree branch summaries, which have their own controller.
           session.abortCompaction();
+          session.abortBranchSummary();
         } else if (session.isBashRunning) {
           session.abortBash();
         }

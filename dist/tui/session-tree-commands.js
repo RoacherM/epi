@@ -149,13 +149,9 @@ async function navigateTo(host, entryId) {
         host.notice("Wait for the current compaction to finish before navigating the session tree.", "error");
         return;
     }
-    // Known gap vs Pi: Pi temporarily points the editor's Esc at session.abortBranchSummary() while
-    // this runs (interactive-mode.js's showTreeSelector), and restores it afterward. MMP's app.interrupt
-    // (keys.ts, shared with other work in progress) only calls session.abortCompaction() when
-    // session.isCompacting is true; isCompacting covers both compaction and branch summarization, but
-    // abortCompaction() and abortBranchSummary() abort separate controllers (agent-session.js), so
-    // Esc during this summary does not actually cancel it. Not fixed here to avoid touching keys.ts's
-    // shared abort-priority chain; the summary still completes (or errors) and navigation proceeds.
+    // Esc during the summary is handled by app.interrupt (keys.ts): Pi's isCompacting covers branch
+    // summaries too, and it calls abortBranchSummary() alongside abortCompaction(), as Pi's
+    // showTreeSelector does with its temporary onEscape.
     if (choice.summarize)
         host.notice("Summarizing branch…");
     try {
