@@ -398,7 +398,7 @@ test("shortcuts still work after clicking a chip (Ctrl+V pastes again)", (t) => 
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500], paste, ["wait", 300],
+    ["waitReady"], paste, ["wait", 300],
     ["mouse", { x: 2 + 4 + 2, y: rows - 4, clicks: 1 }], ["wait", 300],
     ["key", "ctrl+v"], ["wait", 500], ["mark", "afterPaste"],
     ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],

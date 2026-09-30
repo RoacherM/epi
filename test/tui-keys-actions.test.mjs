@@ -202,7 +202,7 @@ test("a kitty-protocol key release does not run the shortcut a second time (one 
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
   const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["raw", "\x1b[118;5u"], ["raw", "\x1b[118;5:3u"], ["wait", 500], ["mark", "afterPaste"],
+    ["waitReady"], ["raw", "\x1b[118;5u"], ["raw", "\x1b[118;5:3u"], ["wait", 500], ["mark", "afterPaste"],
     ["key", "ctrl+c"], ["wait", 300], ["key", "ctrl+d"],
   ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterPaste, /\[Image #1\]/);
@@ -214,14 +214,14 @@ test("Ctrl+V on an empty clipboard says so instead of doing nothing", (t) => {
   t.after(() => rmSync(clipboardFile, { force: true }));
   writeFileSync(clipboardFile, "");
   const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["key", "ctrl+v"], ["wait", 500], ["mark", "afterPaste"], ["key", "ctrl+d"],
+    ["waitReady"], ["key", "ctrl+v"], ["wait", 500], ["mark", "afterPaste"], ["key", "ctrl+d"],
   ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterPaste, /Nothing to paste/);
 });
 
 test("Ctrl+T says whether thinking is now expanded or collapsed, even with no thinking on screen", (t) => {
   const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["key", "ctrl+t"], ["wait", 300], ["mark", "first"],
+    ["waitReady"], ["key", "ctrl+t"], ["wait", 300], ["mark", "first"],
     ["key", "ctrl+t"], ["wait", 300], ["mark", "second"], ["key", "ctrl+d"],
   ]);
   assert.match(marks.first, /Thinking: expanded/);
