@@ -385,3 +385,58 @@ test("the duplicate-/mcp error is visible in MMP's own TUI exactly once, not jus
   const occurrences = (marks.startup.match(/also registers "\/mcp"/g) ?? []).length;
   assert.equal(occurrences, 1, `expected the message exactly once, found ${occurrences}\noutput:\n${output}`);
 });
+
+test("a codemode call's nested MCP tool renders exactly once, not duplicated alongside the codemode block", (t) => {
+  // Fable milestone review, F1: src/tui/transcript.ts's tool_execution_start/update/end handlers
+  // had no parentToolCallId guard, so the nested mcp__fixture__echo call inside codemode (which
+  // Pi's own codemode tool already renders inline, via core/nested-tool-calls.js's
+  // parentToolCallId-tagged events) was *also* drawn as its own top-level "fixture/echo" block --
+  // a duplicate. The direct-exposure call (fixturedirect/echo) has no parent and must still get
+  // its own top-level block.
+  const driver = fileURLToPath(new URL("./fixtures/faux-mcp-driver.mjs", import.meta.url));
+  const { args: fixtureArgs, marker } = fixtureServerArgs();
+  const { marks, exit, output } = runTuiApp(
+    t,
+    ["mmp:mcp", driver],
+    [
+      ["wait", 2500],
+      ["type", "go"], ["key", "enter"], ["wait", 3000],
+      ["mark", "done"],
+      ["key", "ctrl+d"],
+    ],
+    {
+      mcpServers: {
+        fixture: { command: process.execPath, args: fixtureArgs, env: { MMP_FIXTURE_VALUE: "fixture-ok" } },
+        fixturedirect: { command: process.execPath, args: fixtureArgs, env: { MMP_FIXTURE_VALUE: "fixture-ok" }, exposure: "direct" },
+      },
+    },
+  );
+
+  const context = `marker=${marker}\noutput:\n${output}`;
+  assert.equal(exit, 0, context);
+  assert.match(marks.done, /fixture-ok:ping/, context);
+  assert.match(marks.done, /fixture-ok:pong/, context);
+
+  // marks.done is the *cumulative* raw stream (tui-harness.mjs: `strip(output)`), not a single
+  // frame: the app repaints the whole screen on every spinner tick while codemode runs, so a
+  // block that legitimately renders once still shows up many times over as the screen repaints.
+  // That makes an occurrence *count* meaningless here -- the reliable invariant is presence vs.
+  // absence across the whole run: the duplicate top-level block (the bug) must never be painted,
+  // not even once, in any frame; the legitimate nested and direct-call renderings must each be
+  // painted at least once.
+  assert.doesNotMatch(
+    marks.done,
+    /◆ fixture\/echo/,
+    `a top-level "fixture/echo" block was painted -- that's the nested call's duplicate\n${context}`,
+  );
+  assert.match(
+    marks.done,
+    /✓ mcp__fixture__echo/,
+    `the nested call's own inline rendering (inside the codemode block) never appeared\n${context}`,
+  );
+  assert.match(
+    marks.done,
+    /◆ fixturedirect\/echo/,
+    `the direct-exposure call's own top-level block never appeared\n${context}`,
+  );
+});
