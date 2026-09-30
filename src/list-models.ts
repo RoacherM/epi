@@ -18,15 +18,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 
+import { PROVIDER_LOGIN_HELP } from "./pi-output.js";
 import { configureHttp } from "./tui/services.js";
 
 type Diagnostic = { type: "error" | "warning" | "info"; message: string };
 type ParsedPiArgs = ReturnType<typeof parseArgs>;
 type ListedModel = { provider: string; id: string; contextWindow: number; maxTokens: number; reasoning: boolean; input: readonly string[] };
 
-export const NO_MODELS_MESSAGE =
-  "No models available. Log in to a provider with /login inside mmp (OAuth or API key), or declare " +
-  "a provider extension in the Manifest (mmp install <source>, or mmp config).";
+export const NO_MODELS_MESSAGE = `No models available. ${PROVIDER_LOGIN_HELP}`;
 
 /** Whether piMain would take its `--list-models` branch for these args: it checks `--export` first
  * (and `--help`/`--version`, which MMP already handles before reaching here). */

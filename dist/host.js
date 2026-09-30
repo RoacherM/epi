@@ -12,7 +12,7 @@ import { buildInlineExtensions } from "./extensions/index.js";
 import { isInteractivePiRun } from "./interactive.js";
 import { isListModelsRun, runListModels } from "./list-models.js";
 import { resolveMmpPaths } from "./paths.js";
-import { rewritePiStderr } from "./pi-output.js";
+import { rewritePiOutput } from "./pi-output.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { installProviderCostValidation } from "./provider-validation.js";
 import { createMmpRuntimeIdentity, } from "./runtime-identity.js";
@@ -292,7 +292,7 @@ export async function runMmp(argv) {
         });
         return;
     }
-    rewritePiStderr();
+    rewritePiOutput();
     await piMain(prepared.piArgs, { extensionFactories });
     // Deviation from Pi (dogfood D50): after print/json mode, Pi's main.js only sets process.exitCode
     // and returns, so a loaded extension holding a timer or handle keeps the process alive, on success
