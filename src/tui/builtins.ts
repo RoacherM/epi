@@ -9,6 +9,7 @@ import { runExport, runImport } from "./export-commands.js";
 import { runHotkeys, runName, runScopedModels, runSession } from "./info-commands.js";
 import { runCompact, runCopy, runReload, runResume, runThinking } from "./session-commands.js";
 import { runClone, runFork, runTree } from "./session-tree-commands.js";
+import { runSettings } from "./settings-command.js";
 import { runBug, runChangelog, runShare } from "./share-commands.js";
 
 export interface BuiltinCommand {
@@ -37,6 +38,7 @@ export const BUILTIN_COMMANDS: BuiltinCommand[] = [
   { name: "session", description: "Show session info and stats", run: (host) => runSession(host) },
   { name: "export", description: "Export the session (HTML or JSONL)", argumentHint: "[path]", run: (host, args) => runExport(host, args) },
   { name: "import", description: "Replace the current session from a JSONL file", argumentHint: "<path>", run: (host, args) => runImport(host, args) },
+  { name: "settings", description: "Open settings menu", run: (host) => runSettings(host) },
   { name: "hotkeys", description: "Show keyboard shortcuts", run: (host) => runHotkeys(host) },
   { name: "scoped-models", description: "Choose models for Ctrl+P cycling", run: (host) => runScopedModels(host) },
   { name: "share", description: "Share the session as a private gist", run: (host) => runShare(host) },
@@ -45,9 +47,7 @@ export const BUILTIN_COMMANDS: BuiltinCommand[] = [
 ];
 
 /** Pi built-ins not wired yet. */
-const PLANNED: Record<string, string> = {
-  settings: "Open settings",
-};
+const PLANNED: Record<string, string> = {};
 
 /** Pi built-ins MMP leaves out on purpose, with the reason shown to the user. */
 const NOT_IN_MMP: Record<string, string> = {};

@@ -14,6 +14,7 @@ import { ChipEditor, unattachedImageLabels } from "./paste-chips.js";
 import { pastePreview } from "./paste-preview.js";
 import { piTui } from "./pi-tui.js";
 import { crossProjectRefusal } from "./project-guard.js";
+import { configureHttp } from "./services.js";
 import { confirmMissingSessionCwd, missingSessionCwdIssue, runResume } from "./session-commands.js";
 import { Transcript } from "./transcript.js";
 // One instance per layout slot: the layout engine keys slots by component identity.
@@ -194,6 +195,26 @@ export async function runTuiApp(options) {
         autocomplete = new piTui.CombinedAutocompleteProvider(slashCompletions(session), session.sessionManager.getCwd(), null);
         editor.setAutocompleteProvider(autocomplete);
     }
+    // ── settings (/settings, docs/tui-design.md 4.6) ────────────────────────────
+    /** The interface half of Pi's applyRuntimeSettings (interactive-mode.js ~1510), for the settings
+     * MMP's interface honours. Runs before the first frame, so a saved value is in effect from the
+     * start, not only after bind(). */
+    function applyUiSettings() {
+        const settings = session.settingsManager;
+        tui.setShowHardwareCursor(settings.getShowHardwareCursor());
+        // T3 (docs/decisions.md): copy on select stays on when unset; Pi's getter defaults to true.
+        tui.setCopyOnSelect(settings.getFullscreenCopyOnSelect());
+        tui.setWheelScrollLines(settings.getFullscreenWheelScrollLines());
+        scroll.setScrollbar(settings.getFullscreenScrollbar());
+        editor.setAutocompleteMaxVisible(settings.getAutocompleteMaxVisible());
+    }
+    /** Pi's applyRuntimeSettings plus setupAutocompleteProvider: on every bind(), /reload, and after
+     * a /settings change. The skill-commands setting only takes effect through resetAutocomplete(). */
+    function applyRuntimeSettings() {
+        applyUiSettings();
+        configureHttp(session.settingsManager).catch((error) => transcript.notice(`Could not apply the HTTP settings: ${errorText(error)}`, "error"));
+        resetAutocomplete();
+    }
     // ── extension host ────────────────────────────────────────────────────────
     const surface = {
         tui,
@@ -322,6 +343,10 @@ export async function runTuiApp(options) {
         },
         exit: (code) => exit(code),
         reloadSession: () => reloadSession(),
+        applySettings: () => {
+            applyRuntimeSettings();
+            tui.requestRender();
+        },
         // navigateTree (session-tree-commands.ts's /tree) stays on the same AgentSession instance, so
         // setRebindSession never fires for it; this is the same replay bind() does after a real switch.
         resetTranscript: () => transcript.reset(session),
@@ -608,7 +633,8 @@ export async function runTuiApp(options) {
         });
         // bindExtensions re-registers extension providers, which starts an un-awaited auth refresh in Pi.
         await runtime.services.modelRuntime.refresh({ allowNetwork: false });
-        resetAutocomplete();
+        // Pi's rebindCurrentSession runs applyRuntimeSettings on every rebind.
+        applyRuntimeSettings();
         tui.requestRender();
     }
     /** Widget/header/footer/status state an extension sets up again on `session_start`; cleared
@@ -635,7 +661,8 @@ export async function runTuiApp(options) {
         // Re-registering extension providers on reload can race an un-awaited auth refresh, same as bind().
         await runtime.services.modelRuntime.refresh({ allowNetwork: false });
         keybindings.reload();
-        resetAutocomplete();
+        // Pi's handleReloadCommand: applyRuntimeSettings after session.reload() re-read settings.json.
+        applyRuntimeSettings();
         tui.requestRender();
     }
     // ── input ─────────────────────────────────────────────────────────────────
@@ -929,6 +956,7 @@ export async function runTuiApp(options) {
         tui.requestRender();
         return { consume: true };
     });
+    applyUiSettings();
     tui.start();
     tui.setFocus(editor);
     try {

@@ -325,6 +325,10 @@ export class ChipEditor {
     this.inner.setAutocompleteProvider(provider);
   }
 
+  setAutocompleteMaxVisible(maxVisible: number): void {
+    this.inner.setAutocompleteMaxVisible(maxVisible);
+  }
+
   isShowingAutocomplete(): boolean {
     return this.inner.isShowingAutocomplete();
   }

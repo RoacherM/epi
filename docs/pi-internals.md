@@ -46,7 +46,10 @@ Several other comments in `src/` say "mirrors Pi's X, not exported" (`file-argum
 behavior in MMP's own code -- they never import or read anything from Pi at runtime, so a Pi
 upgrade can't make them throw; it can only make them describe Pi's real behavior incorrectly. That's
 design §3's "复制代码的漂移" (`vendor.json` drift check), a separate, not-yet-built mechanism, not a
-reach-in covered by this table.
+reach-in covered by this table. `settings-command.ts` (the /settings item list and the copied
+`HTTP_IDLE_TIMEOUT_CHOICES`/`formatHttpIdleTimeoutMs`/`CACHE_WARMING_MODES`) is the same kind of
+copy, but already has its own drift check: `test/tui-settings.test.mjs` compares it against Pi's real
+`SettingsSelectorComponent` through that component's public input and render only.
 
 `src/tui/chrome.ts`'s `(this.editor as unknown as { focused?: boolean })` cast is *not* a Pi
 internal either: pi-tui's `Editor.focused` is a public field (`components/editor.d.ts`); the cast is

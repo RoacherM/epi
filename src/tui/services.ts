@@ -43,8 +43,9 @@ interface UndiciModule {
   install?: () => void;
 }
 
-/** Mirrors Pi's configureHttpDispatcher: settings proxy, idle timeout, no HTTP/2. Not exported by Pi. */
-async function configureHttp(settingsManager: SettingsManager): Promise<void> {
+/** Mirrors Pi's configureHttpDispatcher: settings proxy, idle timeout, no HTTP/2. Not exported by Pi.
+ * Runs at startup and again from the TUI's applyRuntimeSettings (rebind, /reload, /settings), like Pi. */
+export async function configureHttp(settingsManager: SettingsManager): Promise<void> {
   const proxy = settingsManager.getGlobalSettings().httpProxy?.trim();
   if (proxy) {
     process.env.HTTP_PROXY ??= proxy;

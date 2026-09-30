@@ -84,15 +84,6 @@ test("TUI v2 hosts extension custom() and select() dialogs", (t) => {
   assert.match(out, /select result: beta/);
 });
 
-test("TUI v2 refuses Pi built-in commands it does not implement yet, keeping the text", (t) => {
-  const { text: out, marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["waitReady"], ["type", "/settings"], ["key", "enter"], ["waitFor", "/settings is not available in MMP yet"], ["key", "ctrl+c"], editorCleared,
-    ["key", "ctrl+d"],
-  ]);
-  assert.match(out, /\/settings is not available in MMP yet/);
-  assert.match(out, /EXIT=0/);
-});
-
 test("TUI v2 keeps the editor when custom() finishes before mounting", (t) => {
   const { text: out, marks } = runApp(t, [fixture("ui-probe-extension.mjs")], [
     ["waitReady"], ["type", "/instant"], ["key", "enter"], ["waitFor", "instant result: INSTANT-DONE"], ["mark", "afterInstant"],

@@ -75,6 +75,10 @@ export interface CommandHost {
    * through AgentSessionRuntime, so it skips setBeforeSessionInvalidate/setRebindSession. This
    * redoes the host-owned parts of docs/tui-design.md 6.3 (widgets, autocomplete, keybindings). */
   reloadSession(): Promise<void>;
+  /** Re-read the settings MMP's interface honours (cursor, scrollbar, mouse, autocomplete, HTTP
+   * timeout) and apply them: Pi's applyRuntimeSettings plus setupAutocompleteProvider. /settings
+   * calls it after a change; bind() and /reload call it too. */
+  applySettings(): void;
   /** Clear the transcript and replay `session.messages` from scratch. `session.navigateTree()`
    * (unlike /new, /resume, /reload) moves the leaf without going through AgentSessionRuntime, so
    * it never triggers `setRebindSession`; /tree calls this itself afterward (docs/tui-design.md §15). */

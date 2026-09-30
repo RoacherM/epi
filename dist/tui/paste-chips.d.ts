@@ -109,6 +109,7 @@ export declare class ChipEditor {
     };
     addToHistory(text: string): void;
     setAutocompleteProvider(provider: AutocompleteProvider): void;
+    setAutocompleteMaxVisible(maxVisible: number): void;
     isShowingAutocomplete(): boolean;
     /** Replaces the whole draft. Chips in the part of the text that didn't change keep their content
      * -- restoring a queued message ahead of the current draft on Esc/Ctrl+C/Alt+Up (keys.ts,

@@ -7,8 +7,9 @@ import { createAgentSessionFromServices, createAgentSessionRuntime, createAgentS
 import { MmpArgumentError } from "../errors.js";
 import { importFromPi } from "./pi-tui.js";
 import { crossProjectRefusal } from "./project-guard.js";
-/** Mirrors Pi's configureHttpDispatcher: settings proxy, idle timeout, no HTTP/2. Not exported by Pi. */
-async function configureHttp(settingsManager) {
+/** Mirrors Pi's configureHttpDispatcher: settings proxy, idle timeout, no HTTP/2. Not exported by Pi.
+ * Runs at startup and again from the TUI's applyRuntimeSettings (rebind, /reload, /settings), like Pi. */
+export async function configureHttp(settingsManager) {
     const proxy = settingsManager.getGlobalSettings().httpProxy?.trim();
     if (proxy) {
         process.env.HTTP_PROXY ??= proxy;
