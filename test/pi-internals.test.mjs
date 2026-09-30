@@ -211,6 +211,18 @@ const registry = [
         .filter((file) => file.endsWith(".js") && !file.startsWith("bundle"))
         .filter((file) => readFileSync(join(piDist, file), "utf8").includes("Use /login to log into a provider"));
       assert.deepEqual(copies, [join("core", "auth-guidance.js")], `Pi has login guidance outside core/auth-guidance.js -- ${why}`);
+      // Who writes it: the formatters' callers, and how many calls each (D57). A new caller may write
+      // it some new way (colored, in pieces, through a new mode); review how, then update this.
+      const callers = Object.fromEntries(readdirSync(piDist, { recursive: true })
+        .filter((file) => file.endsWith(".js") && !file.startsWith("bundle") && file !== join("core", "auth-guidance.js"))
+        .map((file) => [file, (readFileSync(join(piDist, file), "utf8").match(/\b(?:formatNo\w*Message|getProviderLoginHelp)\(/g) ?? []).length])
+        .filter(([, count]) => count > 0));
+      assert.deepEqual(callers, {
+        [join("cli", "list-models.js")]: 1,
+        [join("core", "agent-session.js")]: 5,
+        [join("core", "sdk.js")]: 1,
+        "main.js": 1,
+      }, `Pi's calls to its login guidance formatters changed -- ${why}`);
       // Where Pi writes it outside the TUI, it goes out in one write: console.error of the whole
       // message (main.js, print-mode.js), or one JSON line (rpc's serializeJsonLine, json mode).
       const mainPath = join(piDist, "main.js");
@@ -631,9 +643,17 @@ function checkMcpOwnReportsInRpc(indexText, indexPath) {
   const handler = mcpHandlerSource(indexText, "before_agent_start");
   assert.ok(handler !== undefined, `${indexPath} no longer has a before_agent_start handler -- ${why}`);
   const notice = `${indexPath}'s before_agent_start handler notifies something other than "still connecting" -- MMP takes any notify there to mean its own still-connecting lines are covered; ${why}`;
-  // Every notify, however it is written (split over lines too), and none through Pi's helpers.
+  // Every notify, however it is written (split over lines too), and none through a helper: the
+  // handler calls exactly these, in this order (D57; comments and keywords aside).
   assert.equal((handler.match(/notify\(/g) ?? []).length, 1, notice);
-  assert.doesNotMatch(handler, /\b(?:reportProblems|ensureDiscoveryActive)\(/, notice);
+  const calls = [...handler.replace(/\/\/.*$/gm, "").matchAll(/([A-Za-z_$][\w$.]*)\s*\(/g)]
+    .map((match) => match[1])
+    .filter((name) => !/^(?:if|for|while|switch|catch|return|async|function|await)$/.test(name));
+  assert.deepEqual(
+    calls,
+    ["pi.on", "Promise.race", "startup.then", "Promise", "setTimeout", "resolve", "clearTimeout", "ctx.ui.notify"],
+    notice,
+  );
   assert.deepEqual(
     handler.match(/ctx\.ui\.notify\(.*\);/g) ?? [],
     ['ctx.ui.notify("MCP servers are still connecting; their tools become available once connected.", "info");'],
@@ -654,6 +674,7 @@ test("the mcp-own-reports-in-rpc check catches B7 review N1/N2's mutations of Pi
   const mutations = {
     "N1: a notify through reportProblems()": inHandler("before_agent_start", "clearTimeout(timer);\n", "clearTimeout(timer);\n reportProblems(ctx);\n"),
     "N1: a notify through ensureDiscoveryActive()": inHandler("before_agent_start", "clearTimeout(timer);\n", "clearTimeout(timer);\n ensureDiscoveryActive(ctx);\n"),
+    "N1: a notify through any other helper (B8 review m8)": inHandler("before_agent_start", "clearTimeout(timer);\n", "clearTimeout(timer);\n emitChange(ctx);\n"),
     "N1: a second notify split over lines": inHandler("before_agent_start", "clearTimeout(timer);\n", 'clearTimeout(timer);\n ctx.ui.notify(\n"MCP servers need attention: x",\n"warning");\n'),
     "N2: no reportProblems(ctx, connecting) after mcp_servers_change": inHandler("mcp_servers_change", "reportProblems(ctx, connecting);", ""),
   };
