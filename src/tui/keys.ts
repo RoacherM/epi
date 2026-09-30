@@ -5,6 +5,7 @@ import type { CommandHost } from "./command-host.js";
 import { runModel } from "./commands.js";
 import { openExternalEditor, pasteClipboard, suspendToShell } from "./key-handlers.js";
 import { runCopy } from "./session-commands.js";
+import { runFork, runTree } from "./session-tree-commands.js";
 
 export interface KeyAction {
   /** Pi keybinding id, e.g. "app.model.select". */
@@ -14,6 +15,8 @@ export interface KeyAction {
 }
 
 const DOUBLE_PRESS_MS = 1000;
+/** Pi's double-escape window (interactive-mode.js setupKeyHandlers, `now - this.lastEscapeTime < 500`). */
+const DOUBLE_ESCAPE_MS = 500;
 
 /** Pi's interactive-mode.js cycleModel (~L3608): session.cycleModel steps through the scoped models
  * (or every available one without a scope). Pi's showStatus lines are a flash here, like Ctrl+T's;
@@ -31,6 +34,7 @@ async function cycleModel(host: CommandHost, direction: "forward" | "backward"):
 
 export function createKeyActions(): KeyAction[] {
   let lastCtrlC = 0;
+  let lastEscape = 0;
   return [
     {
       // Pi's order (interactive-mode.js onEscape, plus its compaction_start/auto_retry_start
@@ -56,6 +60,26 @@ export function createKeyActions(): KeyAction[] {
           host.clearTurnStatus();
           host.notice("Nothing was running; cleared a stale turn status.", "warning");
         }
+      },
+    },
+    {
+      // Pi's onEscape with nothing running and an empty editor (setupKeyHandlers, dogfood D30): a
+      // second Esc within 500ms opens /tree or /fork per double-escape-action (default "tree").
+      // After the action above, so a running turn always takes Esc first. With "none", or while the
+      // autocomplete list is open (Pi's editor closes it before calling onEscape), Esc stays the
+      // editor's.
+      id: "app.interrupt",
+      when: (host) => host.getEditorText().trim() === "" && !host.isShowingAutocomplete() &&
+        host.session().settingsManager.getDoubleEscapeAction() !== "none",
+      run: async (host) => {
+        const now = Date.now();
+        if (now - lastEscape >= DOUBLE_ESCAPE_MS) {
+          lastEscape = now;
+          return;
+        }
+        lastEscape = 0;
+        if (host.session().settingsManager.getDoubleEscapeAction() === "tree") await runTree(host);
+        else await runFork(host);
       },
     },
     {

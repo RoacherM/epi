@@ -21,6 +21,7 @@
 // quit while the editor has text, so a test that doesn't check the exit code would wait 5s for it).
 // Prints the exit code, the marks, the screens, the terminal after the app quit (`afterExit`), and
 // everything the app wrote (ANSI stripped) as JSON.
+// `progress` is every setProgress call in order ("on"/"off").
 // `rawOsc133` counts the raw OSC 133 (`\x1b]133;`) sequences in what the app wrote: pi-tui strips
 // the prompt-zone markers before painting, and `output` has every OSC stripped, so a leak shows only here.
 import { spawnSync } from "node:child_process";
@@ -58,7 +59,10 @@ const terminal = {
   get rows() { return rows; },
   get kittyProtocolActive() { return false; },
   moveBy() {}, hideCursor() {}, showCursor() {}, clearLine() {}, clearFromCursor() {}, clearScreen() {},
-  setTitle() {}, setProgress() {},
+  setTitle() {},
+  // ProcessTerminal's OSC 9;4 bytes (pi-tui terminal.js), kept out of the xterm screen: `progress`
+  // lists the calls in order, and rawMark shows where they fell (Pi's terminal-progress, D31).
+  setProgress(active) { output += active ? "\x1b]9;4;3\x07" : "\x1b]9;4;0\x07"; },
 };
 
 let appReady = false;
@@ -223,4 +227,5 @@ const code = detached ? "detached" : await Promise.race([running, sleep(5000).th
 // what is left on it.
 const afterExit = typeof code === "number" ? { screen: await currentScreen(), buffer: screen.buffer.active.type } : undefined;
 // Writes to a pipe are asynchronous; exiting before the callback truncates large outputs.
-process.stdout.write(JSON.stringify({ exit: code, marks, screens, afterExit, output: strip(output), rawOsc133: (output.match(/\x1b\]133;/g) ?? []).length }), () => process.exit(0));
+process.stdout.write(JSON.stringify({ exit: code, marks, screens, afterExit, output: strip(output), rawOsc133: (output.match(/\x1b\]133;/g) ?? []).length,
+  progress: [...output.matchAll(/\x1b\]9;4;(\d)\x07/g)].map((match) => (match[1] === "0" ? "off" : "on")) }), () => process.exit(0));
