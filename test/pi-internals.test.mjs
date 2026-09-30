@@ -186,6 +186,35 @@ const registry = [
     },
   },
   {
+    id: "editor-autocomplete-cancel",
+    async check() {
+      const { mkdtempSync, mkdirSync, rmSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { piTui } = await import(pathToFileURL(join(root, "dist", "tui", "pi-tui.js")).href);
+      const cwd = mkdtempSync(join(tmpdir(), "mmp-pi-internals-autocomplete-"));
+      mkdirSync(join(cwd, "home"));
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      // `see #1` + two quick Backspaces leaves the debounced `#` request pending on `see `, where it
+      // opens path completion; resetting the same provider must drop it.
+      const showsAfter = async (reset) => {
+        const fakeTui = { requestRender() {}, terminal: { rows: 40, columns: 120 } };
+        const editor = new piTui.Editor(fakeTui, { borderColor: (text) => text, selectList: getSelectListTheme() }, {});
+        const provider = new piTui.CombinedAutocompleteProvider([], cwd, null);
+        editor.setAutocompleteProvider(provider);
+        for (const key of [..."see #1", "\x7f", "\x7f"]) editor.handleInput(key);
+        if (reset) editor.setAutocompleteProvider(provider);
+        await sleep(100);
+        return editor.isShowingAutocomplete();
+      };
+      try {
+        assert.equal(await showsAfter(false), true, "a debounced autocomplete request no longer outlives later keystrokes (the D18 premise); re-check ChipEditor.removeChipFragments");
+        assert.equal(await showsAfter(true), false, "Editor.setAutocompleteProvider() no longer cancels a pending autocomplete request");
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    },
+  },
+  {
     id: "tool-execution-component-overrides",
     async check() {
       const { ToolExecutionComponent } = await import("@earendil-works/pi-coding-agent");

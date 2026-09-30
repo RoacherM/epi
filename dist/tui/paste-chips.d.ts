@@ -90,6 +90,7 @@ export declare class ChipEditor {
     private lastPastedChip;
     private isInPaste;
     private pasteBuffer;
+    private autocompleteProvider;
     onChange?: (text: string) => void;
     /** Fired on Enter with the message expanded to full text and image chips extracted, in place of
      * Editor's own `onSubmit` (which only ever sees a single text string). */
@@ -177,8 +178,20 @@ export declare class ChipEditor {
     /** Deletes what's left of a chip label that the edit from `before` to now only partly removed
      * (Backspace at its end, Delete at its start, Ctrl+W/Alt+D/Ctrl+U/Ctrl+K reaching into it), so a
      * partially covered chip is fully deleted. Only for a pure deletion with the caret at its start,
-     * which is where every Pi delete leaves it. */
+     * which is where every Pi delete leaves it.
+     *
+     * The half-deleted label must not leave autocomplete behind: after Backspace, `see [Image #1`
+     * matches Pi's `#` trigger, and the 20 ms debounced request it schedules isn't cancelled by the
+     * later keystrokes whose text no longer matches, so it fires on the final `see ` and opens path
+     * completion there (dogfood D18). With no dropdown open, pending requests are dropped so the
+     * result is what the user's key alone would give on the final text: Backspace/Delete
+     * (`checksAutocomplete`) get Pi's own post-delete check from the last synthetic keystroke, the
+     * word and line deletes get none, as in Pi. With a dropdown open, Pi's updateAutocomplete
+     * already re-requests on the final text. */
     private removeChipFragments;
+    /** Pi's Editor has no public cancel; setAutocompleteProvider() starts with cancelAutocomplete()
+     * (docs/pi-internals.md `editor-autocomplete-cancel`). */
+    private cancelAutocompleteRequests;
     private expandTextChip;
     /** Steps the caret to `col` on the current line via synthetic arrow keys -- the only way to
      * reposition it without `setText()`'s side effect of jumping to the end of the whole buffer. */
