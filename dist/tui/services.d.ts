@@ -11,8 +11,10 @@ export interface MmpSessionOptions {
      * project are refused up front, the same way a later /resume would be (project-guard.ts). */
     projectIdentity: ProjectIdentity;
 }
-/** Mirrors Pi's configureHttpDispatcher: settings proxy, idle timeout, no HTTP/2. Not exported by Pi.
- * Runs at startup and again from the TUI's applyRuntimeSettings (rebind, /reload, /settings), like Pi. */
-export declare function configureHttp(settingsManager: SettingsManager): Promise<void>;
+/** Pi's startup (main.js): the settings' `httpProxy` fills HTTP_PROXY/HTTPS_PROXY once, then the
+ * dispatcher. Later rebinds only reconfigure the dispatcher (configureHttp), like Pi. */
+export declare function configureHttpAtStartup(settingsManager: SettingsManager): void;
+/** Pi's applyRuntimeSettings (rebind, /reload, /settings): the dispatcher with the idle timeout. */
+export declare function configureHttp(settingsManager: SettingsManager): void;
 export declare function createMmpRuntime(options: MmpSessionOptions): Promise<AgentSessionRuntime>;
 //# sourceMappingURL=services.d.ts.map

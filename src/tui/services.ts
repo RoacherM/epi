@@ -2,7 +2,8 @@
 // decides what the model sees lives here, so it can be tested without a terminal.
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve as resolvePath } from "node:path";
+import { dirname, join, resolve as resolvePath } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   type AgentSessionRuntime,
@@ -19,7 +20,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { MmpArgumentError } from "../errors.js";
-import { importFromPi } from "./pi-tui.js";
 import { crossProjectRefusal, type ProjectIdentity } from "./project-guard.js";
 
 export interface MmpSessionOptions {
@@ -37,40 +37,28 @@ export interface MmpSessionOptions {
 type ParsedPiArgs = ReturnType<typeof parseArgs>;
 type Diagnostic = { type: "error" | "warning" | "info"; message: string };
 
-interface UndiciModule {
-  EnvHttpProxyAgent: new (options: Record<string, unknown>) => unknown;
-  setGlobalDispatcher(dispatcher: unknown): void;
-  install?: () => void;
+// pi-internals row `http-dispatcher` (dogfood D38): Pi's own core/http-dispatcher.js, not in the
+// package "exports" map, so imported by file path. The package root already loaded it (through
+// settings-manager.js), so this is the same module instance -- and the same shouldInstallGlobals
+// state (an extension's own globalThis.fetch is kept) -- as Pi's own callers.
+const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
+const { applyHttpProxySettings, configureHttpDispatcher } = (await import(
+  pathToFileURL(join(piDist, "core", "http-dispatcher.js")).href
+)) as {
+  applyHttpProxySettings(httpProxy: string | undefined): void;
+  configureHttpDispatcher(timeoutMs?: number): void;
+};
+
+/** Pi's startup (main.js): the settings' `httpProxy` fills HTTP_PROXY/HTTPS_PROXY once, then the
+ * dispatcher. Later rebinds only reconfigure the dispatcher (configureHttp), like Pi. */
+export function configureHttpAtStartup(settingsManager: SettingsManager): void {
+  applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
+  configureHttp(settingsManager);
 }
 
-// Pi's http-dispatcher.js keeps the same pair: the fetch at module load, and the one install() set.
-const originalGlobalFetch = globalThis.fetch;
-let installedGlobalFetch: typeof globalThis.fetch | undefined;
-
-/** Mirrors Pi's configureHttpDispatcher: settings proxy, idle timeout, no HTTP/2. Not exported by Pi.
- * Runs at startup and again from the TUI's applyRuntimeSettings (rebind, /reload, /settings), like Pi. */
-export async function configureHttp(settingsManager: SettingsManager): Promise<void> {
-  const proxy = settingsManager.getGlobalSettings().httpProxy?.trim();
-  if (proxy) {
-    process.env.HTTP_PROXY ??= proxy;
-    process.env.HTTPS_PROXY ??= proxy;
-  }
-  const timeoutMs = settingsManager.getHttpIdleTimeoutMs();
-  const undici = await importFromPi<UndiciModule>("undici");
-  undici.setGlobalDispatcher(new undici.EnvHttpProxyAgent({
-    allowH2: false,
-    proxyTunnel: true,
-    bodyTimeout: timeoutMs,
-    headersTimeout: timeoutMs,
-  }));
-  // Pi's shouldInstallGlobals: a fetch someone else installed (e.g. an extension) is kept.
-  const shouldInstallGlobals = installedGlobalFetch === undefined
-    ? globalThis.fetch === originalGlobalFetch
-    : globalThis.fetch === installedGlobalFetch;
-  if (shouldInstallGlobals && undici.install) {
-    undici.install();
-    installedGlobalFetch = globalThis.fetch;
-  }
+/** Pi's applyRuntimeSettings (rebind, /reload, /settings): the dispatcher with the idle timeout. */
+export function configureHttp(settingsManager: SettingsManager): void {
+  configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
 }
 
 function createSettingsManager(cwd: string, agentDir: string): SettingsManager {
@@ -275,7 +263,7 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
     throw new MmpArgumentError("--name requires a non-empty value");
   }
   const startupSettingsManager = createSettingsManager(options.cwd, options.agentDir);
-  await configureHttp(startupSettingsManager);
+  configureHttpAtStartup(startupSettingsManager);
 
   const noTools: "all" | "builtin" | undefined = parsed.noTools ? "all" : parsed.noBuiltinTools ? "builtin" : undefined;
 

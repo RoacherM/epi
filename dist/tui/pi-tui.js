@@ -21,8 +21,4 @@ if (runtimeVersion !== typesVersion) {
 }
 export const piTui = (await import(pathToFileURL(piTuiEntry).href));
 export const piTuiLocation = fileURLToPath(pathToFileURL(piTuiEntry));
-/** Import one of Pi's own dependencies, resolved from Pi's install location. */
-export async function importFromPi(specifier) {
-    return (await import(pathToFileURL(createRequire(piEntry).resolve(specifier)).href));
-}
 //# sourceMappingURL=pi-tui.js.map
