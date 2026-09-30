@@ -355,3 +355,18 @@ test("/new and /reload leave exactly one MCP child process running, never zero o
   }
   assert.equal(leftovers, "", `MCP stdio server outlived the whole app\n${context}`);
 });
+
+test("the duplicate-/mcp error is also visible in MMP's own TUI, not just print mode's stderr", (t) => {
+  const rogue = fileURLToPath(new URL("./fixtures/mcp-duplicate-rogue.mjs", import.meta.url));
+  const driver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
+  const { marks, output } = runTuiApp(
+    t,
+    ["mmp:mcp", rogue, driver],
+    [["wait", 2500], ["mark", "startup"], ["key", "ctrl+d"]],
+    { mcpServers: {} },
+  );
+  // ctx.ui.notify maps straight to transcript.notice in MMP's TUI (src/tui/app.ts), unlike print
+  // mode's no-op -- this is the channel a person actually reading the TUI would see, distinct from
+  // (and in addition to) the thrown error's onError-routed notice.
+  assert.match(marks.startup, /also registers "\/mcp"/, `output:\n${output}`);
+});

@@ -98,3 +98,24 @@ test("SDK path loads no ambient Pi resource", (t) => {
   assert.deepEqual(readdirSync(marks), [], "ambient extensions ran");
   assert.deepEqual(`${probe.systemPrompt}\n${probe.commands.join("\n")}`.match(AMBIENT_MARKER) ?? [], []);
 });
+
+// docs/mcp-design.md §8: the SDK path with "mmp:mcp" actually declared and active (not just Pi's
+// own never-loaded builtin) must still never read <MMP_HOME>/pi/mcp.json or <cwd>/.pi/mcp.json.
+test("SDK path loads no ambient Pi resource (mmp:mcp declared and active)", (t) => {
+  const f = fixture(t);
+  const marks = join(f.root, "marks");
+  const out = join(f.root, "probe.json");
+  mkdirSync(marks);
+  plantAmbientWorld({ home: f.home, project: f.project, marks });
+  writeFileSync(join(f.home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: ["mmp:mcp", probeExtension] }));
+  const result = spawnSync(process.execPath, [runnerPath], {
+    cwd: f.project,
+    env: { ...f.env, MMP_AMBIENT_PROBE_OUT: out, MMP_SDK_RUNNER: "{}" },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const probe = JSON.parse(readFileSync(out, "utf8"));
+  assert.deepEqual(readdirSync(marks), [], "ambient extensions ran");
+  assert.deepEqual(`${probe.systemPrompt}\n${probe.commands.join("\n")}`.match(AMBIENT_MARKER) ?? [], []);
+});

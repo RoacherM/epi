@@ -39,7 +39,7 @@ function projectTarget(cwd: string): ManifestTarget {
  * overrides the saved decision for this run only (never persisted, same as `resolveProjectManifest`
  * in project.ts); otherwise the last decision from `mmp --approve`/`/trust` applies.
  */
-function assertProjectTrustedFor(cwd: string, approveOverride: boolean | undefined): void {
+export function assertProjectTrustedFor(cwd: string, approveOverride: boolean | undefined): void {
   const agentDir = resolveMmpPaths(process.env).agentDir;
   const trusted = approveOverride ?? readProjectTrustDecision(agentDir, cwd) === true;
   if (trusted) return;
@@ -350,7 +350,7 @@ async function validateAndResolveSource(source: string, checkSourceExists: Sourc
 /** `-h`/`--help` anywhere in argv, matching Pi's own subcommand help check (dist/main.js's
  * `isAuthCommandHelp`, dist/package-manager-cli.js's `rest.includes("-h") || rest.includes("--help")`)
  * -- MMP's own `mmp auth --help` (auth-cli.ts) already works this way. */
-function isHelpRequested(argv: readonly string[]): boolean {
+export function isHelpRequested(argv: readonly string[]): boolean {
   return argv.includes("-h") || argv.includes("--help");
 }
 

@@ -117,18 +117,21 @@ export function createMmpMcpExtension(source) {
             await piFactory(wrappedPi);
             pi.on("session_start", (_event, ctx) => {
                 if (hasDuplicateMcpCommand(pi)) {
-                    // Verified empirically (not just from source): ctx.ui.notify and ctx.shutdown() are both
-                    // no-ops in print (`-p`) mode -- neither a uiContext nor a shutdownHandler is wired there
-                    // (modes/print-mode.js's bindExtensions call omits both), so a session_start handler has
-                    // no way to force a nonzero exit in that mode (unlike a factory-body throw during loading,
-                    // which does -- but that is too early to see a same-name collision from an extension
-                    // declared later in the Manifest). Throwing here is still visible everywhere: every mode's
-                    // bindExtensions wires an onError that surfaces it (print mode: console.error; TUI:
-                    // showExtensionError; RPC/json: an extension_error event) -- runner.emit()'s per-handler
-                    // try/catch reports it there rather than letting it crash the process. ctx.shutdown() is
-                    // also called for the one mode where it does something (interactive), as a bonus, not the
-                    // primary guarantee.
-                    ctx.shutdown();
+                    // Verified empirically (not just from source), across both modes MMP tests directly:
+                    // - print (`-p`) mode: ctx.ui.notify is a no-op (modes/print-mode.js's bindExtensions call
+                    //   passes no uiContext), so only a thrown error is visible there -- caught by Pi's own
+                    //   per-handler try/catch (core/extensions/runner.js's emit()) and routed to onError,
+                    //   which print mode wires to console.error.
+                    // - MMP's own TUI (src/tui/app.ts): ctx.ui.notify *does* work (mapped straight to
+                    //   transcript.notice, the same sink app.ts's onError uses) and renders a persistent
+                    //   banner. ctx.shutdown() calls app.ts's shutdownHandler, `() => void exit(0)` --
+                    //   deliberately NOT called here: calling it before the throw would race the transcript
+                    //   render against process exit, and a running-but-visibly-warned session is a better
+                    //   outcome than a session that may exit before anyone reads why.
+                    // Neither channel alone covers every mode MMP runs Pi in (print, TUI, RPC, json, SDK), so
+                    // both fire; this does not by itself change the exit code in print mode (documented in
+                    // docs/mcp-design.md §4, not silently assumed).
+                    ctx.ui.notify(DUPLICATE_MCP_COMMAND_MESSAGE, "error");
                     throw new Error(DUPLICATE_MCP_COMMAND_MESSAGE);
                 }
             });
