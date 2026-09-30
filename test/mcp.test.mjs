@@ -146,12 +146,13 @@ test("--dry-run reports a native mcp.json validation error before Pi starts", (t
 
 // ── /mcp empty-state override (docs/mcp-design.md §7) ──────────────────────────────────────────
 
-/** A minimal ExtensionAPI: only `on` and `registerCommand` are called synchronously by Pi's own
- * createMcpExtension factory body (verified against extensions/mcp/index.js -- every other pi.X
- * call it makes happens inside an event handler, none of which fire here). Enough to drive
- * mmp:mcp's own Proxy-wrapping logic around the real "/mcp" registration without spawning a
- * session or a real MCP connection. */
-function fakePi() {
+/** A minimal ExtensionAPI: only `on`, `registerCommand`, and (F2) `getMcpServers` are called
+ * synchronously by Pi's own createMcpExtension factory body or by mmp:mcp's own wrapper (verified
+ * against extensions/mcp/index.js -- every other pi.X call it makes happens inside an event
+ * handler, none of which fire here). Enough to drive mmp:mcp's own Proxy-wrapping logic around the
+ * real "/mcp" registration without spawning a session or a real MCP connection.
+ * `registeredServers` fakes servers another extension added with `pi.registerMcpServer()`. */
+function fakePi(registeredServers = []) {
   const commands = new Map();
   return {
     commands,
@@ -159,6 +160,7 @@ function fakePi() {
     registerCommand(name, options) {
       commands.set(name, options);
     },
+    getMcpServers: () => registeredServers,
   };
 }
 
@@ -200,6 +202,42 @@ test("/mcp with configured servers delegates to Pi's own handler instead of MMP'
   assert.equal(notices.length, 1);
   assert.match(notices[0].message, /No MCP servers configured\. Add them to/);
   assert.match(notices[0].message, /\.pi[\\/]mcp\.json/, "expected Pi's own message to come through unmodified");
+});
+
+test("/mcp with only a disabled server still delegates to Pi's own handler (F2)", async (t) => {
+  // Fable milestone review, F2: this used to count only *enabled* servers, so disabling the only
+  // configured server hid Pi's real /mcp panel -- exactly where a person would go to re-enable it.
+  const root = createFixture(t);
+  const mmpHome = join(root, "home");
+  mkdirSync(mmpHome, { recursive: true });
+  writeJson(join(mmpHome, "mcp.json"), {
+    mcpServers: { configured: { command: "node", args: [fixtureServerPath], enabled: false } },
+  });
+  const extension = createMmpMcpExtension({ mmpHome, resolveAssembly: untrustedAssembly });
+  const pi = fakePi();
+  await extension.factory(pi);
+  const notices = [];
+  const ctx = { cwd: root, mode: "print", ui: { notify: (message, type) => notices.push({ message, type }) } };
+  await pi.commands.get("mcp").handler("", ctx);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0].message, /No MCP servers configured\. Add them to/, "expected Pi's own message, not MMP's empty-state override");
+  assert.match(notices[0].message, /\.pi[\\/]mcp\.json/, "expected Pi's own handler to have run, proving MMP delegated instead of intercepting");
+});
+
+test("/mcp with zero configured servers but one registered via pi.registerMcpServer() still delegates to Pi's own handler (F2)", async (t) => {
+  const root = createFixture(t);
+  const mmpHome = join(root, "home");
+  mkdirSync(mmpHome, { recursive: true });
+  // No mcp.json at all -- only an extension-registered server, e.g. from another Manifest entry.
+  const extension = createMmpMcpExtension({ mmpHome, resolveAssembly: untrustedAssembly });
+  const pi = fakePi([{ name: "jira", config: { url: "https://mcp.example.com/jira" }, extensionPath: "/some/other-extension.mjs" }]);
+  await extension.factory(pi);
+  const notices = [];
+  const ctx = { cwd: root, mode: "print", ui: { notify: (message, type) => notices.push({ message, type }) } };
+  await pi.commands.get("mcp").handler("", ctx);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0].message, /No MCP servers configured\. Add them to/, "expected Pi's own message, not MMP's empty-state override");
+  assert.match(notices[0].message, /\.pi[\\/]mcp\.json/, "expected Pi's own handler to have run, proving MMP delegated instead of intercepting");
 });
 
 // ── Manifest declaring a second /mcp-registering extension fails visibly (docs/mcp-design.md §4) ─

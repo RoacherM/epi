@@ -7,7 +7,6 @@ import {
   type ExtensionContext,
   type InlineExtension,
   type LoadedMcpConfig,
-  type McpServerEntry,
   type RegisteredCommand,
 } from "@earendil-works/pi-coding-agent";
 
@@ -81,10 +80,6 @@ export function loadNativeMcpConfig(source: McpConfigSource, cwd: string): Loade
   };
 }
 
-function isServerEnabled(entry: McpServerEntry): boolean {
-  return entry.config.enabled !== false;
-}
-
 function emptyStateMessage(mmpHome: string): string {
   return (
     `No MCP servers configured. Add them to ${join(mmpHome, "mcp.json")} ` +
@@ -148,8 +143,16 @@ export function createMmpMcpExtension(source: McpConfigSource): InlineExtension 
                 ...commandOptions,
                 handler: async (args, ctx) => {
                   if (args.trim().length === 0) {
-                    const enabledCount = loadConfig(ctx).servers.filter(isServerEnabled).length;
-                    if (enabledCount === 0) {
+                    // Fable milestone review, F2: this used to count only *enabled* configured
+                    // servers, so disabling the only server (or having servers solely from
+                    // pi.registerMcpServer(), e.g. another extension) hid Pi's real /mcp panel --
+                    // exactly the place a person would go to re-enable one. Count every configured
+                    // server regardless of `enabled`, plus anything registered via the extension
+                    // API (pi.getMcpServers()); MMP's message is only for a project with truly
+                    // nothing to show.
+                    const configuredCount = loadConfig(ctx).servers.length;
+                    const registeredCount = pi.getMcpServers().length;
+                    if (configuredCount === 0 && registeredCount === 0) {
                       ctx.ui.notify(emptyStateMessage(mmpHome), "info");
                       return;
                     }

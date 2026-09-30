@@ -44,9 +44,6 @@ export function loadNativeMcpConfig(source, cwd) {
         errors: [...global.errors, ...project.errors],
     };
 }
-function isServerEnabled(entry) {
-    return entry.config.enabled !== false;
-}
 function emptyStateMessage(mmpHome) {
     return (`No MCP servers configured. Add them to ${join(mmpHome, "mcp.json")} ` +
         `or .mmp/mcp.json in a trusted project, then run \`mmp mcp add\`.`);
@@ -100,8 +97,16 @@ export function createMmpMcpExtension(source) {
                                 ...commandOptions,
                                 handler: async (args, ctx) => {
                                     if (args.trim().length === 0) {
-                                        const enabledCount = loadConfig(ctx).servers.filter(isServerEnabled).length;
-                                        if (enabledCount === 0) {
+                                        // Fable milestone review, F2: this used to count only *enabled* configured
+                                        // servers, so disabling the only server (or having servers solely from
+                                        // pi.registerMcpServer(), e.g. another extension) hid Pi's real /mcp panel --
+                                        // exactly the place a person would go to re-enable one. Count every configured
+                                        // server regardless of `enabled`, plus anything registered via the extension
+                                        // API (pi.getMcpServers()); MMP's message is only for a project with truly
+                                        // nothing to show.
+                                        const configuredCount = loadConfig(ctx).servers.length;
+                                        const registeredCount = pi.getMcpServers().length;
+                                        if (configuredCount === 0 && registeredCount === 0) {
                                             ctx.ui.notify(emptyStateMessage(mmpHome), "info");
                                             return;
                                         }
