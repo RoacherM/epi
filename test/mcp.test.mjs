@@ -176,9 +176,10 @@ test("/mcp with zero configured servers shows MMP's own message, not Pi's", asyn
   const ctx = { cwd: root, mode: "print", ui: { notify: (message, type) => notices.push({ message, type }) } };
   await pi.commands.get("mcp").handler("", ctx);
   assert.equal(notices.length, 1);
-  assert.match(notices[0].message, /No MCP servers configured\. Add them to/);
-  assert.match(notices[0].message, /mcp\.json/);
-  assert.match(notices[0].message, /mmp mcp add/);
+  // Dogfood D4: one sentence saying what to run, not "Add them to ... then run `mmp mcp add`".
+  assert.match(notices[0].message, /^No MCP servers configured -- add one to .*mcp\.json with `mmp mcp add <server> /);
+  assert.match(notices[0].message, /with -l to this project's \.mmp[\\/]mcp\.json\.$/);
+  assert.doesNotMatch(notices[0].message, /then run/);
   assert.doesNotMatch(notices[0].message, /\.pi\/mcp\.json/, "leaked Pi's own path, not MMP's");
 });
 
@@ -365,6 +366,43 @@ for (const mode of ["print", "json"]) {
     assert.ok(elapsed < 20_000, `process waited for the hung server's request timeout\n${context}`);
     const leftover = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" });
     assert.equal(leftover.stdout.trim(), "", `hung fixture server still running after exit\n${context}`);
+  });
+}
+
+// Dogfood D6: when Pi's MCP startup chain throws after reading the config (here: every
+// McpServerConnection constructor, via a module hook on Pi's extensions/mcp/runtime.js), Pi only
+// calls ctx.ui.notify("MCP failed to load: ...") -- a no-op in print/json mode -- and no server gets
+// a connection. MMP used to call each server "still connecting" and drop the real error.
+for (const mode of ["print", "json"]) {
+  test(`${mode} mode: a failure in Pi's MCP startup is reported once on stderr, not as servers still connecting (D6)`, (t) => {
+    const root = createFixture(t);
+    const mmpHome = join(root, "home");
+    mkdirSync(mmpHome, { recursive: true });
+    const driver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
+    const hooks = fileURLToPath(new URL("./fixtures/mcp-connection-throws.mjs", import.meta.url));
+    writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", driver] });
+    writeJson(join(mmpHome, "mcp.json"), {
+      mcpServers: { one: { command: "node", args: [fixtureServerPath] }, two: { command: "node", args: [fixtureServerPath] } },
+    });
+    const modeArgs = mode === "json" ? ["--mode", "json", "hi"] : ["-p", "hi"];
+    const result = spawnSync(
+      process.execPath,
+      ["--import", hooks, cliPath, "--no-project", "--model", "mmp-faux/echo", ...modeArgs],
+      {
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, PI_OFFLINE: "1" },
+        timeout: 30_000,
+      },
+    );
+    const context = `status=${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+    assert.equal(result.status, 0, context);
+    assert.equal(result.stderr, "MCP failed to load: simulated: McpServerConnection is unavailable\n", context);
+    if (mode === "print") {
+      assert.equal(result.stdout, "ECHO:hi\n", context);
+    } else {
+      for (const line of result.stdout.trim().split("\n")) JSON.parse(line);
+      assert.doesNotMatch(result.stdout, /MCP failed to load/, context);
+    }
   });
 }
 

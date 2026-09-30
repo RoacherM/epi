@@ -75,14 +75,15 @@ Manifest 同时声明第三方 MCP 扩展（例如 pi-mcp-adapter）和 `mmp:mcp
 ```
 mmp mcp add <server> [-l] [--exposure …] [--env K=V]… [--header K:V]… (--url <url> | -- <command> [args…])
 mmp mcp remove <server> [-l]
-mmp mcp list [--json]
-mmp mcp login <server> [--timeout <seconds>]
-mmp mcp logout <server>
+mmp mcp list [--json] [--approve|--no-approve]
+mmp mcp login <server> [--timeout <seconds>] [--approve|--no-approve]
+mmp mcp logout <server> [--approve|--no-approve]
 ```
 
 - Pi 的 `runMcpCommand` 不能直接用：它写死了 `.pi/mcp.json`（`cli.js:127`）和 Pi 的信任存储（`cli.js:133`）。MMP 自己解析参数；读写配置复用 `config.js` 的 `addMcpServerConfig` / `removeMcpServerConfig` / `loadMcpConfig`；`list`、`login`、`logout` 复用 `runtime.js` 的 `McpServerConnection`、`signInMcpServer`、`McpOAuthCredentialStore`（都登记进 `pi-internals.md`）。
 - 写的是 `~/.mmp/mcp.json`，加 `-l` 写项目的 `.mmp/mcp.json`。`-l` 的信任规则和 `mmp install -l` 一样：项目不可信就拒绝，除非带 `--approve`（只对这一次有效）。
-- `list` 和 Pi 一样会真的连接每个服务，报告状态、工具数和错误；有配置错误或连接失败时退出码为 1。项目不可信时不读项目配置，并提示"not trusted"。
+- `list` 和 Pi 一样会真的连接每个服务，报告状态、工具数和错误；有配置错误或连接失败时退出码为 1。项目不可信时不读项目配置，并提示"not trusted"和 `--approve`。
+- `list`、`login`、`logout` 也读项目的 `.mmp/mcp.json`，所以同样接受 `-a`/`--approve`（这一次当作信任，读项目配置）和 `-na`/`--no-approve`（这一次当作不信任），都不写信任记录（决策 U4；dogfood D4）。
 - `mcp` 要加进 `src/host.ts` 的子命令表，**不能落到 `piMain`**：`piMain` 看到 `mcp` 会跑 Pi 自己的命令，读写 Pi 的路径（`main.js:478`）。
 - `cli-design.md` §3 加一行。
 
@@ -90,11 +91,12 @@ mmp mcp logout <server>
 
 直接用 Pi 的：Pi 的 MCP 扩展注册了 `/mcp`（`index.js:820`），面板通过 `ctx.ui.custom` 渲染，MMP 的扩展界面已经支持（`src/tui/ext-host.ts`）。登录、重连、启用/停用、改曝光方式都来自 Pi；启用/停用和曝光方式会写回定义这个服务的那份 `mcp.json`，也就是 MMP 自己的文件。
 
-一处要改：没有配置任何服务时，Pi 的提示是 `Add them to ~/.mmp/pi/mcp.json or .pi/mcp.json`（`index.js:470,633`），这两个路径 MMP 都不读，违反"对外只有 mmp"。做法：一个服务都没加载时，MMP 拦下不带参数的 `/mcp`，自己提示 `~/.mmp/mcp.json` / `.mmp/mcp.json` 和 `mmp mcp add`；有服务时交给 Pi。
+一处要改：没有配置任何服务时，Pi 的提示是 `Add them to ~/.mmp/pi/mcp.json or .pi/mcp.json`（`index.js:470,633`），这两个路径 MMP 都不读，违反"对外只有 mmp"。做法：一个服务都没加载时，MMP 拦下不带参数的 `/mcp`，自己提示 `~/.mmp/mcp.json` / `.mmp/mcp.json` 和 `mmp mcp add`（一句话说清怎么加：`No MCP servers configured -- add one to <mmpHome>/mcp.json with \`mmp mcp add …\`, or with -l to this project's .mmp/mcp.json.`，`mmp mcp list` 用同一句，D4）；有服务时交给 Pi。
 
 - **"一个服务都没加载"最初算窄了（Fable milestone review F1/F2/F3，2026-09-30 修正）**：最初只数*启用*的服务，停用唯一一个服务、或服务只来自另一个扩展的 `pi.registerMcpServer()` 时，也会被当成"零服务"，挡住 Pi 真正的 `/mcp` 面板——而那正是用户想去重新启用它的地方。改法：数配置里的服务（不管 `enabled`）加上 `pi.getMcpServers()` 的数量，两者都是零才拦截（`src/extensions/mcp.ts`）。
 - **codemode 里嵌套的 MCP 调用被渲染成重复的顶层工具块（同一次 review，F1 修正）**：`src/tui/transcript.ts` 的 `tool_execution_start`/`update`/`end` 之前没检查 `event.parentToolCallId`，嵌套调用（codemode 脚本内部调 MCP 工具）除了 Pi 自己内联渲染的那份，还会被 MMP 的 `transcript.ts` 再画一份顶层块。Pi 自己的 `interactive-mode.js` 只在 `start` 里跳过（它的 `pendingTools.get()` 对没见过的 id 天然返回 `undefined`，`update`/`end` 不用另外判断）；MMP 的 `tool()` helper 不一样，见到没见过的 `toolCallId` 会直接创建一个新条目，所以三个事件都要显式跳过。
 - **`-p`/`--mode json` 下连接失败完全静默，违反硬规则 3（同一次 review，F3 修正）**：本节第 2 段已经记过"错误的可见性"，但那次只堵了配置校验错误（`buildInlineExtensions` 时同步抛 `MmpConfigError`）；服务器*配置合法但连接失败*（进程起不来、需要登录）走的是 Pi 自己异步的 `reportProblems()` -> `ctx.ui.notify`，在 `-p`/`--mode json` 下这条路径仍然是纯空操作，之前完全没堵。做法（第一版在 `session_start` 里调用 Pi 的 `/mcp` 处理函数，它会无上限地 `await pending`，让 `-p` 的第一个 prompt 最长等到每个服务 60 s 的请求超时，而 Pi 自己只等 10 s；已修正）：`src/extensions/mcp.ts` 在每个会话的第一个 `before_agent_start` 里（非 tui 模式）读每个服务的状态。Pi 自己的 `before_agent_start` 处理函数先运行（同一个扩展里先注册，运行器按注册顺序逐个 await），它等启动连接，最多 `startupWaitMs`（Pi 默认 10 s，MMP 不传）；MMP 之后读状态不再等待，所以第一个 prompt 的延迟就是 Pi 自己的上限。状态来自 `/mcp` 命令对 `reconnect ` 的补全（名字 + Pi 的 `describeState()` 文本）。每个失败或需要登录的服务在 stderr 写一行（`broken: failed: spawn /nonexistent/x ENOENT`），到时还在连接的服务写一行 `mcp: <名字> is still connecting; its tools become available once connected`，然后 prompt 照常运行；健康的服务和零服务都不输出。stdout 完全不碰（benchmark 和 json 消费者读 stdout）；退出码不变（和"错误的可见性"那次一样，是已认可的偏差）。已知限制（Pi 本身的行为，不是这次引入的）：Pi 的 `McpServerConnection.close()` 不会中止还在进行的连接，一个永远不回 `initialize` 的服务会让进程在输出完之后继续挂着，直到这个服务的请求超时（默认 60 s）才退出。依赖 Pi 的补全文本和 `before_agent_start` 顺序，登记进 `docs/pi-internals.md`（`mcp-reconnect-completion-states`、`mcp-startup-wait-before-agent-start`）。
+- **Pi 的 MCP 启动链本身出错时被报成"still connecting"（dogfood D6）**：加载 `runtime.js` 之后、连接之前（比如构造 `McpServerConnection`）抛出的错误，Pi 只用 `ctx.ui.notify("MCP failed to load: …", "error")` 报告，`-p`/json 下是空操作；而且没有一个服务拿到连接，上面的检查就把每个服务都报成"still connecting"。做法：Pi 的 MCP 扩展通过 `pi.on` 注册的处理函数拿到的 ctx 里，`ui.notify` 在非 tui 模式下把 error 级消息原样写到 stderr（同一会话同一条只写一次），这时不再逐个报服务。`runtime.js` 整个加载不了的情况走不到这里：`mmp:mcp` 自己先加载它，失败就是 `Failed to load extension "<inline:mmp:mcp>": …`，退出码 1（实测）。登记进 `docs/pi-internals.md`（`mcp-load-failure-notify`）。
 
 ## 8. 测试和升级门禁
 

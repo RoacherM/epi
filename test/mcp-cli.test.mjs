@@ -220,9 +220,74 @@ test("mmp mcp list shows MMP's own empty-state message and an untrusted-project 
   writeFileSync(projectMcpPath(f), JSON.stringify({ mcpServers: { ignored: { command: "node" } } }));
   const result = run(f, ["list"]);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /No MCP servers configured\. Add them to/);
-  assert.match(result.stdout, /mmp mcp add/);
-  assert.match(result.stdout, /is ignored because the project is not trusted/);
+  // Dogfood D4: one sentence saying what to run, not "Add them to ... then run `mmp mcp add`".
+  assert.match(result.stdout, /^No MCP servers configured -- add one to .*mcp\.json with `mmp mcp add <server> .*`, or with -l to this project's \.mmp[\\/]mcp\.json\.$/m);
+  assert.doesNotMatch(result.stdout, /then run/);
+  assert.match(result.stdout, /is ignored because the project is not trusted\. Add --approve to read it this once \(mmp mcp list --approve\)/);
+});
+
+// Dogfood D4: list/login/logout read the project's .mmp/mcp.json, so they take the same
+// this-run-only --approve/--no-approve as add/remove -l and `mmp install -l` (decisions U4).
+function untrustedProjectWithFixtureServer(f) {
+  mkdirSync(join(f.project, ".mmp"), { recursive: true });
+  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
+  writeFileSync(projectMcpPath(f), JSON.stringify({ mcpServers: { fixture: { command: "node", args: [fixtureServerPath] } } }));
+}
+
+test("mmp mcp list --approve reads an untrusted project's .mmp/mcp.json for this run only (D4)", (t) => {
+  const f = fixture(t);
+  untrustedProjectWithFixtureServer(f);
+  for (const flag of ["--approve", "-a"]) {
+    const approved = run(f, ["list", flag]);
+    assert.equal(approved.status, 0, `${flag}\n${approved.stdout}\n${approved.stderr}`);
+    assert.match(approved.stdout, /fixture: connected, 2 tools \(codemode, project\)/);
+    assert.doesNotMatch(approved.stdout, /is ignored/);
+  }
+  // Nothing persisted: no trust store written, and a plain list still ignores the file.
+  assert.equal(existsSync(join(f.home, ".mmp", "pi", "trust.json")), false);
+  const plain = run(f, ["list"]);
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.doesNotMatch(plain.stdout, /fixture:/);
+  assert.match(plain.stdout, /is ignored because the project is not trusted/);
+});
+
+test("mmp mcp list --no-approve ignores a trusted project's .mmp/mcp.json; both flags together are refused (D4)", async (t) => {
+  const f = fixture(t);
+  untrustedProjectWithFixtureServer(f);
+  const { ProjectTrustStore } = await import("@earendil-works/pi-coding-agent");
+  mkdirSync(join(f.home, ".mmp", "pi"), { recursive: true });
+  new ProjectTrustStore(join(f.home, ".mmp", "pi")).set(f.project, true);
+  const refused = run(f, ["list", "--no-approve"]);
+  assert.equal(refused.status, 0, refused.stderr);
+  assert.doesNotMatch(refused.stdout, /fixture:/);
+  assert.match(refused.stdout, /is ignored because of --no-approve\./);
+  const both = run(f, ["list", "--approve", "--no-approve"]);
+  assert.equal(both.status, 2, both.stdout);
+  assert.match(both.stderr, /--approve and --no-approve can't be used together/);
+});
+
+test("mmp mcp login/logout --approve find a server defined only in an untrusted project (D4)", (t) => {
+  const f = fixture(t);
+  untrustedProjectWithFixtureServer(f);
+  for (const command of ["login", "logout"]) {
+    const without = run(f, [command, "fixture"]);
+    assert.equal(without.status, 1, without.stdout);
+    assert.match(without.stderr, new RegExp(`No MCP server named "fixture"\\..*mmp mcp ${command} --approve`));
+    const approved = run(f, [command, "fixture", "--approve"]);
+    assert.equal(approved.status, 1, approved.stdout);
+    // Found it: the refusal is now about the server itself (stdio servers don't use OAuth).
+    assert.match(approved.stderr, /MCP server "fixture" does not use OAuth/);
+  }
+});
+
+test("mmp mcp --help documents --approve/--no-approve for list, login and logout (D4)", (t) => {
+  const f = fixture(t);
+  const result = run(f, ["--help"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /mmp mcp list \[--json\] \[--approve\|--no-approve\]/);
+  assert.match(result.stdout, /mmp mcp login <server> \[--timeout <seconds>\] \[--approve\|--no-approve\]/);
+  assert.match(result.stdout, /mmp mcp logout <server> \[--approve\|--no-approve\]/);
+  assert.match(result.stdout, /-na, --no-approve/);
 });
 
 test("mmp mcp login on a stdio server: the same \"does not use OAuth\" refusal Pi gives, no browser flow attempted", (t) => {

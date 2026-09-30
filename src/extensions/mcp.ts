@@ -128,10 +128,11 @@ export function loadNativeMcpConfig(source: McpConfigSource, cwd: string): Loade
   };
 }
 
-function emptyStateMessage(mmpHome: string): string {
+/** Shared by `/mcp` and `mmp mcp list` (src/commands/mcp-cli.ts): what to run, in one sentence. */
+export function emptyStateMessage(mmpHome: string): string {
   return (
-    `No MCP servers configured. Add them to ${join(mmpHome, "mcp.json")} ` +
-    `or .mmp/mcp.json in a trusted project, then run \`mmp mcp add\`.`
+    `No MCP servers configured -- add one to ${join(mmpHome, "mcp.json")} with ` +
+    `\`mmp mcp add <server> (--url <url> | -- <command> [args...])\`, or with -l to this project's .mmp/mcp.json.`
   );
 }
 
@@ -219,8 +220,60 @@ export function createMmpMcpExtension(source: McpConfigSource): InlineExtension 
       // bindExtensions passes no uiContext).
       let piMcpCompletions: McpArgumentCompletions | undefined;
 
+      // Dogfood D6: when anything in Pi's startup chain throws after the config is read (loading
+      // extensions/mcp/runtime.js, constructing a connection), Pi's only report is
+      // ctx.ui.notify("MCP failed to load: ...", "error") -- a no-op in print/json mode -- and no
+      // server ever gets a connection, so before_agent_start below would call each one "still
+      // connecting". Every handler Pi's MCP extension registers gets a ctx whose ui.notify also
+      // writes error-level messages to stderr outside the TUI (the TUI already shows them), once per
+      // message and session; `loadFailed` then replaces the per-server lines. Only error-level
+      // notifies are taken: in Pi 0.99.1 the only ones raised from event handlers (not /mcp command
+      // handlers, which get their own ctx) are the two "MCP failed to load" calls in
+      // extensions/mcp/index.js; its warnings (servers needing attention) are covered by
+      // mcpProblemLines instead.
+      let loadFailed = false;
+      const reportedFailures = new Set<string>();
+      let reportedThisSession = false;
+      const bindTo = (owner: object, value: unknown) =>
+        typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(owner) : value;
+      const reportingContext = (ctx: ExtensionContext): ExtensionContext =>
+        new Proxy(ctx, {
+          get(target, prop) {
+            if (prop !== "ui") return bindTo(target, Reflect.get(target, prop, target));
+            const ui = target.ui;
+            return new Proxy(ui, {
+              get(uiTarget, uiProp) {
+                if (uiProp !== "notify") return bindTo(uiTarget, Reflect.get(uiTarget, uiProp, uiTarget));
+                return (message: string, type?: "info" | "warning" | "error") => {
+                  if (type === "error" && target.mode !== "tui") {
+                    loadFailed = true;
+                    if (!reportedFailures.has(message)) {
+                      reportedFailures.add(message);
+                      process.stderr.write(`${message}\n`);
+                    }
+                  }
+                  return uiTarget.notify(message, type);
+                };
+              },
+            });
+          },
+        });
+      // Registered before piFactory so the reset runs before Pi's own session_start starts connecting.
+      pi.on("session_start", () => {
+        loadFailed = false;
+        reportedFailures.clear();
+        reportedThisSession = false;
+      });
+
       const wrappedPi = new Proxy(pi, {
         get(target, prop, _receiver) {
+          if (prop === "on") {
+            return (event: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) =>
+              (target.on as (event: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => () => void)(
+                event,
+                (piEvent, ctx) => handler(piEvent, reportingContext(ctx)),
+              );
+          }
           if (prop === "registerCommand") {
             return (
               name: string,
@@ -297,12 +350,8 @@ export function createMmpMcpExtension(source: McpConfigSource): InlineExtension 
       // session_start instead would wait before the prompt starts, and then Pi's own timer would
       // start from zero on top of that, doubling the bound for a hung server. Nothing is left
       // running after this handler returns, so a server that settles later cannot print anything.
-      let reportedThisSession = false;
-      pi.on("session_start", () => {
-        reportedThisSession = false;
-      });
       pi.on("before_agent_start", async (_event, ctx) => {
-        if (ctx.mode === "tui" || reportedThisSession || piMcpCompletions === undefined) return;
+        if (ctx.mode === "tui" || reportedThisSession || loadFailed || piMcpCompletions === undefined) return;
         reportedThisSession = true;
         const configured = loadConfig(ctx).servers.filter((entry) => entry.config.enabled !== false);
         const registered = pi.getMcpServers().filter((server) => server.config.enabled !== false);

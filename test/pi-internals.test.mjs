@@ -450,6 +450,43 @@ const registry = [
     },
   },
   {
+    id: "mcp-load-failure-notify",
+    check() {
+      const indexPath = join(piDist, "extensions", "mcp", "index.js");
+      const indexText = readFileSync(indexPath, "utf8");
+      const why = "src/extensions/mcp.ts's reportingContext writes this notify to stderr outside the TUI (dogfood D6)";
+      const loadFailures = indexText.match(/ctx\.ui\.notify\(`MCP failed to load: \$\{errorMessage\(error\)\}`, "error"\)/g) ?? [];
+      assert.equal(loadFailures.length, 2, `${indexPath} no longer reports its startup and mcp_servers_change failures as ctx.ui.notify(\`MCP failed to load: ...\`, "error") -- ${why}`);
+      assert.match(
+        indexText,
+        /\.then\(\(\) => loadMcpRuntime\(\)\)[\s\S]{0,800}\.catch\(\(error\) => \{[\s\S]{0,200}MCP failed to load/,
+        `${indexPath}'s startup chain no longer ends in a catch that notifies "MCP failed to load" -- ${why}`,
+      );
+    },
+  },
+  {
+    id: "model-runtime-register-provider",
+    async check() {
+      const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+      assertFunction(ModelRuntime?.prototype?.registerProvider, "ModelRuntime.prototype.registerProvider");
+      const why = "src/provider-validation.ts wraps ModelRuntime.prototype.registerProvider to check model costs (dogfood D1)";
+      for (const file of [["index.js"], ["main.js"], ["core", "sdk.js"], ["core", "agent-session-services.js"]]) {
+        const path = join(piDist, ...file);
+        assert.match(
+          readFileSync(path, "utf8"),
+          /from "\.\.?\/(?:core\/)?model-runtime\.js"/,
+          `${path} no longer imports ModelRuntime from core/model-runtime.js -- ${why}; a copy elsewhere would skip the check`,
+        );
+      }
+      const servicesPath = join(piDist, "core", "agent-session-services.js");
+      assert.match(
+        readFileSync(servicesPath, "utf8"),
+        /modelRuntime\.registerProvider\(name, config\);\s*\}\s*catch \(error\) \{[\s\S]{0,200}message: `Extension "\$\{extensionPath\}" error: \$\{message\}`/,
+        `${servicesPath} no longer reports a throwing registerProvider as 'Extension "<path>" error: <message>' -- ${why}`,
+      );
+    },
+  },
+  {
     id: "mcp-startup-wait-before-agent-start",
     check() {
       const indexPath = join(piDist, "extensions", "mcp", "index.js");

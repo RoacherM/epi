@@ -22,6 +22,8 @@ export interface McpConfigSource {
  * the project entry wins, matching Pi's own project-overrides-global rule.
  */
 export declare function loadNativeMcpConfig(source: McpConfigSource, cwd: string): LoadedMcpConfig;
+/** Shared by `/mcp` and `mmp mcp list` (src/commands/mcp-cli.ts): what to run, in one sentence. */
+export declare function emptyStateMessage(mmpHome: string): string;
 /**
  * `mmp:mcp`: `createMcpExtension` (connections, OAuth, tool registration, `/mcp`) wired to MMP's own
  * config source, plus three MMP-only behaviors:

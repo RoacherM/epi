@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { MmpArgumentError } from "../errors.js";
 import { assertProjectTrustedFor, isHelpRequested } from "./manifest-cli.js";
-import { loadNativeMcpConfig } from "../extensions/mcp.js";
+import { emptyStateMessage, loadNativeMcpConfig } from "../extensions/mcp.js";
 import { resolveMmpPaths } from "../paths.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "../project.js";
 const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
@@ -21,9 +21,9 @@ const { validateMcpServerConfig } = (await import(pathToFileURL(join(piDist, "co
 const HELP = `Usage:
   mmp mcp add <server> [options] (--url <url> | -- <command> [args...])
   mmp mcp remove <server> [-l]
-  mmp mcp list [--json]
-  mmp mcp login <server> [--timeout <seconds>]
-  mmp mcp logout <server>
+  mmp mcp list [--json] [--approve|--no-approve]
+  mmp mcp login <server> [--timeout <seconds>] [--approve|--no-approve]
+  mmp mcp logout <server> [--approve|--no-approve]
 
 Configure and check MCP servers, and sign in to OAuth servers, without starting a session.
 Reads ~/.mmp/mcp.json and, in a trusted project, .mmp/mcp.json.
@@ -37,9 +37,12 @@ Commands:
 
 Options for add and remove:
   -l, --local             Use .mmp/mcp.json in the current project instead of the global file
-  -a, --approve           Trust the project Manifest for this -l write, even if the project isn't
-                          otherwise trusted (this run only; does not persist -- use mmp --approve
-                          or /trust)
+
+Trust (every command):
+  -a, --approve           Trust the project Manifest for this run, even if the project isn't
+                          otherwise trusted: add/remove -l may write the project's .mmp/mcp.json,
+                          list/login/logout read it. Does not persist -- /trust in mmp does
+  -na, --no-approve       Treat the project as untrusted for this run, even if it is trusted
 
 Options for add:
   --url <url>             Streamable HTTP server URL (instead of a command)
@@ -68,7 +71,16 @@ function describeTransport(entry) {
     const { config } = entry;
     return "url" in config ? config.url : [config.command, ...(config.args ?? [])].join(" ");
 }
-const OPTION_ALIASES = new Map([["-l", "--local"], ["-a", "--approve"]]);
+const OPTION_ALIASES = new Map([["-l", "--local"], ["-a", "--approve"], ["-na", "--no-approve"]]);
+const APPROVE_OPTIONS = { approve: "flag", "no-approve": "flag" };
+/** `--approve`/`--no-approve` as a this-run-only override of the saved trust decision (decisions
+ * U4, same as `mmp install -l`): true, false, or undefined for "use the saved decision". */
+function approveOverrideOf(values) {
+    if (values.has("approve") && values.has("no-approve")) {
+        throw new MmpArgumentError(`--approve and --no-approve can't be used together.\n${HELP_HINT}`);
+    }
+    return values.has("approve") ? true : values.has("no-approve") ? false : undefined;
+}
 /** Parses `--name value` options; throws on an unknown one. `--` ends the options, as does
  * reaching `maxPositionals` positional arguments -- mirrors Pi's own `parseOptions` (cli.js, not
  * exported), so an added stdio command's own flags (`add <server> -- node script.js --flag`) pass
@@ -131,14 +143,18 @@ function localConfigPath(ctx) {
 /** The merged view a real session would see: global always, project only when trusted -- built the
  * same way src/extensions/mcp.ts does, but walking up to the nearest project Manifest (like
  * `mmp list`) rather than "only exactly cwd" (like `add -l`/`remove -l`, which always write "here",
- * matching `mmp install -l`). */
-function resolveListConfig(ctx) {
+ * matching `mmp install -l`). `approveOverride` replaces the saved decision for this run only, like
+ * `mmp --approve`/`--no-approve` (src/project.ts's resolveProjectManifest); nothing is persisted. */
+function resolveListConfig(ctx, approveOverride, command) {
     const paths = resolveMmpPaths(process.env);
     const candidate = findNearestProjectManifest(ctx.cwd, paths.globalManifest);
-    const trusted = candidate !== undefined && readProjectTrustDecision(paths.agentDir, ctx.cwd) === true;
-    const untrustedNote = candidate !== undefined && !trusted
-        ? `${join(candidate.root, ".mmp", "mcp.json")} is ignored because the project is not trusted. Run mmp --approve or /trust.`
-        : undefined;
+    const trusted = candidate !== undefined && (approveOverride ?? readProjectTrustDecision(paths.agentDir, ctx.cwd) === true);
+    const ignoredPath = candidate === undefined ? undefined : join(candidate.root, ".mmp", "mcp.json");
+    const untrustedNote = candidate === undefined || trusted
+        ? undefined
+        : approveOverride === false
+            ? `${ignoredPath} is ignored because of --no-approve.`
+            : `${ignoredPath} is ignored because the project is not trusted. Add --approve to read it this once (mmp mcp ${command} --approve), or trust the project with /trust in mmp.`;
     const loaded = loadNativeMcpConfig({
         mmpHome: ctx.mmpHome,
         resolveAssembly: () => trusted && candidate !== undefined
@@ -151,8 +167,7 @@ function addCommand(args, ctx) {
     const usage = `Usage: mmp mcp add <server> [options] (--url <url> | -- <command> [args...])\n${HELP_HINT}`;
     const parsed = parseOptions(args, {
         local: "flag",
-        approve: "flag",
-        "no-approve": "flag",
+        ...APPROVE_OPTIONS,
         url: "value",
         env: "list",
         cwd: "value",
@@ -164,6 +179,7 @@ function addCommand(args, ctx) {
         exposure: "value",
     }, 2);
     const { positional, values, lists } = parsed;
+    const approveOverride = approveOverrideOf(values);
     const [name, ...command] = positional;
     const url = values.get("url");
     if (!name || (url === undefined) === (command.length === 0)) {
@@ -216,7 +232,6 @@ function addCommand(args, ctx) {
     }
     const local = values.has("local");
     if (local) {
-        const approveOverride = values.has("approve") ? true : values.has("no-approve") ? false : undefined;
         assertProjectTrustedFor(ctx.cwd, approveOverride);
     }
     const path = local ? localConfigPath(ctx) : globalConfigPath(ctx);
@@ -246,14 +261,14 @@ function addCommand(args, ctx) {
     return 0;
 }
 function removeCommand(args, ctx) {
-    const parsed = parseOptions(args, { local: "flag", approve: "flag", "no-approve": "flag" });
+    const parsed = parseOptions(args, { local: "flag", ...APPROVE_OPTIONS });
     const [name, ...extra] = parsed.positional;
     if (!name || extra.length > 0) {
         throw new MmpArgumentError(`Usage: mmp mcp remove <server> [-l]\n${HELP_HINT}`);
     }
+    const approveOverride = approveOverrideOf(parsed.values);
     const local = parsed.values.has("local");
     if (local) {
-        const approveOverride = parsed.values.has("approve") ? true : parsed.values.has("no-approve") ? false : undefined;
         assertProjectTrustedFor(ctx.cwd, approveOverride);
     }
     const path = local ? localConfigPath(ctx) : globalConfigPath(ctx);
@@ -273,7 +288,7 @@ function removeCommand(args, ctx) {
     // check the other scope (within what MMP already trusts enough to read; unlike Pi's own CLI, this
     // never reads an untrusted project's mcp.json just for a nicer error) and name where it actually
     // lives, with MMP's own paths and flag (`-l`, not Pi's `--local`).
-    const other = resolveListConfig(ctx).loaded.servers.find((server) => server.name === name && (server.scope ?? "global") !== scope);
+    const other = resolveListConfig(ctx, approveOverride, "remove").loaded.servers.find((server) => server.name === name && (server.scope ?? "global") !== scope);
     const otherHint = other === undefined ? "" : ` It is defined in ${other.source}${other.scope === "project" ? "; use -l" : "; omit -l"}.`;
     console.error(`No ${scope} MCP server named "${name}" in ${path}.${otherHint}`);
     return 1;
@@ -286,12 +301,12 @@ async function loadRuntimeModule() {
     return (await import(pathToFileURL(join(piDist, "extensions", "mcp", "runtime.js")).href));
 }
 async function listCommand(args, ctx) {
-    const parsed = parseOptions(args, { json: "flag" });
+    const parsed = parseOptions(args, { json: "flag", ...APPROVE_OPTIONS });
     if (parsed.positional.length > 0) {
-        throw new MmpArgumentError(`Usage: mmp mcp list [--json]\n${HELP_HINT}`);
+        throw new MmpArgumentError(`Usage: mmp mcp list [--json] [--approve|--no-approve]\n${HELP_HINT}`);
     }
     const json = parsed.values.has("json");
-    const { loaded, untrustedNote } = resolveListConfig(ctx);
+    const { loaded, untrustedNote } = resolveListConfig(ctx, approveOverrideOf(parsed.values), "list");
     const runtime = await loadRuntimeModule();
     const credentials = new runtime.McpOAuthCredentialStore();
     const reports = await Promise.all(loaded.servers.map(async (entry) => {
@@ -344,7 +359,7 @@ async function listCommand(args, ctx) {
         return failed ? 1 : 0;
     }
     if (reports.length === 0 && loaded.errors.length === 0) {
-        console.log(`No MCP servers configured. Add them to ${globalConfigPath(ctx)} or .mmp/mcp.json in a trusted project, then run \`mmp mcp add\`.`);
+        console.log(emptyStateMessage(ctx.mmpHome));
     }
     for (const report of reports) {
         const state = report.state === "connected"
@@ -376,12 +391,12 @@ async function listCommand(args, ctx) {
     return failed ? 1 : 0;
 }
 async function loginOrLogoutCommand(command, args, ctx) {
-    const parsed = parseOptions(args, command === "login" ? { timeout: "value" } : {});
+    const parsed = parseOptions(args, command === "login" ? { timeout: "value", ...APPROVE_OPTIONS } : APPROVE_OPTIONS);
     const [name, ...extra] = parsed.positional;
     if (!name || extra.length > 0) {
-        throw new MmpArgumentError(`Usage: mmp mcp ${command} <server>\n${HELP_HINT}`);
+        throw new MmpArgumentError(`Usage: mmp mcp ${command} <server> [--approve|--no-approve]\n${HELP_HINT}`);
     }
-    const { loaded, untrustedNote } = resolveListConfig(ctx);
+    const { loaded, untrustedNote } = resolveListConfig(ctx, approveOverrideOf(parsed.values), command);
     const entry = loaded.servers.find((server) => server.name === name);
     if (!entry) {
         console.error(`No MCP server named "${name}".${untrustedNote ? ` ${untrustedNote}` : ""} Configured: ${loaded.servers.map((server) => server.name).join(", ") || "none"}.`);
