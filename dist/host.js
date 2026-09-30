@@ -12,6 +12,7 @@ import { buildInlineExtensions } from "./extensions/index.js";
 import { isInteractivePiRun } from "./interactive.js";
 import { resolveMmpPaths } from "./paths.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
+import { installProviderCostValidation } from "./provider-validation.js";
 import { createMmpRuntimeIdentity, } from "./runtime-identity.js";
 import { askProjectTrust, saveProjectTrustChoice, shouldAskProjectTrust } from "./trust-prompt.js";
 import { runMmpUpdateCommand, updateCheckDisabled } from "./update.js";
@@ -209,6 +210,8 @@ export async function runMmp(argv) {
     }
     // Pi's own notice would suggest `pi update`, which does not update MMP's pinned Pi.
     process.env.PI_SKIP_VERSION_CHECK = "1";
+    // Before any path below can load an extension that registers a provider (--help included).
+    installProviderCostValidation();
     if (args.version) {
         process.stdout.write(`mmp ${MMP_VERSION}\npi ${PI_VERSION}\n`);
         return;
