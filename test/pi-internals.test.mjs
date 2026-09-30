@@ -599,6 +599,50 @@ const registry = [
       checkMcpOwnReportsInRpc(readFileSync(indexPath, "utf8"), indexPath);
     },
   },
+  {
+    id: "resolve-app-mode",
+    async check() {
+      // Throws by design when main.js no longer defines resolveAppMode(parsed, stdinIsTTY, stdoutIsTTY).
+      const { piResolveAppMode } = await import("./fixtures/pi-app-mode.mjs");
+      assert.equal(piResolveAppMode({ mode: "text" }, true, true), "interactive", "Pi's resolveAppMode no longer returns \"interactive\" for --mode text on a terminal");
+      assert.equal(piResolveAppMode({ mode: "json" }, true, true), "json");
+    },
+  },
+  {
+    id: "output-guard-stdout-write",
+    check() {
+      const guardPath = join(piDist, "core", "output-guard.js");
+      const guardText = readFileSync(guardPath, "utf8");
+      assert.match(
+        guardText,
+        /export function takeOverStdout\(\) \{[\s\S]{0,200}const rawStdoutWrite = process\.stdout\.write\.bind\(process\.stdout\);\s*const rawStderrWrite = process\.stderr\.write\.bind\(process\.stderr\);/,
+        `${guardPath}'s takeOverStdout no longer binds process.stdout.write/process.stderr.write when called -- src/closed-stdout.ts's wrappers (installed before piMain) would be bypassed`,
+      );
+      assert.match(
+        guardText,
+        /return process\.stdout\.write\.bind\(process\.stdout\);/,
+        `${guardPath}'s getRawStdoutWrite no longer falls back to process.stdout.write`,
+      );
+      const printPath = join(piDist, "modes", "print-mode.js");
+      const printText = readFileSync(printPath, "utf8");
+      assert.match(
+        printText,
+        /for \(const message of messages\) \{\s*await session\.prompt\(message\);/,
+        `${printPath} no longer sends each -p message through session.prompt -- MMP's input handler would stop skipping them after stdout closes`,
+      );
+      assert.match(
+        printText,
+        /finally \{[\s\S]{0,200}await disposeRuntime\(\);\s*await flushRawStdout\(\);/,
+        `${printPath} no longer disposes the runtime (session_shutdown) before its final stdout flush`,
+      );
+      const sessionPath = join(piDist, "core", "agent-session.js");
+      assert.match(
+        readFileSync(sessionPath, "utf8"),
+        /emitInput\([^)]*\);\s*if \(inputResult\.action === "handled"\) \{\s*return undefined;/,
+        `${sessionPath}'s prompt no longer stops at an input handler's "handled"`,
+      );
+    },
+  },
 ];
 
 /** One `pi.on("<event>", ...)` handler's source in Pi's MCP extension: up to the next `pi.on(`. */
