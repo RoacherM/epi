@@ -321,7 +321,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | P0 ✓ | `/compact [指令]` | `session.compact` |
 | P0 ✓ | `/resume` | `SessionSelectorComponent`（导出）+ `runtime.switchSession` |
 | P0 ✓ | `/thinking [档位]` | `ThinkingSelectorComponent`（导出） |
-| P0 ✓ | `/copy`、`Ctrl+X` | `getLastAssistantText` + `copyToClipboard` |
+| P0 ✓ | `/copy`、`Ctrl+X` | `getLastAssistantText` + `copyToClipboard`；和 Pi 的 `handleCopyCommand` 一样，`Ctrl+X` 在关掉 copy-on-select 且有选区时改为复制选区（`TuiAltScreen.copyActiveSelectionToClipboard`，选区保留），按键确认用 `Copied!` 闪现（D34） |
 | P0 ✓ | `/reload` | `session.reload()`，然后重建宿主状态（6.3 节） |
 | P0 ✓ | `!命令`、`!!命令` | `session.executeBash` + `BashExecutionComponent`（导出） |
 | P0 ✓ | 键位：`Ctrl+L`、`Alt+Enter`、`Alt+↑`、`Ctrl+G`、`Ctrl+V`、`Ctrl+Z`，以及运行中排队消息的显示 | 各自一个 SDK 调用或 pi-tui 功能 |
@@ -366,7 +366,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | `cache-warming-mode` | Pi 核心 | `session.setCacheWarmingMode` |
 | `tree-filter-mode` | MMP 的 `/tree` 每次打开都读 | 只写设置 |
 | `fullscreen-scrollbar` | MMP 接线 | 对话区 `ScrollView.setScrollbar` |
-| `fullscreen-copy-on-select` | MMP 接线 | `TuiAltScreen.setCopyOnSelect`。没设置时是开（决策 T3，Pi 的 getter 默认 `true`）。说明文字去掉了 Pi 的"关掉后用 Ctrl+X 复制选区"：MMP 的 Ctrl+X 只复制最后一条回复 |
+| `fullscreen-copy-on-select` | MMP 接线 | `TuiAltScreen.setCopyOnSelect`。没设置时是开（决策 T3，Pi 的 getter 默认 `true`）。说明文字和 Pi 一样：关掉后 Ctrl+X 复制选区（D34） |
 | `fullscreen-wheel-scroll-lines` | MMP 接线 | `TuiAltScreen.setWheelScrollLines`。没设置时用 Pi 的默认值 `auto`（以前 MMP 固定 1 行；`auto` 下单独一格还是 1 行，只有非 macOS 本地终端快速滚动时会加速） |
 
 不显示的项：

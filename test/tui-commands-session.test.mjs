@@ -77,7 +77,9 @@ test("/copy and Ctrl+X copy the last assistant reply, and refuse when there is n
   assert.match(marks.beforeAnyReply, /No agent messages to copy yet\./);
   assert.match(marks.afterReply, /FIRST-REPLY/);
   assert.match(marks.afterCopy.slice(marks.afterReply.length), /Copied last agent message to clipboard\./);
-  assert.match(marks.afterCtrlX.slice(marks.afterCopy.length), /Copied last agent message to clipboard\./);
+  // The key confirms with Pi's flash, /copy with Pi's notice (interactive-mode.js handleCopyCommand).
+  assert.match(marks.afterCtrlX.slice(marks.afterCopy.length), /Copied!/);
+  assert.doesNotMatch(marks.afterCtrlX.slice(marks.afterCopy.length), /Copied last agent message/);
   assert.equal(readFileSync(clipboardFile, "utf8"), "FIRST-REPLY");
   assert.match(out, /EXIT=0/);
 });

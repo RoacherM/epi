@@ -12,6 +12,7 @@ import {
 import { writeClipboardText } from "./clipboard.js";
 import type { CommandHost } from "./command-host.js";
 import { errorText } from "./errors.js";
+import { piTui } from "./pi-tui.js";
 import { crossProjectRefusal } from "./project-guard.js";
 
 type ThinkingLevel = AgentSession["thinkingLevel"];
@@ -188,9 +189,15 @@ function selectThinkingLevel(host: CommandHost, level: ThinkingLevel, persist: b
 }
 
 /** `/copy` and the `app.message.copy` key: copy the last assistant reply to the clipboard.
- * Pi also prefers a live mouse-selection when the key triggers it from `TuiAltScreen`; MMP has no
- * such selection state wired into CommandHost yet, so this always copies the last assistant text. */
-export async function runCopy(host: CommandHost): Promise<void> {
+ * Like Pi's handleCopyCommand, the key (`fromKey`) copies the active mouse selection instead when
+ * copy-on-select is off (with it on, releasing the mouse already copied the selection), and
+ * confirms with a "Copied!" flash rather than a notice. */
+export async function runCopy(host: CommandHost, options: { fromKey?: boolean } = {}): Promise<void> {
+  const { tui } = host;
+  if (options.fromKey && tui instanceof piTui.TuiAltScreen && !tui.getCopyOnSelect() && tui.hasActiveSelection()) {
+    await tui.copyActiveSelectionToClipboard();
+    return;
+  }
   const text = host.session().getLastAssistantText();
   if (text === undefined) {
     host.notice("No agent messages to copy yet.", "warning");
@@ -198,7 +205,8 @@ export async function runCopy(host: CommandHost): Promise<void> {
   }
   try {
     await writeClipboardText(text);
-    host.notice("Copied last agent message to clipboard.");
+    if (options.fromKey) host.flash("Copied!");
+    else host.notice("Copied last agent message to clipboard.");
   } catch (error) {
     host.notice(errorText(error), "error");
   }
