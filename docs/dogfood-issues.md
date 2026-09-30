@@ -48,3 +48,4 @@
 | D42 | P3 | 声明了 `mmp:mcp` 但没有配置任何服务时，D3 之后也会加载 Pi 的 `extensions/mcp/runtime.js`（约 12 ms）；Pi 自己特意推迟到有服务时才加载（`index.js:726`）（D3 复审 F1） | 只声明 `mmp:mcp`、不配服务，测启动时间 | 待排期 |
 | D43 | P3 | 扩展工具全部返回 `terminate: true` 后，Pi 会停下并投递排队的追问，但这条追问和上一轮共用一行 `Worked for`（G1 只以"不带工具调用的回复结束"为轮次边界）（G1 复审第 2 条） | 带 terminate 工具的扩展 + 运行中排队一句 | 待修 |
 | D44 | P3 | 复制的小差异：最后一条回复为空时 MMP 复制空串并提示成功，Pi 提示 "No agent messages to copy yet."（`session-commands.ts` 用 `=== undefined`，Pi 用 `!text`）；`/copy` 提示末尾多一个句号；D34 的 "on" 测试里 Ctrl+X 后的 `Copied!` 可能匹配到松开鼠标时的那次闪烁（有剪贴板文件断言兜底）（D34 复审） | 空回复后按 Ctrl+X | 待修 |
+| D45 | P3 | Pi 在扩展加载失败时的报错末尾带着 `Hint: Start without extensions using "pi -ne".`（Pi `main.js` 的原文），经 MMP 原样输出，违反硬规则 4（只暴露 mmp 自己的命令和参数；MMP 也不提供 `-ne`）（B1 worker 发现） | 让一个 Manifest 扩展加载失败，`mmp -p hi </dev/null` | 待修 |
