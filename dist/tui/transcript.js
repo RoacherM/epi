@@ -37,10 +37,10 @@ export class Transcript {
     /** The most recent `agent_end`'s own messages, read back on `agent_settled` (the point that's
      * actually "this run is over") to find the last assistant reply's `stopReason`. */
     lastTurnMessages = [];
-    /** Set by `auto_retry_end`'s "Retry cancelled" and by an aborted automatic `compaction_end`
-     * inside a run (Esc during a retry's backoff sleep or a post-run compaction never reaches another
-     * `agent_end`, so it has no `stopReason` of its own to read back from `lastTurnMessages` -- this
-     * is the only signal it leaves behind). `turnFooter()` ORs this with `lastTurnMessages`'s own
+    /** Set by `auto_retry_end`'s "Retry cancelled" and by `markStopped()` (Esc during a retry's
+     * backoff sleep or a post-run compaction never reaches another `agent_end`, so it has no
+     * `stopReason` of its own to read back from `lastTurnMessages` -- this is the only signal it
+     * leaves behind). `turnFooter()` ORs this with `lastTurnMessages`'s own
      * aborted check, the ordinary case (Esc during a normal response). */
     turnAborted = false;
     constructor(tui, theme, session) {
@@ -225,13 +225,8 @@ export class Transcript {
                     this.notice(event.reason === "manual" ? "Compaction cancelled" : "Auto-compaction cancelled", event.reason === "manual" ? "error" : "info");
                 else
                     this.notice("Context compacted.");
-                // Dogfood D17: Esc on an automatic compaction stops the run it belongs to (after an overflow,
-                // the retry that would have followed). Pi has no turn footer; its only record is the
-                // "Auto-compaction cancelled" status above, so the footer reads the same stop as "Stopped
-                // after", not "Worked for". Only inside a timed run: a manual /compact runs after Pi's
-                // compact() has aborted and settled the run, and its cancel must not mark the next run.
-                if (event.aborted && this.turnStartedAt !== undefined)
-                    this.turnAborted = true;
+                // `aborted` is also set when an extension's session_before_compact cancels it, so it can't
+                // mean the user stopped the run; markStopped() carries that (dogfood D17).
                 break;
             case "auto_retry_start":
                 this.notice(`Retrying (${event.attempt}/${event.maxAttempts}) in ${Math.round(event.delayMs / 1000)}s: ${event.errorMessage}`, "warning");
@@ -260,6 +255,15 @@ export class Transcript {
         this.assistantBlocks.push(component);
         this.add(component, false);
         return component;
+    }
+    /** The user stopped the running prompt (Esc, Ctrl+C, an extension's ctx.abort()): its footer
+     * reads "Stopped after" even when no event says so -- an automatic compaction it cancelled ends
+     * with only `compaction_end.aborted`, the same as one an extension cancelled (dogfood D17). Only
+     * inside a timed run: outside one (a manual /compact) there is no footer to mark, and the next
+     * run must not inherit it. */
+    markStopped() {
+        if (this.turnStartedAt !== undefined)
+            this.turnAborted = true;
     }
     /** Item 2 (docs/tui-design.md 4.2): `Worked for Ns` below the last block of a settled turn,
      * `Stopped after Ns` for one that ended aborted. Called once, from `agent_settled` -- the whole

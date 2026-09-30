@@ -174,6 +174,7 @@ async function navigateTo(host: CommandHost, entryId: string): Promise<void> {
   }
   if (session.isStreaming) {
     host.restoreQueuedMessagesToEditor();
+    host.markRunStopped();
     await session.abort();
   }
   if (session.isCompacting) {

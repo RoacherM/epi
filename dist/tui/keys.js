@@ -30,6 +30,7 @@ export function createKeyActions() {
                 const session = host.session();
                 if (session.isStreaming) {
                     host.restoreQueuedMessagesToEditor();
+                    host.markRunStopped();
                     void session.abort();
                 }
                 else if (session.isCompacting) {
@@ -55,6 +56,7 @@ export function createKeyActions() {
                 }
                 else if (host.session().isStreaming) {
                     host.restoreQueuedMessagesToEditor();
+                    host.markRunStopped();
                     void host.session().abort();
                 }
                 else if (Date.now() - lastCtrlC < DOUBLE_PRESS_MS) {

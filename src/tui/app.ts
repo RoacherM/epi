@@ -357,6 +357,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     submit: (text, images) => submit(text, images),
     steer: (text, images) => steer(text, images),
     restoreQueuedMessagesToEditor: () => restoreQueuedMessagesToEditor(),
+    markRunStopped: () => transcript.markStopped(),
     isWorking: () => turn !== undefined,
     clearTurnStatus: () => {
       turn = undefined;
@@ -642,6 +643,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       // must not drop whatever is queued, and must abort even when nothing was queued.
       abortHandler: () => {
         restoreQueuedMessagesToEditor();
+        transcript.markStopped();
         void session.abort();
       },
       onError: (error) => transcript.notice(`Extension error (${error.extensionPath}, ${error.event}): ${error.error}`, "error"),

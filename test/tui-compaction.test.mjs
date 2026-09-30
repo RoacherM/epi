@@ -410,6 +410,23 @@ test("Esc during a post-run overflow compaction leaves no Compacting… status a
   assert.match(lastFrame, /Ctrl\+t:thinking/);
   // Cancelled, so no summary and no retry of the overflowed request.
   assert.doesNotMatch(out, /Context compacted\.|AFTER-RECOVERY/);
-  // The second prompt's footer: only the first one ("BEFORE-OVERFLOW") reads "Worked for".
-  assert.equal(out.match(/Worked for/g)?.length, 1);
+  // The second prompt's footer is the last one drawn: nothing after it reads "Worked for".
+  assert.doesNotMatch(lastFrame, /Worked for/);
+});
+
+// Dogfood D17 review: Pi sets compaction_end.aborted for an extension's session_before_compact
+// { cancel: true } too. Nobody stopped the run, so its footer stays "Worked for".
+test("an extension cancelling a post-run overflow compaction leaves the footer at Worked for", (t) => {
+  const { marks } = runApp(t, [fixture("faux-overflow.mjs"), fixture("cancel-compact-extension.mjs")], [
+    ["waitReady"],
+    ["type", "go"], ["key", "enter"], ["waitFor", { regex: "BEFORE-OVERFLOW[\\s\\S]*Worked for" }],
+    ["type", "again"], ["key", "enter"],
+    // The footer is drawn at agent_settled, once the run is over; either label ends the wait.
+    ["waitFor", { regex: "Auto-compaction cancelled[\\s\\S]*(Worked for|Stopped after)" }],
+    ["mark", "settled"],
+    ["key", "ctrl+d"],
+  ], KEEP_NO_RECENT);
+  const afterCancel = marks.settled.slice(marks.settled.lastIndexOf("Auto-compaction cancelled"));
+  assert.match(afterCancel, /Worked for \d/);
+  assert.doesNotMatch(afterCancel, /Stopped after/);
 });
