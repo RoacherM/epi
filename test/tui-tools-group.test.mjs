@@ -400,6 +400,12 @@ test("a new member joining an unfolded (by click) run stays unfolded -- no mixed
   const out = render(transcript);
   assert.doesNotMatch(out, /◈ Read/, "the group must not re-form just because a new member arrived");
   assert.equal((out.match(/◆ read/g) ?? []).length, 3, "all three, including the new one, render individually");
+  // The actual "mixed view" this guards: an old version expanded c1/c2's *output* on the group
+  // click (Pi's setExpanded), so a late-arriving c3 -- rendered collapsed, like any fresh member --
+  // would sit next to two fully-expanded siblings. Unfolding must never touch output expansion.
+  for (const id of ["c1", "c2", "c3"]) {
+    assert.equal(transcript.tools.get(id).expandedFlag, false, `${id}: unfolding must not have expanded anyone's output`);
+  }
 });
 
 // The guard for the private-field coupling in ToolEntry: Pi's own click-to-toggle region
