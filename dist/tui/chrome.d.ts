@@ -24,6 +24,13 @@ export declare function headerBar(theme: Theme, state: () => HeaderState): Compo
 export declare function withoutImageHints(text: string): string;
 /** The text parts of a user message's content, joined. */
 export declare function messageText(content: unknown): string;
+/** Wraps a rendered block in a prompt zone (a no-op for an empty one, as in Pi). */
+export declare function markPromptZone(lines: string[]): string[];
+/** A row's leading zone markers, and the rest of it. */
+export declare function splitPromptZone(line: string): {
+    marker: string;
+    rest: string;
+};
 /** Full-width `userMessageBg` block with one row of padding, `❯ text` and the time on the right.
  * Collapses past `COLLAPSED_LINES` *logical* lines (not wrapped rows) to `…` -- observed in grok
  * 1.0.44 (docs/tui-design.md 4.2/4.3): a sent 12-line paste renders as its first 3 lines then `…`.

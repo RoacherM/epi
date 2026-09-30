@@ -20,6 +20,9 @@ export interface CommandHost {
      * UserMessageSelectorComponent) whose own handleInput lives only on a sub-component. */
     takeEditorSlot(component: Component, focus?: Component): () => void;
     notice(text: string, tone?: NoticeTone): void;
+    /** A one-second message in the corner (TuiAltScreen.flash), for key feedback that shouldn't stay
+     * in the transcript. */
+    flash(text: string): void;
     /** Append a block to the transcript (command output, info panels). */
     addBlock(component: Component): void;
     getEditorText(): string;

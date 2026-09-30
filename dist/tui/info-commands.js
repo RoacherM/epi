@@ -103,8 +103,9 @@ export async function runSession(host) {
 // ── /hotkeys ─────────────────────────────────────────────────────────────────
 /** MMP's own app-level actions (src/tui/keys.ts), with the wording MMP actually implements: three
  * of these read differently from Pi's table because docs/tui-design.md 4.7 deliberately remaps
- * them (Ctrl+P is the command palette not model-cycling, Enter/Alt+Enter swap follow-up/steer,
- * Ctrl+C also aborts/quits). The rest of the wording tracks Pi's own KEYBINDINGS descriptions. */
+ * them (Ctrl+P is kept for the command palette, so model cycling is unbound by default,
+ * Enter/Alt+Enter swap follow-up/steer, Ctrl+C also aborts/quits). The rest of the wording tracks
+ * Pi's own KEYBINDINGS descriptions. */
 const APP_KEY_DESCRIPTIONS = {
     "app.interrupt": "Cancel or abort (turn, compaction, or bash)",
     "app.clear": "Clear editor; abort a running turn; twice on an empty editor to quit",
@@ -113,6 +114,8 @@ const APP_KEY_DESCRIPTIONS = {
     "app.thinking.toggle": "Expand or collapse thinking blocks",
     "app.tools.expand": "Toggle tool output",
     "app.model.select": "Open model selector",
+    "app.model.cycleForward": "Cycle to next model (scoped models, if any)",
+    "app.model.cycleBackward": "Cycle to previous model",
     "app.message.followUp": "Steer the running turn (idle: send, same as Enter)",
     "app.message.dequeue": "Restore queued messages to the editor",
     "app.editor.external": "Edit the prompt in $VISUAL/$EDITOR",
@@ -136,12 +139,21 @@ const EDITOR_KEYS = [
     { id: "tui.editor.deleteWordForward", description: "Delete word forward" },
     { id: "tui.editor.undo", description: "Undo" },
 ];
+/** Handled by pi-tui's TuiAltScreen itself (handleViewportInput), ahead of MMP's key table. */
+const TRANSCRIPT_KEYS = [
+    { id: "tui.altScreen.previousPrompt", description: "Jump to previous prompt or answer" },
+    { id: "tui.altScreen.nextPrompt", description: "Jump to next prompt or answer" },
+    { id: "tui.altScreen.search", description: "Search the transcript" },
+    { id: "tui.altScreen.searchNext", description: "Next search match" },
+    { id: "tui.altScreen.searchPrevious", description: "Previous search match" },
+    { id: "tui.altScreen.searchClose", description: "Close search" },
+];
 /** `/hotkeys`: every key MMP's app table (src/tui/keys.ts) and editor actually bind, with the keys
  * resolved live through the installed KeybindingsManager (installKeybindings, keybindings.ts), so a
  * user remap in `~/.mmp/pi/keybindings.json` shows here too — unlike a hardcoded key label. */
 export async function runHotkeys(host) {
     const theme = host.theme;
-    const row = (id, description) => `${theme.fg("dim", keyText(id))}  ${theme.fg("muted", description)}`;
+    const row = (id, description) => `${theme.fg("dim", keyText(id) || "unbound")}  ${theme.fg("muted", description)}`;
     const appIds = [...new Set(createKeyActions().map((action) => action.id))];
     const lines = [theme.bold("Editor"), ""];
     for (const { id, description } of EDITOR_KEYS)
@@ -149,6 +161,9 @@ export async function runHotkeys(host) {
     lines.push("", theme.bold("App"), "");
     for (const id of appIds)
         lines.push(row(id, APP_KEY_DESCRIPTIONS[id] ?? id));
+    lines.push("", theme.bold("Transcript"), "");
+    for (const { id, description } of TRANSCRIPT_KEYS)
+        lines.push(row(id, description));
     host.addBlock(new piTui.Text(lines.join("\n"), 1, 0));
 }
 // Not part of pi-coding-agent's package "exports" map (unlike SessionSelectorComponent and the

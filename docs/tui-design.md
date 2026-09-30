@@ -369,6 +369,8 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | `Ctrl+C` | 清空输入，连按两次退出 | 输入非空时清空；输入为空时中止；连按两次退出 | 合并两边 |
 | `Shift+Tab` | 切换思考档位 | 不变 | MMP 没有 grok 的权限模式，不冲突 |
 
+按 K1，`app.model.cycleForward`/`cycleBackward` 在 MMP 里默认不绑键（`src/tui/keybindings.ts` 的 `MMP_DEFAULT_KEYS`），用户可以在 `~/.mmp/pi/keybindings.json` 里绑，绑了之后行为照抄 Pi 的 `cycleModel`（结果用角落的 flash 提示）。`Ctrl+Up`/`Ctrl+Down`（跳到上/下一条提问或最终回答）和 `Ctrl+Shift+F`（搜索对话）由 pi-tui 的 `TuiAltScreen` 自己处理；跳转靠 OSC 133 标记，MMP 的用户消息和不含工具调用的助手消息各标一个区域，和 Pi 一样（dogfood D10）。
+
 ### 4.8 欢迎页
 
 - 这是界面自己的组件，数据来自 MMP 现有的运行时身份：MMP_HOME、Manifest 状态、已加载资源。排版按 grok 欢迎页（grok 笔记 2.4 节）：宽度 ≥90 列时 logo 和信息左右两栏，外加圆角框；窄屏时上下排列。

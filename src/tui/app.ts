@@ -21,6 +21,7 @@ import {
   queuedMessagesBar,
   type Shortcut,
   shortcutsBar,
+  splitPromptZone,
   type TurnState,
   TurnStatus,
 } from "./chrome.js";
@@ -70,7 +71,12 @@ const blank = (): Component => ({ render: () => [""], invalidate() {} });
  * always-undefined result back from its wrapped component's absent handleMouse, harmlessly. */
 function inset(component: Component, columns = 2): Component {
   return {
-    render: (width) => component.render(Math.max(1, width - columns * 2)).map((line) => `${" ".repeat(columns)}${line}`),
+    // A row's OSC133 prompt-zone markers stay at column 0, where TuiAltScreen.scrollToPrompt
+    // (Ctrl+Up/Down) looks for them and the layout strips them before painting.
+    render: (width) => component.render(Math.max(1, width - columns * 2)).map((line) => {
+      const { marker, rest } = splitPromptZone(line);
+      return `${marker}${" ".repeat(columns)}${rest}`;
+    }),
     invalidate: () => component.invalidate(),
     handleMouse: (event) => {
       const width = Math.max(1, event.width - columns * 2);
@@ -328,6 +334,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     session: () => session,
     takeEditorSlot: (component, focus) => surface.takeEditorSlot(component, focus),
     notice: (text, tone) => transcript.notice(text, tone ?? "info"),
+    flash: (text) => tui.flash(text),
     addBlock: (component) => transcript.addBlock(component),
     getEditorText: () => editor.getText(),
     setEditorText: (text) => surface.setEditorText(text),

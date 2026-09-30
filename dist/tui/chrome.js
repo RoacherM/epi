@@ -117,6 +117,26 @@ function collapseUserText(text) {
     }
     return text;
 }
+// OSC 133 semantic-prompt zones, marked the way Pi's user-message.js (L39-46) and
+// assistant-message.js (L60-68) mark theirs: TuiAltScreen.scrollToPrompt (Ctrl+Up/Down) stops on
+// rows that start with the A marker, and the layout strips these prefixes before painting a row.
+const PROMPT_ZONE_START = "\x1b]133;A\x07";
+const PROMPT_ZONE_END = "\x1b]133;B\x07\x1b]133;C\x07";
+const PROMPT_ZONE_PREFIX = /^(?:\x1b\]133;[ABC](?:\x07|\x1b\\))+/;
+/** Wraps a rendered block in a prompt zone (a no-op for an empty one, as in Pi). */
+export function markPromptZone(lines) {
+    if (lines.length === 0)
+        return lines;
+    const marked = [...lines];
+    marked[0] = PROMPT_ZONE_START + marked[0];
+    marked[marked.length - 1] = PROMPT_ZONE_END + marked[marked.length - 1];
+    return marked;
+}
+/** A row's leading zone markers, and the rest of it. */
+export function splitPromptZone(line) {
+    const marker = PROMPT_ZONE_PREFIX.exec(line)?.[0] ?? "";
+    return { marker, rest: line.slice(marker.length) };
+}
 /** Full-width `userMessageBg` block with one row of padding, `❯ text` and the time on the right.
  * Collapses past `COLLAPSED_LINES` *logical* lines (not wrapped rows) to `…` -- observed in grok
  * 1.0.44 (docs/tui-design.md 4.2/4.3): a sent 12-line paste renders as its first 3 lines then `…`.
@@ -147,7 +167,7 @@ export class UserMessageBlock {
             const left = `  ${prefix}${this.theme.fg("userMessageText", text)}`;
             return index === 0 ? spread(left, `${clock}  `, width) : fit(left, width);
         });
-        return [paint(""), ...rows.map(paint), paint("")];
+        return markPromptZone([paint(""), ...rows.map(paint), paint("")]);
     }
     invalidate() { }
 }

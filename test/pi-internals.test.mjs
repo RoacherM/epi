@@ -173,6 +173,39 @@ const registry = [
     },
   },
   {
+    id: "osc133-prompt-zones",
+    async check() {
+      const { piTui } = await import(pathToFileURL(join(root, "dist", "tui", "pi-tui.js")).href);
+      const { markPromptZone } = await import(pathToFileURL(join(root, "dist", "tui", "chrome.js")).href);
+      let written = "";
+      const terminal = {
+        start() {}, stop() {}, async drainInput() {}, write(data) { written += data; },
+        get columns() { return 40; }, get rows() { return 10; }, get kittyProtocolActive() { return false; },
+        moveBy() {}, hideCursor() {}, showCursor() {}, clearLine() {}, clearFromCursor() {}, clearScreen() {}, setTitle() {}, setProgress() {},
+      };
+      const filler = (name) => Array.from({ length: 30 }, (_, i) => `${name} ${i}`);
+      const rows = [...markPromptZone(["ONE", "a"]), ...filler("row"), ...markPromptZone(["TWO", "b"]), ...filler("tail")];
+      const tui = new piTui.TuiAltScreen(terminal, false);
+      const scroll = new piTui.ScrollView({ render: () => rows, invalidate() {} }, { follow: "end", primary: true });
+      tui.setLayoutRoot(new piTui.VStack([{ component: scroll, basis: 0, grow: 1, shrink: 1, minSize: 1 }]));
+      const frame = () => new Promise((resolve) => setTimeout(resolve, 40));
+      tui.start();
+      try {
+        await frame();
+        assert.equal(typeof tui.scrollToPrompt, "function", "TuiAltScreen.scrollToPrompt is gone");
+        tui.scrollToPrompt(-1);
+        await frame();
+        assert.equal(scroll.scrollTop, rows.indexOf(rows.find((row) => row.endsWith("TWO"))), "scrollToPrompt no longer stops on MMP's 133;A-marked row");
+        tui.scrollToPrompt(-1);
+        await frame();
+        assert.equal(scroll.scrollTop, 0, "scrollToPrompt no longer stops on the first marked row");
+        assert.ok(!written.includes("\x1b]133;"), "TuiAltScreen painted MMP's OSC 133 markers instead of stripping them");
+      } finally {
+        tui.stop();
+      }
+    },
+  },
+  {
     id: "editor-state",
     async check() {
       const { piTui } = await import(pathToFileURL(join(root, "dist", "tui", "pi-tui.js")).href);

@@ -2,6 +2,19 @@ import { runModel } from "./commands.js";
 import { openExternalEditor, pasteClipboard, suspendToShell } from "./key-handlers.js";
 import { runCopy } from "./session-commands.js";
 const DOUBLE_PRESS_MS = 1000;
+/** Pi's interactive-mode.js cycleModel (~L3608): session.cycleModel steps through the scoped models
+ * (or every available one without a scope). Pi's showStatus lines are a flash here, like Ctrl+T's;
+ * a thrown error reaches the transcript through the key listener in app.ts. */
+async function cycleModel(host, direction) {
+    const session = host.session();
+    const result = await session.cycleModel(direction);
+    if (result === undefined) {
+        host.flash(session.scopedModels.length > 0 ? "Only one model in scope" : "Only one model available");
+        return;
+    }
+    const thinking = result.model.reasoning && result.thinkingLevel !== "off" ? ` (thinking: ${result.thinkingLevel})` : "";
+    host.flash(`Switched to ${result.model.name || result.model.id}${thinking}`);
+}
 export function createKeyActions() {
     let lastCtrlC = 0;
     return [
@@ -74,6 +87,15 @@ export function createKeyActions() {
         {
             id: "app.model.select",
             run: (host) => runModel(host, ""),
+        },
+        {
+            // Unbound by default in MMP (keybindings.ts MMP_DEFAULT_KEYS, decision K1).
+            id: "app.model.cycleForward",
+            run: (host) => cycleModel(host, "forward"),
+        },
+        {
+            id: "app.model.cycleBackward",
+            run: (host) => cycleModel(host, "backward"),
         },
         {
             // K1: MMP swaps Pi's Enter/Alt+Enter semantics while a turn runs. Enter already queues a

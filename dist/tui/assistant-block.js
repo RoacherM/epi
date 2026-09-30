@@ -7,7 +7,7 @@
 // transformers, the aborted/error/length footer) still go through Pi's real component -- that part
 // isn't broken, just reused per text run instead of once for the whole message.
 import { AssistantMessageComponent, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { fit, formatDuration, spread, clockColumns } from "./chrome.js";
+import { fit, formatDuration, markPromptZone, spread, splitPromptZone, clockColumns } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
 // Matches transcript.ts's CONTENT_PAD: a 1-column rail plus 2 columns of padding, so thinking lines
 // up under the assistant text next to it.
@@ -218,8 +218,7 @@ export class AssistantBlock {
                     // bubble above); dropped for every later one so a text run right after a thinking block
                     // sits flush under it (the M4 mock-up shows no gap there). `visibleWidth`, not `.trim()`:
                     // Pi also prepends a zero-width OSC133 marker to this exact row, which defeats a plain
-                    // string-emptiness check -- losing that marker for a non-first run is an accepted, minor
-                    // side effect (it only affects a terminal's "jump to previous/next prompt" feature).
+                    // string-emptiness check. The markers themselves are replaced in render() below.
                     return segmentIndex === 0 || piTui.visibleWidth(rendered[0] ?? "") > 0 ? rendered : rendered.slice(1);
                 },
                 invalidate: () => component.invalidate(),
@@ -256,14 +255,17 @@ export class AssistantBlock {
      * costs a little wrap width throughout rather than only on that one line, which pi-tui's Markdown
      * has no hook to do more precisely. */
     render(width) {
-        const lines = this.container.render(this.innerWidth(width));
-        // `visibleWidth`, not a string-emptiness check: the leading blank row is often not literally ""
-        // -- Pi's AssistantMessageComponent prepends a zero-width OSC133 marker to it -- so a plain
-        // `.trim() !== ""` would treat that row as "visible" and put the clock on the blank line.
+        // Each text run's AssistantMessageComponent marks its own OSC133 prompt zone; the block is
+        // marked once as a whole instead (below), so those markers are dropped here.
+        const lines = this.container.render(this.innerWidth(width)).map((line) => splitPromptZone(line).rest);
         const index = lines.findIndex((line) => piTui.visibleWidth(line) > 0);
         if (index === -1)
             return lines;
-        return lines.map((line, lineIndex) => (lineIndex === index ? spread(line, this.clock, width) : line));
+        const rows = lines.map((line, lineIndex) => (lineIndex === index ? spread(line, this.clock, width) : line));
+        // Pi's rule (assistant-message.js render): a message with tool calls is not a prompt zone, so
+        // Ctrl+Up/Down step over a turn's intermediate tool-calling messages to its final answer.
+        const hasToolCalls = this.lastMessage?.content.some((part) => part.type === "toolCall") ?? false;
+        return hasToolCalls ? rows : markPromptZone(rows);
     }
     /** `event.width` must match what `render()` last drew the container at, or pi-tui's `Container.
      * handleMouse` recomputes row heights at the wrong (full, not narrowed) width and a click lands on
