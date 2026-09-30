@@ -3,7 +3,7 @@
 // no stack, the run's own exit code, the run stops, and shutdown completes (src/closed-stdout.ts).
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,16 +18,22 @@ function makeHome(t) {
   const home = join(root, "home");
   mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEpipe] }));
-  const marks = { shutdown: join(root, "shutdown"), second: join(root, "second") };
+  const marks = { shutdown: join(root, "shutdown"), later: join(root, "later.jsonl") };
   const env = {
     PATH: process.env.PATH,
     HOME: home,
     MMP_HOME: join(home, ".mmp"),
     PI_OFFLINE: "1",
     MMP_FAUX_SHUTDOWN_MARK: marks.shutdown,
-    MMP_FAUX_SECOND_MARK: marks.second,
+    MMP_FAUX_LATER_LOG: marks.later,
   };
   return { root, env, marks };
+}
+
+/** Last user text of every model request after the first (test/fixtures/faux-epipe.mjs). */
+function laterRequests(marks) {
+  if (!existsSync(marks.later)) return [];
+  return readFileSync(marks.later, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
 /** `reader`: "close" closes stdout's read end at once (`| true`), "first" after the first chunk
@@ -49,7 +55,7 @@ async function run(t, args, reader) {
   const status = await Promise.race([exited, new Promise((resolve) => { timer = setTimeout(() => resolve("did not exit"), 30_000); })]);
   clearTimeout(timer);
   child.kill("SIGKILL");
-  return { status, stderr, shutdown: existsSync(marks.shutdown), second: existsSync(marks.second) };
+  return { status, stderr, shutdown: existsSync(marks.shutdown), later: laterRequests(marks) };
 }
 
 function assertQuietEnd(result) {
@@ -69,17 +75,20 @@ test("-p into a reader that closes after the first byte (| head -c1) ends quietl
 test("--mode json into a reader that closes early stops the run: the next prompt is never sent", async (t) => {
   const result = await run(t, ["--mode", "json", "-p", "first", "second"], "first");
   assertQuietEnd(result);
-  assert.equal(result.second, false, "the second prompt still went to the model after stdout closed");
+  // Nothing at all after the first reply: not "second", and not the auto-compaction the long reply
+  // would trigger either. The guard aborts the run and skips later prompts; each alone would still
+  // let one of those requests through.
+  assert.deepEqual(result.later, [], "the model was asked again after stdout closed");
 });
 
 test("control: with a reader that reads everything, both prompts run and shutdown finishes", async (t) => {
   const result = await run(t, ["--mode", "json", "-p", "first", "second"], "all");
   assertQuietEnd(result);
-  assert.equal(result.second, true, "the second prompt never reached the model");
-  // The long reply makes Pi auto-compact after the first turn; the mark must not come from that.
+  assert.ok(result.later.includes("second"), `the second prompt never reached the model: ${JSON.stringify(result.later)}`);
+  // The long reply makes Pi auto-compact after the first turn; that request must not read as "second".
   const single = await run(t, ["--mode", "json", "-p", "first"], "all");
   assertQuietEnd(single);
-  assert.equal(single.second, false, "the second mark was written without a second prompt");
+  assert.ok(!single.later.includes("second"), `a request read as "second" without a second prompt: ${JSON.stringify(single.later)}`);
 });
 
 // rpc is left to Pi (src/host.ts installs the guard for print/json only): an rpc client that stops
@@ -104,7 +113,7 @@ test("--mode rpc with a closed stdout behaves as Pi does: EPIPE on stderr, exit 
   clearTimeout(timer);
   assert.equal(status, 1, stderr);
   assert.match(stderr, /Error: write EPIPE/);
-  assert.equal(existsSync(marks.second), false);
+  assert.ok(!laterRequests(marks).includes("second"));
 });
 
 // stdout and stderr on the same pipe: MMP's own final stderr flush used to raise a second EPIPE.
