@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -271,7 +271,7 @@ test("a Manifest that declares another extension registering \"/mcp\" alongside 
 // ── F3 (Fable milestone review, hard rule 3): a server that fails to connect, or needs sign-in, ──
 // ── is silent in -p and --mode json without this fix (ctx.ui.notify is a no-op there) ───────────
 
-function runNonTuiMcp(t, mode, mcpConfig) {
+function runNonTuiMcp(t, mode, mcpConfig, { nodeArgs = [], env = {} } = {}) {
   const root = createFixture(t);
   const mmpHome = join(root, "home");
   mkdirSync(mmpHome, { recursive: true });
@@ -283,12 +283,52 @@ function runNonTuiMcp(t, mode, mcpConfig) {
     mode === "json"
       ? [cliPath, "--no-project", "--model", "mmp-faux/echo", "--mode", "json", "hi"]
       : [cliPath, "--no-project", "--model", "mmp-faux/echo", "-p", "hi"];
-  const result = spawnSync(process.execPath, args, {
+  const result = spawnSync(process.execPath, [...nodeArgs, ...args], {
     encoding: "utf8",
-    env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, PI_OFFLINE: "1", ...env },
     timeout: 30_000,
   });
   return result;
+}
+
+// Dogfood D42: Pi loads extensions/mcp/runtime.js (the MCP client, transports, OAuth) only once a
+// session has an enabled server (index.js's loadMcpRuntime); mmp:mcp's transport tracking (D3) must
+// not load it any earlier. A module-load hook logs whether runtime.js was loaded at all.
+const moduleLoadLog = fileURLToPath(new URL("./fixtures/module-load-log.mjs", import.meta.url));
+for (const [label, mcpConfig, loaded] of [
+  ["no mcp.json", undefined, false],
+  ["an empty mcp.json", { mcpServers: {} }, false],
+  ["only a disabled server", { mcpServers: { off: { command: "/nonexistent/x", enabled: false } } }, false],
+  ["one server", "fixture", true],
+]) {
+  test(`mmp:mcp with ${label} ${loaded ? "loads" : "never loads"} Pi's MCP runtime (D42)`, (t) => {
+    const log = join(mkdtempSync(join(tmpdir(), "mmp-d42-")), "loads.log");
+    t.after(() => rmSync(dirname(log), { recursive: true, force: true }));
+    writeFileSync(log, "");
+    let marker;
+    let config = mcpConfig;
+    if (config === "fixture") {
+      const fixture = fixtureServerArgs();
+      marker = fixture.marker;
+      config = { mcpServers: { fixture: { command: process.execPath, args: fixture.args } } };
+    }
+    const result = runNonTuiMcp(t, "print", config, {
+      nodeArgs: ["--import", moduleLoadLog],
+      env: { MMP_TEST_MODULE_LOG: log, MMP_TEST_MODULE_MATCH: "/extensions/mcp/runtime.js" },
+    });
+    const loads = readFileSync(log, "utf8");
+    const context = `loads:\n${loads}\nstatus=${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+    assert.equal(result.status, 0, context);
+    assert.equal(result.stdout, "ECHO:hi\n", context);
+    if (loaded) {
+      assert.match(loads, /\/extensions\/mcp\/runtime\.js/, context);
+      assert.equal(result.stderr, "", `the server connected through MMP's tracking transport\n${context}`);
+      const leftover = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" });
+      assert.equal(leftover.stdout.trim(), "", `fixture server still running after exit\n${context}`);
+    } else {
+      assert.equal(loads, "", context);
+    }
+  });
 }
 
 for (const mode of ["print", "json"]) {

@@ -88,14 +88,18 @@ const registry = [
     },
   },
   {
-    id: "undici",
+    id: "http-dispatcher",
     async check() {
-      const { createRequire } = await import("node:module");
-      const piEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
-      const undiciPath = createRequire(piEntry).resolve("undici");
-      const undici = await import(pathToFileURL(undiciPath).href);
-      assertFunction(undici.EnvHttpProxyAgent, "undici.EnvHttpProxyAgent");
-      assertFunction(undici.setGlobalDispatcher, "undici.setGlobalDispatcher");
+      const { applyHttpProxySettings, configureHttpDispatcher } = await importDeep("core", "http-dispatcher.js");
+      assertFunction(applyHttpProxySettings, "applyHttpProxySettings");
+      assertFunction(configureHttpDispatcher, "configureHttpDispatcher");
+      // configureHttp (src/tui/services.ts) runs on every rebind; Pi sets the proxy env only at
+      // startup, so the proxy must stay out of configureHttpDispatcher (dogfood D38).
+      assert.doesNotMatch(
+        configureHttpDispatcher.toString(),
+        /HTTP_PROXY|applyHttpProxySettings/,
+        "configureHttpDispatcher now sets the proxy env itself -- configureHttp would apply it on every /reload",
+      );
     },
   },
   {
@@ -554,7 +558,7 @@ const KNOWN_DEEP_PATHS = new Map([
   ["modes/interactive/components/scoped-models-selector.js", "scoped-models-selector"],
   ["core/trust-manager.js", "trust-requiring-resources"],
   ["core/resource-loader.js", "context-file-candidates"],
-  ["undici", "undici"],
+  ["core/http-dispatcher.js", "http-dispatcher"],
   ["@earendil-works/pi-tui", "pi-tui-nested-copy"],
   ["diff", "pi-diff-package"],
   ["extensions/mcp/config.js", "mcp-native-config-loader"],

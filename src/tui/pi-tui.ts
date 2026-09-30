@@ -29,8 +29,3 @@ if (runtimeVersion !== typesVersion) {
 
 export const piTui = (await import(pathToFileURL(piTuiEntry).href)) as typeof PiTuiModule;
 export const piTuiLocation = fileURLToPath(pathToFileURL(piTuiEntry));
-
-/** Import one of Pi's own dependencies, resolved from Pi's install location. */
-export async function importFromPi<T>(specifier: string): Promise<T> {
-  return (await import(pathToFileURL(createRequire(piEntry).resolve(specifier)).href)) as T;
-}

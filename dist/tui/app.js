@@ -230,7 +230,12 @@ export async function runTuiApp(options) {
      * it leaves autocomplete alone; bind(), /reload and the skill-commands item rebuild that. */
     function applyRuntimeSettings() {
         applyUiSettings();
-        configureHttp(session.settingsManager).catch((error) => transcript.notice(`Could not apply the HTTP settings: ${errorText(error)}`, "error"));
+        try {
+            configureHttp(session.settingsManager);
+        }
+        catch (error) {
+            transcript.notice(`Could not apply the HTTP settings: ${errorText(error)}`, "error");
+        }
     }
     // ── extension host ────────────────────────────────────────────────────────
     const surface = {

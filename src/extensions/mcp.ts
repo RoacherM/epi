@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -42,17 +44,31 @@ type McpTransport = ReturnType<McpTransportFactory>;
 
 // pi-internals row `mcp-default-transport`: runtime.js's createDefaultTransport (not in the package
 // "exports" map; only the McpTransportFactory type is) is what createMcpExtension uses when no
-// createTransport option is given. Not a top-level import: src/commands/mcp-cli.ts imports this
-// module too, and `mmp mcp add/remove` must not load the MCP client (row `mcp-native-runtime`).
-// Loaded by the mmp:mcp factory instead, which always runs before Pi's first connect.
+// createTransport option is given. Loaded at the first transport, not before (dogfood D42): Pi
+// itself loads runtime.js only once a session has servers (index.js's loadMcpRuntime), and
+// src/commands/mcp-cli.ts imports this module too, so `mmp mcp add/remove` must not load it either
+// (row `mcp-native-runtime`). Pi only ever calls createTransport synchronously from inside runtime.js
+// (McpServerConnection.connectOnce), so by then runtime.js is evaluated and require() of the ES
+// module returns that same instance at once. The mmp:mcp factory still checks the file exists, so
+// a moved path fails loudly at startup rather than at the first connect.
+const piRuntimePath = join(piDist, "extensions", "mcp", "runtime.js");
 let piCreateDefaultTransport: McpTransportFactory | undefined;
 
-async function loadDefaultTransport(): Promise<void> {
-  piCreateDefaultTransport ??= (
-    (await import(pathToFileURL(join(piDist, "extensions", "mcp", "runtime.js")).href)) as {
-      createDefaultTransport: McpTransportFactory;
+function checkDefaultTransportPath(): void {
+  if (!existsSync(piRuntimePath)) {
+    throw new Error(`mmp:mcp: Pi's MCP runtime is not at ${piRuntimePath} (pi-internals row mcp-default-transport)`);
+  }
+}
+
+function defaultTransportFactory(): McpTransportFactory {
+  if (piCreateDefaultTransport === undefined) {
+    const { createDefaultTransport } = createRequire(import.meta.url)(piRuntimePath) as { createDefaultTransport?: unknown };
+    if (typeof createDefaultTransport !== "function") {
+      throw new Error(`mmp:mcp: ${piRuntimePath} no longer exports createDefaultTransport (pi-internals row mcp-default-transport)`);
     }
-  ).createDefaultTransport;
+    piCreateDefaultTransport = createDefaultTransport as McpTransportFactory;
+  }
+  return piCreateDefaultTransport;
 }
 
 /**
@@ -69,10 +85,7 @@ function trackingTransportFactory(): { createTransport: McpTransportFactory; clo
   const open = new Set<McpTransport>();
   return {
     createTransport: (entry, cwd, authProvider) => {
-      if (piCreateDefaultTransport === undefined) {
-        throw new Error("mmp:mcp: MCP transport requested before the mmp:mcp extension finished loading");
-      }
-      const transport = piCreateDefaultTransport(entry, cwd, authProvider);
+      const transport = defaultTransportFactory()(entry, cwd, authProvider);
       open.add(transport);
       transport.onClose(() => open.delete(transport));
       return transport;
@@ -256,7 +269,7 @@ export function createMmpMcpExtension(source: McpConfigSource): InlineExtension 
           return Reflect.get(target, prop, target);
         },
       });
-      await loadDefaultTransport();
+      checkDefaultTransportPath();
       await piFactory(wrappedPi as ExtensionAPI);
 
       // Registered after piFactory, so it runs after Pi's own session_shutdown handler has marked
