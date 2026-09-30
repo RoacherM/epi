@@ -21,3 +21,4 @@
 | D15 | P0 | 上下文超长的自动恢复失败后，界面永远停在 "Compacting…"（实测 76 分钟），Esc 也停不下来。原因：Pi 在回合结束后的收尾阶段做恢复压缩，`compaction_end` 到达时 `isStreaming` 仍为 true，MMP 不清状态；之后的 `agent_settled` 也不清 | D11 worker 会话（magpie，约 176K token 时报 "Prompt is too long"） | 已修（合并 D15；另外修了两个同根的变体：回合结束后压缩成功也会卡住，回合中途压缩结束后状态不更新） |
 | D16 | P1 | magpie 的上下文上限配错：MMP 的 magpie 扩展照抄了 magpie 给 Pi 的 100 万，实际约 20 万，所以 Pi 从不自动压缩，直接撞上 "Prompt is too long"；恢复时的摘要请求又被 magpie 以 `content_filter` 拒绝 | 长任务里看上下文用量 | 已修（`~/.mmp/extensions/magpie/index.mjs` 改为 200000）；`content_filter` 的原因待查 |
 | D17 | P3 | D15 复审发现：自动重试的等待期间按 Esc，曾是另一个状态卡住的变体（已被 D15 的修复覆盖），但没有测试；D15 新增的两处清理（回合结束时、重试结束时）也没有单独的测试 | D15 的 review-1.md 第 1、2 条 | 待补测试 |
+| D18 | P2 | 用退格删掉一个图片标签后立刻按回车，弹出的是路径补全（如 `see foo home/`），消息没有发出去；先随便打一个字再回车就正常（D11 worker 发现，D11 之前就存在） | `see foo `，Ctrl+V，退格，回车 | 待修 |
