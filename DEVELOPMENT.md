@@ -7,7 +7,8 @@
 - 当前验证环境：`package.json` 锁定的 Pi 版本已通过全部契约测试、ambient 隔离测试和离线 MCP 验收；真实模型冒烟和 benchmark adapter 冒烟是 Pi `0.83.0` 时做的，升级后还没重做，之后每次升级也要看是否需要重跑（见 `docs/pi-upgrade-design.md` 第 3 节"模型可见内容快照"）。OMP `17.1.3` 仅作能力边界参考，不是运行依赖
 - Pi 升级：设计见 `docs/pi-upgrade-design.md`（版本锁死、升级自动化，已定，见 `docs/decisions.md`）
 - 交互界面：设计见 `docs/tui-design.md`，代码在 `src/tui/`，是 `mmp` 唯一的交互入口（不再启动 Pi 经典交互界面），进度见设计文档第 15 节
-- 最后更新：2026-09-29
+- 开发流程：角色分工（Sonnet 编码、Fable 合并前审查、agy 调研）、任务说明要求、Herdr 实测和对照 grok，见 `docs/dev-workflow.md`；给 agent 的硬规则见根目录 `AGENTS.md`
+- 最后更新：2026-09-30
 
 ## 1. 产品定义
 
