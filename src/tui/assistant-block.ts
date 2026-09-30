@@ -10,7 +10,7 @@ import { AssistantMessageComponent, getMarkdownTheme, type MarkdownTransformer, 
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
-import { fit, formatDuration, spread } from "./chrome.js";
+import { fit, formatDuration, spread, clockColumns } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
 
 type ContentPart = AssistantMessage["content"][number];
@@ -259,7 +259,7 @@ export class AssistantBlock implements Component {
    * to leave room for the clock (chrome.ts's `UserMessageBlock` does the same). Shared by `render()`
    * and `handleMouse()` so a click is dispatched against the same row heights it was drawn with. */
   private innerWidth(width: number): number {
-    return Math.max(1, width - piTui.visibleWidth(this.clock) - 2);
+    return Math.max(1, width - clockColumns(this.clock) - 2);
   }
 
   /** Item 1 (docs/tui-design.md 4.2): the time sits on the first *visible* line, like a user
