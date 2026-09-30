@@ -31,8 +31,9 @@ export class Transcript {
     /** Set on the *first* `agent_start` of a prompt run (item 2's `Worked for Ns` footer), read and
      * cleared on `agent_settled` -- this process's own clock, not anything from the event stream,
      * since none of these events carry a timestamp. Not reset on a later `agent_start`: `agent.
-     * continue()` (a retry, a compaction recovery, a queued continuation) re-emits it for the *same*
-     * run, and the footer times the whole run from when the user asked for it, not its last leg. */
+     * continue()` (a retry, a compaction recovery) re-emits it for the *same* run, and the footer
+     * times the whole run from when the user asked for it, not its last leg. A queued follow-up
+     * restarts it at its own user message instead (`finishedReply`, dogfood D23). */
     turnStartedAt;
     /** The most recent `agent_end`'s own messages, read back on `agent_settled` (the point that's
      * actually "this run is over") to find the last assistant reply's `stopReason`. */
@@ -43,6 +44,12 @@ export class Transcript {
      * leaves behind). `turnFooter()` ORs this with `lastTurnMessages`'s own
      * aborted check, the ordinary case (Esc during a normal response). */
     turnAborted = false;
+    /** The timed turn's last assistant reply, once it ended with no tool calls: the agent would have
+     * stopped there, so a user message arriving after it (a queued follow-up, or a steer the loop
+     * picked up at that point) starts a new turn with its own footer (dogfood D23). Cleared as soon
+     * as another assistant message starts. A steer delivered between tool calls finds this unset
+     * and stays part of the running turn. */
+    finishedReply;
     constructor(tui, theme, session) {
         this.tui = tui;
         this.theme = theme;
@@ -63,6 +70,8 @@ export class Transcript {
         // away, and the same for any group line mid-flash.
         for (const tool of this.tools.values())
             tool.dispose();
+        for (const block of this.assistantBlocks)
+            block.dispose();
         this.groupedMessages.dispose();
         this.messages.clear();
         this.messageCount = 0;
@@ -77,6 +86,7 @@ export class Transcript {
         this.turnStartedAt = undefined;
         this.lastTurnMessages = [];
         this.turnAborted = false;
+        this.finishedReply = undefined;
         for (const message of session.messages) {
             this.addFinishedMessage(message);
         }
@@ -136,9 +146,19 @@ export class Transcript {
         switch (event.type) {
             case "message_start":
                 if (event.message.role === "user") {
+                    // Pi delivers a queued follow-up inside the same run (agent-loop.js's runLoop drains
+                    // getFollowUpMessages when the agent would stop, then emits turn_start + this user
+                    // message_start) or, when it was queued after the loop's last poll, through
+                    // agent.continue() (another agent_start, then this message_start). This user message is
+                    // the one boundary both paths share: close the previous turn's footer above it.
+                    if (this.turnStartedAt !== undefined && this.finishedReply !== undefined) {
+                        this.turnFooter([this.finishedReply]);
+                        this.turnStartedAt = Date.now();
+                    }
                     this.addFinishedMessage(event.message);
                 }
                 else if (event.message.role === "assistant") {
+                    this.finishedReply = undefined;
                     this.streaming = this.assistant(event.message, true);
                 }
                 break;
@@ -154,16 +174,18 @@ export class Transcript {
                     (this.streaming ?? this.assistant(event.message, false)).updateContent(event.message, false);
                     this.syncToolCalls(event.message, true);
                     this.streaming = undefined;
+                    const hasToolCalls = event.message.content.some((part) => part.type === "toolCall");
+                    this.finishedReply = hasToolCalls ? undefined : event.message;
                 }
                 else if (event.message.role === "custom") {
                     this.addFinishedMessage(event.message);
                 }
                 break;
             case "agent_start":
-                // `??=`, not `=`: `agent.continue()` (a queued follow-up, a retry, a compaction
-                // continuation) re-emits agent_start for the *same* prompt run -- overwriting this would
-                // reset the clock on every continuation instead of timing the whole run from when the user
-                // actually asked for it.
+                // `??=`, not `=`: `agent.continue()` (a retry, a compaction continuation) re-emits
+                // agent_start for the *same* prompt run -- overwriting this would reset the clock on every
+                // continuation instead of timing the whole run from when the user actually asked for it. A
+                // queued follow-up's own clock starts at its user message_start (above).
                 this.turnStartedAt ??= Date.now();
                 break;
             case "agent_end":
@@ -176,8 +198,8 @@ export class Transcript {
                 // Fired exactly once per session.prompt()/steer()/followUp() call, after every retry,
                 // compaction recovery and queued continuation has run its course (agent-session.js
                 // _runAgentPrompt's finally block) -- the one point that's both "the turn is really over"
-                // and "print the footer exactly once", regardless of how many agent_start/agent_end pairs
-                // happened along the way.
+                // and "print the (last turn's) footer exactly once", regardless of how many
+                // agent_start/agent_end pairs happened along the way.
                 this.turnFooter(this.lastTurnMessages);
                 break;
             case "auto_retry_end":
@@ -251,7 +273,7 @@ export class Transcript {
     assistant(message, streaming) {
         // The current Ctrl+T state goes in at construction (not a `setGlobalExpanded()` call right
         // after), so a replayed message only ever rebuilds once instead of twice.
-        const component = new AssistantBlock(this.theme, message, this.session.extensionRunner.getMarkdownTransformers(), streaming, this.thinkingExpanded);
+        const component = new AssistantBlock(this.theme, message, this.session.extensionRunner.getMarkdownTransformers(), streaming, this.thinkingExpanded, () => this.tui.requestRender());
         this.assistantBlocks.push(component);
         this.add(component, false);
         return component;
@@ -266,8 +288,9 @@ export class Transcript {
             this.turnAborted = true;
     }
     /** Item 2 (docs/tui-design.md 4.2): `Worked for Ns` below the last block of a settled turn,
-     * `Stopped after Ns` for one that ended aborted. Called once, from `agent_settled` -- the whole
-     * prompt run (every retry, compaction recovery and queued continuation) is over by then, so
+     * `Stopped after Ns` for one that ended aborted. Called from a queued follow-up's user message
+     * for the turn before it, and once from `agent_settled` for the last one -- the whole prompt run
+     * (every retry and compaction recovery) is over by then, so
      * `lastTurnMessages` holds the *last* `agent_end`'s payload, the one whose stopReason actually
      * decides the label; an empty array (a cancelled retry with no final assistant message at all)
      * just falls back to `turnAborted` alone. */
@@ -280,6 +303,7 @@ export class Transcript {
         this.turnStartedAt = undefined;
         this.lastTurnMessages = [];
         this.turnAborted = false;
+        this.finishedReply = undefined;
         const label = aborted ? "Stopped after" : "Worked for";
         this.add(new piTui.Text(this.theme.fg("muted", `${label} ${formatDuration(duration)}`), CONTENT_PAD, 0), true, false);
     }

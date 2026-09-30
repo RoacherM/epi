@@ -1,6 +1,6 @@
 // Completion flash (docs/tui-design.md 4.2 M4 "完成闪烁"): when a tool or thinking block finishes,
 // its rail flashes once in `success` color (or `error` if it failed) for 400ms, then settles back to
-// normal. Shared by tool blocks (tools/group.ts) and, once the other agent lands it, thinking blocks.
+// normal. Shared by tool blocks (tools/group.ts) and thinking blocks (assistant-block.ts).
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 export const FLASH_MS = 400;

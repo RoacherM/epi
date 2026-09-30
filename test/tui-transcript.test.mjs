@@ -605,3 +605,55 @@ test("expanded thinking renders markdown in the answer's column at every width",
     }
   }
 });
+
+// Dogfood D24 (docs/tui-design.md 4.2 "完成闪烁"): a thinking run that ends live flashes its rail
+// once in `success` for 400ms, like a tool; replayed history never does.
+test("a thinking run flashes its rail in success color when it ends, then clears", async () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  const successBar = theme.fg("success", "┃");
+  const thinking = assistantMessage([{ type: "thinking", thinking: "reasoning about it" }]);
+  transcript.handle({ type: "message_start", message: thinking });
+  transcript.handle({ type: "message_update", message: thinking, assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: thinking } });
+  assert.ok(!transcript.root.render(80).join("\n").includes(successBar), "no flash while still thinking");
+  // The run ends when the reply text starts after it, not only at message_end.
+  const answering = assistantMessage([{ type: "thinking", thinking: "reasoning about it" }, { type: "text", text: "the answer" }]);
+  transcript.handle({ type: "message_update", message: answering, assistantMessageEvent: { type: "text_start", contentIndex: 1, partial: answering } });
+  const justAfter = transcript.root.render(80);
+  const header = justAfter.find((line) => stripAnsi(line).includes("Thought for"));
+  assert.ok(header?.startsWith(successBar), `the thinking rail must flash right after it ends: ${JSON.stringify(header)}`);
+  transcript.handle({ type: "message_end", message: answering });
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.ok(!transcript.root.render(80).join("\n").includes(successBar), "the flash must clear itself after 400ms");
+});
+
+test("a replayed thinking run never flashes", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  const message = assistantMessage([{ type: "thinking", thinking: "old reasoning" }, { type: "text", text: "old answer" }]);
+  transcript.reset({ ...stubSession(), messages: [message] });
+  assert.ok(!transcript.root.render(80).join("\n").includes(theme.fg("success", "┃")));
+});
+
+// Dogfood D23: a user message after a reply that ended with no tool calls (a queued follow-up, or a
+// steer picked up where the agent would have stopped) starts a new turn; one delivered between tool
+// calls (a steer into the running work) stays part of the same turn.
+test("a steer between tool calls stays in the running turn; one after a finished reply starts a new one", () => {
+  const transcript = new Transcript(stubTui(), theme, { ...stubSession(), getToolDefinition: () => undefined, getAllTools: () => [] });
+  const user = (text) => ({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
+  const reply = (content) => {
+    const message = assistantMessage(content);
+    transcript.handle({ type: "message_start", message });
+    transcript.handle({ type: "message_end", message });
+  };
+  transcript.handle({ type: "agent_start" });
+  transcript.handle({ type: "message_start", message: user("go") });
+  reply([{ type: "toolCall", id: "c1", name: "custom_tool", arguments: {} }]);
+  transcript.handle({ type: "message_start", message: user("STEER-MID") });
+  reply([{ type: "text", text: "REPLY-ONE" }]);
+  transcript.handle({ type: "message_start", message: user("FOLLOW-UP") });
+  reply([{ type: "text", text: "REPLY-TWO" }]);
+  transcript.handle({ type: "agent_end", messages: [] });
+  transcript.handle({ type: "agent_settled" });
+  const rendered = stripAnsi(transcript.root.render(80).join("\n"));
+  assert.equal(rendered.match(/Worked for/g)?.length, 2, rendered);
+  assert.match(rendered, /STEER-MID[\s\S]*REPLY-ONE[\s\S]*Worked for[\s\S]*FOLLOW-UP[\s\S]*REPLY-TWO[\s\S]*Worked for/);
+});

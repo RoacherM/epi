@@ -4,14 +4,21 @@ import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-wo
 export declare class AssistantBlock implements Component {
     private readonly theme;
     private readonly transformers;
+    private readonly requestRender;
     private readonly container;
     private lastMessage;
     private lastStreaming;
     private readonly timing;
     private readonly expandedOverride;
+    /** Completion flash per thinking run, keyed like `timing` (docs/tui-design.md 4.2 "完成闪烁"). */
+    private readonly flashes;
+    /** The run drawn as live "Thinking…" by the last rebuild. Only a run seen active here flashes
+     * when it ends, so replayed history (never streamed in this process) never does -- the same
+     * guard as a tool's `started` flag. */
+    private activeThinking;
     private globalExpanded;
     private readonly clock;
-    constructor(theme: Theme, message: AssistantMessage, transformers: readonly MarkdownTransformer[], streaming: boolean, globalExpanded?: boolean);
+    constructor(theme: Theme, message: AssistantMessage, transformers: readonly MarkdownTransformer[], streaming: boolean, globalExpanded?: boolean, requestRender?: () => void);
     /** Finds which thinking segment (by its startIndex key) a streaming event's contentIndex falls
      * into, so a run built from several adjacent `thinking` content parts still gets one timer. */
     private recordEvent;
@@ -21,6 +28,9 @@ export declare class AssistantBlock implements Component {
      * `setHideThinkingBlock` clearing `thinkingVisibilityOverrides`. */
     setGlobalExpanded(expanded: boolean): void;
     private rebuild;
+    private flash;
+    /** Drops pending flash timers when the transcript is cleared (/new, /resume, /reload). */
+    dispose(): void;
     /** The width the inner container is actually rendered at -- narrower than the component's own,
      * to leave room for the clock (chrome.ts's `UserMessageBlock` does the same). Shared by `render()`
      * and `handleMouse()` so a click is dispatched against the same row heights it was drawn with. */

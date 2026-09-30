@@ -9,6 +9,7 @@
 import { AssistantMessageComponent, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { fit, formatDuration, markPromptZone, spread, splitPromptZone, clockColumns } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
+import { createFlashState, disposeFlash, paintFlashRail, startFlash } from "./tools/flash.js";
 // Matches transcript.ts's CONTENT_PAD: a 1-column rail plus 2 columns of padding, so thinking lines
 // up under the assistant text next to it.
 const CONTENT_PAD = 3;
@@ -60,11 +61,12 @@ class ThinkingBlock {
     onToggle;
     transformers;
     isStreaming;
+    flash;
     body;
     constructor(theme, text, active, timing, expanded, onToggle, transformers, 
     // The whole message's streaming state, which Pi hands to the thinking transformers too -- an
     // earlier, finished run of a still-streaming message gets `true`, as in Pi.
-    isStreaming) {
+    isStreaming, flash) {
         this.theme = theme;
         this.text = text;
         this.active = active;
@@ -73,6 +75,7 @@ class ThinkingBlock {
         this.onToggle = onToggle;
         this.transformers = transformers;
         this.isStreaming = isStreaming;
+        this.flash = flash;
     }
     renderLines(width) {
         const bullet = this.theme.fg("dim", "◆");
@@ -121,7 +124,8 @@ class ThinkingBlock {
         return this.body;
     }
     render(width) {
-        return this.renderLines(width);
+        // The rail column is the blank first column of `pad`; it flashes once when the run ends.
+        return paintFlashRail(this.renderLines(width), this.flash, this.theme);
     }
     /** Only the header row (the `Thought for Ns` / `Thinking…` line) toggles -- clicking into an
      * expanded block's body shouldn't collapse it back out from under a text selection. */
@@ -138,11 +142,18 @@ class ThinkingBlock {
 export class AssistantBlock {
     theme;
     transformers;
+    requestRender;
     container = new piTui.Container();
     lastMessage;
     lastStreaming = false;
     timing = new Map();
     expandedOverride = new Map();
+    /** Completion flash per thinking run, keyed like `timing` (docs/tui-design.md 4.2 "完成闪烁"). */
+    flashes = new Map();
+    /** The run drawn as live "Thinking…" by the last rebuild. Only a run seen active here flashes
+     * when it ends, so replayed history (never streamed in this process) never does -- the same
+     * guard as a tool's `started` flag. */
+    activeThinking;
     globalExpanded = false;
     clock;
     constructor(theme, message, transformers, streaming, 
@@ -150,9 +161,12 @@ export class AssistantBlock {
     // first rebuild instead of via a `setGlobalExpanded()` call right after construction -- that
     // call would trigger a second full rebuild of every segment on every single replayed message,
     // for no visible difference the vast majority of the time (Ctrl+T defaults to off).
-    globalExpanded = false) {
+    globalExpanded = false, 
+    // Draws the frame after a completion flash clears, when nothing else would.
+    requestRender = () => { }) {
         this.theme = theme;
         this.transformers = transformers;
+        this.requestRender = requestRender;
         // Captured once, like UserMessageBlock's `time`: the component is reused across every
         // streaming update for this message, so this must not drift as content arrives.
         this.clock = theme.fg("muted", new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
@@ -203,6 +217,12 @@ export class AssistantBlock {
         // (a plain, thinking-free reply rendering two blank rows instead of one).
         if (hasVisibleContent && segments[0]?.kind === "thinking")
             this.container.addChild(new piTui.Spacer(1));
+        const lastSegment = segments[segments.length - 1];
+        const activeThinking = this.lastStreaming && lastSegment?.kind === "thinking" ? lastSegment.startIndex : undefined;
+        if (this.activeThinking !== undefined && this.activeThinking !== activeThinking) {
+            startFlash(this.flash(this.activeThinking), "success", this.requestRender);
+        }
+        this.activeThinking = activeThinking;
         segments.forEach((segment, segmentIndex) => {
             if (segment.kind === "thinking") {
                 const text = segment.parts.map((part) => part.thinking.trim()).filter((part) => part !== "").join("\n\n");
@@ -219,7 +239,7 @@ export class AssistantBlock {
                     if (this.lastMessage !== undefined)
                         this.rebuild(splitSegments(this.lastMessage.content));
                 };
-                this.container.addChild(new ThinkingBlock(this.theme, text, active, timing, expanded, toggle, this.transformers, this.lastStreaming));
+                this.container.addChild(new ThinkingBlock(this.theme, text, active, timing, expanded, toggle, this.transformers, this.lastStreaming, this.flash(segment.startIndex)));
                 return;
             }
             // A text/tool-call run: Pi's own component, fed only this run's `content` and a neutral
@@ -262,6 +282,19 @@ export class AssistantBlock {
                 this.container.addChild(new piTui.Text(this.theme.fg("error", `Error: ${message.errorMessage ?? "Unknown error"}`), CONTENT_PAD, 0));
             }
         }
+    }
+    flash(startIndex) {
+        let flash = this.flashes.get(startIndex);
+        if (flash === undefined) {
+            flash = createFlashState();
+            this.flashes.set(startIndex, flash);
+        }
+        return flash;
+    }
+    /** Drops pending flash timers when the transcript is cleared (/new, /resume, /reload). */
+    dispose() {
+        for (const flash of this.flashes.values())
+            disposeFlash(flash);
     }
     /** The width the inner container is actually rendered at -- narrower than the component's own,
      * to leave room for the clock (chrome.ts's `UserMessageBlock` does the same). Shared by `render()`
