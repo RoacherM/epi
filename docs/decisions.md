@@ -37,6 +37,7 @@
 | 2026-09-30 | MCP2 | MCP 的具体接法（细化 MCP1）：用 `createMcpExtension` 的 `loadConfig` 选项交配置，不用 `registerMcpServer`（`/mcp` 里的启用/停用、曝光方式才能写回 MMP 的 `mcp.json`）；配置格式改成 Pi 的（不再支持 SSE、socket 和 pi-mcp-adapter 独有字段）；默认曝光沿用 Pi 的 `codemode`；仍由 Manifest 的 `mmp:mcp` 开关；`/mcp` 没有服务时的提示由 MMP 改写 | 用户确认（"mcp/skills 的改造你的意思是对的"） | `registerMcpServer` 交配置；保留 pi-mcp-adapter 的格式 | 已定（已实现，ac9b407） | [mcp-design.md](mcp-design.md) |
 | 2026-09-30 | H1 | 长期方向：更接近 OMP（oh-my-pi）的设计。grok 风格的界面是第一步，之后按 OMP 的思路构建 MMP 自己的 harness | 用户决定 | — | 已定（方向；具体 harness 设计以后逐项确认） | DEVELOPMENT.md 第 3.1、3.3、3.4、17 节里"不做 OMP 结构"等条目已和这个方向不一致，做 harness 设计时一起改 |
 | 2026-09-30 | T3 | 界面细节："选中即复制"保持开启（和 Pi 一致）；用户消息块不显示 Pi 追加的图片缩放/格式转换说明（模型照常收到，"Image omitted" 这类失败说明照常显示） | 用户决定 | 关闭选中即复制；原样显示说明 | 已定（D9 随任务 D11 实现中） | [dogfood-issues.md](dogfood-issues.md) D9 |
+| 2026-09-30 | T4 | 图片标签 `[Image #N]` 留在发给模型的文字里；整个会话统一编号，下一张 = 会话里出现过的最大编号 + 1；没有编号的图片显示 `[Image]`；没有图片数据的标签显示成暗色删除线，发送时提示 | 用户确认（"我觉得没啥问题"）；做法参照 Claude Code，用户可以直接说"第 2 张图" | 按计数推算、按图片内容匹配预留（D11 前两轮，过于复杂且仍会错位） | 已定（D11 实现中） | [dogfood-issues.md](dogfood-issues.md) D11 |
 
 ## 待定
 
