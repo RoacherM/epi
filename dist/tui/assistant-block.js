@@ -7,7 +7,7 @@
 // transformers, the aborted/error/length footer) still go through Pi's real component -- that part
 // isn't broken, just reused per text run instead of once for the whole message.
 import { AssistantMessageComponent, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { fit, formatDuration, spread } from "./chrome.js";
+import { fit, formatDuration, spread, clockColumns } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
 // Matches transcript.ts's CONTENT_PAD: a 1-column rail plus 2 columns of padding, so thinking lines
 // up under the assistant text next to it.
@@ -248,7 +248,7 @@ export class AssistantBlock {
      * to leave room for the clock (chrome.ts's `UserMessageBlock` does the same). Shared by `render()`
      * and `handleMouse()` so a click is dispatched against the same row heights it was drawn with. */
     innerWidth(width) {
-        return Math.max(1, width - piTui.visibleWidth(this.clock) - 2);
+        return Math.max(1, width - clockColumns(this.clock) - 2);
     }
     /** Item 1 (docs/tui-design.md 4.2): the time sits on the first *visible* line, like a user
      * message -- not literally render()'s line 0, which is usually the blank spacer Pi's component

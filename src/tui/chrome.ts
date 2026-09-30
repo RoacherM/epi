@@ -16,6 +16,12 @@ export function fit(text: string, width: number): string {
 }
 
 /** Left and right segments on one row; the left side is truncated first. */
+/** Columns kept free for a message's time on every row ("12:00 PM"), so text wraps at the same place
+ * whatever the time reads; a longer locale string widens it. */
+export function clockColumns(clock: string): number {
+  return Math.max(8, visibleWidth(clock));
+}
+
 export function spread(left: string, right: string, width: number): string {
   const rightWidth = visibleWidth(right);
   if (rightWidth >= width) return fit(right, width);
@@ -133,7 +139,7 @@ export class UserMessageBlock implements Component {
   render(width: number): string[] {
     const paint = (content: string) => this.theme.bg("userMessageBg", content + " ".repeat(Math.max(0, width - visibleWidth(content))));
     const clock = this.theme.fg("muted", this.time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
-    const bodyWidth = Math.max(1, width - 4 - visibleWidth(clock) - 3);
+    const bodyWidth = Math.max(1, width - 4 - clockColumns(clock) - 3);
     const source = this.expanded ? this.text : collapseUserText(this.text);
     const lines = piTui.wrapTextWithAnsi(source, bodyWidth);
     const rows = lines.map((text, index) => {

@@ -96,7 +96,9 @@ test("a single long line never collapses, even wrapped across many rows on a nar
   const transcript = new Transcript(stubTui(), theme, stubSession());
   const longLine = Array.from({ length: 30 }, (_, i) => `word${i}`).join(" "); // one logical line
   transcript.handle({ type: "message_start", message: { role: "user", content: longLine, timestamp: Date.now() } });
-  const rendered = transcript.root.render(20).join("\n"); // narrow enough to wrap into >3 rows
+  // 24 columns leave 9 for text (the time column is always 8 wide), so each word fits on its own row
+  // and the line still wraps into far more than 3 rows.
+  const rendered = transcript.root.render(24).join("\n");
   assert.match(rendered, /word0/);
   assert.match(rendered, /word29/); // the very last word still shows: never collapsed
   assert.doesNotMatch(rendered, /…/);
