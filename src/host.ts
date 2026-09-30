@@ -350,8 +350,11 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
   // keep going through piMain unchanged (docs/decisions.md D3).
   if (isInteractivePiRun(args.passthrough, process.stdin.isTTY === true, process.stdout.isTTY === true)) {
     const tui = await import("./tui/start.js");
-    process.exitCode = await tui.runTuiV2(prepared, extensionFactories);
-    return;
+    const code = await tui.runTuiV2(prepared, extensionFactories);
+    // Pi's interactive shutdown() ends in process.exit(0) too. Waiting for the event loop to drain
+    // instead left the process running with the TUI gone whenever anything still held it open, such
+    // as a compaction request that ignored its abort (dogfood D35).
+    process.exit(code);
   }
   await piMain(prepared.piArgs, { extensionFactories });
 }

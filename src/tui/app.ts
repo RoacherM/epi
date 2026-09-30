@@ -58,6 +58,9 @@ export interface TuiAppOptions {
   terminal?: Terminal;
 }
 
+/** How long quitting waits for the runtime to dispose before exiting anyway (see disposeRuntime). */
+const SHUTDOWN_TIMEOUT_MS = 3000;
+
 // One instance per layout slot: the layout engine keys slots by component identity.
 const blank = (): Component => ({ render: () => [""], invalidate() {} });
 
@@ -386,22 +389,58 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     resolveRun = resolve;
   });
 
+  /** Leaves the alternate screen with the normal screen as it was. TuiAltScreen's default stop
+   * re-renders the whole document onto the normal screen, which left the last frame behind after
+   * every quit (dogfood D25); docs/tui-design.md says v1 leaves no chat in the terminal. Pi's own
+   * fullscreen stop passes the same option (interactive-mode.js stopInteractiveTui). */
+  function stopTui(): void {
+    turnStatus.stop();
+    tui.stop({ preserveScreen: true });
+  }
+
+  /** Pi's shutdown() (interactive-mode.js ~3383): drain late key releases, stop the TUI, then
+   * dispose the runtime -- session_shutdown handlers first, then the session aborts any running
+   * turn, compaction or branch summary. The caller exits the process right after (host.ts), as
+   * Pi's process.exit(0) does, so a request that ignores its abort can't keep it alive (D35). */
   async function exit(code = 0): Promise<void> {
     if (exiting) return;
     exiting = true;
-    turnStatus.stop();
-    tui.stop();
+    let exitCode = code;
     try {
-      await runtime.dispose();
+      await terminal.drainInput(1000);
+      stopTui();
+      exitCode = await disposeRuntime(code);
     } finally {
-      resolveRun(code);
+      resolveRun(exitCode);
+    }
+  }
+
+  /** runtime.dispose() awaits every extension's session_shutdown handler before the session's own
+   * aborts run, so one handler that never returns would hang quitting with the TUI already gone. */
+  async function disposeRuntime(code: number): Promise<number> {
+    let timer: NodeJS.Timeout | undefined;
+    const timedOut = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), SHUTDOWN_TIMEOUT_MS);
+    });
+    try {
+      const outcome = await Promise.race([runtime.dispose().then(() => "disposed" as const), timedOut]);
+      if (outcome === "timeout") {
+        process.stderr.write(`mmp: the session did not shut down within ${SHUTDOWN_TIMEOUT_MS / 1000}s ` +
+          "(a session_shutdown handler has not returned); exiting anyway.\n");
+      }
+      return code;
+    } catch (error) {
+      process.stderr.write(`mmp: shutting down the session failed: ${errorText(error)}\n`);
+      return 1;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
   const onSignal = () => void exit(0);
   const onCrash = (error: unknown) => {
     // Leave the alternate screen before the stack trace, or the user's terminal stays wrecked.
-    tui.stop();
+    stopTui();
     process.stderr.write(`mmp: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
     process.exit(1);
   };
@@ -431,8 +470,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   function fatal(prefix: string, error: unknown): never {
     if (!exiting) {
       exiting = true;
-      turnStatus.stop();
-      tui.stop();
+      stopTui();
       process.stderr.write(`mmp: ${prefix}: ${errorText(error)}\n`);
     }
     process.exit(1);
@@ -986,16 +1024,20 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   // submit()'s full pipeline -- submit() clears the editor/history and runs MMP's built-ins (e.g.
   // `mmp /new`), which would wipe whatever the startup gate above just put back into the editor.
   // `initialImages` (an `@image` argument) pairs with the first message only, as Pi's own
-  // initialMessage/initialImages does.
-  for (const [index, message] of (options.initialMessages ?? []).entries()) {
-    if (exiting) break;
-    const images = index === 0 ? options.initialImages ?? [] : [];
-    try {
-      await session.prompt(message, images.length > 0 ? { images } : undefined);
-    } catch (error) {
-      transcript.notice(errorText(error), "error");
+  // initialMessage/initialImages does. Not awaited before `finished`: quitting while one of them is
+  // still running must not wait for its prompt to settle (a request can ignore its abort, D35).
+  const sendInitialMessages = async (): Promise<void> => {
+    for (const [index, message] of (options.initialMessages ?? []).entries()) {
+      if (exiting) break;
+      const images = index === 0 ? options.initialImages ?? [] : [];
+      try {
+        await session.prompt(message, images.length > 0 ? { images } : undefined);
+      } catch (error) {
+        transcript.notice(errorText(error), "error");
+      }
     }
-  }
+  };
+  void sendInitialMessages();
 
   const code = await finished;
   process.off("SIGTERM", onSignal);

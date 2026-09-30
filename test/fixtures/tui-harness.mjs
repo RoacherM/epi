@@ -18,7 +18,8 @@
 // pattern and timeout rules as waitFor).
 // ["detach"], as the last step, ends the run without waiting for the app to quit (Ctrl+D does not
 // quit while the editor has text, so a test that doesn't check the exit code would wait 5s for it).
-// Prints the exit code, the marks, the screens, and everything the app wrote (ANSI stripped) as JSON.
+// Prints the exit code, the marks, the screens, the terminal after the app quit (`afterExit`), and
+// everything the app wrote (ANSI stripped) as JSON.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -207,5 +208,8 @@ for (const [kind, value, opts = {}] of steps) {
   }
 }
 const code = detached ? "detached" : await Promise.race([running, sleep(5000).then(() => "did not exit")]);
+// Once the app has quit: which xterm buffer is showing ("normal" after leaving the alt screen) and
+// what is left on it.
+const afterExit = typeof code === "number" ? { screen: await currentScreen(), buffer: screen.buffer.active.type } : undefined;
 // Writes to a pipe are asynchronous; exiting before the callback truncates large outputs.
-process.stdout.write(JSON.stringify({ exit: code, marks, screens, output: strip(output) }), () => process.exit(0));
+process.stdout.write(JSON.stringify({ exit: code, marks, screens, afterExit, output: strip(output) }), () => process.exit(0));
