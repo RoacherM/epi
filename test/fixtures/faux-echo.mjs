@@ -12,9 +12,13 @@ function lastUserText(context) {
   return (content ?? []).map((part) => part.text ?? "").join("");
 }
 
+const echo = (context) => fauxAssistantMessage(fauxText(`ECHO:${lastUserText(context)}`));
+
 export default function (pi) {
   registerFaux(pi, {
     models: ["echo"],
-    responses: [(context) => fauxAssistantMessage(fauxText(`ECHO:${lastUserText(context)}`))],
+    // The faux queue is consumed once per model call; a few replies let a test see a message that was
+    // wrongly sent as a second turn (it would otherwise draw a "No more faux responses" error instead).
+    responses: Array.from({ length: 5 }, () => echo),
   });
 }
