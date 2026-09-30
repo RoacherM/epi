@@ -3,11 +3,15 @@
 // no stack, the run's own exit code, the run stops, and shutdown completes (src/closed-stdout.ts).
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+
+import { endOnClosedPipe } from "../dist/closed-stdout.js";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const fauxEpipe = fileURLToPath(new URL("./fixtures/faux-epipe.mjs", import.meta.url));
@@ -126,3 +130,71 @@ for (const reader of ["head -c1", "true"]) {
     assert.ok(existsSync(marks.shutdown), "the session_shutdown handler did not finish");
   });
 }
+
+// Dogfood D60: Node's spawn stdio are socketpairs; a write racing the reader's close can fail with
+// ENOTCONN (or ECONNRESET) instead of EPIPE, and MMP crashed with a stack. These drive the guard on a
+// stand-in stream with synthetic errors, through both ways a write can report one.
+function writeError(code) {
+  return Object.assign(new Error(`write ${code}`), { code });
+}
+
+/** A stream that fails its first write with `code`: `"callback"` the way a socket does (the write's
+ * callback, then `error`), `"throw"` synchronously from `write`. */
+function failingStream(code, how) {
+  const stream = new Writable({
+    write(_chunk, _encoding, callback) {
+      stream.writes += 1;
+      if (how === "throw") throw writeError(code);
+      callback(writeError(code));
+    },
+  });
+  stream.writes = 0;
+  return stream;
+}
+
+for (const code of ["EPIPE", "ENOTCONN", "ECONNRESET"]) {
+  test(`a closed reader reported as ${code} through the write callback and 'error' ends the output quietly`, async () => {
+    const stream = failingStream(code, "callback");
+    let closed = 0;
+    endOnClosedPipe(stream, () => { closed += 1; });
+    // Not events.once: it rejects on the 'error' Node emits before close.
+    const closeEvent = new Promise((resolve) => stream.once("close", resolve));
+    const error = await new Promise((resolve) => stream.write("a", resolve));
+    assert.equal(error, undefined, `the write's callback got ${error?.code}`);
+    await closeEvent; // Node has emitted 'error' by now; a rethrow would have been uncaught
+    assert.doesNotThrow(() => stream.emit("error", writeError(code)));
+    assert.equal(await new Promise((resolve) => stream.write("b", resolve)), undefined);
+    assert.equal(stream.writes, 1, "a write after the reader went away still reached the stream");
+    assert.equal(closed, 1);
+  });
+
+  test(`a closed reader reported as ${code} thrown synchronously from write ends the output quietly`, async () => {
+    const stream = failingStream(code, "throw");
+    let closed = 0;
+    endOnClosedPipe(stream, () => { closed += 1; });
+    let callback;
+    const called = new Promise((resolve) => { callback = resolve; });
+    assert.equal(stream.write("a", callback), true);
+    assert.equal(await called, undefined);
+    assert.equal(await new Promise((resolve) => stream.write("b", resolve)), undefined);
+    assert.equal(stream.writes, 1, "a write after the reader went away still reached the stream");
+    assert.equal(closed, 1);
+  });
+}
+
+test("a write error that is not a closed reader (EIO) still surfaces on every path", async () => {
+  let closed = 0;
+  // Not a Writable: Node would emit the rethrowing 'error' on its own tick, uncaught in the test.
+  const viaCallback = Object.assign(new EventEmitter(), {
+    write(_chunk, callback) { process.nextTick(callback, writeError("EIO")); return true; },
+  });
+  endOnClosedPipe(viaCallback, () => { closed += 1; });
+  const error = await new Promise((resolve) => viaCallback.write("a", resolve));
+  assert.equal(error?.code, "EIO");
+  assert.throws(() => viaCallback.emit("error", writeError("EIO")), { code: "EIO" });
+
+  const viaThrow = failingStream("EIO", "throw");
+  endOnClosedPipe(viaThrow, () => { closed += 1; });
+  assert.throws(() => viaThrow.write("a", () => {}), { code: "EIO" });
+  assert.equal(closed, 0);
+});

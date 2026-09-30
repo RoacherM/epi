@@ -1,12 +1,23 @@
+/**
+ * Write errors that mean the reader has gone (dogfood D60). EPIPE is the pipe case. Node's `spawn`
+ * stdio are Unix socketpairs, where a write racing the peer's close can fail with ENOTCONN instead
+ * (seen on macOS under load; Node's own `net` `_final` treats ENOTCONN from shutdown as already
+ * finished), or ECONNRESET (a stream socket's peer closed with data unread, and libuv on macOS turns
+ * the teardown race's EPROTOTYPE into it). ERR_STREAM_DESTROYED is a write after Node destroyed the
+ * stream for one of those. Anything else (EIO, EBADF, ...) is not a closed reader and stays loud.
+ */
+const CLOSED_READER_CODES = new Set(["EPIPE", "ENOTCONN", "ECONNRESET", "ERR_STREAM_DESTROYED"]);
 function isClosedPipe(error) {
     const code = error?.code;
-    return code === "EPIPE" || code === "ERR_STREAM_DESTROYED";
+    return typeof code === "string" && CLOSED_READER_CODES.has(code);
 }
 /**
- * Makes `stream` treat a closed pipe as the end of its output: the EPIPE is swallowed (no `error`
- * crash, the write's callback succeeds), every later write is dropped, and `onClosed` runs once.
+ * Makes `stream` treat a closed reader (`isClosedPipe`) as the end of its output: the error is
+ * swallowed (no `error` crash, the write's callback succeeds), every later write is dropped, and
+ * `onClosed` runs once. A socket reports it to the write's callback and then as `error`; a stream
+ * whose `_write` throws reports it synchronously from `write`. Both are handled.
  */
-function endOnClosedPipe(stream, onClosed) {
+export function endOnClosedPipe(stream, onClosed) {
     let closed = false;
     const markClosed = () => {
         if (closed)
@@ -35,9 +46,19 @@ function endOnClosedPipe(stream, onClosed) {
             }
             done?.(error);
         };
-        return typeof encoding === "function"
-            ? write.call(this, chunk, wrapped)
-            : write.call(this, chunk, encoding, wrapped);
+        try {
+            return typeof encoding === "function"
+                ? write.call(this, chunk, wrapped)
+                : write.call(this, chunk, encoding, wrapped);
+        }
+        catch (error) {
+            if (!isClosedPipe(error))
+                throw error;
+            markClosed();
+            if (done)
+                process.nextTick(done);
+            return true;
+        }
     };
 }
 /**
