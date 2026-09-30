@@ -1,5 +1,5 @@
 # Helpers for driving mmp in a Herdr pane (docs/dev-workflow-herdr.md).
-# Usage: P=w9:pX source scripts/dev/herdr.sh; startmmp <worktree> sonnet; say "text"; scr 40
+# Usage: P=w9:pX source scripts/dev/herdr.sh; startmmp <worktree> opus; say "text"; scr 40
 #
 # The tool build (a known-good commit, section 2) does the work; MMP_TOOL points at it.
 MMP_TOOL=${MMP_TOOL:-$HOME/Desktop/Projects/sides/mmp-tool}

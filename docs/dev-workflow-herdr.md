@@ -9,8 +9,7 @@
 | 角色 | 谁 | 在哪 | 做什么 |
 |---|---|---|---|
 | 主控 | Claude Code 主会话 | 用户的会话 | 拆任务、写任务说明、盯进度、合并、同步文档、分拣 mmp 问题、向用户汇报 |
-| 编码 | mmp，`magpie` 的 `claude/claude-sonnet-5-5`，thinking `high` | Herdr pane，cwd 是任务的 worktree | 按任务说明实现、写测试、提交 |
-| 编码（升级） | mmp，`claude/claude-opus-5-5`，thinking `high` | 同上 | 同一任务被退回 2 轮、或修复引入倒退时接手 |
+| 编码 | mmp，`magpie` 的 `claude/claude-opus-5-5`，thinking `high`（用户 2026-10-01 定为默认；`sonnet-5-5` 只在用户要求时用） | Herdr pane，cwd 是任务的 worktree | 按任务说明实现、写测试、提交 |
 | 初审 | mmp，`claude/claude-opus-5-5`，thinking `high` | 另一个 pane，同一 worktree，只读 | 每个任务合并前审查：复现、分级、写审查报告 |
 | 终审 | Fable（主控的只读 subagent） | 主控会话 | 大节点审查：主控把一个阶段的改动打成审查包交给它（见第 5 节） |
 | 调研 | agy（`agy -p`）或 mmp | — | 同现在；写进 scratchpad，主控核对后再用 |
@@ -29,7 +28,7 @@
 ```
 
 - **升级工具版**：每次合并、通过 Herdr 验收、并跑完 [e2e-acceptance.md](e2e-acceptance.md) 里标 ★ 的冒烟条目后，主控把工具版切到新的提交（`git -C mmp-tool checkout --detach <commit>` 再 `npm run build`）。这样新功能马上进入日常使用，问题尽早暴露。
-- **回退**：工具版出了阻塞问题（第 6 节 P0），先把工具版切回上一个提交继续干活，同时开任务修。实在修不动时，这个任务退回到现在的做法（Claude Code 的 Sonnet/Opus subagent），修好后再切回来。
+- **回退**：工具版出了阻塞问题（第 6 节 P0），先把工具版切回上一个提交继续干活，同时开任务修。实在修不动时，这个任务退回到现在的做法（Claude Code 的 Opus subagent），修好后再切回来。
 - 两份共用用户真实的 `~/.mmp`（凭证、会话、magpie 配置）。自动测试照旧用临时 `HOME`/`MMP_HOME`，不受影响。
 
 ## 3. 启动一个 mmp 工作者
@@ -46,10 +45,10 @@
 
 ```bash
 cd <worktree> && node ~/Desktop/Projects/sides/mmp-tool/dist/cli.js --approve \
-  --provider magpie --model claude/claude-sonnet-5-5 --thinking high
+  --provider magpie --model claude/claude-opus-5-5 --thinking high
 ```
 
-审查者把模型换成 `claude/claude-opus-5-5`。每个任务用一个新会话，不复用上一个任务的上下文。
+编码和审查都用这个命令（`startmmp <worktree> opus`）。每个任务用一个新会话，不复用上一个任务的上下文。
 
 ## 4. 任务交接：用文件，不靠读屏
 
