@@ -12,7 +12,7 @@ import { usageBreakdown } from "../dist/tui/info-commands.js";
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
-function runApp(t, extensions, steps, { keybindings } = {}) {
+function runApp(t, extensions, steps, { keybindings, rows } = {}) {
   const root = mkdtempSync(join(tmpdir(), "mmp-tui-info-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
@@ -24,7 +24,10 @@ function runApp(t, extensions, steps, { keybindings } = {}) {
   }
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1", MMP_TUI_HARNESS: JSON.stringify({ steps }) },
+    env: {
+      PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1",
+      MMP_TUI_HARNESS: JSON.stringify({ steps, ...(rows ? { rows } : {}) }),
+    },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -89,7 +92,10 @@ test("/hotkeys lists editor and app keys, resolved through the installed (possib
     ["wait", 2500],
     ["type", "/hotkeys"], ["key", "enter"], ["wait", 400], ["mark", "afterHotkeys"],
     ["key", "ctrl+d"],
-  ], { keybindings: { "app.model.select": "ctrl+q" } });
+  // A taller terminal than the 40-row default: the listing (now 13 App rows, one more since M4's
+  // `app.thinking.toggle`) plus the welcome page above it no longer both fit a 40-row scrollback
+  // view without the transcript's "follow: end" ScrollView cutting off the "Editor" header at top.
+  ], { keybindings: { "app.model.select": "ctrl+q" }, rows: 55 });
   const shown = marks.afterHotkeys;
   assert.match(shown, /Editor/);
   assert.match(shown, /App/);

@@ -3,15 +3,15 @@
 import {
   type AgentSession,
   type AgentSessionEvent,
-  AssistantMessageComponent,
   CustomMessageComponent,
   getMarkdownTheme,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, Container, TUI } from "@earendil-works/pi-tui";
 
+import { AssistantBlock } from "./assistant-block.js";
 import { UserBashBlock } from "./bash-block.js";
-import { UserMessageBlock } from "./chrome.js";
+import { formatDuration, UserMessageBlock } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
 import { toolBlock } from "./tools/block.js";
 import { asGroupKind, GroupedMessages, ToolEntry } from "./tools/group.js";
@@ -31,8 +31,24 @@ export class Transcript {
   private messageCount = 0;
   private readonly tools = new Map<string, ToolEntry>();
   private readonly userMessages: UserMessageBlock[] = [];
-  private streaming: AssistantMessageComponent | undefined;
+  private readonly assistantBlocks: AssistantBlock[] = [];
+  private streaming: AssistantBlock | undefined;
   private toolsExpanded = false;
+  private thinkingExpanded = false;
+  /** Set on the *first* `agent_start` of a prompt run (item 2's `Worked for Ns` footer), read and
+   * cleared on `agent_settled` -- this process's own clock, not anything from the event stream,
+   * since none of these events carry a timestamp. Not reset on a later `agent_start`: `agent.
+   * continue()` (a retry, a compaction recovery, a queued continuation) re-emits it for the *same*
+   * run, and the footer times the whole run from when the user asked for it, not its last leg. */
+  private turnStartedAt: number | undefined;
+  /** The most recent `agent_end`'s own messages, read back on `agent_settled` (the point that's
+   * actually "this run is over") to find the last assistant reply's `stopReason`. */
+  private lastTurnMessages: readonly { role: string; stopReason?: string }[] = [];
+  /** Set only by `auto_retry_end`'s "Retry cancelled" (Esc during a retry's backoff sleep never
+   * reaches another `agent_end`, so it has no `stopReason` of its own to read back from
+   * `lastTurnMessages` -- this is the only signal it leaves behind). `turnFooter()` ORs this with
+   * `lastTurnMessages`'s own aborted check, the ordinary case (Esc during a normal response). */
+  private turnAborted = false;
 
   constructor(
     private readonly tui: TUI,
@@ -60,7 +76,14 @@ export class Transcript {
     this.messageCount = 0;
     this.tools.clear();
     this.userMessages.length = 0;
+    this.assistantBlocks.length = 0;
     this.streaming = undefined;
+    // A turn from the outgoing session can never reach its agent_end here; drop it rather than
+    // print a "Worked for" footer timed against the wrong session (and, per docs/tui-design.md
+    // 4.2, replayed history doesn't get one anyway).
+    this.turnStartedAt = undefined;
+    this.lastTurnMessages = [];
+    this.turnAborted = false;
     for (const message of session.messages) {
       this.addFinishedMessage(message);
     }
@@ -75,6 +98,14 @@ export class Transcript {
     // Ctrl+O is authoritative over grouping too: it always wins over a group left unfolded (or
     // partly revealed) by a click (tools/group.ts's GroupedMessages doc comment).
     this.groupedMessages.setToolsExpanded(expanded);
+  }
+
+  /** Ctrl+T (docs/tui-design.md 4.2/4.6, `app.thinking.toggle`): expands or collapses every
+   * thinking run in every assistant message at once, independent of Ctrl+O's tool/user-message
+   * toggle. */
+  setThinkingExpanded(expanded: boolean): void {
+    this.thinkingExpanded = expanded;
+    for (const block of this.assistantBlocks) block.setGlobalExpanded(expanded);
   }
 
   /**
@@ -105,7 +136,7 @@ export class Transcript {
       case "message_update":
         if (event.message.role === "assistant") {
           this.streaming ??= this.assistant(event.message, true);
-          this.streaming.updateContent(event.message, true);
+          this.streaming.updateContent(event.message, true, event.assistantMessageEvent);
           this.syncToolCalls(event.message, false);
         }
         break;
@@ -116,6 +147,37 @@ export class Transcript {
           this.streaming = undefined;
         } else if (event.message.role === "custom") {
           this.addFinishedMessage(event.message);
+        }
+        break;
+      case "agent_start":
+        // `??=`, not `=`: `agent.continue()` (a queued follow-up, a retry, a compaction
+        // continuation) re-emits agent_start for the *same* prompt run -- overwriting this would
+        // reset the clock on every continuation instead of timing the whole run from when the user
+        // actually asked for it.
+        this.turnStartedAt ??= Date.now();
+        break;
+      case "agent_end":
+        // Not the footer yet: agent_end fires once per continuation (a retry, a compaction
+        // recovery), so the *last* one's messages -- read again by agent_settled below, once the
+        // whole prompt run has actually finished -- are what decide the label.
+        this.lastTurnMessages = event.messages;
+        break;
+      case "agent_settled":
+        // Fired exactly once per session.prompt()/steer()/followUp() call, after every retry,
+        // compaction recovery and queued continuation has run its course (agent-session.js
+        // _runAgentPrompt's finally block) -- the one point that's both "the turn is really over"
+        // and "print the footer exactly once", regardless of how many agent_start/agent_end pairs
+        // happened along the way.
+        this.turnFooter(this.lastTurnMessages);
+        break;
+      case "auto_retry_end":
+        if (!event.success) {
+          this.notice(`Retry failed: ${event.finalError ?? "unknown error"}`, "error");
+          // Esc during the retry backoff sleep (AgentSession.abortRetry, called from the general
+          // abort path) surfaces here as `finalError: "Retry cancelled"` (agent-session.js's
+          // _finishCancelledRetry) -- the only signal this event carries that the *user* stopped
+          // it, as opposed to the retries simply running out.
+          if (event.finalError === "Retry cancelled") this.turnAborted = true;
         }
         break;
       case "tool_execution_start":
@@ -140,9 +202,6 @@ export class Transcript {
       case "auto_retry_start":
         this.notice(`Retrying (${event.attempt}/${event.maxAttempts}) in ${Math.round(event.delayMs / 1000)}s: ${event.errorMessage}`, "warning");
         break;
-      case "auto_retry_end":
-        if (!event.success) this.notice(`Retry failed: ${event.finalError ?? "unknown error"}`, "error");
-        break;
       default:
         break;
     }
@@ -160,18 +219,31 @@ export class Transcript {
     if (counts) this.messageCount += 1;
   }
 
-  private assistant(message: Extract<AgentMessage, { role: "assistant" }>, streaming: boolean): AssistantMessageComponent {
-    const component = new AssistantMessageComponent(
-      undefined,
-      false,
-      getMarkdownTheme(),
-      undefined,
-      CONTENT_PAD,
-      this.session.extensionRunner.getMarkdownTransformers(),
-    );
-    component.updateContent(message, streaming);
+  private assistant(message: Extract<AgentMessage, { role: "assistant" }>, streaming: boolean): AssistantBlock {
+    // The current Ctrl+T state goes in at construction (not a `setGlobalExpanded()` call right
+    // after), so a replayed message only ever rebuilds once instead of twice.
+    const component = new AssistantBlock(this.theme, message, this.session.extensionRunner.getMarkdownTransformers(), streaming, this.thinkingExpanded);
+    this.assistantBlocks.push(component);
     this.add(component, false);
     return component;
+  }
+
+  /** Item 2 (docs/tui-design.md 4.2): `Worked for Ns` below the last block of a settled turn,
+   * `Stopped after Ns` for one that ended aborted. Called once, from `agent_settled` -- the whole
+   * prompt run (every retry, compaction recovery and queued continuation) is over by then, so
+   * `lastTurnMessages` holds the *last* `agent_end`'s payload, the one whose stopReason actually
+   * decides the label; an empty array (a cancelled retry with no final assistant message at all)
+   * just falls back to `turnAborted` alone. */
+  private turnFooter(messages: readonly { role: string; stopReason?: string }[]): void {
+    if (this.turnStartedAt === undefined) return;
+    const duration = Date.now() - this.turnStartedAt;
+    const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+    const aborted = this.turnAborted || lastAssistant?.stopReason === "aborted";
+    this.turnStartedAt = undefined;
+    this.lastTurnMessages = [];
+    this.turnAborted = false;
+    const label = aborted ? "Stopped after" : "Worked for";
+    this.add(new piTui.Text(this.theme.fg("muted", `${label} ${formatDuration(duration)}`), CONTENT_PAD, 0), true, false);
   }
 
   private addFinishedMessage(message: AgentMessage): void {

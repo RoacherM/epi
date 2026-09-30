@@ -57,6 +57,9 @@ export interface CommandHost {
   /** True while an agent turn is running. */
   isWorking(): boolean;
   toggleToolsExpanded(): void;
+  /** Ctrl+T (docs/tui-design.md 4.2/4.6, `app.thinking.toggle`): expands/collapses every finished
+   * thinking block, independent of Ctrl+O's tool/user-message toggle. */
+  toggleThinkingExpanded(): void;
   exit(code?: number): Promise<void>;
   /** `session.reload()` rebuilds resources and the extension runtime in place; it does not go
    * through AgentSessionRuntime, so it skips setBeforeSessionInvalidate/setRebindSession. This

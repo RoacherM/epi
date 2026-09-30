@@ -87,10 +87,10 @@ test("crossProjectRefusal blocks a different project's session and allows the sa
   assert.equal(crossProjectRefusal(aSession.path, identity), undefined);
 });
 
-function runHarness(t, cwd, env, args, steps) {
+function runHarness(t, cwd, env, args, steps, rows) {
   const result = spawnSync(process.execPath, [harnessPath], {
     cwd,
-    env: { ...env, MMP_TUI_HARNESS: JSON.stringify({ args, steps }) },
+    env: { ...env, MMP_TUI_HARNESS: JSON.stringify({ args, steps, ...(rows ? { rows } : {}) }) },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -122,7 +122,13 @@ test("the switchSession extension action (same one /resume uses) refuses a diffe
     ["type", "still A?"], ["key", "enter"], ["wait", 800], ["mark", "stillA"],
     ["type", `/switchto ${subSession.path}`], ["key", "enter"], ["wait", 800], ["mark", "afterSameProject"],
     ["key", "ctrl+d"],
-  ]);
+  // A taller terminal than the 40-row default: with M4's per-turn "Worked for Ns" footer, this
+  // transcript (2 turns plus the refusal notice) is now tall enough that typing the second
+  // `/switchto` (whose autocomplete dropdown changes size per keystroke, resizing the transcript's
+  // scroll viewport each time) forces a full repaint of the still-scrolled-past refusal notice --
+  // which then shows up again in a `marks.X.slice(marks.Y.length)` delta that's supposed to only be
+  // *new* content. Comfortably fitting everything without scrolling sidesteps that repaint.
+  ], 60);
 
   assert.match(marks.aReply, /ECHO:hello A/);
   // Cross-project: refused before any teardown, current session untouched.

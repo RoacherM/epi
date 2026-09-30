@@ -71,6 +71,10 @@ export function createKeyActions(): KeyAction[] {
       run: (host) => host.toggleToolsExpanded(),
     },
     {
+      id: "app.thinking.toggle",
+      run: (host) => host.toggleThinkingExpanded(),
+    },
+    {
       id: "app.model.select",
       run: (host) => runModel(host, ""),
     },

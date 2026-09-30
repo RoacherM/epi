@@ -4,11 +4,12 @@ import { homedir } from "node:os";
 import { basename, sep } from "node:path";
 import { piTui } from "./pi-tui.js";
 const { truncateToWidth, visibleWidth } = piTui;
-function fit(text, width) {
+/** Shared with assistant-block.ts (the assistant-message timestamp reuses this row layout). */
+export function fit(text, width) {
     return truncateToWidth(text, Math.max(0, width), "…");
 }
 /** Left and right segments on one row; the left side is truncated first. */
-function spread(left, right, width) {
+export function spread(left, right, width) {
     const rightWidth = visibleWidth(right);
     if (rightWidth >= width)
         return fit(right, width);
@@ -29,7 +30,8 @@ export function formatTokens(count) {
     const thousands = count / 1000;
     return thousands >= 100 ? `${Math.round(thousands)}K` : `${thousands.toFixed(1).replace(/\.0$/, "")}K`;
 }
-function formatDuration(ms) {
+/** Shared with transcript.ts (turn footer) and assistant-block.ts (thinking duration). */
+export function formatDuration(ms) {
     const seconds = ms / 1000;
     if (seconds < 60)
         return `${seconds.toFixed(1)}s`;
@@ -171,16 +173,36 @@ function isBorderRule(text) {
     const plain = plainText(text);
     return plain.includes("─") && /^[─↑↓\d\s a-z]+$/.test(plain);
 }
+/** Item 4 (docs/tui-design.md 4.1/4.2): at ≤12 rows, crop the editor's content down to the row
+ * holding the cursor (its reverse-video marker, same as the Editor itself emits it) instead of an
+ * arbitrary window -- the point of the cap is to keep editing visible, not just short. Falls back to
+ * the last row (unfocused editors don't mark a cursor at all) so this never returns nothing. Returns
+ * the window's bounds, not just the cropped slice, so `handleMouse()` can shift a click's `y` by the
+ * same `start` offset `render()` cropped by -- otherwise a click lands on the row it would be at
+ * without the crop, not the one actually drawn on screen. */
+function cropWindow(lines, maxRows) {
+    if (lines.length <= maxRows)
+        return { start: 0, end: lines.length };
+    const cursorIndex = lines.findIndex((line) => line.includes("\x1b[7m"));
+    const end = Math.min(lines.length, Math.max(maxRows, (cursorIndex === -1 ? lines.length - 1 : cursorIndex) + 1));
+    return { start: end - maxRows, end };
+}
+function cropToCursor(lines, maxRows) {
+    const { start, end } = cropWindow(lines, maxRows);
+    return lines.slice(start, end);
+}
 export class PromptFrame {
     theme;
     editor;
     label;
     borderColor;
-    constructor(theme, editor, label, borderColor) {
+    maxContentRows;
+    constructor(theme, editor, label, borderColor, maxContentRows = () => undefined) {
         this.theme = theme;
         this.editor = editor;
         this.label = label;
         this.borderColor = borderColor;
+        this.maxContentRows = maxContentRows;
     }
     get focused() {
         return this.editor.focused ?? false;
@@ -220,9 +242,11 @@ export class PromptFrame {
         };
         const bottomLabel = [hint(lines[bottom] ?? ""), this.label()].filter((part) => part !== "").join(" · ");
         const out = [border("╭", "╮", hint(lines[top] ?? ""))];
-        lines.slice(top + 1, bottom).forEach((content, index) => {
+        const maxRows = this.maxContentRows();
+        const content = maxRows === undefined ? lines.slice(top + 1, bottom) : cropToCursor(lines.slice(top + 1, bottom), maxRows);
+        content.forEach((line, index) => {
             const prompt = index === 0 ? this.theme.fg("muted", "❯ ") : "  ";
-            const padded = content + " ".repeat(Math.max(0, inner - visibleWidth(content)));
+            const padded = line + " ".repeat(Math.max(0, inner - visibleWidth(line)));
             out.push(`${color("│")} ${prompt}${padded} ${color("│")}`);
         });
         // grok puts the model label on the right of the bottom border.
@@ -240,10 +264,15 @@ export class PromptFrame {
     }
     /** Forwards a click/double-click inside the content rows to the editor, translated into its own
      * coordinate space (docs/tui-design.md 4.3: double-click on a chip expands it). Clicks on the
-     * border or the autocomplete dropdown below it are left unhandled, matching prior behavior. */
+     * border or the autocomplete dropdown below it are left unhandled, matching prior behavior. At the
+     * ≤12-row cap (`maxContentRows`), a click's `y` is shifted by the same crop-window offset
+     * `render()` used, so a double-click on a chip on a row *within the drawn window* still lands on
+     * the right line of the editor's own (uncropped) content -- a click on a screen position outside
+     * the drawn window can't occur in practice (nothing else is drawn there) but is also harmless: it
+     * maps past the editor's real content and simply falls through unhandled below. */
     handleMouse(event) {
         const inner = Math.max(1, event.width - 6);
-        const { top, bottom } = this.contentBounds(inner);
+        const { lines, top, bottom } = this.contentBounds(inner);
         if (top === -1 || bottom === -1)
             return undefined;
         const contentHeight = bottom - top - 1;
@@ -252,7 +281,9 @@ export class PromptFrame {
         const x = event.x - PROMPT_COLUMNS;
         if (x < 0 || x >= inner)
             return undefined;
-        return this.editor.handleMouse?.({ ...event, x, width: inner, height: contentHeight });
+        const maxRows = this.maxContentRows();
+        const offset = maxRows === undefined ? 0 : cropWindow(lines.slice(top + 1, bottom), maxRows).start;
+        return this.editor.handleMouse?.({ ...event, x, y: event.y + offset, width: inner, height: contentHeight });
     }
     invalidate() {
         this.editor.invalidate();

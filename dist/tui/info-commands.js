@@ -110,6 +110,7 @@ const APP_KEY_DESCRIPTIONS = {
     "app.clear": "Clear editor; abort a running turn; twice on an empty editor to quit",
     "app.exit": "Quit (editor must be empty)",
     "app.thinking.cycle": "Cycle thinking level",
+    "app.thinking.toggle": "Expand or collapse thinking blocks",
     "app.tools.expand": "Toggle tool output",
     "app.model.select": "Open model selector",
     "app.message.followUp": "Steer the running turn (idle: send, same as Enter)",

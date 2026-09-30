@@ -81,6 +81,17 @@ function inset(component: Component, columns = 2): Component {
   };
 }
 
+/** Item 4 (docs/tui-design.md 4.1/4.2): a component that draws nothing once the terminal is this
+ * short or shorter, freeing its row(s) for the transcript instead. Reads `terminal.rows` fresh on
+ * every render, so it re-evaluates on resize for free -- nothing here caches the last size. */
+function hideBelowRows(terminal: Terminal, maxRows: number, component: Component): Component {
+  return {
+    render: (width) => (terminal.rows <= maxRows ? [] : component.render(width)),
+    invalidate: () => component.invalidate(),
+    handleMouse: (event) => (terminal.rows <= maxRows ? undefined : component.handleMouse?.(event)),
+  };
+}
+
 function readGitBranch(cwd: string): string | undefined {
   for (let dir = cwd; ; dir = dirname(dir)) {
     try {
@@ -105,6 +116,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   const statuses = new Map<string, string>();
   const widgets = { aboveEditor: new Map<string, Component>(), belowEditor: new Map<string, Component>() };
   let toolsExpanded = false;
+  let thinkingExpanded = false;
   let turn: TurnState | undefined;
   let queued: QueuedMessagesState = { steering: [], followUp: [] };
   // Messages submitted while compaction is running (Pi's compactionQueuedMessages): session.prompt()
@@ -130,7 +142,11 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     const model = session.model;
     const hasModel = model !== undefined && runtime.services.modelRuntime.getAvailableSnapshot().length > 0;
     return hasModel ? `${model.name ?? model.id} (${session.thinkingLevel})` : "no model · /login";
-  }, () => (text) => theme.fg(turn === undefined ? "border" : "borderAccent", text));
+  }, () => (text) => theme.fg(turn === undefined ? "border" : "borderAccent", text),
+  // Item 4 (docs/tui-design.md 4.1/4.2): ≤12 rows caps the editor to 1 content row, freeing the rest
+  // of a very short terminal for the transcript. Above that there's no cap (PromptFrame passes the
+  // editor's own content through unchanged).
+  () => (terminal.rows <= 12 ? 1 : undefined));
   editorSlot.addChild(prompt);
   // Preview popup for a paste/image chip (docs/tui-design.md 4.3), placed right above the prompt.
   // Hidden while a dialog occupies the editor slot (e.g. /model): the chip it would describe is
@@ -164,8 +180,13 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
         ? [{ key: "Enter", label: "expand" }, { key: "Shift+Enter", label: "newline" }]
         // "expand", not "tools": Ctrl+o now also expands a collapsed user message (item 5), not
         // just tool output.
+        // Item 3 (docs/tui-design.md 4.2/4.6): idle already had 4 hints, the limit, so `Ctrl+t:thinking`
+        // (toggle thinking blocks) replaces `Ctrl+d:quit` -- quitting is still reachable via Ctrl+C
+        // twice (app.clear's double-press, 4.7) and is the least useful of the four to lose.
+        // `Shift+Tab` (app.thinking.cycle, thinking *level*) is relabeled "effort" so it doesn't
+        // read as the same action as the new `Ctrl+t:thinking` (toggle thinking *blocks*).
         : turn === undefined
-          ? [{ key: "Shift+Tab", label: "thinking" }, { key: "Ctrl+o", label: "expand" }, { key: "/", label: "commands" }, { key: "Ctrl+d", label: "quit" }]
+          ? [{ key: "Shift+Tab", label: "effort" }, { key: "Ctrl+t", label: "thinking" }, { key: "Ctrl+o", label: "expand" }, { key: "/", label: "commands" }]
           : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "expand" }, { key: "Alt+Enter", label: "steer" }];
     return { shortcuts, right: theme.fg("muted", [...statuses.values()].join(" · ")) };
   });
@@ -177,10 +198,13 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
 
   const scroll = new piTui.ScrollView(inset(transcript.root), { follow: "end", primary: true, scrollbar: "auto" });
   const turnGap: Component = { render: () => (turn === undefined ? [] : [""]), invalidate() {} };
+  // Item 4: the header bar and shortcuts bar (plus the blank rows that frame them) disappear at
+  // ≤16 rows -- otherwise hiding just the text would keep their blank padding and save nothing.
+  const short = (component: Component) => hideBelowRows(terminal, 16, component);
   tui.setLayoutRoot(new piTui.VStack([
-    { component: blank(), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
-    { component: inset(header), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
-    { component: blank(), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: short(blank()), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: short(inset(header)), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: short(blank()), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
     { component: scroll, basis: 0, grow: 1, shrink: 1, minSize: 1 },
     { component: turnGap, basis: "auto", grow: 0, shrink: 1, minSize: 0 },
     { component: inset(turnStatus), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
@@ -190,8 +214,8 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     { component: inset(pastePreviewWidget), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
     { component: inset(editorSlot), basis: "auto", grow: 0, shrink: 1, minSize: 3 },
     { component: inset(widgetsBelow), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
-    { component: inset(footerSlot), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
-    { component: blank(), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: short(inset(footerSlot)), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
+    { component: short(blank()), basis: "auto", grow: 0, shrink: 1, minSize: 0 },
   ]));
 
   function rebuildWidgets(): void {
@@ -322,6 +346,11 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     restoreQueuedMessagesToEditor: () => restoreQueuedMessagesToEditor(),
     isWorking: () => turn !== undefined,
     toggleToolsExpanded: () => surface.setToolsExpanded(!toolsExpanded),
+    toggleThinkingExpanded: () => {
+      thinkingExpanded = !thinkingExpanded;
+      transcript.setThinkingExpanded(thinkingExpanded);
+      tui.requestRender();
+    },
     exit: (code) => exit(code),
     reloadSession: () => reloadSession(),
     // navigateTree (session-tree-commands.ts's /tree) stays on the same AgentSession instance, so

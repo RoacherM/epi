@@ -114,6 +114,52 @@ test("prompt frame keeps multi-line input inside the rails", () => {
   assert.deepEqual(lines.slice(1, -1).map((line) => line.slice(0, 9)), ["│ ❯ one  ", "│   two  ", "│   three"]);
 });
 
+// Item 4 (docs/tui-design.md 4.1/4.2): a ≤12-row terminal caps the editor to one content row.
+// `maxContentRows` is app.ts's hook for that; PromptFrame itself just has to honor it.
+test("prompt frame caps content rows to maxContentRows, keeping the row with the cursor", () => {
+  const editor = new piTui.Editor(fakeTui(), { borderColor: (text) => text, selectList: getSelectListTheme() });
+  editor.focused = true;
+  const frame = new PromptFrame(theme, editor, () => "m (off)", () => (text) => text, () => 1);
+  editor.setText("one\ntwo\nthree");
+  const lines = frame.render(40).map(plain);
+  const content = lines.slice(1, -1);
+  assert.equal(content.length, 1, "expected exactly one content row");
+  assert.match(content[0], /three/, "expected the row holding the cursor (end of the typed text)");
+  assertFits(frame);
+});
+
+test("prompt frame draws every content row when maxContentRows is unset or not exceeded", () => {
+  const editor = new piTui.Editor(fakeTui(), { borderColor: (text) => text, selectList: getSelectListTheme() });
+  const frame = new PromptFrame(theme, editor, () => "m (off)", () => (text) => text);
+  editor.setText("one\ntwo\nthree");
+  const lines = frame.render(40).map(plain);
+  assert.equal(lines.slice(1, -1).length, 3);
+});
+
+// Regression: render() crops to the row holding the cursor (cropWindow's `start` offset into the
+// editor's own, uncropped content), but handleMouse() forwarded a click's `y` unshifted -- so a
+// click on the one row actually drawn on screen mapped to whatever row *that same y* would be at
+// without the crop, not the row under the cursor. Five lines, cursor on the last one (line index 4,
+// setText's default placement): capped to 1 row, the crop window starts at 4, so a click on that one
+// visible row must reach editor content line 4, not line 0.
+test("prompt frame's handleMouse applies the same crop offset as render() at maxContentRows", () => {
+  const editor = new piTui.Editor(fakeTui(), { borderColor: (text) => text, selectList: getSelectListTheme() });
+  editor.focused = true;
+  const frame = new PromptFrame(theme, editor, () => "m (off)", () => (text) => text, () => 1);
+  editor.setText("line0\nline1\nline2\nline3\nline4");
+  const width = 40;
+  const lines = frame.render(width).map(plain);
+  assert.match(lines[1], /line4/, "sanity: the one visible row is the cursor's row");
+  const click = {
+    type: "click", button: "left", clickCount: 1,
+    x: 6, y: 1, screenX: 6, screenY: 1, width, height: lines.length,
+    shift: false, alt: false, ctrl: false,
+  };
+  const result = frame.handleMouse(click);
+  assert.ok(result?.handled, "expected the click on the visible row to be handled");
+  assert.equal(editor.getCursor().line, 4, "expected the click to land on the cursor's actual line (4), not line 0");
+});
+
 test("shortcuts bar joins key:label pairs and keeps statuses right", () => {
   const bar = shortcutsBar(theme, () => ({ shortcuts: [{ key: "Esc", label: "stop" }, { key: "Ctrl+o", label: "tools" }], right: "mcp: 3" }));
   assert.match(plain(bar.render(60)[0]), /^Esc:stop {2}│ {2}Ctrl\+o:tools +mcp: 3$/);

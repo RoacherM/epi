@@ -11,7 +11,7 @@ const KEYS = {
   enter: "\r", esc: "\x1b", "ctrl+c": "\x03", "ctrl+d": "\x04", "ctrl+x": "\x18", down: "\x1b[B", up: "\x1b[A",
   left: "\x1b[D", right: "\x1b[C", backspace: "\x7f",
   "alt+enter": "\x1b\r", "alt+up": "\x1b[1;3A", "ctrl+l": "\x0c", "ctrl+g": "\x07", "ctrl+v": "\x16", tab: "\t",
-  "ctrl+o": "\x0f",
+  "ctrl+o": "\x0f", "ctrl+t": "\x14",
 };
 // `args` replaces the default `--no-project` entirely (not appended to it), so tests that need
 // real project discovery (e.g. a cross-project /resume) can pass their own, such as ["--approve"].
