@@ -78,15 +78,19 @@ export function sentImageLabel(image) {
     return sentLabels.get(image);
 }
 /** Images from a stored user message (/fork, /tree), tagged with the labels they were sent under,
- * or none when that can't be known. The editor takes an image out of the text only for a label
- * that had data, in order, and Pi keeps that order; so when the text has exactly as many labels
- * as the message has images, no label went out without data and no image was dropped, and the
- * i-th label is the i-th image's own. Otherwise (a label typed without an image, an image Pi
- * omitted) the pairing is unknown and the labels stay without data. */
+ * or none when that can't be known. The editor attaches an image once per label that had data, in
+ * the order the labels first appear, and Pi keeps that order; so when the text has exactly as many
+ * distinct labels as the message has images, no label went out without data and no image was
+ * dropped, and the i-th label is the i-th image's own. With no labels at all (the `@image` startup
+ * message, an extension's image) nothing can be mislabelled: the images come back untagged, as new
+ * chips. Otherwise (a label typed without an image, an image Pi omitted) the pairing is unknown and
+ * the labels stay without data. */
 export function labelStoredImages(text, images) {
     if (images.every((image) => sentLabels.has(image)))
         return [...images];
-    const labels = imageLabelNumbers(text);
+    const labels = [...new Set(imageLabelNumbers(text))];
+    if (labels.length === 0)
+        return [...images];
     if (labels.length !== images.length)
         return [];
     images.forEach((image, index) => sentLabels.set(image, labels[index]));
@@ -101,6 +105,24 @@ export function unattachedImageLabels(text, images) {
 // attached image (it isn't a chip either: no preview, not deleted as a unit).
 const UNATTACHED_ON = "\x1b[2;9m";
 const UNATTACHED_OFF = "\x1b[22;29m";
+// Escapes the Editor draws inside a line: SGR styling and the caret (Pi's `\x1b_pi:c\x07` marker,
+// then an inverted character ending in a reset).
+const DRAWN_ESCAPE = String.raw `(?:\x1b\[[0-9;]*m|\x1b_[^\x07]*\x07)`;
+const DRAWN_ESCAPES = `${DRAWN_ESCAPE}*`;
+const DRAWN_ESCAPE_G = new RegExp(DRAWN_ESCAPE, "g");
+/** An `[Image #N]` label as drawn in the rendered lines joined with "\n": the caret's escapes can sit
+ * between any two characters, and a soft wrap can break it at its space (padding spaces, then the
+ * next line). Group 1 is N, possibly with escapes in it. */
+const DRAWN_IMAGE_LABEL_G = new RegExp([..."[Image"].map((char) => char.replace("[", "\\[")).join(DRAWN_ESCAPES) +
+    `${DRAWN_ESCAPES}(?: | *\\n *)${DRAWN_ESCAPES}#${DRAWN_ESCAPES}((?:\\d|${DRAWN_ESCAPE})+)\\]`, "g");
+/** Styles a drawn label as unattached: dim and struck through from `[` to `]`, again after any
+ * styling inside it (the caret's reset), and not over the padding at a soft wrap. */
+function drawUnattached(label) {
+    const restyled = label
+        .replace(DRAWN_ESCAPE_G, (escape) => (escape.endsWith("m") ? `${escape}${UNATTACHED_ON}` : escape))
+        .replace(/( *\n *)/, `${UNATTACHED_OFF}$1${UNATTACHED_ON}`);
+    return `${UNATTACHED_ON}${restyled}${UNATTACHED_OFF}`;
+}
 const LEFT_ARROW = "\x1b[D";
 const RIGHT_ARROW = "\x1b[C";
 const BACKSPACE = "\x7f";
@@ -235,7 +257,9 @@ export class ChipEditor {
         this.inner.borderColor = value;
     }
     render(width) {
-        return this.inner.render(width).map((line) => line.replace(IMAGE_LABEL_G, (label, id) => (this.imageChips.has(Number(id)) ? label : `${UNATTACHED_ON}${label}${UNATTACHED_OFF}`)));
+        const lines = this.inner.render(width);
+        const drawn = lines.join("\n").replace(DRAWN_IMAGE_LABEL_G, (label, id) => this.imageChips.has(Number(id.replace(DRAWN_ESCAPE_G, ""))) ? label : drawUnattached(label));
+        return drawn.split("\n");
     }
     invalidate() {
         this.inner.invalidate();
@@ -735,16 +759,21 @@ export class ChipEditor {
         const entry = slot === null || slot === undefined ? undefined : this.textContents.get(slot);
         return entry?.label === label ? entry.content : undefined;
     }
+    /** The text to send and its images: one per distinct label with data, in the order the labels
+     * first appear, however often the text names it ("[Image #1] … the corner of [Image #1]"). */
     resolveForSubmit(rawText, slots) {
         const images = [];
+        const attached = new Set();
         let textIndex = 0;
         const text = rawText.replace(CHIP_REGEX_G, (match, imageId) => {
             if (imageId !== undefined) {
-                const meta = this.imageChips.get(Number(imageId));
-                if (!meta)
+                const id = Number(imageId);
+                const meta = this.imageChips.get(id);
+                if (!meta || attached.has(id))
                     return match;
                 const image = { type: "image", data: meta.base64, mimeType: meta.mimeType };
-                sentLabels.set(image, Number(imageId));
+                sentLabels.set(image, id);
+                attached.add(id);
                 images.push(image);
                 return match;
             }

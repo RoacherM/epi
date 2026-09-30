@@ -650,4 +650,108 @@ describe("image numbering", { concurrency: Math.min(8, Math.max(2, availablePara
     transcript.reset(session({ getCwd: () => "/tmp" })); // a stub without getBranch
     assert.equal(transcript.highestImageNumber, 0);
   });
+
+  // D20 (the D11 review-3 leftovers).
+
+  test("D20: a label written twice sends its image once", async (t) => {
+    const run = setup(t, [ECHO_IMAGES]);
+    const { marks } = await run([
+      ["waitReady"], ["type", "see "], ["key", "ctrl+v"], pasted, ["type", " and [Image #1]"], ["mark", "typed"],
+      ["key", "enter"], settled, ["mark", "sent"],
+      ["key", "ctrl+d"],
+    ]);
+    const sent = since(marks.typed, marks.sent);
+    assert.match(sent, /ECHO:see \[Image #1\] and \[Image #1\]\|IMAGES:1/);
+    assert.doesNotMatch(sent, /No image attached/);
+  });
+
+  test("D20: Alt+Up into a draft that already names the restored label: the image still goes once", async (t) => {
+    const run = setup(t, [fixture("faux-queue-echo.mjs")]);
+    const { marks } = await run([
+      ["waitReady"], ["type", "go"], ["key", "enter"], ["waitFor", "FIRST-START"],
+      ["type", "one "], ["key", "ctrl+v"], pasted, ["key", "enter"], ["waitFor", "Follow-up:"],
+      ["type", "about [Image #1]"], ["key", "alt+up"], ["waitFor", "Restored 1 queued message"], ["mark", "restored"],
+      ["waitFor", "Worked for", { all: true }], // the first reply ended: Enter sends at once
+      ["key", "enter"], settled, ["mark", "sent"],
+      ["key", "ctrl+d"],
+    ]);
+    const sent = since(marks.restored, marks.sent);
+    assert.match(sent, /ECHO:one \[Image #1\][\s\S]*about \[Image #1\]\|IMAGES:1/);
+    assert.doesNotMatch(sent, /No image attached/);
+  });
+
+  test("D20: a stored message with a label written twice pairs its one image with that label", () => {
+    const image = () => ({ type: "image", data: "AAAA", mimeType: "image/png" });
+    const text = "[Image #2] what is in the corner of [Image #2]? and [Image #4]";
+    const paired = labelStoredImages(text, [image(), image()]);
+    assert.equal(paired.length, 2);
+    assert.deepEqual(unattachedImageLabels(text, paired), []);
+    const editor = bareEditor();
+    editor.setText(editor.restoreDraftImages(text, paired));
+    assert.equal(editor.getText(), text);
+    assert.equal(editor.getImageAttachments().length, 2);
+  });
+
+  test("D20: /fork of the @image startup message puts its image back as a chip", async (t) => {
+    const run = setup(t, [ECHO_IMAGES]);
+    const { marks } = await run([
+      ["waitReady"], settled, ["type", "a2"], ["key", "enter"], turnDone("ECHO:a2"), ["mark", "before"],
+      ["type", "/fork"], ["key", "enter"], ["waitFor", "Fork from Message"], ["key", "up"], ["key", "enter"],
+      ["waitFor", "Forked to new session."], ["waitFor", "Image #1 ─ PNG", { all: true }], ["mark", "forked"],
+      ["key", "enter"], settled, ["mark", "sent"],
+      ["key", "ctrl+d"],
+    ], ["--no-project", "@pic.png", "look"]);
+    // Like Pi, the editor gets the message's text back (the `@file` block included); unlike Pi, the
+    // image comes back too, as a new chip at the end, rather than being dropped.
+    const sent = since(marks.forked, marks.sent);
+    assert.match(sent, /ECHO:[^|]*look \[Image #1\]\|IMAGES:1/);
+    assert.doesNotMatch(sent, /No image attached/);
+  });
+
+  test("D20: a stored message with images but no labels gives every image back, as new chips", () => {
+    const image = () => ({ type: "image", data: ONE_PIXEL_PNG.toString("base64"), mimeType: "image/png" });
+    const paired = labelStoredImages("look", [image(), image()]);
+    assert.equal(paired.length, 2);
+    const editor = bareEditor();
+    editor.setText(editor.restoreDraftImages("look", paired));
+    assert.equal(editor.getText(), "look [Image #1] [Image #2]");
+    assert.equal(editor.getImageAttachments().length, 2);
+  });
+
+  test("D20: /tree back to a user message puts its image back under its label", async (t) => {
+    const run = setup(t, [ECHO_IMAGES]);
+    const { marks } = await run([
+      ["waitReady"], ["type", "a1"], ["key", "enter"], turnDone("ECHO:a1"),
+      ["type", "a2 "], ["key", "ctrl+v"], pasted, ["key", "enter"], turnDone("ECHO:a2"),
+      ["type", "/tree"], ["key", "enter"], ["waitFor", "Session Tree"],
+      ["key", "up"], ["key", "enter"], ["waitFor", "Summarize branch?"],
+      ["key", "enter"], ["waitFor", "Navigated to selected point."], ["mark", "navigated"],
+      ["key", "enter"], settled, ["mark", "sent"],
+      ["key", "ctrl+d"],
+    ]);
+    const sent = since(marks.navigated, marks.sent);
+    assert.match(sent, /ECHO:a2 \[Image #1\]\|IMAGES:1/);
+    assert.doesNotMatch(sent, /No image attached/);
+  });
+
+  test("D20: an unattached label keeps its look when a soft wrap splits it or the caret is inside it", () => {
+    const styled = (lines) => lines.join("\n").replace(/\x1b_[^\x07]*\x07/g, "");
+    const wrapped = bareEditor();
+    wrapped.insertTextAtCursor("abcdefghij [Image #7] tail");
+    const wrappedLines = wrapped.render(20);
+    assert.ok(wrappedLines.some((line) => line.includes("[Image")) && !wrappedLines.some((line) => line.includes("[Image #7]")), "the label is wrapped");
+    assert.match(styled(wrappedLines), /\x1b\[2;9m\[Image\x1b\[22;29m *\n\x1b\[2;9m#7\]\x1b\[22;29m tail/);
+    const caret = bareEditor();
+    caret.focused = true;
+    caret.insertTextAtCursor("x [Image #7] y");
+    for (let i = 0; i < 6; i += 1) caret.handleInput("\x1b[D"); // onto the label's space
+    const caretText = styled(caret.render(60));
+    // Dim and struck through from `[` to `]`, including after the caret's own reset.
+    assert.match(caretText, /\x1b\[2;9m\[Image(?:\x1b\[[0-9;]*m)* \x1b\[0m\x1b\[2;9m#7\]\x1b\[22;29m y/);
+    // A label with data is left alone, wrapped or not.
+    const chip = bareEditor();
+    chip.insertTextAtCursor("abcdefghij ");
+    chip.insertImageChip(ONE_PIXEL_PNG, "image/png");
+    assert.doesNotMatch(chip.render(20).join("\n"), /\x1b\[2;9m/);
+  });
 });
