@@ -225,6 +225,8 @@ export async function runTuiApp(options) {
         tui.setWheelScrollLines(settings.getFullscreenWheelScrollLines());
         scroll.setScrollbar(settings.getFullscreenScrollbar());
         editor.setAutocompleteMaxVisible(settings.getAutocompleteMaxVisible());
+        if (!settings.getShowTerminalProgress())
+            clearTerminalProgress();
     }
     /** Pi's applyRuntimeSettings: on every bind(), /reload, and after a /settings change. Like Pi's,
      * it leaves autocomplete alone; bind(), /reload and the skill-commands item rebuild that. */
@@ -328,6 +330,7 @@ export async function runTuiApp(options) {
         flash: (text) => tui.flash(text),
         addBlock: (component) => transcript.addBlock(component),
         getEditorText: () => editor.getText(),
+        isShowingAutocomplete: () => editor.isShowingAutocomplete(),
         setEditorText: (text) => surface.setEditorText(text),
         restoreEditorDraft: (text, images) => surface.setEditorText(editor.restoreDraftImages(text, images)),
         getExpandedEditorText: () => editor.getExpandedText(),
@@ -388,8 +391,30 @@ export async function runTuiApp(options) {
     let tuiStopped = false;
     function stopTui() {
         tuiStopped = true;
+        clearTerminalProgress();
         turnStatus.stop();
         tui.stop({ preserveScreen: true });
+    }
+    /** Pi's terminal progress (dogfood D31): with terminal-progress on (off by default), the tab bar
+     * shows OSC 9;4 progress from each turn_start/compaction_start until agent_end/compaction_end,
+     * and it is cleared when the TUI stops (interactive-mode.js handleEvent and stop()). Unlike Pi,
+     * clearing doesn't check the setting again, and turning the setting off mid-turn clears it at
+     * once (applyUiSettings), so it can't stay on (ProcessTerminal.setProgress also re-sends it every
+     * second until cleared). Also unlike Pi, nothing sets it after the TUI stopped: session events
+     * keep arriving while session_shutdown handlers run, and a turn_start there would turn it back
+     * on with no agent_end to follow (session.dispose drops the listeners), leaving it on after exit. */
+    let terminalProgress = false;
+    function showTerminalProgress() {
+        if (tuiStopped || !session.settingsManager.getShowTerminalProgress())
+            return;
+        terminalProgress = true;
+        terminal.setProgress(true);
+    }
+    function clearTerminalProgress() {
+        if (!terminalProgress)
+            return;
+        terminalProgress = false;
+        terminal.setProgress(false);
     }
     /** Pi's shutdown() (interactive-mode.js ~3383): drain late key releases, stop the TUI, then
      * dispose the runtime -- session_shutdown handlers first, then the session aborts any running
@@ -550,10 +575,14 @@ export async function runTuiApp(options) {
                 turn = { startedAt: now, phaseStartedAt: now, activity: "Waiting for response…", outputTokens: 0, estimated: false };
                 inAgentLoop = true;
                 break;
+            case "turn_start":
+                showTerminalProgress();
+                break;
             case "agent_end":
                 turn = undefined;
                 inAgentLoop = false;
                 workingMessage = undefined;
+                clearTerminalProgress();
                 break;
             case "queue_update":
                 queued = { steering: event.steering, followUp: event.followUp };
@@ -581,11 +610,13 @@ export async function runTuiApp(options) {
             // shows a CompactionStatusIndicator and lets Esc cancel it via a temporary onEscape override;
             // MMP's app.interrupt checks session.isCompacting instead, so the shared turn state suffices).
             case "compaction_start":
+                showTerminalProgress();
                 turn = turn === undefined
                     ? { startedAt: now, phaseStartedAt: now, activity: "Compacting…", outputTokens: 0, estimated: false }
                     : { ...turn, activity: "Compacting…", phaseStartedAt: now };
                 break;
             case "compaction_end":
+                clearTerminalProgress();
                 // Pi's interactive mode clears its compaction indicator here unconditionally and shows the
                 // working one again on the next agent_start. MMP has one shared turn state, so: inside the
                 // agent loop (a threshold compaction before the next request) the request follows; after a

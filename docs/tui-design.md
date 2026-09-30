@@ -360,11 +360,14 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | `skill-commands` | MMP 接线 | 重建补全（`slashCompletions` 读它） |
 | `show-hardware-cursor` | MMP 接线 | `tui.setShowHardwareCursor`。没设置时是关，不看 `PI_HARDWARE_CURSOR`（主控 2026-10-01：MMP 不认用户 Pi 环境里的 `PI_*` 变量，同 `MMP_SESSION_DIR` 的先例）。Pi 的 `getShowHardwareCursor` 会回退到这个环境变量，所以界面和 `/settings` 都用 `settings-command.ts` 的 `showHardwareCursor()`（`getGlobalSettings().showHardwareCursor ?? false`） |
 | `autocomplete-max-visible` | MMP 接线 | `Editor.setAutocompleteMaxVisible` |
+| `terminal-progress` | MMP 接线（D31） | 同 Pi（`interactive-mode.js` 的 `handleEvent`、`stop()`）：打开时（默认关）每次 `turn_start`/`compaction_start` 调 `terminal.setProgress(true)`（OSC 9;4;3，pi-tui 每秒重发），`agent_end`/`compaction_end` 清掉；`app.ts` 的 `stopTui()` 也清，所以 `exit()`、崩溃、`fatal()` 这些退出路径都会清。和 Pi 两处不同：回合中途关掉设置会马上清掉进度（清除时也不再看设置）；TUI 停下后不再打开进度——退出时 `session_shutdown` 处理期间回合可能进到下一轮，Pi 会在这时重新打开，而 `session.dispose` 已丢掉监听、等不到 `agent_end`，进度会留在退出后的标签页上 |
 | `steering-mode`、`follow-up-mode` | Pi 核心 | `session.setSteeringMode`/`setFollowUpMode`。说明文字改了：MMP 里运行中 Enter 是 follow-up、Alt+Enter 是 steer（4.7 节），和 Pi 相反 |
 | `transport` | Pi 核心 | 写设置并改 `session.agent.transport`，同 Pi |
 | `http-idle-timeout` | MMP 接线 | 重跑 `services.ts` 的 `configureHttp`（Pi 的 `configureHttpDispatcher` 没导出） |
 | `cache-warming-mode` | Pi 核心 | `session.setCacheWarmingMode` |
+| `double-escape-action` | MMP 的按键每次都读（D30） | 只写设置。空输入框、没有在运行时，500ms 内按两次 Esc 打开 `/tree`（默认）或 `/fork`，`none` 什么都不做（4.7 节） |
 | `tree-filter-mode` | MMP 的 `/tree` 每次打开都读 | 只写设置 |
+| `model-thinking` | Pi 核心 + MMP 子菜单（D29） | Pi 的两步子菜单（先选模型，再选档位，可清除）用 pi-tui 的 `SelectList`/`Input` 重搭（`src/tui/model-thinking-submenu.ts`，Pi 的 `SelectSubmenu`/`SteppedSubmenu` 没导出）。选了档位就 `setModelThinkingLevel`/`removeModelThinkingLevel`；是当前模型时同时 `session.setThinkingLevel`，输入框底边的 `(档位)` 马上变。切模型时由 `AgentSession.setModel`/`cycleModel` 自己套用（`_getThinkingLevelForModelSwitch`），启动时由 `createAgentSession` 套用 |
 | `fullscreen-scrollbar` | MMP 接线 | 对话区 `ScrollView.setScrollbar` |
 | `fullscreen-copy-on-select` | MMP 接线 | `TuiAltScreen.setCopyOnSelect`。没设置时是开（决策 T3，Pi 的 getter 默认 `true`）。说明文字和 Pi 一样：关掉后 Ctrl+X 复制选区（D34） |
 | `fullscreen-wheel-scroll-lines` | MMP 接线 | `TuiAltScreen.setWheelScrollLines`。没设置时用 Pi 的默认值 `auto`（以前 MMP 固定 1 行；`auto` 下单独一格还是 1 行，只有非 macOS 本地终端快速滚动时会加速） |
@@ -383,13 +386,11 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | `show-images`、`image-width-cells` | MMP 的工具块不在终端里画图 |
 | `mermaid-rendering` | Pi 的 mermaid 转换器没导出 |
 | `cache-miss-notices` | MMP 不显示缓存未命中提示（`computeCacheWaste` 没导出） |
-| `double-escape-action`、`terminal-progress` | 要先给 MMP 加新行为（Esc 两下、OSC 9;4），另记 dogfood 条目 |
 | `quiet-startup`、`collapse-changelog` | MMP 有自己的启动页和 `/changelog` |
 | `install-telemetry` | 只有 Pi 的交互模式发这个统计，MMP 从不发 |
 | `warnings` | 里面唯一一项（Anthropic extra usage 警告）只在 Pi 的界面里显示 |
-| `model-thinking` | 先不做（主控 2026-10-01）：当前模型用 `/thinking` 和 Shift+Tab；另记 dogfood 条目 |
 
-测试：`test/tui-commands-session-tree.test.mjs`、`test/tui-commands-export-import.test.mjs`、`test/tui-commands-info.test.mjs`、`test/tui-commands-share.test.mjs`、`test/tui-settings.test.mjs`。
+测试：`test/tui-commands-session-tree.test.mjs`、`test/tui-commands-export-import.test.mjs`、`test/tui-commands-info.test.mjs`、`test/tui-commands-share.test.mjs`、`test/tui-settings.test.mjs`、`test/tui-double-escape.test.mjs`、`test/tui-terminal-progress.test.mjs`。
 
 扩展命令、prompt 模板和 skill 命令不用宿主执行，交给 `session.prompt("/名字 参数")` 即可（SDK 笔记第 4 节）。宿主只拦截自己的内置命令。
 
@@ -407,6 +408,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | 运行中按 `Enter` | steer：插进当前这轮 | follow-up：排到这轮结束后 | grok 的语义，行为更可预测 |
 | 运行中按 `Alt+Enter` | follow-up | steer | 和上一条对调 |
 | `Esc`（运行中） | 中止 | 中止（不变） | grok 要求按 Ctrl+C 才取消，但 Pi 用户已经习惯 Esc |
+| `Esc Esc`（空输入框、没在运行） | 按 `double-escape-action` 打开 `/tree` 或 `/fork` | 不变（D30） | `keys.ts` 里排在中止那条 `app.interrupt` 后面，运行中总是先中止；补全列表打开时 Esc 留给输入框关列表 |
 | `Ctrl+C` | 清空输入，连按两次退出 | 输入非空时清空；输入为空时中止；连按两次退出 | 合并两边 |
 | `Shift+Tab` | 切换思考档位 | 不变 | MMP 没有 grok 的权限模式，不冲突 |
 

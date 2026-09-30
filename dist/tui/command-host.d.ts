@@ -26,6 +26,8 @@ export interface CommandHost {
     /** Append a block to the transcript (command output, info panels). */
     addBlock(component: Component): void;
     getEditorText(): string;
+    /** Whether the editor's autocomplete list is open (it takes Esc to close itself). */
+    isShowingAutocomplete(): boolean;
     setEditorText(text: string): void;
     /** Sent text back into the editor with its images, each under the `[Image #N]` label it was
      * sent under (ChipEditor.restoreDraftImages); labels left without an image show as unattached. */

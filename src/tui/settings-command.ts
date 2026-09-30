@@ -8,6 +8,7 @@ import { DynamicBorder, getSettingsListTheme, keyText, type AgentSession, type S
 import type { SettingItem } from "@earendil-works/pi-tui";
 
 import type { CommandHost } from "./command-host.js";
+import { modelThinkingSubmenu, modelThinkingSummary } from "./model-thinking-submenu.js";
 import { piTui } from "./pi-tui.js";
 
 /** Pi's HTTP_IDLE_TIMEOUT_CHOICES (core/http-dispatcher.js, not exported). */
@@ -31,6 +32,7 @@ type Transport = Parameters<SettingsManager["setTransport"]>[0];
 type QueueMode = Parameters<AgentSession["setSteeringMode"]>[0];
 type CacheWarmingMode = Parameters<AgentSession["setCacheWarmingMode"]>[0];
 type TreeFilterMode = Parameters<SettingsManager["setTreeFilterMode"]>[0];
+type DoubleEscapeAction = Parameters<SettingsManager["setDoubleEscapeAction"]>[0];
 type Scrollbar = Parameters<SettingsManager["setFullscreenScrollbar"]>[0];
 
 interface MmpSetting {
@@ -133,6 +135,22 @@ export function settingsItems(host: CommandHost): MmpSetting[] {
       },
     },
     {
+      // D31: app.ts reads it at every turn_start/compaction_start, like Pi, so it takes effect on
+      // the next turn. Turning it off clears a running turn's progress at once (applySettings),
+      // which Pi doesn't do.
+      item: {
+        id: "terminal-progress",
+        label: "Terminal progress",
+        description: "Show OSC 9;4 progress indicators in the terminal tab bar",
+        currentValue: bool(settings.getShowTerminalProgress()),
+        values: ["true", "false"],
+      },
+      apply: (value) => {
+        settings.setShowTerminalProgress(value === "true");
+        host.applySettings();
+      },
+    },
+    {
       item: {
         id: "steering-mode",
         label: "Steering mode",
@@ -198,6 +216,17 @@ export function settingsItems(host: CommandHost): MmpSetting[] {
       },
     },
     {
+      // D30: read by the Esc Esc key action (keys.ts) at each press.
+      item: {
+        id: "double-escape-action",
+        label: "Double-escape action",
+        description: "Action when pressing Escape twice with empty editor",
+        currentValue: settings.getDoubleEscapeAction(),
+        values: ["tree", "fork", "none"],
+      },
+      apply: (value) => settings.setDoubleEscapeAction(value as DoubleEscapeAction),
+    },
+    {
       item: {
         id: "tree-filter-mode",
         label: "Tree filter mode",
@@ -206,6 +235,17 @@ export function settingsItems(host: CommandHost): MmpSetting[] {
         values: ["default", "no-tools", "user-only", "labeled-only", "all"],
       },
       apply: (value) => settings.setTreeFilterMode(value as TreeFilterMode),
+    },
+    {
+      // D29: the submenu saves each level itself; its value is only the summary it closes with.
+      item: {
+        id: "model-thinking",
+        label: "Default thinking level per model",
+        description: `Override the default thinking level for specific models. ${keyText("app.thinking.cycle")} cycles in-session.`,
+        currentValue: modelThinkingSummary(settings.getAllModelThinkingLevels()),
+        submenu: (_currentValue, done) => modelThinkingSubmenu(host, done),
+      },
+      apply: () => {},
     },
     {
       item: {

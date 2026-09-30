@@ -56,22 +56,24 @@ const after = (marks, from, to) => marks[to].slice(marks[from].length);
 
 const SHOWN = [
   "Auto-compact", "Auto-resize images", "Block images", "Skill commands", "Show hardware cursor",
-  "Autocomplete max items", "Steering mode", "Follow-up mode", "Transport", "HTTP idle timeout",
-  "Cache warming", "Tree filter mode", "Fullscreen scrollbar", "Fullscreen copy on select",
+  "Autocomplete max items", "Terminal progress", "Steering mode", "Follow-up mode", "Transport",
+  "HTTP idle timeout", "Cache warming", "Double-escape action", "Tree filter mode",
+  "Default thinking level per model", "Fullscreen scrollbar", "Fullscreen copy on select",
   "Fullscreen wheel scrolling",
 ];
+// Opens a submenu instead of cycling values (the per-model thinking levels, D29).
+const SUBMENU = "Default thinking level per model";
 // Pi's items MMP leaves out, and why: docs/tui-design.md 4.6. "Show images"/"Image width" only
 // exist in Pi's list when the terminal can draw images.
 const HIDDEN = [
-  "Show images", "Image width", "Editor padding", "Output padding", "Clear on shrink", "Terminal progress",
+  "Show images", "Image width", "Editor padding", "Output padding", "Clear on shrink",
   "Hide thinking", "Mermaid diagrams", "Cache miss notices", "Collapse changelog", "Quiet startup",
-  "Install telemetry", "Default project trust", "Double-escape action", "Warnings",
-  "Default thinking level per model", "TUI mode", "Fullscreen exit output", "Theme",
+  "Install telemetry", "Default project trust", "Warnings", "TUI mode", "Fullscreen exit output", "Theme",
 ];
 // Pi's wording names keys or behaviour MMP does not have (see src/tui/settings-command.ts).
 const OWN_DESCRIPTION = new Set(["steering-mode", "follow-up-mode"]);
 
-test("/settings lists MMP's 15 items and none of the ones it leaves out", (t) => {
+test("/settings lists MMP's 18 items and none of the ones it leaves out", (t) => {
   const env = makeEnv(t);
   const { marks } = env.run([
     ["waitReady"], ["mark", "start"],
@@ -106,7 +108,7 @@ test("every item saves to ~/.mmp/pi/settings.json, nothing lands under ~/.pi or 
   const env = makeEnv(t);
   const { marks } = env.run([
     ["waitReady"],
-    ...SHOWN.flatMap((label) => change(label)),
+    ...SHOWN.filter((label) => label !== SUBMENU).flatMap((label) => change(label)),
     ["mark", "changed"], ...quit,
   ]);
   assert.match(marks.changed, /HTTP idle timeout: disabled/);
@@ -118,11 +120,13 @@ test("every item saves to ~/.mmp/pi/settings.json, nothing lands under ~/.pi or 
     enableSkillCommands: false,
     showHardwareCursor: true,
     autocompleteMaxVisible: 7,
+    terminal: { showTerminalProgress: true },
     steeringMode: "all",
     followUpMode: "all",
     transport: "sse",
     httpIdleTimeoutMs: 0,
     cacheWarming: "idle",
+    doubleEscapeAction: "fork",
     treeFilterMode: "no-tools",
     fullscreenScrollbar: "always",
     fullscreenCopyOnSelect: false,
@@ -141,7 +145,8 @@ test("every item saves to ~/.mmp/pi/settings.json, nothing lands under ~/.pi or 
   ]);
   const list = after(restarted.marks, "start", "walked");
   for (const [label, value] of [
-    ["Auto-compact", "false"], ["Block images", "true"], ["Steering mode", "all"], ["Transport", "sse"],
+    ["Auto-compact", "false"], ["Block images", "true"], ["Terminal progress", "true"], ["Steering mode", "all"], ["Transport", "sse"],
+    ["Double-escape action", "fork"],
     ["HTTP idle timeout", "disabled"], ["Cache warming", "idle"], ["Tree filter mode", "no-tools"],
     ["Fullscreen copy on select", "false"], ["Fullscreen wheel scrolling", "1"],
   ]) assert.match(list, new RegExp(`→ ${label} +${value}`), label);
@@ -160,6 +165,66 @@ test("a Pi-core item changed in /settings takes effect at once: /tree opens with
   assert.match(marks.before, /\(3\/3\)\s/);
   assert.doesNotMatch(marks.before, /\[no-tools\]/);
   assert.match(after(marks, "changed", "after"), /\(\d+\/\d+\) \[no-tools\]/);
+});
+
+const openModelThinking = [
+  ["type", "/settings"], ["key", "enter"], ["waitFor", "Type to search"],
+  ["type", "Default thinking"], ["wait", 50], ["key", "enter"], ["waitFor", "Per-Model Thinking Level"],
+];
+
+test("Default thinking level per model (D29): the submenu saves a model's level, and switching to it applies it", (t) => {
+  const env = makeEnv(t, { extension: "faux-two-reasoning-models.mjs" });
+  const { marks } = env.run([
+    ["waitReady"], ["waitFor", "thinker-a (medium)", { all: true }], ["mark", "start"],
+    ...openModelThinking, ["mark", "models"],
+    ["type", "thinker-b"], ["key", "enter"], ["waitFor", "Thinking Level for thinker-b [mmp-faux]"], ["mark", "levels"],
+    // off, minimal, low, medium, high: nothing saved yet, so "off" is selected.
+    ["key", "down"], ["key", "down"], ["key", "down"], ["key", "down"], ["key", "enter"],
+    ["waitFor", "Per-Model Thinking Level"], ["mark", "saved"],
+    ["key", "esc"], ["waitFor", "1 configured"], ["mark", "closed"],
+    ["key", "esc"], ["wait", 150], ["mark", "prompt"],
+    ["type", "/model thinker-b"], ["key", "enter"], ["waitFor", "thinker-b (high)"], ["mark", "switched"],
+    ...quit,
+  ]);
+  const models = after(marks, "start", "models");
+  assert.match(models, /Step 1\/2 · Select a model to configure/);
+  // Pi lists the current model first.
+  assert.match(models, /thinker-a \[mmp-faux\][\s\S]*thinker-b \[mmp-faux\]/);
+  const levels = after(marks, "models", "levels");
+  assert.match(levels, /Step 2\/2 · Select default thinking level for this model/);
+  assert.match(levels, /off +No reasoning[\s\S]*high +Deep reasoning/);
+  assert.doesNotMatch(levels, /clear override/);
+  assert.match(after(marks, "levels", "saved"), /thinker-b \[mmp-faux\] +high/);
+  assert.deepEqual(env.readSettings().modelThinkingLevels, { "mmp-faux/thinker-b": "high" });
+  // Another model's level leaves the current one alone.
+  assert.match(after(marks, "closed", "prompt"), /thinker-a \(medium\)/);
+  assert.doesNotMatch(after(marks, "closed", "prompt"), /thinker-a \(high\)/);
+  assert.match(after(marks, "prompt", "switched"), /Model: mmp-faux\/thinker-b/);
+});
+
+test("Default thinking level per model (D29): the current model's level applies at once; clearing it reverts to the global default", (t) => {
+  const env = makeEnv(t, {
+    extension: "faux-two-reasoning-models.mjs",
+    settings: { defaultThinkingLevel: "minimal", modelThinkingLevels: { "mmp-faux/thinker-a": "high" } },
+  });
+  const { marks } = env.run([
+    ["waitReady"], ["waitFor", "thinker-a (high)", { all: true }], ["mark", "start"],
+    // The current model is listed and selected first; its saved "high" is selected on the levels.
+    ...openModelThinking, ["key", "enter"], ["waitFor", "Thinking Level for thinker-a"], ["mark", "levels"],
+    ["key", "up"], ["key", "up"], ["key", "enter"], ["waitFor", "Per-Model Thinking Level"],
+    ["key", "esc"], ["key", "esc"], ["waitFor", "thinker-a (low)"], ["mark", "low"],
+    // off, minimal, low (saved, selected), medium, high, (clear override).
+    ...openModelThinking, ["key", "enter"], ["waitFor", "(clear override)"],
+    ["key", "down"], ["key", "down"], ["key", "down"], ["key", "enter"], ["waitFor", "Per-Model Thinking Level"],
+    ["key", "esc"], ["waitFor", "none"], ["key", "esc"], ["waitFor", "thinker-a (minimal)"], ["mark", "cleared"],
+    ...quit,
+  ]);
+  const levels = after(marks, "start", "levels");
+  assert.match(levels, /✓ high/);
+  assert.match(levels, /\(clear override\) +Revert to global default \(minimal\)/);
+  assert.match(after(marks, "levels", "low"), /thinker-a \(low\)/);
+  assert.equal(env.readSettings().modelThinkingLevels, undefined);
+  assert.equal(env.readSettings().defaultThinkingLevel, "minimal");
 });
 
 test("Autocomplete max items applies at once and at the next start", (t) => {
@@ -421,7 +486,7 @@ test("MMP's items match Pi's SettingsSelectorComponent: same order, labels, desc
   const { SettingsManager, SettingsSelectorComponent } = await import("@earendil-works/pi-coding-agent");
   const { installMmpTheme } = await import("../dist/tui/theme.js");
   const { settingsItems } = await import("../dist/tui/settings-command.js");
-  installMmpTheme(agentDir, "dark");
+  const theme = installMmpTheme(agentDir, "dark");
 
   const settings = SettingsManager.inMemory();
   const config = {
@@ -492,6 +557,8 @@ test("MMP's items match Pi's SettingsSelectorComponent: same order, labels, desc
     const piItem = piItems.find((candidate) => candidate.label === item.label);
     assert.equal(item.currentValue, piItem.value, `${item.id}: current value`);
     if (!OWN_DESCRIPTION.has(item.id)) assert.equal(item.description, piItem.description, `${item.id}: description`);
+    // A submenu has no values to cycle; the D29 tests above drive it.
+    if (item.submenu !== undefined) continue;
     // Pi's values, in order: search the item, press Enter through every value.
     const selector = pi();
     for (const char of item.label) selector.getSettingsList().handleInput(char);
@@ -516,4 +583,65 @@ test("MMP's items match Pi's SettingsSelectorComponent: same order, labels, desc
     for (const char of timeout.item.label) selector.getSettingsList().handleInput(char);
     assert.equal(read(selector).value, label, `http-idle-timeout: Pi's label for ${settings.getHttpIdleTimeoutMs()} ms`);
   }
+
+  // D29: MMP's copy of Pi's model-thinking submenu draws what Pi's does at each step: the models
+  // (current first, then the default model, saved levels beside them), a reasoning model's levels
+  // with the saved one ticked and "(clear override)", a non-reasoning model's "off", the search box
+  // filtering the models, and the loop back to the models after saving. No global default level is
+  // set, so "(clear override)" shows Pi's DEFAULT_THINKING_LEVEL (core/defaults.js, not exported;
+  // read by path here only) against MMP's copy.
+  const { modelThinkingSubmenu } = await import("../dist/tui/model-thinking-submenu.js");
+  const { DEFAULT_THINKING_LEVEL } = await import(new URL("./core/defaults.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href);
+  const model = (provider, id, reasoning) => ({ provider, id, name: id, reasoning, input: ["text"] });
+  const models = [model("zeta", "plain-model", false), model("alpha", "reasoner", true), model("beta", "other", true)];
+  const thinking = SettingsManager.inMemory();
+  thinking.setModelThinkingLevel("alpha", "reasoner", "high");
+  // The default model sorts last by provider, so only the default-model rule puts it second.
+  thinking.setDefaultModelAndProvider("zeta", "plain-model");
+  /** Pi's and MMP's submenus over the same settings, opened as Pi's showSettingsSelector does. */
+  const submenus = (currentModel) => {
+    const pi = new SettingsSelectorComponent({
+      ...config, availableDefaultModels: models, currentModel,
+      defaultModel: `${thinking.getDefaultProvider()}/${thinking.getDefaultModel()}`,
+      thinkingLevel: thinking.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+      modelThinkingLevels: thinking.getAllModelThinkingLevels(),
+    }, noop);
+    for (const char of "Default thinking level per model") pi.getSettingsList().handleInput(char);
+    pi.getSettingsList().handleInput("\r");
+    const mmp = modelThinkingSubmenu({
+      theme,
+      tui: { requestRender() {} },
+      session: () => ({ settingsManager: thinking, modelRuntime: { getAvailableSnapshot: () => models }, model: currentModel }),
+    }, () => {});
+    return { pi, mmp };
+  };
+  // Pi's selector draws a border above and below whatever the list shows.
+  const drawn = (component, border) => component.render(100).map((line) => strip(line).trimEnd()).slice(border ? 1 : 0, border ? -1 : undefined);
+  const same = ({ pi, mmp }, step) => assert.deepEqual(drawn(mmp, false), drawn(pi, true), `model-thinking: ${step}`);
+  const both = ({ pi, mmp }, data) => {
+    pi.getSettingsList().handleInput(data);
+    mmp.handleInput(data);
+  };
+
+  // No current model: the default model comes first and is preselected.
+  same(submenus(undefined), "models with no current model");
+
+  const menus = submenus(models[1]);
+  same(menus, "models");
+  both(menus, "\r");
+  same(menus, "levels of the current model");
+  both(menus, "\x1b");
+  same(menus, "back to the models");
+  both(menus, DOWN);
+  both(menus, "\r");
+  same(menus, "levels of a model without reasoning");
+  both(menus, "\x1b");
+  for (const char of "oth") both(menus, char);
+  same(menus, "models filtered by the search box");
+  both(menus, "\r");
+  same(menus, "levels of a searched model");
+  both(menus, DOWN);
+  both(menus, "\r");
+  same(menus, "back to the models after saving a level");
+  assert.equal(thinking.getAllModelThinkingLevels()["beta/other"], "minimal", "MMP's submenu saved the level");
 });
