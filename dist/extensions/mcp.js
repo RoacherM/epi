@@ -114,9 +114,10 @@ export function emptyStateMessage(mmpHome, cwd) {
  * alarm). A server still connecting -- or one without a connection yet because Pi's MCP runtime has
  * not even loaded -- gets a "still connecting" line. Config errors are not reported here: those
  * already fail eagerly before Pi starts (`buildInlineExtensions` throwing `MmpConfigError`,
- * docs/mcp-design.md §2).
+ * docs/mcp-design.md §2). `connectingOnly` leaves out the failed / needs-sign-in lines, for a mode
+ * where Pi's own `reportProblems()` already reaches the user.
  */
-async function mcpProblemLines(completions, enabledServerNames) {
+async function mcpProblemLines(completions, enabledServerNames, connectingOnly) {
     const states = new Map(((await completions("reconnect ")) ?? []).map((item) => [item.label, item.description ?? ""]));
     const lines = [];
     for (const name of new Set([...enabledServerNames, ...states.keys()])) {
@@ -124,7 +125,7 @@ async function mcpProblemLines(completions, enabledServerNames) {
         if (state === undefined || state.startsWith("connecting")) {
             lines.push(`mcp: ${name} is still connecting; its tools become available once connected`);
         }
-        else if (state.startsWith("failed") || state.startsWith("needs sign-in")) {
+        else if (!connectingOnly && (state.startsWith("failed") || state.startsWith("needs sign-in"))) {
             lines.push(`${name}: ${state}`);
         }
     }
@@ -192,8 +193,11 @@ export function createMmpMcpExtension(source) {
             let loadFailed = false;
             const reportedFailures = new Set();
             let reportedThisSession = false;
+            // Dogfood D52: set when Pi's own before_agent_start handler notifies. In Pi 0.99.1 its only
+            // notify there is "MCP servers are still connecting; ...", sent once its startup wait runs out.
+            let piReportedStillConnecting = false;
             const bindTo = (owner, value) => typeof value === "function" ? value.bind(owner) : value;
-            const reportingContext = (ctx) => new Proxy(ctx, {
+            const reportingContext = (ctx, event) => new Proxy(ctx, {
                 get(target, prop) {
                     if (prop !== "ui")
                         return bindTo(target, Reflect.get(target, prop, target));
@@ -203,6 +207,8 @@ export function createMmpMcpExtension(source) {
                             if (uiProp !== "notify")
                                 return bindTo(uiTarget, Reflect.get(uiTarget, uiProp, uiTarget));
                             return (message, type) => {
+                                if (event === "before_agent_start")
+                                    piReportedStillConnecting = true;
                                 if (type === "error" && target.mode !== "tui") {
                                     loadFailed = true;
                                     if (!target.hasUI && !reportedFailures.has(message)) {
@@ -221,11 +227,12 @@ export function createMmpMcpExtension(source) {
                 loadFailed = false;
                 reportedFailures.clear();
                 reportedThisSession = false;
+                piReportedStillConnecting = false;
             });
             const wrappedPi = new Proxy(pi, {
                 get(target, prop, _receiver) {
                     if (prop === "on") {
-                        return (event, handler) => target.on(event, (piEvent, ctx) => handler(piEvent, reportingContext(ctx)));
+                        return (event, handler) => target.on(event, (piEvent, ctx) => handler(piEvent, reportingContext(ctx, event)));
                     }
                     if (prop === "registerCommand") {
                         return (name, commandOptions) => {
@@ -297,15 +304,29 @@ export function createMmpMcpExtension(source) {
             // session_start instead would wait before the prompt starts, and then Pi's own timer would
             // start from zero on top of that, doubling the bound for a hung server. Nothing is left
             // running after this handler returns, so a server that settles later cannot print anything.
+            //
+            // Dogfood D52: in rpc (a UI, but not the TUI) Pi's own notifies do reach the client, so each
+            // problem is reported there once, like the D47 failures above: failed and needs-sign-in servers
+            // come from Pi's reportProblems(), and servers still connecting after Pi's startup wait from
+            // Pi's own before_agent_start notify. MMP adds only what Pi says nothing about -- servers still
+            // connecting when Pi's startup wait did finish (registered later, through mcp_servers_change) --
+            // and sends it through the same client channel, not stderr.
             pi.on("before_agent_start", async (_event, ctx) => {
                 if (ctx.mode === "tui" || reportedThisSession || loadFailed || piMcpCompletions === undefined)
                     return;
                 reportedThisSession = true;
+                if (ctx.hasUI && piReportedStillConnecting)
+                    return;
                 const configured = loadConfig(ctx).servers.filter((entry) => entry.config.enabled !== false);
                 const registered = pi.getMcpServers().filter((server) => server.config.enabled !== false);
                 const enabledServerNames = [...configured, ...registered].map((server) => server.name);
-                const lines = await mcpProblemLines(piMcpCompletions, enabledServerNames);
-                if (lines.length > 0) {
+                const lines = await mcpProblemLines(piMcpCompletions, enabledServerNames, ctx.hasUI);
+                if (lines.length === 0)
+                    return;
+                if (ctx.hasUI) {
+                    ctx.ui.notify(lines.join("\n"), "info");
+                }
+                else {
                     process.stderr.write(`${lines.join("\n")}\n`);
                 }
             });

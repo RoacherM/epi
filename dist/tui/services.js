@@ -229,11 +229,8 @@ export async function createMmpRuntime(options) {
         // adds them itself (~641-648). Without this, a Manifest extension that failed to load was
         // skipped with nothing on screen (dogfood D45).
         const extensions = services.resourceLoader.getExtensions();
-        const extensionLoadErrors = new Set();
         for (const { path, error } of extensions.errors) {
-            const diagnostic = { type: "error", message: `Failed to load extension "${path}": ${error}` };
-            extensionLoadErrors.add(diagnostic);
-            diagnostics.push(diagnostic);
+            diagnostics.push({ type: "error", message: `Failed to load extension "${path}": ${error}` });
         }
         for (const { path, warning } of extensions.warnings ?? []) {
             diagnostics.push({ type: "warning", message: `Extension package "${path}": ${warning}` });
@@ -302,14 +299,17 @@ export async function createMmpRuntime(options) {
         // just startup -- after the TUI's alt screen is up, that writes raw over the fullscreen UI. Pi
         // shows startup diagnostics in the transcript instead (interactive-mode.js ~817); MMP's `bind()`
         // does the same with `runtime.diagnostics`, so nothing is dropped, it just isn't printed here.
-        // Extension load errors are fatal only for the initial runtime, like Pi (main.js exits after the
-        // first createAgentSessionRuntime only). Extensions re-run on every /new, /resume, /fork and
-        // /import; there a load error stays a diagnostic, which bind() shows as a transcript notice.
-        const isInitialRuntime = sessionStartEvent === undefined;
-        const errors = diagnostics.filter((diagnostic) => diagnostic.type === "error" && (isInitialRuntime || !extensionLoadErrors.has(diagnostic)));
+        // Error diagnostics are fatal only for the initial runtime, like Pi: its factory never throws for
+        // them, and main.js exits on them after the first createAgentSessionRuntime only (~737-746).
+        // Extensions re-run on every /new, /resume, /fork and /import, so a provider extension failing
+        // there can also leave --model or --api-key unresolvable (dogfood D51); on a replacement every
+        // error stays a diagnostic, which bind() shows as a transcript notice, and the session goes on.
+        const errors = sessionStartEvent === undefined
+            ? diagnostics.filter((diagnostic) => diagnostic.type === "error")
+            : [];
         if (errors.length > 0) {
             const lines = errors.map((diagnostic) => diagnostic.message);
-            if (isInitialRuntime && extensionLoadErrors.size > 0)
+            if (extensions.errors.length > 0)
                 lines.push(EXTENSION_LOAD_FAILURE_HINT);
             throw new Error(lines.join("\n"));
         }

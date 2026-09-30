@@ -57,51 +57,88 @@ test("a Manifest extension that fails to load stops the TUI with the error and M
   assert.match(result.stderr, /^mmp: Failed to load extension/);
 });
 
-// Extensions re-run on every session replacement. Pi exits on a load error only at startup; on
-// /new it shows the error in the transcript and keeps running, and so does MMP (review F1 of B5).
-test("an extension that fails to load on /new is shown in the transcript and the TUI keeps running", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-ext-load-failure-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+// Runs the real TUI under a fake tty with `extensions` in the global Manifest. `waitFor` fails as
+// soon as the TUI exits, so a replacement that quits MMP shows up as that, not as a timeout.
+function spawnTui(t, root, extensions, args = []) {
   const home = join(root, "home");
   mkdirSync(join(home, ".mmp"), { recursive: true });
-  const flag = join(root, "BREAK");
-  const flaky = join(root, "flaky.mjs");
-  writeFileSync(flaky, `import { existsSync } from "node:fs";
-export default function () { if (existsSync(${JSON.stringify(flag)})) throw new Error("flakymarker"); }
-`);
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho, flaky] }));
-  const child = spawn(process.execPath, ["--import", fakeTty, cli, "--no-project"], {
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  const child = spawn(process.execPath, ["--import", fakeTty, cli, "--no-project", ...args], {
     cwd: root,
     env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
     stdio: ["pipe", "pipe", "pipe"],
   });
   t.after(() => child.kill("SIGKILL"));
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (data) => { stdout += data; });
-  child.stderr.on("data", (data) => { stderr += data; });
-  let exitCode;
-  const exited = new Promise((resolve) => child.on("exit", (code) => { exitCode = code; resolve(code); }));
-  const waitFor = async (text) => {
+  const tui = { child, stdout: "", stderr: "", exitCode: undefined };
+  child.stdout.on("data", (data) => { tui.stdout += data; });
+  child.stderr.on("data", (data) => { tui.stderr += data; });
+  tui.exited = new Promise((resolve) => child.on("exit", (code) => { tui.exitCode = code; resolve(code); }));
+  tui.waitFor = async (text) => {
     const deadline = Date.now() + 15_000;
-    while (!stdout.includes(text)) {
-      if (exitCode !== undefined) throw new Error(`exited ${exitCode} before drawing ${JSON.stringify(text)}; stderr: ${stderr}`);
-      if (Date.now() > deadline) throw new Error(`never drew ${JSON.stringify(text)}; stderr: ${stderr}`);
-      await new Promise((resolve) => setTimeout(resolve, 20));
+    while (!tui.stdout.includes(text)) {
+      if (tui.exitCode !== undefined) throw new Error(`exited ${tui.exitCode} before drawing ${JSON.stringify(text)}; stderr: ${tui.stderr}`);
+      if (Date.now() > deadline) throw new Error(`never drew ${JSON.stringify(text)}; stderr: ${tui.stderr}`);
+      await sleep(20);
     }
   };
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  return tui;
+}
 
-  await waitFor("ASSEMBLY");
-  writeFileSync(flag, "");
-  child.stdin.write("/new");
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Types /new, then checks the TUI is still running and quits cleanly with Ctrl+D.
+async function newSessionKeepsRunning(tui, marker) {
+  tui.child.stdin.write("/new");
   await sleep(300);
-  child.stdin.write("\r");
-  await waitFor("flakymarker");
-  const afterNew = await Promise.race([exited, sleep(500).then(() => "running")]);
-  assert.equal(afterNew, "running", stderr);
-  child.stdin.write("\x04");
-  assert.equal(await Promise.race([exited, sleep(8000).then(() => "did not exit")]), 0, stderr);
-  assert.doesNotMatch(stderr, /flakymarker|Failed to create session/);
-  assert.doesNotMatch(stdout, /-ne\b|pi -|"pi /);
+  tui.child.stdin.write("\r");
+  await tui.waitFor(marker);
+  const afterNew = await Promise.race([tui.exited, sleep(500).then(() => "running")]);
+  assert.equal(afterNew, "running", tui.stderr);
+  tui.child.stdin.write("\x04");
+  assert.equal(await Promise.race([tui.exited, sleep(8000).then(() => "did not exit")]), 0, tui.stderr);
+  assert.doesNotMatch(tui.stderr, /Failed to create session/);
+}
+
+// Extensions re-run on every session replacement. Pi exits on a load error only at startup; on
+// /new it shows the error in the transcript and keeps running, and so does MMP (review F1 of B5).
+test("an extension that fails to load on /new is shown in the transcript and the TUI keeps running", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "mmp-ext-load-failure-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const flag = join(root, "BREAK");
+  const flaky = join(root, "flaky.mjs");
+  writeFileSync(flaky, `import { existsSync } from "node:fs";
+export default function () { if (existsSync(${JSON.stringify(flag)})) throw new Error("flakymarker"); }
+`);
+  const tui = spawnTui(t, root, [fauxEcho, flaky]);
+
+  await tui.waitFor("ASSEMBLY");
+  writeFileSync(flag, "");
+  await newSessionKeepsRunning(tui, "flakymarker");
+  assert.doesNotMatch(tui.stderr, /flakymarker/);
+  assert.doesNotMatch(tui.stdout, /-ne\b|pi -|"pi /);
+});
+
+// Dogfood D51: the other errors the runtime factory reports -- a --model that no longer resolves
+// because its provider extension failed on this /new, and --api-key with no model left -- are
+// fatal at startup only, like Pi's; on /new they are notices and the TUI keeps running.
+test("--model and --api-key errors caused by a provider failing on /new are shown and the TUI keeps running", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "mmp-ext-load-failure-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const flag = join(root, "BREAK");
+  const provider = join(root, "flaky-provider.mjs");
+  writeFileSync(provider, `import { existsSync } from "node:fs";
+import { registerFaux } from ${JSON.stringify(new URL("./fixtures/faux-register.mjs", import.meta.url).href)};
+export default function (pi) {
+  if (existsSync(${JSON.stringify(flag)})) throw new Error("providermarker");
+  registerFaux(pi, { models: ["echo"], responses: [] });
+}
+`);
+  const tui = spawnTui(t, root, [provider], ["--model", "mmp-faux/echo", "--api-key", "test-key"]);
+
+  await tui.waitFor("ASSEMBLY");
+  writeFileSync(flag, "");
+  await newSessionKeepsRunning(tui, "providermarker");
+  assert.match(tui.stdout, /Model "mmp-faux\/echo" not found/);
+  assert.match(tui.stdout, /--api-key requires a model/);
+  assert.doesNotMatch(tui.stderr, /providermarker|--api-key requires/);
 });

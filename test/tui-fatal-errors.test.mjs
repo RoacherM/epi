@@ -25,15 +25,13 @@ test("/new failing after teardown is fatal: the alt screen is left cleanly and t
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("throw-on-second-session-extension.mjs")] }));
-  const result = spawnSync(process.execPath, [harnessPath], {
+  const result = spawnSync(process.execPath, ["--import", fixture("second-session-throws.mjs"), harnessPath], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
       PI_OFFLINE: "1",
-      MMP_TEST_SECOND_SESSION_MARKER: join(root, "marker"),
       // fatal() calls process.exit(1) directly (Pi's own handleFatalRuntimeError does too), which
       // cuts off the harness's own JSON stdout write -- so this checks the raw process exit and
       // stderr instead of the usual marks/JSON.
@@ -51,7 +49,7 @@ test("/new failing after teardown is fatal: the alt screen is left cleanly and t
   });
   assert.equal(result.status, 1, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
   assert.match(result.stderr, /Failed to create session/);
-  assert.match(result.stderr, /"api" is required when registering streamSimple/);
+  assert.match(result.stderr, /simulated: second session factory failure/);
   // The alternate screen was left cleanly: no leftover raw escape sequences from a half-drawn frame
   // in what did make it to stdout, and no "Could not switch session"-style half-recovery message
   // that would imply the app kept running with a disposed session.
@@ -74,17 +72,15 @@ test("/import failing after teardown is fatal: the alt screen is left cleanly an
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("throw-on-second-session-extension.mjs")] }));
   const sessionFile = join(root, "imported.jsonl");
   writeSessionFile(sessionFile, root);
-  const result = spawnSync(process.execPath, [harnessPath], {
+  const result = spawnSync(process.execPath, ["--import", fixture("second-session-throws.mjs"), harnessPath], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
       PI_OFFLINE: "1",
-      MMP_TEST_SECOND_SESSION_MARKER: join(root, "marker"),
       // As in the /new case above: fatal() calls process.exit(1) directly, cutting off the harness's
       // JSON stdout write, so this checks the raw process exit and stderr instead of marks/JSON.
       MMP_TUI_HARNESS: JSON.stringify({
@@ -93,7 +89,7 @@ test("/import failing after teardown is fatal: the alt screen is left cleanly an
           ["waitReady"],
           ["type", `/import ${sessionFile}`], ["key", "enter"], ["wait", 400],
           // The confirm dialog opens with "Yes" highlighted; Enter accepts it, triggering the
-          // teardown/rebuild that the second-session marker fails.
+          // teardown/rebuild that the second-session hook fails.
           ["key", "enter"],
           ["wait", 1500],
         ],
@@ -104,7 +100,7 @@ test("/import failing after teardown is fatal: the alt screen is left cleanly an
   });
   assert.equal(result.status, 1, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
   assert.match(result.stderr, /Failed to import session/);
-  assert.match(result.stderr, /"api" is required when registering streamSimple/);
+  assert.match(result.stderr, /simulated: second session factory failure/);
   assert.doesNotMatch(result.stderr, /Could not (switch|create|import) session/);
 });
 

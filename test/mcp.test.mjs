@@ -452,19 +452,17 @@ for (const mode of ["print", "json"]) {
   });
 }
 
-// Dogfood D47 (B1 review F6): in rpc mode ctx.ui.notify reaches the client as an
-// extension_ui_request, so writing the failure to stderr as well reported it twice.
-test("rpc mode: a failure in Pi's MCP startup reaches the client once, not stderr too (D6, D47)", async (t) => {
+// Runs one "hi" prompt in `--mode rpc` and ends the session once the turn is over.
+async function runRpcMcp(t, mcpConfig, { nodeArgs = [], extensions = [] } = {}) {
   const root = createFixture(t);
   const mmpHome = join(root, "home");
   mkdirSync(mmpHome, { recursive: true });
   const driver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
-  const hooks = fileURLToPath(new URL("./fixtures/mcp-connection-throws.mjs", import.meta.url));
-  writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", driver] });
-  writeJson(join(mmpHome, "mcp.json"), { mcpServers: { one: { command: "node", args: [fixtureServerPath] } } });
+  writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", driver, ...extensions] });
+  if (mcpConfig !== undefined) writeJson(join(mmpHome, "mcp.json"), mcpConfig);
   const child = spawn(
     process.execPath,
-    ["--import", hooks, cliPath, "--no-project", "--model", "mmp-faux/echo", "--mode", "rpc"],
+    [...nodeArgs, cliPath, "--no-project", "--model", "mmp-faux/echo", "--mode", "rpc"],
     { env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, PI_OFFLINE: "1" }, stdio: ["pipe", "pipe", "pipe"] },
   );
   const killTimer = setTimeout(() => child.kill(), 30_000);
@@ -480,12 +478,68 @@ test("rpc mode: a failure in Pi's MCP startup reaches the client once, not stder
   const status = await new Promise((resolve) => child.on("close", resolve));
   clearTimeout(killTimer);
   const context = `status=${status}\nstdout:\n${stdout}\nstderr:\n${stderr}`;
-  assert.equal(status, 0, context);
   const events = stdout.trim().split("\n").map((line) => JSON.parse(line));
-  const failures = events.filter((event) => event.type === "extension_ui_request" && event.method === "notify" && /MCP failed to load/.test(event.message));
-  assert.deepEqual(failures.map((event) => [event.message, event.notifyType]), [["MCP failed to load: simulated: McpServerConnection is unavailable", "error"]], context);
+  const notifies = events
+    .filter((event) => event.type === "extension_ui_request" && event.method === "notify")
+    .map((event) => [event.message, event.notifyType]);
+  assert.equal(status, 0, context);
   assert.ok(events.some((event) => event.type === "agent_end"), context);
+  return { stderr, notifies, context };
+}
+
+// Dogfood D47 (B1 review F6): in rpc mode ctx.ui.notify reaches the client as an
+// extension_ui_request, so writing the failure to stderr as well reported it twice.
+test("rpc mode: a failure in Pi's MCP startup reaches the client once, not stderr too (D6, D47)", async (t) => {
+  const hooks = fileURLToPath(new URL("./fixtures/mcp-connection-throws.mjs", import.meta.url));
+  const { stderr, notifies, context } = await runRpcMcp(t, { mcpServers: { one: { command: "node", args: [fixtureServerPath] } } }, { nodeArgs: ["--import", hooks] });
+  const failures = notifies.filter(([message]) => /MCP failed to load/.test(message));
+  assert.deepEqual(failures, [["MCP failed to load: simulated: McpServerConnection is unavailable", "error"]], context);
   // No "still connecting" lines either: the client already has the real error.
+  assert.equal(stderr, "", context);
+});
+
+// Dogfood D52: Pi's own reportProblems() also reaches an rpc client, so MMP's per-server line on
+// stderr reported a failed server a second time.
+test("rpc mode: a server that fails to start is reported to the client once, not on stderr too (D52)", async (t) => {
+  const { stderr, notifies, context } = await runRpcMcp(t, { mcpServers: { broken: { command: "/nonexistent/x" } } });
+  const reports = notifies.filter(([message]) => /broken/.test(message));
+  assert.equal(reports.length, 1, context);
+  assert.match(reports[0][0], /^MCP servers need attention:\n {2}broken: failed/, context);
+  assert.equal(reports[0][1], "warning", context);
+  assert.equal(stderr, "", context);
+});
+
+// Pi says "still connecting" itself once its 10 s startup wait runs out.
+test("rpc mode: a server still connecting after Pi's startup wait is reported to the client once (D52)", async (t) => {
+  const { args: fixtureArgs } = fixtureServerArgs();
+  const { stderr, notifies, context } = await runRpcMcp(t, {
+    mcpServers: { hung: { command: process.execPath, args: fixtureArgs, env: { MMP_FIXTURE_HANG_INITIALIZE: "1" }, timeout: 30 } },
+  });
+  assert.deepEqual(
+    notifies.filter(([message]) => /still connecting/.test(message)),
+    [["MCP servers are still connecting; their tools become available once connected.", "info"]],
+    context,
+  );
+  assert.equal(stderr, "", context);
+});
+
+// A server registered after startup (here: by the first prompt) is outside Pi's startup wait, so Pi
+// says nothing about it still connecting: that line is MMP's own, and it goes to the client like
+// Pi's, not to stderr.
+test("rpc mode: a later-registered server still connecting is reported to the client by MMP (D52)", async (t) => {
+  const { args: fixtureArgs } = fixtureServerArgs();
+  const root = createFixture(t);
+  const late = join(root, "late-server.mjs");
+  writeFileSync(late, `export default function (pi) {
+  pi.on("before_agent_start", () => pi.registerMcpServer("late", ${JSON.stringify({ command: process.execPath, args: fixtureArgs, env: { MMP_FIXTURE_HANG_INITIALIZE: "1" }, timeout: 30 })}));
+}
+`);
+  const { stderr, notifies, context } = await runRpcMcp(t, undefined, { extensions: [late] });
+  assert.deepEqual(
+    notifies.filter(([message]) => /still connecting/.test(message)),
+    [["mcp: late is still connecting; its tools become available once connected", "info"]],
+    context,
+  );
   assert.equal(stderr, "", context);
 });
 

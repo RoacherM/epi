@@ -557,6 +557,33 @@ const registry = [
       );
     },
   },
+  {
+    id: "mcp-own-reports-in-rpc",
+    check() {
+      const indexPath = join(piDist, "extensions", "mcp", "index.js");
+      const indexText = readFileSync(indexPath, "utf8");
+      const why = "src/extensions/mcp.ts leaves these reports to Pi in rpc and sends only its other lines (dogfood D52)";
+      assert.match(
+        indexText,
+        /if \(state === "needs-auth" \|\| state === "failed"\)[\s\S]{0,200}ctx\.ui\.notify\(`MCP servers need attention:/,
+        `${indexPath}'s reportProblems() no longer notifies failed and needs-sign-in servers -- ${why}`,
+      );
+      assert.match(
+        indexText,
+        /ensureDiscoveryActive\(ctx\);\s*reportProblems\(ctx\);\s*\}\)\s*\.catch/,
+        `${indexPath}'s startup chain no longer ends in reportProblems() -- ${why}`,
+      );
+      const start = indexText.indexOf('pi.on("before_agent_start"');
+      const handler = indexText.slice(start, indexText.indexOf("pi.on(", start + 1));
+      assert.ok(start >= 0, `${indexPath} no longer has a before_agent_start handler -- ${why}`);
+      const notifies = handler.match(/ctx\.ui\.notify\(.*\);/g) ?? [];
+      assert.deepEqual(
+        notifies,
+        ['ctx.ui.notify("MCP servers are still connecting; their tools become available once connected.", "info");'],
+        `${indexPath}'s before_agent_start handler notifies something other than "still connecting" -- MMP takes any notify there to mean its own still-connecting lines are covered; ${why}`,
+      );
+    },
+  },
 ];
 
 test("every docs/pi-internals.md row still matches the installed Pi", async () => {
