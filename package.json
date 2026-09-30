@@ -15,7 +15,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.mjs",
     "benchmark": "node scripts/benchmark-adapter.mjs",
-    "model-snapshot": "node scripts/model-snapshot.mjs"
+    "model-snapshot": "node scripts/model-snapshot.mjs",
+    "pi:upgrade": "node scripts/pi-upgrade.mjs",
+    "release": "node scripts/release.mjs"
   },
   "engines": {
     "node": ">=22.19.0"
@@ -31,6 +33,8 @@
   },
   "devDependencies": {
     "@types/node": "24.12.4",
-    "typescript": "5.9.3"
+    "semver": "7.8.5",
+    "typescript": "5.9.3",
+    "yaml": "2.9.1"
   }
 }
