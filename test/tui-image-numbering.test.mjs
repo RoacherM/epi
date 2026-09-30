@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -87,7 +87,8 @@ const resumeList = ["waitFor", { regex: "Resume Session[\\s\\S]*› " }];
 
 // The app-driven tests spend nearly all their time waiting on the app (a faux reply streams for
 // seconds), so they run side by side; each has its own HOME, clipboard file and processes.
-describe("image numbering", { concurrency: 8 }, () => {
+// Capped so small CI runners don't get 8 apps on 2 cores (D19 review).
+describe("image numbering", { concurrency: Math.min(8, Math.max(2, availableParallelism())) }, () => {
   test("two messages with one image each: the editor chips and the transcript read #1 then #2", async (t) => {
     const run = setup(t, [ECHO_IMAGES]);
     const { marks } = await run([
