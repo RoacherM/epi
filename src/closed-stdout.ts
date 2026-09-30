@@ -17,8 +17,7 @@ type WriteCallback = (error?: Error | null) => void;
  * Write errors that mean the reader has gone (dogfood D60). EPIPE is the pipe case. Node's `spawn`
  * stdio are Unix socketpairs, where a write racing the peer's close can fail with ENOTCONN instead
  * (seen on macOS under load; Node's own `net` `_final` treats ENOTCONN from shutdown as already
- * finished), or ECONNRESET (a stream socket's peer closed with data unread, and libuv on macOS turns
- * the teardown race's EPROTOTYPE into it). ERR_STREAM_DESTROYED is a write after Node destroyed the
+ * finished), or ECONNRESET (a stream socket's peer closed with data unread). ERR_STREAM_DESTROYED is a write after Node destroyed the
  * stream for one of those. Anything else (EIO, EBADF, ...) is not a closed reader and stays loud.
  */
 const CLOSED_READER_CODES = new Set(["EPIPE", "ENOTCONN", "ECONNRESET", "ERR_STREAM_DESTROYED"]);

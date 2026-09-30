@@ -153,7 +153,7 @@ function failingStream(code, how) {
 }
 
 for (const code of ["EPIPE", "ENOTCONN", "ECONNRESET"]) {
-  test(`a closed reader reported as ${code} through the write callback and 'error' ends the output quietly`, async () => {
+  test(`a closed reader reported as ${code} through the write callback and 'error' ends the output quietly`, { timeout: 5000 }, async () => {
     const stream = failingStream(code, "callback");
     let closed = 0;
     endOnClosedPipe(stream, () => { closed += 1; });
@@ -168,7 +168,7 @@ for (const code of ["EPIPE", "ENOTCONN", "ECONNRESET"]) {
     assert.equal(closed, 1);
   });
 
-  test(`a closed reader reported as ${code} thrown synchronously from write ends the output quietly`, async () => {
+  test(`a closed reader reported as ${code} thrown synchronously from write ends the output quietly`, { timeout: 5000 }, async () => {
     const stream = failingStream(code, "throw");
     let closed = 0;
     endOnClosedPipe(stream, () => { closed += 1; });
