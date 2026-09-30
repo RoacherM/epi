@@ -109,6 +109,25 @@ const registry = [
     },
   },
   {
+    id: "pi-chalk",
+    async check() {
+      const { createRequire } = await import("node:module");
+      const piEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
+      const { default: chalk } = await import(pathToFileURL(createRequire(piEntry).resolve("chalk")).href);
+      const { createMmpTheme } = await import(pathToFileURL(join(root, "dist", "tui", "theme.js")).href);
+      const theme = createMmpTheme("dark");
+      const level = chalk.level;
+      try {
+        chalk.level = 1;
+        assert.equal(theme.italic("x"), "\x1b[3mx\x1b[23m", "Pi's Theme.italic no longer goes through the chalk resolved from Pi's install");
+        chalk.level = 0;
+        assert.equal(theme.italic("x"), "x", "Pi's Theme.italic no longer follows that chalk's level");
+      } finally {
+        chalk.level = level;
+      }
+    },
+  },
+  {
     id: "pi-agent-core-agent",
     async check() {
       // pi-agent-core's package.json "exports" only offers an "import" condition (no "require"),
@@ -188,17 +207,26 @@ const registry = [
       const tui = new piTui.TuiAltScreen(terminal, false);
       const scroll = new piTui.ScrollView({ render: () => rows, invalidate() {} }, { follow: "end", primary: true });
       tui.setLayoutRoot(new piTui.VStack([{ component: scroll, basis: 0, grow: 1, shrink: 1, minSize: 1 }]));
-      const frame = () => new Promise((resolve) => setTimeout(resolve, 40));
+      // Waits until a frame showing `text` has been painted after the `since` offset of `written`.
+      const painted = async (text, since) => {
+        const deadline = Date.now() + 5000;
+        while (!written.slice(since).includes(text)) {
+          if (Date.now() > deadline) assert.fail(`TuiAltScreen never painted ${JSON.stringify(text)}`);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      };
       tui.start();
       try {
-        await frame();
+        await painted("tail 29", 0);
         assert.equal(typeof tui.scrollToPrompt, "function", "TuiAltScreen.scrollToPrompt is gone");
+        let since = written.length;
         tui.scrollToPrompt(-1);
-        await frame();
         assert.equal(scroll.scrollTop, rows.indexOf(rows.find((row) => row.endsWith("TWO"))), "scrollToPrompt no longer stops on MMP's 133;A-marked row");
+        await painted("TWO", since);
+        since = written.length;
         tui.scrollToPrompt(-1);
-        await frame();
         assert.equal(scroll.scrollTop, 0, "scrollToPrompt no longer stops on the first marked row");
+        await painted("ONE", since);
         assert.ok(!written.includes("\x1b]133;"), "TuiAltScreen painted MMP's OSC 133 markers instead of stripping them");
       } finally {
         tui.stop();

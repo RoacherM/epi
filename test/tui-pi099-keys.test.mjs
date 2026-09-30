@@ -100,7 +100,7 @@ const twoLongTurns = [
 ];
 
 test("Ctrl+Up/Down jump between user messages and final answers, like Pi's OSC 133 prompt zones", (t) => {
-  const { drawn } = runApp(t, "faux-long-replies.mjs", [
+  const { drawn, rawOsc133 } = runApp(t, "faux-long-replies.mjs", [
     ...twoLongTurns,
     ["raw", KITTY.ctrlUp], ["wait", 200], ["mark", "up1"],
     // A kitty release event must not jump a second time.
@@ -122,6 +122,8 @@ test("Ctrl+Up/Down jump between user messages and final answers, like Pi's OSC 1
   assert.match(drawn.up4, /first question/);
   assert.match(drawn.down1, /REPLY-1/);
   assert.doesNotMatch(drawn.down1, /first question/);
+  // The markers the jumps use must never reach the terminal, including the exit dump (Ctrl+D).
+  assert.equal(rawOsc133, 0, "the app wrote raw OSC 133 prompt-zone markers to the terminal");
 });
 
 test("Ctrl+Shift+F searches the transcript and scrolls to a match in an earlier reply", (t) => {
