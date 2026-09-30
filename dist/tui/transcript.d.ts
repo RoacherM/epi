@@ -10,6 +10,8 @@ export declare class Transcript {
     private readonly messages;
     private readonly groupedMessages;
     private messageCount;
+    private imageCount;
+    private pendingImages;
     private readonly tools;
     private readonly userMessages;
     private readonly assistantBlocks;
@@ -33,6 +35,15 @@ export declare class Transcript {
     constructor(tui: TUI, theme: Theme, session: AgentSession);
     /** New session after /new, /resume, /reload: clear and replay its history. */
     reset(session: AgentSession): void;
+    /** The session's `[Image #N]` numbering (D11): images in the user messages shown so far, counted
+     * in the order they're rendered and recounted by `reset()` from the replayed history, plus the
+     * ones already accepted for sending but not shown yet (queued while streaming or compacting).
+     * The editor numbers its next chip after this. */
+    get sentImageCount(): number;
+    /** `count` images were handed to the session and will show up as a user message later. */
+    reserveImages(count: number): void;
+    /** The message carrying `count` reserved images was rejected or taken back out of the queue. */
+    releaseImages(count: number): void;
     /** Ctrl+O (docs/tui-design.md 4.3, item 5): the same toggle that expands tool output also
      * expands a user message collapsed past 3 lines, instead of a second toggle. */
     setToolsExpanded(expanded: boolean): void;

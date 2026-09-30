@@ -56,20 +56,38 @@ export function headerBar(theme, state) {
     });
 }
 // ── user message block ────────────────────────────────────────────────────────
+// The notes Pi appends to a prompt's text after the user's own words when it resizes or converts an
+// image (utils/image-resize.js's formatDimensionNote, utils/image-process.js's conversionHint;
+// docs/pi-internals.md `image-hint-wording`). The model still gets them; the transcript hides them
+// (D9). `[Image omitted: ...]` failure notes are not listed here on purpose: failures stay visible.
+const IMAGE_HINT_LINE = /^\[(?:Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+(?:\.\d+)? to map to original image\.|Image converted from [^\s\]]+ to [^\s\]]+\.)\]$/;
+/** Drops Pi's image notes from the end of `text`, where it puts them (one per line, after a blank line). */
+export function withoutImageHints(text) {
+    const lines = text.trimEnd().split("\n");
+    while (lines.length > 0 && IMAGE_HINT_LINE.test(lines[lines.length - 1] ?? ""))
+        lines.pop();
+    return lines.join("\n").trimEnd();
+}
 const FILE_BLOCK_RE = /<file name="([^"]*)">[\s\S]*?<\/file>\n?/g;
+/** How many image content parts a user message carries; the transcript numbers images across the
+ * whole session with this (Transcript.imageCount). */
+export function countImages(content) {
+    return Array.isArray(content) ? content.filter((part) => part?.type === "image").length : 0;
+}
 /** A user message's own display text: `<file name="...">...</file>` blocks (file-arguments.ts's
  * `@file` inlining) collapse to `[File: name]`, and image content parts (never inlined as text)
- * show as `[Image #N]` -- the model still gets the full `content` array unchanged; this only
- * affects what's drawn in the transcript (item 5, docs/tui-design.md 4.3's 发送 row). */
-function displayText(content) {
+ * show as `[Image #N]`, numbered from `firstImageNumber` -- the model still gets the full `content`
+ * array unchanged; this only affects what's drawn in the transcript (item 5, docs/tui-design.md
+ * 4.3's 发送 row). */
+function displayText(content, firstImageNumber) {
     const text = typeof content === "string"
         ? content
         : Array.isArray(content)
             ? content.filter((part) => part?.type === "text").map((part) => part.text).join("")
             : "";
-    const imageCount = Array.isArray(content) ? content.filter((part) => part?.type === "image").length : 0;
-    const withFileChips = text.replace(FILE_BLOCK_RE, (_match, name) => `[File: ${basename(name)}]\n`).trim();
-    const images = Array.from({ length: imageCount }, (_, index) => `[Image #${index + 1}]`).join(" ");
+    const imageCount = countImages(content);
+    const withFileChips = (imageCount > 0 ? withoutImageHints(text) : text).replace(FILE_BLOCK_RE, (_match, name) => `[File: ${basename(name)}]\n`).trim();
+    const images = Array.from({ length: imageCount }, (_, index) => `[Image #${firstImageNumber + index}]`).join(" ");
     return [withFileChips, images].filter((part) => part !== "").join("\n");
 }
 const COLLAPSED_LINES = 3;
@@ -102,10 +120,10 @@ export class UserMessageBlock {
     time;
     text;
     expanded = false;
-    constructor(theme, content, time) {
+    constructor(theme, content, time, firstImageNumber = 1) {
         this.theme = theme;
         this.time = time;
-        this.text = displayText(content);
+        this.text = displayText(content, firstImageNumber);
     }
     setExpanded(expanded) {
         this.expanded = expanded;

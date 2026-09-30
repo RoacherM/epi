@@ -3,7 +3,7 @@
 import { CustomMessageComponent, getMarkdownTheme, } from "@earendil-works/pi-coding-agent";
 import { AssistantBlock } from "./assistant-block.js";
 import { UserBashBlock } from "./bash-block.js";
-import { formatDuration, UserMessageBlock } from "./chrome.js";
+import { countImages, formatDuration, UserMessageBlock } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
 import { toolBlock } from "./tools/block.js";
 import { asGroupKind, GroupedMessages, ToolEntry } from "./tools/group.js";
@@ -20,6 +20,8 @@ export class Transcript {
     messages = new piTui.Container();
     groupedMessages;
     messageCount = 0;
+    imageCount = 0;
+    pendingImages = 0;
     tools = new Map();
     userMessages = [];
     assistantBlocks = [];
@@ -55,6 +57,9 @@ export class Transcript {
     }
     /** New session after /new, /resume, /reload: clear and replay its history. */
     reset(session) {
+        // Queued messages belong to their session; a reload or /tree keeps the same one.
+        if (session !== this.session)
+            this.pendingImages = 0;
         this.session = session;
         // Drop pending completion-flash timers (tools/flash.ts) before the entries they belong to go
         // away, and the same for any group line mid-flash.
@@ -63,6 +68,7 @@ export class Transcript {
         this.groupedMessages.dispose();
         this.messages.clear();
         this.messageCount = 0;
+        this.imageCount = 0;
         this.tools.clear();
         this.userMessages.length = 0;
         this.assistantBlocks.length = 0;
@@ -76,6 +82,21 @@ export class Transcript {
         for (const message of session.messages) {
             this.addFinishedMessage(message);
         }
+    }
+    /** The session's `[Image #N]` numbering (D11): images in the user messages shown so far, counted
+     * in the order they're rendered and recounted by `reset()` from the replayed history, plus the
+     * ones already accepted for sending but not shown yet (queued while streaming or compacting).
+     * The editor numbers its next chip after this. */
+    get sentImageCount() {
+        return this.imageCount + this.pendingImages;
+    }
+    /** `count` images were handed to the session and will show up as a user message later. */
+    reserveImages(count) {
+        this.pendingImages += count;
+    }
+    /** The message carrying `count` reserved images was rejected or taken back out of the queue. */
+    releaseImages(count) {
+        this.pendingImages = Math.max(0, this.pendingImages - count);
     }
     /** Ctrl+O (docs/tui-design.md 4.3, item 5): the same toggle that expands tool output also
      * expands a user message collapsed past 3 lines, instead of a second toggle. */
@@ -115,7 +136,7 @@ export class Transcript {
         switch (event.type) {
             case "message_start":
                 if (event.message.role === "user") {
-                    this.addFinishedMessage(event.message);
+                    this.addFinishedMessage(event.message, true);
                 }
                 else if (event.message.role === "assistant") {
                     this.streaming = this.assistant(event.message, true);
@@ -251,10 +272,14 @@ export class Transcript {
         const label = aborted ? "Stopped after" : "Worked for";
         this.add(new piTui.Text(this.theme.fg("muted", `${label} ${formatDuration(duration)}`), CONTENT_PAD, 0), true, false);
     }
-    addFinishedMessage(message) {
+    addFinishedMessage(message, live = false) {
         switch (message.role) {
             case "user": {
-                const block = new UserMessageBlock(this.theme, message.content, new Date(message.timestamp ?? Date.now()));
+                const block = new UserMessageBlock(this.theme, message.content, new Date(message.timestamp ?? Date.now()), this.imageCount + 1);
+                const images = countImages(message.content);
+                this.imageCount += images;
+                if (live)
+                    this.releaseImages(images);
                 block.setExpanded(this.toolsExpanded);
                 this.userMessages.push(block);
                 this.add(block);

@@ -21,7 +21,8 @@
 // exactly one entry per text-chip label, in document order, and a non-null entry's content was
 // pasted under that very label -- so no label ever resolves to another chip's content.
 // `[Image #N]` labels carry their id; image data stays in `imageChips` until the draft is sent,
-// and ids are never reused, so a label deleted and brought back by undo resolves to its own image.
+// and ids are never reused within a draft (a new id is above every id the draft has seen), so a
+// label deleted and brought back by undo resolves to its own image.
 //
 // How `slots` follows edits:
 // - Undo and history. pi-tui's `pushUndoSnapshot()` structuredClones `Editor.state` onto its undo
@@ -153,11 +154,12 @@ function alignEdit(before, beforeCursor, after, afterCursor) {
 export class ChipEditor {
     inner;
     getCwd;
+    getSentImageCount;
+    lastImageId = 0;
     /** Content of every text chip pasted into this draft, by content id; see the module comment. */
     textContents = new Map();
     textContentCounter = 0;
     imageChips = new Map();
-    imageCounter = 0;
     /** The text, caret offset and slots as of the last `sync()`. */
     synced = { text: "", cursor: 0, slots: [] };
     /** Cursor position immediately after the most recent paste-created chip, for the "paste again to
@@ -171,6 +173,7 @@ export class ChipEditor {
     onSubmitImages;
     constructor(tui, theme, options) {
         this.getCwd = options.getCwd;
+        this.getSentImageCount = options.getSentImageCount ?? (() => this.lastImageId);
         this.inner = new piTui.Editor(tui, theme, options);
         this.inner.onChange = (text) => this.onChange?.(text);
         this.inner.onSubmit = (text) => this.deliverSubmit(text);
@@ -244,10 +247,13 @@ export class ChipEditor {
     /** Registers an image's data without inserting anything -- for a caller building the marker into
      * arbitrary text itself (Esc/Alt+Up queue restore, app.ts's restoreQueuedMessagesToEditor) ahead
      * of one `setText()` call, rather than at the current cursor. Returns the `[Image #N]` label to
-     * place in that text. */
-    registerImage(bytes, mimeType) {
-        this.imageCounter += 1;
-        const id = this.imageCounter;
+     * place in that text. `preferredId` (queue restore: the number the image had when it was sent)
+     * is used when the draft hasn't seen that id. */
+    registerImage(bytes, mimeType, preferredId) {
+        const id = preferredId !== undefined && !this.imageChips.has(preferredId)
+            ? preferredId
+            : Math.max(this.getSentImageCount(), ...this.imageChips.keys()) + 1;
+        this.lastImageId = id;
         const base64 = Buffer.from(bytes).toString("base64");
         const dimensions = piTui.getImageDimensions(base64, mimeType);
         this.imageChips.set(id, {

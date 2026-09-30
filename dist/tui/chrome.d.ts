@@ -19,6 +19,11 @@ export interface HeaderState {
     contextWindow: number | undefined;
 }
 export declare function headerBar(theme: Theme, state: () => HeaderState): Component;
+/** Drops Pi's image notes from the end of `text`, where it puts them (one per line, after a blank line). */
+export declare function withoutImageHints(text: string): string;
+/** How many image content parts a user message carries; the transcript numbers images across the
+ * whole session with this (Transcript.imageCount). */
+export declare function countImages(content: unknown): number;
 /** Full-width `userMessageBg` block with one row of padding, `❯ text` and the time on the right.
  * Collapses past `COLLAPSED_LINES` *logical* lines (not wrapped rows) to `…` -- observed in grok
  * 1.0.44 (docs/tui-design.md 4.2/4.3): a sent 12-line paste renders as its first 3 lines then `…`.
@@ -30,7 +35,7 @@ export declare class UserMessageBlock implements Component {
     private readonly time;
     private readonly text;
     private expanded;
-    constructor(theme: Theme, content: unknown, time: Date);
+    constructor(theme: Theme, content: unknown, time: Date, firstImageNumber?: number);
     setExpanded(expanded: boolean): void;
     render(width: number): string[];
     invalidate(): void;

@@ -93,7 +93,7 @@ export async function runTuiApp(options) {
     const editor = new ChipEditor(tui, {
         borderColor: (text) => theme.fg("border", text),
         selectList: getSelectListTheme(),
-    }, { getCwd: () => session.sessionManager.getCwd() });
+    }, { getCwd: () => session.sessionManager.getCwd(), getSentImageCount: () => transcript.sentImageCount });
     const prompt = new PromptFrame(theme, editor, () => {
         const model = session.model;
         const hasModel = model !== undefined && runtime.services.modelRuntime.getAvailableSnapshot().length > 0;
@@ -298,6 +298,7 @@ export async function runTuiApp(options) {
         },
         addToHistory: (text) => editor.addToHistory(text),
         submit: (text, images) => submit(text, images),
+        steer: (text, images) => steer(text, images),
         restoreQueuedMessagesToEditor: () => restoreQueuedMessagesToEditor(),
         isWorking: () => turn !== undefined,
         toggleToolsExpanded: () => surface.setToolsExpanded(!toolsExpanded),
@@ -729,10 +730,13 @@ export async function runTuiApp(options) {
         const queued = [...steering, ...followUp];
         if (queued.length === 0)
             return 0;
+        transcript.releaseImages(queued.reduce((sum, message) => sum + message.images.length, 0));
+        // They go ahead of the draft, so they take the numbers right after the sent images, below any chip already in the draft.
+        let nextImage = transcript.sentImageCount + 1;
         const queuedText = queued
             .map((message) => [
             message.text,
-            ...message.images.map((image) => editor.registerImage(Buffer.from(image.data, "base64"), image.mimeType)),
+            ...message.images.map((image) => editor.registerImage(Buffer.from(image.data, "base64"), image.mimeType, nextImage++)),
         ].filter((part) => part !== "").join(" "))
             .join("\n\n");
         const current = editor.getText();
@@ -836,19 +840,35 @@ export async function runTuiApp(options) {
                 }
                 return;
             }
+            transcript.reserveImages(images.length);
             compactionQueue.push({ text, images, mode: "followUp" });
             transcript.notice("Queued message for after compaction.");
             tui.requestRender();
             return;
         }
+        // An extension command consumes its arguments; no user message (and no image) ever shows up.
+        const reserved = isExtensionCommand ? 0 : images.length;
+        transcript.reserveImages(reserved);
         try {
             await session.prompt(text, { images, ...(session.isStreaming ? { streamingBehavior: "followUp" } : {}) });
         }
         catch (error) {
+            transcript.releaseImages(reserved);
             // No model, no auth: say why and keep the text.
             transcript.notice(errorText(error), "error");
             if (editor.getText() === "")
                 editor.setText(text);
+        }
+    }
+    /** Alt+Enter while streaming: into the running turn. */
+    async function steer(text, images) {
+        transcript.reserveImages(images.length);
+        try {
+            await session.prompt(text, { images, streamingBehavior: "steer" });
+        }
+        catch (error) {
+            transcript.releaseImages(images.length);
+            throw error;
         }
     }
     editor.onSubmitImages = (text, images) => void submit(text, images);

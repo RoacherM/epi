@@ -90,7 +90,7 @@ export function createKeyActions(): KeyAction[] {
         host.addToHistory(text);
         host.setEditorText("");
         try {
-          await host.session().prompt(text, { images, streamingBehavior: "steer" });
+          await host.steer(text, images);
         } catch (error) {
           host.notice(errorText(error), "error");
           if (host.getEditorText() === "") host.setEditorText(text);

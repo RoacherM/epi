@@ -44,6 +44,9 @@ export interface CommandHost {
     addToHistory(text: string): void;
     /** Run the submit pipeline (built-ins, `!`, `session.prompt`) as if Enter were pressed. */
     submit(text: string, images?: ImageContent[]): Promise<void>;
+    /** Alt+Enter while a turn runs: send text and images into the running turn (`session.prompt`
+     * with `streamingBehavior: "steer"`), keeping the transcript's image numbering in step. */
+    steer(text: string, images: ImageContent[]): Promise<void>;
     /** Pi's restoreQueuedMessagesToEditor/clearAllQueues (interactive-mode.js ~3729, ~3761): clears
      * both the session's own steering/follow-up queue and app.ts's compaction queue, puts their text
      * back in the editor (ahead of anything already typed), and returns how many messages that was.

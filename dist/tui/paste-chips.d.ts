@@ -49,6 +49,10 @@ export declare function sniffImageFile(path: string): {
 interface ChipEditorOptions extends EditorOptions {
     /** Read live so an image path pasted after /resume resolves against the new session's cwd. */
     getCwd: () => string;
+    /** Images already sent in the session (including queued ones): a new chip is numbered after
+     * them, so the label in the editor is the one the transcript shows once the message is sent.
+     * Read live; without it the editor keeps counting up from its own last chip. */
+    getSentImageCount?: () => number;
 }
 /**
  * Wraps pi-tui's `Editor`, adding atomic paste/image chips on top of its public API. See the
@@ -57,11 +61,12 @@ interface ChipEditorOptions extends EditorOptions {
 export declare class ChipEditor {
     private readonly inner;
     private readonly getCwd;
+    private readonly getSentImageCount;
+    private lastImageId;
     /** Content of every text chip pasted into this draft, by content id; see the module comment. */
     private textContents;
     private textContentCounter;
     private imageChips;
-    private imageCounter;
     /** The text, caret offset and slots as of the last `sync()`. */
     private synced;
     /** Cursor position immediately after the most recent paste-created chip, for the "paste again to
@@ -108,8 +113,9 @@ export declare class ChipEditor {
     /** Registers an image's data without inserting anything -- for a caller building the marker into
      * arbitrary text itself (Esc/Alt+Up queue restore, app.ts's restoreQueuedMessagesToEditor) ahead
      * of one `setText()` call, rather than at the current cursor. Returns the `[Image #N]` label to
-     * place in that text. */
-    registerImage(bytes: Uint8Array, mimeType: string): string;
+     * place in that text. `preferredId` (queue restore: the number the image had when it was sent)
+     * is used when the draft hasn't seen that id. */
+    registerImage(bytes: Uint8Array, mimeType: string, preferredId?: number): string;
     /** Ctrl+V with an image on the clipboard, or an `@image`-equivalent drop: adds an `[Image #N]`
      * chip at the cursor. `bytes` are kept as-is; AgentSession resizes for the model at send time
      * (agent-session.js's `_normalizePromptImages`), so there's no need to do it here too. */
