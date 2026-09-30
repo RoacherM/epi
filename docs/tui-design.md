@@ -327,7 +327,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | P0 ✓ | 键位：`Ctrl+L`、`Alt+Enter`、`Alt+↑`、`Ctrl+G`、`Ctrl+V`、`Ctrl+Z`，以及运行中排队消息的显示 | 各自一个 SDK 调用或 pi-tui 功能 |
 | P0 ✓ | `Ctrl+T` 折叠 thinking | 和 M4 的 `Thought for Ns` 一起做完（`src/tui/keys.ts` 的 `app.thinking.toggle`） |
 | P1 ✓ | `/tree`、`/fork`、`/clone`、`/name`、`/session`、`/export`、`/import`、`/hotkeys` | `session-tree-commands.ts`（`/tree`、`/fork`、`/clone`）、`info-commands.ts`（`/name`、`/session`、`/hotkeys`、`/scoped-models`）、`export-commands.ts`（`/export`、`/import`）；见下方"2026-09-29 补充"表 |
-| P2 | `/settings` | 里面有些项只对 Pi 自己的界面有意义，要先挑出适用于 MMP 的；`/scoped-models` 已随 P1 一起做完（见下） |
+| P2 ✓ | `/settings` | `settings-command.ts`（2026-10-01，任务 D21）：只列 MMP 界面真正生效的 15 项，见下方"`/settings` 的项"表；`/scoped-models` 已随 P1 一起做完（见下） |
 
 **2026-09-29 补充（推翻原先的"不做"）**：`/share`、`/bug`、`/changelog` 原计划不做，用户当天改口要求实现，语义和 Pi 不同：`/share` 跟 Pi 一样（去掉 Pi 专属的 Radius 上传和预览页，只保留 `gh gist create` 分支）；`/bug` 不上报给 Pi 开发者，改成在 MMP 自己的 GitHub 仓库开一个预填内容的 issue 链接；`/changelog` 读 MMP 自己仓库的 GitHub Releases，不是 Pi 的内置更新日志文件。实现在 `share-commands.ts`。彩蛋命令仍然不做。
 
@@ -347,8 +347,49 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | `/share` | `shareSession` | `BorderedLoader`（导出）+ `session.exportToHtml` | 不做 Radius 上传（Pi 自己的托管服务，MMP 没有对应身份）；成功后打印原始 gist URL，不是 Pi 的 `getShareViewerUrl` 预览页（没导出）。Pi 本来就没有确认对话框，只有 loader 的 Esc 取消，这点照抄 |
 | `/bug` | 不对应 Pi 的 `/bug`（那个上传给 Pi 开发者） | `session.summarizeForBugReport`（导出）、`BorderedLoader` | 同意 → 描述（可选）→ 是否附加当前模型写的摘要 → 在 MMP 自己仓库开一个预填标题/正文的 `issues/new` 链接，打印出来并尝试用系统默认方式打开；正文按 URL 长度上限截断并注明 |
 | `/changelog` | 不对应 Pi 的 `/changelog`（那个读 Pi 自带的更新日志文件） | 复用 `src/update.ts` 的仓库常量（新增 `MMP_REPO` 导出） | 读 GitHub Releases 列表（`/releases`），不是 `mmp update` 用的 `/releases/latest`；离线（`PI_OFFLINE`）时给出明确提示，不发请求 |
+| `/settings` | `showSettingsSelector` | pi-tui `SettingsList`（导出）+ `getSettingsListTheme`、`DynamicBorder`（导出） | 不复用 `SettingsSelectorComponent`：它在构造函数里建好全部 34 项，没有过滤参数，`SettingsList.items` 是私有字段。MMP 用同一个 `SettingsList` 建自己的列表，id、标签、说明、取值照抄 Pi 0.99.1，顺序也和 Pi 一致；`HTTP_IDLE_TIMEOUT_CHOICES`、`formatHttpIdleTimeoutMs`、`CACHE_WARMING_MODES` 没导出，复制过来。`test/tui-settings.test.mjs` 用 Pi 真的 `SettingsSelectorComponent`（只走公开的输入和渲染）核对顺序、标签、说明和取值，Pi 新增一项而这里既没列出也没登记为隐藏时测试失败。界面那一半（Pi 的 `applyRuntimeSettings` + `setupAutocompleteProvider`）在 `app.ts` 的 `applyRuntimeSettings`：第一帧之前、每次 `bind()`、`/reload` 之后、`/settings` 改动之后都跑一遍（`CommandHost.applySettings()`）。写入只到 `~/.mmp/pi/settings.json`（`SettingsManager` 以 `projectTrusted: false` 创建） |
 
-测试：`test/tui-commands-session-tree.test.mjs`、`test/tui-commands-export-import.test.mjs`、`test/tui-commands-info.test.mjs`、`test/tui-commands-share.test.mjs`。
+**`/settings` 的项（2026-10-01 主控定，任务 D21）**
+
+显示的 15 项，顺序同 Pi。"Pi 核心"表示 Pi 的 `AgentSession`/SDK 自己读这个设置，MMP 只调 Pi 的公开 setter；"MMP 接线"表示 Pi 只在自己的界面里读，MMP 的界面照做。
+
+| id | 谁读 | 改了之后 |
+|---|---|---|
+| `autocompact` | Pi 核心 | `session.setAutoCompactionEnabled` |
+| `auto-resize-images`、`block-images` | Pi 核心（每次发请求时读） | 只写设置 |
+| `skill-commands` | MMP 接线 | 重建补全（`slashCompletions` 读它） |
+| `show-hardware-cursor` | MMP 接线 | `tui.setShowHardwareCursor`。没设置时是关，不看 `PI_HARDWARE_CURSOR`（主控 2026-10-01：MMP 不认用户 Pi 环境里的 `PI_*` 变量，同 `MMP_SESSION_DIR` 的先例）。Pi 的 `getShowHardwareCursor` 会回退到这个环境变量，所以界面和 `/settings` 都用 `settings-command.ts` 的 `showHardwareCursor()`（`getGlobalSettings().showHardwareCursor ?? false`） |
+| `autocomplete-max-visible` | MMP 接线 | `Editor.setAutocompleteMaxVisible` |
+| `steering-mode`、`follow-up-mode` | Pi 核心 | `session.setSteeringMode`/`setFollowUpMode`。说明文字改了：MMP 里运行中 Enter 是 follow-up、Alt+Enter 是 steer（4.7 节），和 Pi 相反 |
+| `transport` | Pi 核心 | 写设置并改 `session.agent.transport`，同 Pi |
+| `http-idle-timeout` | MMP 接线 | 重跑 `services.ts` 的 `configureHttp`（Pi 的 `configureHttpDispatcher` 没导出） |
+| `cache-warming-mode` | Pi 核心 | `session.setCacheWarmingMode` |
+| `tree-filter-mode` | MMP 的 `/tree` 每次打开都读 | 只写设置 |
+| `fullscreen-scrollbar` | MMP 接线 | 对话区 `ScrollView.setScrollbar` |
+| `fullscreen-copy-on-select` | MMP 接线 | `TuiAltScreen.setCopyOnSelect`。没设置时是开（决策 T3，Pi 的 getter 默认 `true`）。说明文字去掉了 Pi 的"关掉后用 Ctrl+X 复制选区"：MMP 的 Ctrl+X 只复制最后一条回复 |
+| `fullscreen-wheel-scroll-lines` | MMP 接线 | `TuiAltScreen.setWheelScrollLines`。没设置时用 Pi 的默认值 `auto`（以前 MMP 固定 1 行；`auto` 下单独一格还是 1 行，只有非 macOS 本地终端快速滚动时会加速） |
+
+不显示的项：
+
+| id | 原因 |
+|---|---|
+| `default-project-trust` | 和决策 U4 冲突：项目信任只由 MMP 的 `/trust` 决定 |
+| `tui-mode` | MMP 只有全屏界面 |
+| `fullscreen-exit-output` | MMP 退出时不打印对话记录或恢复提示 |
+| `theme` | MMP 用自己的 grok 主题，按终端自动选深浅 |
+| `hide-thinking` | MMP 的 thinking 默认折叠成 `Thought for Ns`，`Ctrl+T` 切换；映射过去会改变 MMP 的默认值 |
+| `output-padding`、`editor-padding` | grok 布局的边距是固定的 |
+| `clear-on-shrink` | 全屏界面（`TuiAltScreen`）不读它 |
+| `show-images`、`image-width-cells` | MMP 的工具块不在终端里画图 |
+| `mermaid-rendering` | Pi 的 mermaid 转换器没导出 |
+| `cache-miss-notices` | MMP 不显示缓存未命中提示（`computeCacheWaste` 没导出） |
+| `double-escape-action`、`terminal-progress` | 要先给 MMP 加新行为（Esc 两下、OSC 9;4），另记 dogfood 条目 |
+| `quiet-startup`、`collapse-changelog` | MMP 有自己的启动页和 `/changelog` |
+| `install-telemetry` | 只有 Pi 的交互模式发这个统计，MMP 从不发 |
+| `warnings` | 里面唯一一项（Anthropic extra usage 警告）只在 Pi 的界面里显示 |
+| `model-thinking` | 先不做（主控 2026-10-01）：当前模型用 `/thinking` 和 Shift+Tab；另记 dogfood 条目 |
+
+测试：`test/tui-commands-session-tree.test.mjs`、`test/tui-commands-export-import.test.mjs`、`test/tui-commands-info.test.mjs`、`test/tui-commands-share.test.mjs`、`test/tui-settings.test.mjs`。
 
 扩展命令、prompt 模板和 skill 命令不用宿主执行，交给 `session.prompt("/名字 参数")` 即可（SDK 笔记第 4 节）。宿主只拦截自己的内置命令。
 
@@ -430,7 +471,8 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | `setHiddenThinkingLabel` | 折叠后的 thinking 标题 |
 | `setTitle` | 终端 tab 标题 |
 | `onTerminalInput` | 在动作表之前拿到原始输入 |
-| `pasteToEditor` / `setEditorText` / `getEditorText` / `addAutocompleteProvider` | 转给输入框 |
+| `pasteToEditor` / `setEditorText` / `getEditorText` | 转给输入框 |
+| `addAutocompleteProvider` | 同 Pi：记进包装列表，每次重建补全（bind、`/reload`、`/settings` 的 skill-commands）都重新套上；切换会话前和 `/reload` 时随其余扩展界面状态一起清空，由 `session_start` 重新添加 |
 | `theme` / `getAllThemes` / `getTheme` / `setTheme` | MMP 构造的 `Theme` 实例（4.9 节）；v1 的 `setTheme` 只接受 MMP 的两套主题 |
 | `getToolsExpanded` / `setToolsExpanded` | 对应 `Ctrl+O` 的全局状态 |
 
@@ -558,7 +600,7 @@ M2 结束时就能日常使用，只是样子还接近 Pi。M4 才换成 grok �
 | M0 升级 Pi | 完成（0.87.1），见 [decisions.md](decisions.md) P0 |
 | M1 探针 | 并进 M2 一起做。已验证：S2（扩展消息只显示一次）、S3（全局主题和 MMP 的 Theme 颜色一致，有测试）、S5（MCP adapter 在新宿主里正常连接；`custom()` 面板和 `tui.select.*` 键位正常，用测试扩展验证，因为 MMP 的配置方式下 `/mcp` 不弹面板）。未做：S1（Pi 的选择器组件，M3 用到时验证）、S4（各终端表现）、S6（缺 fd/rg）、S7（查询终端背景色） |
 | M2 最小可用版本 | 完成 v0，当时放在 `MMP_TUI=v2` 开关后面（经典界面仍是默认，因为 `/login` 还只有经典界面有）。代码在 `src/tui/`，约 1,080 行。**开关已在 2026-09-29 去掉**（见 [decisions.md](decisions.md) M5）：交互模式只走这条路径，不再有经典界面可退回 |
-| M3 内置命令 | P0 完成（`Ctrl+T` 除外，随 M4 做）：补全、`/compact` `/resume` `/thinking` `/copy` `/reload`、`!` 命令、常用键位和排队显示。由 3 个 Sonnet subagent 分别在独立 worktree 里写，审查后合并。P1 完成（2026-09-29，另一个 Sonnet subagent）：`/tree` `/fork` `/clone` `/name` `/session` `/export` `/import` `/hotkeys`，以及原计划不做后来改口的 `/share` `/bug` `/changelog`、连带做掉的 `/scoped-models`；新文件 `session-tree-commands.ts`、`info-commands.ts`、`export-commands.ts`、`share-commands.ts`，对照表见 4.6 节。P2 只剩 `/settings` 未做 |
+| M3 内置命令 | P0 完成（`Ctrl+T` 除外，随 M4 做）：补全、`/compact` `/resume` `/thinking` `/copy` `/reload`、`!` 命令、常用键位和排队显示。由 3 个 Sonnet subagent 分别在独立 worktree 里写，审查后合并。P1 完成（2026-09-29，另一个 Sonnet subagent）：`/tree` `/fork` `/clone` `/name` `/session` `/export` `/import` `/hotkeys`，以及原计划不做后来改口的 `/share` `/bug` `/changelog`、连带做掉的 `/scoped-models`；新文件 `session-tree-commands.ts`、`info-commands.ts`、`export-commands.ts`、`share-commands.ts`，对照表见 4.6 节。P2 的 `/settings` 于 2026-10-01 完成（任务 D21，见 4.6 节） |
 | M4 grok 界面 | 进行中。已完成：顶栏（分支、缩短的路径、上下文占用）、用户消息块、运行状态行、圆角输入框（底边是模型和思考档位）、快捷键栏（`src/tui/chrome.ts`）；工具块用 `┃` 竖条和 `◆`，去掉 Pi 的底色框（`src/tui/tools/block.ts`，内置工具和扩展工具都套用）；7 个内置工具的渲染器（agy 写，审查后合并）；4.3 节的粘贴标签和预览浮窗（`src/tui/paste-chips.ts`、`src/tui/paste-preview.ts`：Pi 的 `Editor` 把折叠/原子/展开/校验都写成私有方法，无法子类化覆盖，改成包一层，用它公开的 `getText`/`getCursor`/`insertTextAtCursor`/`setText`/`handleInput`/`handleMouse`/`render`，外加一个私有字段 `state`：`[Pasted: …]` 标签没有编号，内容表按"文档里第几个标签"对应，这张表挂在 `Editor.state` 上，Pi 的撤销（`pushUndoSnapshot` 克隆、`undo` 恢复）和历史浏览（`historyDraft`）会连同文字一起克隆、恢复它，所以撤销后每个标签的内容和当时完全一致；其他编辑按光标处的前后缀比对决定哪些标签还在，新出现的同形文字（手打、Ctrl+Y 贴回）不带内容；删掉半个标签的操作（退格、Delete、Ctrl+W、Alt+D、Ctrl+U、Ctrl+K）顺带删掉剩下的半个；展开靠合成方向键/退格键调用；图片走 `session.prompt(text, {images})`，`ImageContent` 来自 `@earendil-works/pi-ai`；双击展开一度不生效——pi-tui 的鼠标分发要么走 overlay，要么走 `dispatchMouseToLayout` 按 `currentLayout` 里登记过布局节点（Stack/ScrollView）的组件找目标，`inset()` 这种裸 `{render, invalidate}` 包装对象不登记子结构，点到 `editorSlot` 也传不进 `PromptFrame`，补了 `inset()` 自己的 `handleMouse` 转发才通；补上后连续两次点击又被屏幕级"双击选词"抢先吃掉（`Editor.handleMouse` 故意不处理 press，让拖选文本能用），改成 `ChipEditor` 自己在 press 阶段先认领，用真实 SGR 鼠标序列在 `test/tui-paste-chips-app.test.mjs` 里端到端验证过，不只是单测坐标换算。`setText()` 原样清空过 Alt+Up/Esc 的队列回填，导致回填出的文字还原样保留标签但内容已经跟丢；现在 `setText()` 也按前后缀比对，没改动部分里的标签保留内容）。已知偏差：方向键/主页键/单击可能落在标签中间，用 `snapOutOfChipSpan` 顺着移动方向纠正，未覆盖的只剩跨行移动；`[Image #N]` 删除后不重排号，会有空档；Ctrl+G 外部编辑器里展开文本会把图片标签整个丢掉。2026-09-30 完成（两个并行 subagent）：助手消息时间戳、`Worked for Ns`/`Stopped after Ns`、thinking 折叠成 `Thought for Ns`（含 `Ctrl+T` 全局折叠和单击折叠单条）、矮屏降级；连续只读工具合并（超过 10 项时只显示最近 10 项，更早的收成最前面一行 `◈ N more`，可点开）、完成闪烁。未做：`▼` 新内容提示 |
 
 M2 验收依据（都可重跑）：

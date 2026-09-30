@@ -25,7 +25,7 @@
 // the prompt-zone markers before painting, and `output` has every OSC stripped, so a leak shows only here.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import xterm from "@xterm/headless";
 
@@ -117,6 +117,9 @@ for (const [kind, value, opts = {}] of steps) {
   if (INPUT_STEPS.has(kind)) inputStart = output.length;
   if (kind === "mark") marks[value] = strip(output);
   else if (kind === "screen") screens[value] = await currentScreen();
+  // Unstripped output, for effects that only exist as escape sequences (e.g. the hardware cursor's
+  // `\x1b[?25h`, docs/tui-design.md 4.6's /settings).
+  else if (kind === "rawMark") marks[value] = output;
   else if (kind === "wait") await sleep(value);
   else if (kind === "detach") detached = true;
   else if (kind === "waitReady") {
@@ -163,6 +166,11 @@ for (const [kind, value, opts = {}] of steps) {
     const dir = join(value.skillsDir, value.name);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "SKILL.md"), `---\nname: ${value.name}\ndescription: ${value.name}\n---\n${value.name}\n`);
+  }
+  // Writes a file between steps (e.g. settings.json before "/reload"), like plantSkill above.
+  else if (kind === "writeFile") {
+    mkdirSync(dirname(value.path), { recursive: true });
+    writeFileSync(value.path, value.content);
   }
   // Counts live processes matching `value.pattern` (a `pgrep -f` argument) mid-run, from outside
   // the app -- e.g. exactly one MCP stdio child surviving a /new or /reload (docs/mcp-design.md's

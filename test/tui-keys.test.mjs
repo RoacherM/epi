@@ -48,13 +48,13 @@ test("model cycling is unbound by default, bindable in keybindings.json, and sta
   assert.equal(keybindings.matches(CTRL_L, "app.model.select"), true);
 });
 
-test("built-in lookup separates wired and planned commands", () => {
+test("built-in lookup finds wired commands only", () => {
   assert.equal(findBuiltin("login")?.kind, "run");
   assert.equal(findBuiltin("resume")?.kind, "run");
   assert.equal(findBuiltin("tree")?.kind, "run");
   assert.equal(findBuiltin("share")?.kind, "run");
   assert.equal(findBuiltin("trust")?.kind, "run");
-  assert.equal(findBuiltin("settings")?.kind, "planned");
+  assert.equal(findBuiltin("settings")?.kind, "run");
   assert.equal(findBuiltin("mmp"), undefined);
 });
 

@@ -69,12 +69,13 @@
 
 逐个执行，预期都是"不报错、行为对齐 Pi"，特别注意的写在后面：
 
-`/model`（弹出选择器，Esc 关闭后快捷键仍然有效）、`/thinking`、`/new`（旧会话保存、新会话为空）、`/resume`（列表里能看到刚才的会话，选中后恢复内容）、`/tree`、`/fork`、`/clone`、`/name`、`/session`、`/compact`（显示 "Compacting…"，结束后上下文用量下降）、`/reload`、`/trust`、`/copy`、`/export`、`/import`、`/hotkeys`、`/scoped-models`、`/share`、`/changelog`、`/bug`、`/login`、`/logout`、`/mcp`。
+`/model`（弹出选择器，Esc 关闭后快捷键仍然有效）、`/thinking`、`/new`（旧会话保存、新会话为空）、`/resume`（列表里能看到刚才的会话，选中后恢复内容）、`/tree`、`/fork`、`/clone`、`/name`、`/session`、`/compact`（显示 "Compacting…"，结束后上下文用量下降）、`/reload`、`/trust`、`/copy`、`/export`、`/import`、`/hotkeys`、`/scoped-models`、`/settings`、`/share`、`/changelog`、`/bug`、`/login`、`/logout`、`/mcp`。
 
 | 编号 | 步骤 | 预期结果 |
 |---|---|---|
 | ★ K1 | 打开任意弹窗（`/model`）再关掉，然后按 Shift+Tab、Ctrl+V | 快捷键仍然有效（焦点回到输入框） |
 | K2 | 输入 `/` | 补全列表只有 mmp 的命令，没有 Pi 独有、MMP 不提供的命令 |
+| K3 | `/settings`：翻到底（↓），再搜 `Theme`；把 `Fullscreen scrollbar` 改成 `always`、`Autocomplete max items` 改成 `7`，Esc；输入 `/`；退出后看 `~/.mmp/pi/settings.json`，重启再开 `/settings` | 列表 15 项（`(15/15)`），搜 `Theme` 显示 `No matching settings`；改完对话区右侧立刻出现滚动条，`/` 补全一次显示 7 行；文件里有 `fullscreenScrollbar`、`autocompleteMaxVisible`，`~/.pi` 和项目 `.pi/` 下没有新文件；重启后两项仍是新值。Esc 后 Shift+Tab、Ctrl+V 照常（同 K1） |
 
 ### 3.5 MCP 和 skills
 

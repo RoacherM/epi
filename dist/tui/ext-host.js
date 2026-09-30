@@ -97,7 +97,7 @@ export function createExtensionUIContext(surface) {
         pasteToEditor: (text) => surface.setEditorText(surface.getEditorText() + text),
         setEditorText: (text) => surface.setEditorText(text),
         getEditorText: () => surface.getEditorText(),
-        addAutocompleteProvider: (factory) => surface.setAutocompleteProvider(factory(surface.getAutocompleteProvider())),
+        addAutocompleteProvider: (factory) => surface.addAutocompleteProvider(factory),
         setEditorComponent: (factory) => {
             if (factory !== undefined)
                 unsupported(surface, "setEditorComponent");

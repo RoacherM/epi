@@ -14,6 +14,8 @@ import { ChipEditor, unattachedImageLabels } from "./paste-chips.js";
 import { pastePreview } from "./paste-preview.js";
 import { piTui } from "./pi-tui.js";
 import { crossProjectRefusal } from "./project-guard.js";
+import { configureHttp } from "./services.js";
+import { showHardwareCursor } from "./settings-command.js";
 import { confirmMissingSessionCwd, missingSessionCwdIssue, runResume } from "./session-commands.js";
 import { Transcript } from "./transcript.js";
 /** How long quitting waits for the runtime to dispose before exiting anyway (see disposeRuntime). */
@@ -194,12 +196,41 @@ export async function runTuiApp(options) {
         tui.requestRender();
     }
     // ── autocomplete ──────────────────────────────────────────────────────────
-    let autocomplete = new piTui.CombinedAutocompleteProvider([], cwd, null);
-    // Rebuilt in bind() (after a /new, /resume, /reload, or fork), so this always reads the cwd of
-    // whichever session is bound then, not the cwd the app launched with.
+    // Pi's autocompleteProviderWrappers: what extensions added with ctx.ui.addAutocompleteProvider,
+    // re-applied on every rebuild and cleared with the rest of the extension UI state.
+    let autocompleteWrappers = [];
+    // Pi's setupAutocompleteProvider. Rebuilt in bind() (after a /new, /resume, /reload, or fork), so
+    // this always reads the cwd of whichever session is bound then, not the cwd the app launched with.
     function resetAutocomplete() {
-        autocomplete = new piTui.CombinedAutocompleteProvider(slashCompletions(session), session.sessionManager.getCwd(), null);
-        editor.setAutocompleteProvider(autocomplete);
+        let provider = new piTui.CombinedAutocompleteProvider(slashCompletions(session), session.sessionManager.getCwd(), null);
+        const triggerCharacters = [];
+        for (const wrap of autocompleteWrappers) {
+            provider = wrap(provider);
+            triggerCharacters.push(...(provider.triggerCharacters ?? []));
+        }
+        if (triggerCharacters.length > 0)
+            provider.triggerCharacters = [...new Set(triggerCharacters)];
+        editor.setAutocompleteProvider(provider);
+    }
+    // ── settings (/settings, docs/tui-design.md 4.6) ────────────────────────────
+    /** The interface half of Pi's applyRuntimeSettings (interactive-mode.js ~1510), for the settings
+     * MMP's interface honours. Runs before the first frame, so a saved value is in effect from the
+     * start, not only after bind(). */
+    function applyUiSettings() {
+        const settings = session.settingsManager;
+        // Not Pi's getShowHardwareCursor: that one reads PI_HARDWARE_CURSOR (settings-command.ts).
+        tui.setShowHardwareCursor(showHardwareCursor(settings));
+        // T3 (docs/decisions.md): copy on select stays on when unset; Pi's getter defaults to true.
+        tui.setCopyOnSelect(settings.getFullscreenCopyOnSelect());
+        tui.setWheelScrollLines(settings.getFullscreenWheelScrollLines());
+        scroll.setScrollbar(settings.getFullscreenScrollbar());
+        editor.setAutocompleteMaxVisible(settings.getAutocompleteMaxVisible());
+    }
+    /** Pi's applyRuntimeSettings: on every bind(), /reload, and after a /settings change. Like Pi's,
+     * it leaves autocomplete alone; bind(), /reload and the skill-commands item rebuild that. */
+    function applyRuntimeSettings() {
+        applyUiSettings();
+        configureHttp(session.settingsManager).catch((error) => transcript.notice(`Could not apply the HTTP settings: ${errorText(error)}`, "error"));
     }
     // ── extension host ────────────────────────────────────────────────────────
     const surface = {
@@ -262,11 +293,10 @@ export async function runTuiApp(options) {
             editor.setText(text);
             tui.requestRender();
         },
-        setAutocompleteProvider(provider) {
-            autocomplete = provider;
-            editor.setAutocompleteProvider(provider);
+        addAutocompleteProvider(factory) {
+            autocompleteWrappers.push(factory);
+            resetAutocomplete();
         },
-        getAutocompleteProvider: () => autocomplete,
         getToolsExpanded: () => toolsExpanded,
         setToolsExpanded(expanded) {
             toolsExpanded = expanded;
@@ -331,6 +361,11 @@ export async function runTuiApp(options) {
         },
         exit: (code) => exit(code),
         reloadSession: () => reloadSession(),
+        applySettings: () => {
+            applyRuntimeSettings();
+            tui.requestRender();
+        },
+        resetAutocomplete,
         // navigateTree (session-tree-commands.ts's /tree) stays on the same AgentSession instance, so
         // setRebindSession never fires for it; this is the same replay bind() does after a real switch.
         resetTranscript: () => transcript.reset(session),
@@ -656,6 +691,8 @@ export async function runTuiApp(options) {
         });
         // bindExtensions re-registers extension providers, which starts an un-awaited auth refresh in Pi.
         await runtime.services.modelRuntime.refresh({ allowNetwork: false });
+        // Pi's rebindCurrentSession runs applyRuntimeSettings and setupAutocompleteProvider on every rebind.
+        applyRuntimeSettings();
         resetAutocomplete();
         tui.requestRender();
     }
@@ -668,6 +705,10 @@ export async function runTuiApp(options) {
         rebuildWidgets();
         surface.setHeader(undefined);
         surface.setFooter(undefined);
+        autocompleteWrappers = [];
+        // Pi's resetExtensionUI order: detach the old session's wrappers from the editor now, before
+        // their captured ctx goes stale, not only when bind()/reloadSession() finish.
+        resetAutocomplete();
     }
     runtime.setBeforeSessionInvalidate(clearExtensionUiState);
     runtime.setRebindSession(bind);
@@ -683,6 +724,8 @@ export async function runTuiApp(options) {
         // Re-registering extension providers on reload can race an un-awaited auth refresh, same as bind().
         await runtime.services.modelRuntime.refresh({ allowNetwork: false });
         keybindings.reload();
+        // Pi's handleReloadCommand: applyRuntimeSettings after session.reload() re-read settings.json.
+        applyRuntimeSettings();
         resetAutocomplete();
         tui.requestRender();
     }
@@ -977,6 +1020,7 @@ export async function runTuiApp(options) {
         tui.requestRender();
         return { consume: true };
     });
+    applyUiSettings();
     tui.start();
     tui.setFocus(editor);
     try {

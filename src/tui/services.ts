@@ -43,8 +43,13 @@ interface UndiciModule {
   install?: () => void;
 }
 
-/** Mirrors Pi's configureHttpDispatcher: settings proxy, idle timeout, no HTTP/2. Not exported by Pi. */
-async function configureHttp(settingsManager: SettingsManager): Promise<void> {
+// Pi's http-dispatcher.js keeps the same pair: the fetch at module load, and the one install() set.
+const originalGlobalFetch = globalThis.fetch;
+let installedGlobalFetch: typeof globalThis.fetch | undefined;
+
+/** Mirrors Pi's configureHttpDispatcher: settings proxy, idle timeout, no HTTP/2. Not exported by Pi.
+ * Runs at startup and again from the TUI's applyRuntimeSettings (rebind, /reload, /settings), like Pi. */
+export async function configureHttp(settingsManager: SettingsManager): Promise<void> {
   const proxy = settingsManager.getGlobalSettings().httpProxy?.trim();
   if (proxy) {
     process.env.HTTP_PROXY ??= proxy;
@@ -58,7 +63,14 @@ async function configureHttp(settingsManager: SettingsManager): Promise<void> {
     bodyTimeout: timeoutMs,
     headersTimeout: timeoutMs,
   }));
-  undici.install?.();
+  // Pi's shouldInstallGlobals: a fetch someone else installed (e.g. an extension) is kept.
+  const shouldInstallGlobals = installedGlobalFetch === undefined
+    ? globalThis.fetch === originalGlobalFetch
+    : globalThis.fetch === installedGlobalFetch;
+  if (shouldInstallGlobals && undici.install) {
+    undici.install();
+    installedGlobalFetch = globalThis.fetch;
+  }
 }
 
 function createSettingsManager(cwd: string, agentDir: string): SettingsManager {

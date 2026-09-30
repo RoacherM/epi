@@ -34,8 +34,8 @@ declare const handlerSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
 }, z.core.$strict>], "type">;
 declare const hookSchema: z.ZodObject<{
     event: z.ZodEnum<{
-        session_start: "session_start";
         session_shutdown: "session_shutdown";
+        session_start: "session_start";
         user_prompt: "user_prompt";
         tool_call: "tool_call";
         tool_result: "tool_result";
