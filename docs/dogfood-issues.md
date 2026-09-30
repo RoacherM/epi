@@ -16,7 +16,7 @@
 | D10 | P2 | Pi 0.99 新增的快捷键 MMP 没接：`app.model.cycleForward/Backward`、`tui.altScreen.previousPrompt/nextPrompt`、`tui.altScreen.search` | 对照 Pi 的 `core/keybindings.js` | 已修（合并 D10：Ctrl+↑/↓ 跳到上/下一条提问或回答；切换模型的动作已接上但按 K1 默认不绑键；Ctrl+Shift+F 搜索原本就能用，补了测试和 `/hotkeys`） |
 | D11 | P2 | 图片编号前后对不上：输入框里的标签按启动以来累加（第二张是 `[Image #2]`），发出去后对话区每条消息各自从 1 数，都显示 `[Image #1]` | 连发两条各带一张图的消息 | 已修（合并 e1d545c，决策 T4） |
 | D12 | P2 | 按 Ctrl+T 没有任何反馈：屏幕上没有思考内容时，看起来像按键失灵（用户报告）。Pi 会提示 "Thinking blocks: hidden/visible" | 在一个没有思考块的会话里按 Ctrl+T | 已修（Ctrl+T 在右下角闪 "Thinking: expanded/collapsed"） |
-| D13 | P3 | 测试辅助只能看"写到屏幕上的所有输出"，看不到"现在屏幕上显示的是什么"。所以"某行本该消失却一直留着"这类 bug（比如中止后队列提示不消失）没有测试能抓到（D2 复审发现，A4–A6、C1 四个改坏场景） | D2 的 review-2.md 第 2 条 | 待排期：给 tui-harness 加一个读取当前屏幕内容的步骤 |
+| D13 | P3 | 测试辅助只能看"写到屏幕上的所有输出"，看不到"现在屏幕上显示的是什么"。所以"某行本该消失却一直留着"这类 bug（比如中止后队列提示不消失）没有测试能抓到（D2 复审发现，A4–A6、C1 四个改坏场景） | D2 的 review-2.md 第 2 条 | 已修（合并 D13：`["screen", name]`、`waitFor {screen:true}`、`waitGone`；A4–A6、C1 四个测试已改用当前屏幕） |
 | D14 | P3 | D2 的 worker（旧工具版 b0d88c4，跑了约 1.5 小时）空输入框按 Ctrl+D 等 15 秒没退出，输入 `/quit` 4 秒内退出。没有点过图片标签。同样旧版本的 reviewer 上 Ctrl+D 1 秒退出，没复现 | 长时间运行的会话里按 Ctrl+D | 待复现（在新版本上留意） |
 | D15 | P0 | 上下文超长的自动恢复失败后，界面永远停在 "Compacting…"（实测 76 分钟），Esc 也停不下来。原因：Pi 在回合结束后的收尾阶段做恢复压缩，`compaction_end` 到达时 `isStreaming` 仍为 true，MMP 不清状态；之后的 `agent_settled` 也不清 | D11 worker 会话（magpie，约 176K token 时报 "Prompt is too long"） | 已修（合并 D15；另外修了两个同根的变体：回合结束后压缩成功也会卡住，回合中途压缩结束后状态不更新） |
 | D16 | P1 | magpie 的上下文上限配错：MMP 的 magpie 扩展照抄了 magpie 给 Pi 的 100 万，实际约 20 万，所以 Pi 从不自动压缩，直接撞上 "Prompt is too long"；恢复时的摘要请求又被 magpie 以 `content_filter` 拒绝 | 长任务里看上下文用量 | 已修（`~/.mmp/extensions/magpie/index.mjs` 改为 200000）；`content_filter` 的原因待查 |
@@ -36,3 +36,4 @@
 | D30 | P3 | 空输入框按两次 Esc 没有动作；Pi 可以设成打开 `/tree` 或 `/fork`（double-escape-action），D21 里隐藏了这个设置项 | 空输入框按 Esc Esc | 待排期 |
 | D31 | P3 | 没有终端标签栏进度提示（Pi 的 terminal-progress，OSC 9;4），D21 里隐藏了这个设置项 | 在支持 OSC 9;4 的终端里跑一个长回合 | 待排期 |
 | D32 | P3 | D10 复审的小问题：`test/pi-internals.test.mjs` 的 osc133 检查用固定 40ms 等待画面（机器忙时可能偶发失败）；测试辅助会去掉 OSC 序列，所以没有应用层测试能发现 OSC 133 标记漏到终端上（只靠跳转测试间接发现） | D10 的 review-1.md 第 1、2 条 | 待修 |
+| D33 | P3 | D13 复审的小问题：A6 测试（扩展 ctx.abort）改成只查最终屏幕后，丢了"恢复后排队提示不再出现"这项检查；`waitGone` 和 `waitFor {screen:true}` 的正则写法还没有测试用到 | D13 的 review-1.md 第 2、3 条 | 待修 |

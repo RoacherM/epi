@@ -44,7 +44,7 @@ const { steps, args = ["--no-project"], columns = 120, rows = 40 } = JSON.parse(
 let output = "";
 let onInput = () => {};
 const screen = new xterm.Terminal({ cols: columns, rows, allowProposedApi: true });
-// pi-tui draws only through write(); the no-op methods below are never called by it.
+// pi-tui draws only through write(); the other methods here only touch cursor visibility or the title, which don't change cells.
 const terminal = {
   start(input) { onInput = input; },
   stop() {},
