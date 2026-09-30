@@ -341,6 +341,40 @@ test("a compaction continuation (two agent_end pairs, one agent_settled) prints 
   assert.equal(matches.length, 1, `expected exactly one footer line, got: ${rendered}`);
 });
 
+// Dogfood D17: the footer reads "Stopped after" only when the user stopped the run (the app calls
+// markStopped()), not from compaction_end.aborted -- an extension's session_before_compact cancel
+// sets that too.
+test("an aborted automatic compaction inside a run reads Stopped after only when the user stopped it", () => {
+  for (const stopped of [false, true]) {
+    const transcript = new Transcript(stubTui(), theme, stubSession());
+    transcript.handle({ type: "agent_start" });
+    transcript.handle({ type: "agent_end", messages: [assistantMessage([{ type: "text", text: "done" }])], willRetry: false });
+    if (stopped) transcript.markStopped();
+    transcript.handle({ type: "compaction_end", reason: "threshold", aborted: true, willRetry: false });
+    transcript.handle({ type: "agent_settled" });
+    const rendered = transcript.root.render(80).join("\n");
+    assert.match(rendered, /Auto-compaction cancelled/);
+    assert.match(rendered, stopped ? /Stopped after \d+\.\ds/ : /Worked for \d+\.\ds/);
+    assert.doesNotMatch(rendered, stopped ? /Worked for/ : /Stopped after/);
+  }
+});
+
+// A stop outside a run (Esc on a manual /compact, which Pi runs after the run has settled) has no
+// footer of its own and must not mark the next run as stopped.
+test("markStopped() between runs leaves the next run's footer at 'Worked for'", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  transcript.markStopped();
+  transcript.handle({ type: "compaction_end", reason: "manual", aborted: true, willRetry: false });
+  transcript.handle({ type: "agent_start" });
+  transcript.handle({ type: "agent_end", messages: [assistantMessage([{ type: "text", text: "done" }])], willRetry: false });
+  transcript.handle({ type: "agent_settled" });
+  const rendered = transcript.root.render(80).join("\n");
+  assert.match(rendered, /Compaction cancelled/);
+  assert.doesNotMatch(rendered, /Context compacted\./);
+  assert.match(rendered, /Worked for \d+\.\ds/);
+  assert.doesNotMatch(rendered, /Stopped after/);
+});
+
 // Every new block this change adds (timestamp, thinking streaming/collapsed/expanded, the turn
 // footer) must still fit narrow and wide terminals, like the existing tool/message renderers do.
 test("assistant messages with thinking fit widths 40, 80, and 120", () => {

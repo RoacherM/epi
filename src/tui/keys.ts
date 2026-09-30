@@ -44,6 +44,7 @@ export function createKeyActions(): KeyAction[] {
         const session = host.session();
         if (session.isStreaming) {
           host.restoreQueuedMessagesToEditor();
+          host.markRunStopped();
           void session.abort();
         } else if (session.isCompacting) {
           // Pi's isCompacting also covers /tree branch summaries, which have their own controller.
@@ -65,6 +66,7 @@ export function createKeyActions(): KeyAction[] {
           host.setEditorText("");
         } else if (host.session().isStreaming) {
           host.restoreQueuedMessagesToEditor();
+          host.markRunStopped();
           void host.session().abort();
         } else if (Date.now() - lastCtrlC < DOUBLE_PRESS_MS) {
           void host.exit(0);

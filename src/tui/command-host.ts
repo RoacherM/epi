@@ -64,6 +64,9 @@ export interface CommandHost {
    * Shared by Esc/Ctrl+C (app.interrupt/app.clear), Alt+Up (app.message.dequeue), and the extension
    * abort handler, so none of them can see only one of the two queues. */
   restoreQueuedMessagesToEditor(): number;
+  /** Call before `session.abort()` when the user stops the running prompt (Esc, Ctrl+C, leaving it
+   * for /tree): its footer reads "Stopped after" (dogfood D17). */
+  markRunStopped(): void;
   /** True while an agent turn is running. */
   isWorking(): boolean;
   /** Drop the turn status row. Only for Esc when the row shows but the session is idle (dogfood

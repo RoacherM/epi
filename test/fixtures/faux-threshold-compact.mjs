@@ -5,19 +5,18 @@
 // it answers directly instead, and Pi's threshold compaction runs after the run's agent_end
 // (_checkCompaction) with no request following. The summary and the reply after it both take a
 // moment, so the status row is drawn during the compaction and while the next request waits.
-import { setTimeout as sleep } from "node:timers/promises";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { registerFaux } from "./faux-register.mjs";
+import { pause, registerFaux } from "./faux-register.mjs";
 
 export default function (pi) {
-  const route = async (context) => {
+  const route = async (context, options) => {
     // Pi 0.99 sends the system prompt as the first message.
     const system = context.messages[0]?.role === "system" ? String(context.messages[0].content) : "";
     if (system.startsWith("You are a context summarization assistant")) {
-      await sleep(800);
+      await pause(800, options?.signal);
       return fauxAssistantMessage("SUMMARY-TEXT");
     }
-    await sleep(1500);
+    await pause(1500, options?.signal);
     return fauxAssistantMessage("AFTER-COMPACT-REPLY");
   };
   registerFaux(pi, {

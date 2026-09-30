@@ -37,10 +37,11 @@ export class Transcript {
     /** The most recent `agent_end`'s own messages, read back on `agent_settled` (the point that's
      * actually "this run is over") to find the last assistant reply's `stopReason`. */
     lastTurnMessages = [];
-    /** Set only by `auto_retry_end`'s "Retry cancelled" (Esc during a retry's backoff sleep never
-     * reaches another `agent_end`, so it has no `stopReason` of its own to read back from
-     * `lastTurnMessages` -- this is the only signal it leaves behind). `turnFooter()` ORs this with
-     * `lastTurnMessages`'s own aborted check, the ordinary case (Esc during a normal response). */
+    /** Set by `auto_retry_end`'s "Retry cancelled" and by `markStopped()` (Esc during a retry's
+     * backoff sleep or a post-run compaction never reaches another `agent_end`, so it has no
+     * `stopReason` of its own to read back from `lastTurnMessages` -- this is the only signal it
+     * leaves behind). `turnFooter()` ORs this with `lastTurnMessages`'s own
+     * aborted check, the ordinary case (Esc during a normal response). */
     turnAborted = false;
     constructor(tui, theme, session) {
         this.tui = tui;
@@ -224,6 +225,8 @@ export class Transcript {
                     this.notice(event.reason === "manual" ? "Compaction cancelled" : "Auto-compaction cancelled", event.reason === "manual" ? "error" : "info");
                 else
                     this.notice("Context compacted.");
+                // `aborted` is also set when an extension's session_before_compact cancels it, so it can't
+                // mean the user stopped the run; markStopped() carries that (dogfood D17).
                 break;
             case "auto_retry_start":
                 this.notice(`Retrying (${event.attempt}/${event.maxAttempts}) in ${Math.round(event.delayMs / 1000)}s: ${event.errorMessage}`, "warning");
@@ -252,6 +255,15 @@ export class Transcript {
         this.assistantBlocks.push(component);
         this.add(component, false);
         return component;
+    }
+    /** The user stopped the running prompt (Esc, Ctrl+C, an extension's ctx.abort()): its footer
+     * reads "Stopped after" even when no event says so -- an automatic compaction it cancelled ends
+     * with only `compaction_end.aborted`, the same as one an extension cancelled (dogfood D17). Only
+     * inside a timed run: outside one (a manual /compact) there is no footer to mark, and the next
+     * run must not inherit it. */
+    markStopped() {
+        if (this.turnStartedAt !== undefined)
+            this.turnAborted = true;
     }
     /** Item 2 (docs/tui-design.md 4.2): `Worked for Ns` below the last block of a settled turn,
      * `Stopped after Ns` for one that ended aborted. Called once, from `agent_settled` -- the whole

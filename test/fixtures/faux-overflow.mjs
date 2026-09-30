@@ -5,9 +5,8 @@
 // automatic retry gets "AFTER-RECOVERY". Later requests are routed by their system prompt, since
 // a compaction may make more than one summarization request. Summaries and the retry take a
 // moment, so the "Compacting…" status and the status after it are drawn at least once.
-import { setTimeout as sleep } from "node:timers/promises";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { registerFaux } from "./faux-register.mjs";
+import { pause, registerFaux } from "./faux-register.mjs";
 
 export default function (pi) {
   const fail = process.env.MMP_FAUX_OVERFLOW_RECOVERY === "fail";
@@ -15,14 +14,14 @@ export default function (pi) {
     stopReason: "error",
     errorMessage: "prompt is too long: 213462 tokens > 200000 maximum",
   });
-  const route = async (context) => {
+  const route = async (context, options) => {
     // Pi 0.99 sends the system prompt as the first message.
     const system = context.messages[0]?.role === "system" ? String(context.messages[0].content) : "";
     if (!system.startsWith("You are a context summarization assistant")) {
-      await sleep(800);
+      await pause(800, options?.signal);
       return fauxAssistantMessage("AFTER-RECOVERY");
     }
-    await sleep(800);
+    await pause(800, options?.signal);
     return fail
       ? fauxAssistantMessage("", { stopReason: "error", errorMessage: "summary request rejected" })
       : fauxAssistantMessage("SUMMARY-TEXT");

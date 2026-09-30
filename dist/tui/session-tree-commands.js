@@ -141,6 +141,7 @@ async function navigateTo(host, entryId) {
     }
     if (session.isStreaming) {
         host.restoreQueuedMessagesToEditor();
+        host.markRunStopped();
         await session.abort();
     }
     if (session.isCompacting) {
