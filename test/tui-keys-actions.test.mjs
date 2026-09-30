@@ -86,18 +86,24 @@ test("Alt+Enter while idle submits like plain Enter", (t) => {
 });
 
 test("Alt+Up restores a queued follow-up to the editor", (t) => {
-  const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
+  const { marks, screens } = runApp(t, [fixture("faux-queue.mjs")], [
     ["waitReady"], ["type", "go"], ["key", "enter"],
     ["waitFor", "FIRST-START"], ["type", "restoreme"], ["key", "enter"],
     ["waitFor", "Follow-up: restoreme"], ["mark", "queued"],
     ["key", "alt+up"], ["waitFor", "❯ restoreme"], ["mark", "restored"],
+    ["waitFor", "│ ❯ restoreme", { screen: true }], ["screen", "restored"],
     ["detach"],
   ]);
   assert.match(marks.queued, /Follow-up: restoreme/);
-  // The frames drawn between the two marks: the queue line is gone and "restoreme" is back in the editor.
+  // The frames drawn between the two marks: the queue line is not redrawn and "restoreme" is back in the editor.
   const afterDequeue = marks.restored.slice(marks.queued.length);
   assert.match(afterDequeue, /restoreme/);
   assert.doesNotMatch(afterDequeue, /Follow-up:/);
+  // The alt screen only redraws rows that changed, so a queue bar that stays put would never show up
+  // in the drawn output above; the current screen is where it has to be gone. The restore clears the
+  // queue and fills the editor in one frame, so no settle wait is needed.
+  const shown = screens.restored.join("\n");
+  assert.doesNotMatch(shown, /Follow-up:|Alt\+Up to edit/, shown);
 });
 
 // Item 2 (pre-merge review, MUST FIX): clearAllQueues used to count how many queued messages its

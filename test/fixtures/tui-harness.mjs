@@ -7,13 +7,23 @@
 // continues at once; only a failure waits out the timeout (opts.timeoutMs, default 15000), and then
 // the harness exits non-zero with the screen tail. By default it looks only at what was drawn
 // since the last input step began, so an earlier identical text can't satisfy it; opts.all looks at
-// everything drawn so far (for text that was drawn before the step was reached).
+// everything drawn so far (for text that was drawn before the step was reached); opts.screen looks
+// at the current screen instead (see "screen" below).
+// ["screen", name] records the current screen into screens[name] as an array of `rows` strings
+// (trailing spaces trimmed). Everything the app writes is also fed to a headless xterm -- the
+// emulator pi-tui's own tests use -- so this is what a terminal shows after all cursor moves and
+// clears. "Drawn" (the output and marks) can't tell that a line went away: the alt screen only
+// rewrites rows that changed, so a row that should have been cleared but wasn't never shows up again.
+// ["waitGone", pattern, opts?] waits until `pattern` is no longer on the current screen (same
+// pattern and timeout rules as waitFor).
 // ["detach"], as the last step, ends the run without waiting for the app to quit (Ctrl+D does not
 // quit while the editor has text, so a test that doesn't check the exit code would wait 5s for it).
-// Prints the exit code, the marks, and everything the app wrote (ANSI stripped) as JSON.
+// Prints the exit code, the marks, the screens, and everything the app wrote (ANSI stripped) as JSON.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+import xterm from "@xterm/headless";
 
 import { prepareMmpRun } from "../../dist/host.js";
 import { runTuiApp } from "../../dist/tui/app.js";
@@ -33,11 +43,13 @@ const { steps, args = ["--no-project"], columns = 120, rows = 40 } = JSON.parse(
 
 let output = "";
 let onInput = () => {};
+const screen = new xterm.Terminal({ cols: columns, rows, allowProposedApi: true });
+// pi-tui draws only through write(); the no-op methods below are never called by it.
 const terminal = {
   start(input) { onInput = input; },
   stop() {},
   async drainInput() {},
-  write(data) { output += data; },
+  write(data) { output += data; screen.write(data); },
   get columns() { return columns; },
   get rows() { return rows; },
   get kittyProtocolActive() { return false; },
@@ -78,12 +90,21 @@ const running = runTuiApp({
   terminal,
 });
 
-function fail(reason) {
-  process.stderr.write(`tui-harness.mjs: ${reason}. Screen tail:\n${strip(output).slice(-1500)}\n`);
+function fail(reason, current) {
+  const shown = current === undefined ? `Screen tail:\n${strip(output).slice(-1500)}` : `Current screen:\n${current.join("\n")}`;
+  process.stderr.write(`tui-harness.mjs: ${reason}. ${shown}\n`);
   process.exit(2);
 }
+// xterm parses writes asynchronously; an empty write's callback runs once everything before it has landed.
+async function currentScreen() {
+  await new Promise((resolve) => screen.write("", resolve));
+  const buffer = screen.buffer.active;
+  return Array.from({ length: rows }, (_, row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? "");
+}
+const matcher = (pattern) => typeof pattern === "string" ? (text) => text.includes(pattern) : (text) => new RegExp(pattern.regex, pattern.flags).test(text);
 const strip = (text) => text.replace(/\x1b\[[0-9;?<>=:]*[a-zA-Z~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[=>]/g, "");
 const marks = {};
+const screens = {};
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let inputStart = 0;
 const INPUT_STEPS = new Set(["type", "paste", "key", "mouse"]);
@@ -91,6 +112,7 @@ let detached = false;
 for (const [kind, value, opts = {}] of steps) {
   if (INPUT_STEPS.has(kind)) inputStart = output.length;
   if (kind === "mark") marks[value] = strip(output);
+  else if (kind === "screen") screens[value] = await currentScreen();
   else if (kind === "wait") await sleep(value);
   else if (kind === "detach") detached = true;
   else if (kind === "waitReady") {
@@ -102,11 +124,29 @@ for (const [kind, value, opts = {}] of steps) {
     // pi-tui defers a requested frame by up to 16ms; let bind()'s last one land before the next step.
     await sleep(25);
   }
+  else if (kind === "waitFor" && opts.screen === true) {
+    const matches = matcher(value);
+    const deadline = Date.now() + (opts.timeoutMs ?? 15000);
+    let current;
+    while (!matches((current = await currentScreen()).join("\n"))) {
+      if (Date.now() > deadline) fail(`never showed ${JSON.stringify(value)}`, current);
+      await sleep(5);
+    }
+  }
   else if (kind === "waitFor") {
-    const matches = typeof value === "string" ? (text) => text.includes(value) : (text) => new RegExp(value.regex, value.flags).test(text);
+    const matches = matcher(value);
     const deadline = Date.now() + (opts.timeoutMs ?? 15000);
     while (!matches(strip(opts.all === true ? output : output.slice(inputStart)))) {
       if (Date.now() > deadline) fail(`never drew ${JSON.stringify(value)}`);
+      await sleep(5);
+    }
+  }
+  else if (kind === "waitGone") {
+    const matches = matcher(value);
+    const deadline = Date.now() + (opts.timeoutMs ?? 15000);
+    let current;
+    while (matches((current = await currentScreen()).join("\n"))) {
+      if (Date.now() > deadline) fail(`still showing ${JSON.stringify(value)}`, current);
       await sleep(5);
     }
   }
@@ -168,4 +208,4 @@ for (const [kind, value, opts = {}] of steps) {
 }
 const code = detached ? "detached" : await Promise.race([running, sleep(5000).then(() => "did not exit")]);
 // Writes to a pipe are asynchronous; exiting before the callback truncates large outputs.
-process.stdout.write(JSON.stringify({ exit: code, marks, output: strip(output) }), () => process.exit(0));
+process.stdout.write(JSON.stringify({ exit: code, marks, screens, output: strip(output) }), () => process.exit(0));
