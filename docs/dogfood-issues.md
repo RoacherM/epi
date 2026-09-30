@@ -14,3 +14,4 @@
 | D8 | P1 | 点一下输入框里的图片标签（看预览）之后，所有快捷键都失效：Ctrl+V 贴不了图、Shift+Tab、Esc、Ctrl+D 都没反应，只有打字还能用。原因：点击后 pi-tui 把焦点交给了包着输入框的 PromptFrame（它会把打字转给输入框），而 MMP 的快捷键只认输入框本身 | 贴一张图，鼠标点一下 `[Image #1]`，再按 Ctrl+V | 已修（见下一提交，工具版已升级） |
 | D9 | P2 | Pi 0.99 会把图片缩放说明（`[Image: original WxH, displayed at …]`）追加到发给模型的文字里，MMP 的用户消息块把它原样显示出来；用户用"选中即复制"拖选这行后，Ctrl+V 贴出的是这段文字而不是图（用户会话里第二条消息实际没有图片，只有这行字） | 贴一张大于 2000px 的图并发送，看用户消息块 | 待定：界面隐藏缩放和格式转换说明（"Image omitted" 这类失败说明保留），模型照常收到 |
 | D10 | P2 | Pi 0.99 新增的快捷键 MMP 没接：`app.model.cycleForward/Backward`、`tui.altScreen.previousPrompt/nextPrompt`、`tui.altScreen.search` | 对照 Pi 的 `core/keybindings.js` | 待排期 |
+| D11 | P2 | 图片编号前后对不上：输入框里的标签按启动以来累加（第二张是 `[Image #2]`），发出去后对话区每条消息各自从 1 数，都显示 `[Image #1]` | 连发两条各带一张图的消息 | 修复中（任务 D11：整个会话统一编号，`/resume` 接着编，`/new` 从 1 开始） |
