@@ -39,9 +39,12 @@ export declare function runResume(host: CommandHost): Promise<ResumeOutcome>;
  * open the selector (also reachable with no argument). */
 export declare function runThinking(host: CommandHost, levelArg: string): Promise<void>;
 /** `/copy` and the `app.message.copy` key: copy the last assistant reply to the clipboard.
- * Pi also prefers a live mouse-selection when the key triggers it from `TuiAltScreen`; MMP has no
- * such selection state wired into CommandHost yet, so this always copies the last assistant text. */
-export declare function runCopy(host: CommandHost): Promise<void>;
+ * Like Pi's handleCopyCommand, the key (`fromKey`) copies the active mouse selection instead when
+ * copy-on-select is off (with it on, releasing the mouse already copied the selection), and
+ * confirms with a "Copied!" flash rather than a notice. */
+export declare function runCopy(host: CommandHost, options?: {
+    fromKey?: boolean;
+}): Promise<void>;
 /** `/reload`: like Pi, refuse while a turn or compaction is running, then `session.reload()` and
  * rebuild the host state it doesn't cover (docs/tui-design.md 6.3) via `host.reloadSession`. */
 export declare function runReload(host: CommandHost): Promise<void>;

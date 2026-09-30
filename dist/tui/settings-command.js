@@ -204,8 +204,7 @@ export function settingsItems(host) {
             item: {
                 id: "fullscreen-copy-on-select",
                 label: "Fullscreen copy on select",
-                // Pi adds "disable to copy selections with Ctrl+X"; MMP's Ctrl+X copies only the last reply.
-                description: "Automatically copy selected text in fullscreen mode",
+                description: "Automatically copy selected text in fullscreen mode; disable to copy selections with Ctrl+X",
                 currentValue: bool(settings.getFullscreenCopyOnSelect()),
                 values: ["true", "false"],
             },

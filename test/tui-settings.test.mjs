@@ -69,7 +69,7 @@ const HIDDEN = [
   "Default thinking level per model", "TUI mode", "Fullscreen exit output", "Theme",
 ];
 // Pi's wording names keys or behaviour MMP does not have (see src/tui/settings-command.ts).
-const OWN_DESCRIPTION = new Set(["steering-mode", "follow-up-mode", "fullscreen-copy-on-select"]);
+const OWN_DESCRIPTION = new Set(["steering-mode", "follow-up-mode"]);
 
 test("/settings lists MMP's 15 items and none of the ones it leaves out", (t) => {
   const env = makeEnv(t);
@@ -340,6 +340,46 @@ test("Fullscreen copy on select: on when unset (decision T3), off at once from /
 
   const startup = makeEnv(t, { settings: { fullscreenCopyOnSelect: false } });
   assert.equal(count(startup.run([["waitReady"], ...drag, ["rawMark", "end"], ...quit]).marks.end), 0);
+});
+
+test("Ctrl+X copies the active selection when copy-on-select is off, otherwise the last reply (Pi's handleCopyCommand)", (t) => {
+  const OSC52 = /\x1b\]52;c;([A-Za-z0-9+/=]*)\x07/g;
+  const copied = (text) => [...text.matchAll(OSC52)].map((match) => Buffer.from(match[1], "base64").toString("utf8"));
+  // Drag across 1-based row `row`, columns 5-30: the startup page's box top, or "❯ hi" after a reply.
+  const drag = (row = 4) => [["raw", `\x1b[<0;5;${row}M`], ["raw", `\x1b[<32;30;${row}M`], ["raw", `\x1b[<0;30;${row}m`], ["wait", 300]];
+  const reply = [["type", "hi"], ["key", "enter"], ["waitFor", "ECHO:hi"], ["wait", 200]];
+  const ctrlX = [["key", "ctrl+x"], ["waitFor", "Copied!"]];
+  const clipboard = (env) => {
+    const file = join(env.root, "clipboard.txt");
+    return { file, env: { MMP_TEST_CLIPBOARD_FILE: file } };
+  };
+
+  // Off, with a selection: the selection goes out as OSC 52, as pi-tui's own selection copy does.
+  const off = makeEnv(t, { settings: { fullscreenCopyOnSelect: false } });
+  const offClip = clipboard(off);
+  const selected = off.run([
+    ["waitReady"], ...drag(), ["screen", "dragged"], ["rawMark", "dragged"], ...ctrlX, ["rawMark", "copied"], ...quit,
+  ], { env: offClip.env });
+  assert.deepEqual(copied(selected.marks.dragged), [], "copy-on-select off: releasing the mouse copies nothing");
+  const [text, ...more] = copied(after(selected.marks, "dragged", "copied"));
+  assert.deepEqual(more, []);
+  assert.equal(text, selected.screens.dragged[3].slice(4, 30).trimEnd());
+  assert.equal(existsSync(offClip.file), false, "the selection, not the last reply");
+
+  // Off, no selection: the last reply, with Pi's key confirmation.
+  const none = makeEnv(t, { settings: { fullscreenCopyOnSelect: false } });
+  const noneClip = clipboard(none);
+  const last = none.run([["waitReady"], ...reply, ["rawMark", "replied"], ...ctrlX, ["rawMark", "copied"], ...quit], { env: noneClip.env });
+  assert.deepEqual(copied(after(last.marks, "replied", "copied")), []);
+  assert.equal(readFileSync(noneClip.file, "utf8"), "ECHO:hi");
+
+  // On (unset, T3): releasing the mouse already copied the selection, so Ctrl+X copies the last reply.
+  const on = makeEnv(t);
+  const onClip = clipboard(on);
+  const both = on.run([["waitReady"], ...reply, ...drag(5), ["rawMark", "dragged"], ...ctrlX, ["rawMark", "copied"], ...quit], { env: onClip.env });
+  assert.equal(copied(both.marks.dragged).length, 1, "copy-on-select on: releasing the mouse copies");
+  assert.deepEqual(copied(after(both.marks, "dragged", "copied")), []);
+  assert.equal(readFileSync(onClip.file, "utf8"), "ECHO:hi");
 });
 
 test("Fullscreen wheel scrolling sets lines per wheel event at once and at startup", (t) => {

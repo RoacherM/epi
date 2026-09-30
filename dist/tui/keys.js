@@ -143,7 +143,7 @@ export function createKeyActions() {
         },
         {
             id: "app.message.copy",
-            run: (host) => runCopy(host),
+            run: (host) => runCopy(host, { fromKey: true }),
         },
     ];
 }
