@@ -129,7 +129,7 @@ cd <worktree> && node ~/Desktop/Projects/sides/mmp-tool/dist/cli.js --approve \
 |---|---|
 | worker-1 | 编码者（必要时 worker-2 并行第二个任务，两个任务改的文件不重叠） |
 | reviewer | 初审 |
-| check | 主控的 Herdr 验收、跑命令 |
+| check | 主控的 Herdr 验收、跑命令。用户可能随时关掉它，用之前先确认还在（`herdr.sh` 找不到 pane 会直接报错），不在就重新 split 一个 |
 | grok | 对比 grok（需要时开） |
 
 mmp 不是 Herdr 认识的 agent 类型，所以用 pane 命令（`pane run` / `send-text` / `wait-output` / `read`）操作，pane 编号记在 `.dev/panes.json`。现在放在 scratchpad 的辅助脚本 `h.sh`（`startmmp` / `quitmmp` / `say` / `scr`）移进仓库 `scripts/dev/herdr.sh`，因为 scratchpad 只在当前会话有效。

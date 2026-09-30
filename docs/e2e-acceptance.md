@@ -46,7 +46,7 @@
 | C4 | 运行中输入一句再按 Alt+Enter | 作为 steer 插入当前回合 |
 | C5 | 有排队消息时按 Alt+↑ | 排队消息放回输入框，队列清空 |
 | C6 | 按 Ctrl+O | 工具块展开/折叠，按一次切换一次 |
-| C7 | 按 Ctrl+T | thinking 内容展开/折叠，按一次切换一次 |
+| C7 | 按 Ctrl+T | thinking 内容展开/折叠，按一次切换一次；右下角闪 "Thinking: expanded/collapsed"（没有思考内容时也要有这个提示，D12 回归） |
 | ★ C8 | 按 Shift+Tab | thinking 档位切一档（右下角标签变化），按一次只切一档 |
 | C9 | `!ls` 和 `!!ls` | `!` 的输出进入上下文，`!!` 的不进入（对齐 Pi） |
 
