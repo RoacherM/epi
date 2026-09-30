@@ -1,0 +1,142 @@
+# 用 mmp 开发 mmp（Herdr 自举流程）
+
+状态：2026-09-30 草案，等用户确认。当前功能（Pi 0.99 + 原生 MCP）验收后启用；启用后替换 [dev-workflow.md](dev-workflow.md) 第 1–4 节，第 5 节（不可违反的约定）不变。
+
+目标：开发和审查都由 Herdr 里运行的 mmp 完成，mmp 在给自己干活的过程中暴露问题，再按优先级修掉。主控只管进度、文档和质量把关。
+
+## 1. 角色
+
+| 角色 | 谁 | 在哪 | 做什么 |
+|---|---|---|---|
+| 主控 | Claude Code 主会话 | 用户的会话 | 拆任务、写任务说明、盯进度、合并、同步文档、分拣 mmp 问题、向用户汇报 |
+| 编码 | mmp，`magpie` 的 `claude/claude-sonnet-5-5`，thinking `high` | Herdr pane，cwd 是任务的 worktree | 按任务说明实现、写测试、提交 |
+| 编码（升级） | mmp，`claude/claude-opus-5-5`，thinking `high` | 同上 | 同一任务被退回 2 轮、或修复引入倒退时接手 |
+| 初审 | mmp，`claude/claude-opus-5-5`，thinking `high` | 另一个 pane，同一 worktree，只读 | 每个任务合并前审查：复现、分级、写审查报告 |
+| 终审 | Fable（主控的只读 subagent） | 主控会话 | 高风险改动合并前的最终把关（见第 5 节），并抽查初审质量 |
+| 调研 | agy（`agy -p`）或 mmp | — | 同现在；写进 scratchpad，主控核对后再用 |
+
+用哪个模型、什么 thinking 级别，由启动命令决定（第 3 节），不靠 mmp 的默认设置。
+
+## 2. 两个 mmp：工具版和开发版
+
+自己改自己有个风险：改坏了就没法用它来修。所以分两份：
+
+```
+工具版（tool）   ~/Desktop/Projects/sides/mmp-tool  ← 最近一次验收通过的提交（git worktree，detached）
+                 用它干活：编码、审查都跑 `node <tool>/dist/cli.js`
+开发版（dev）    .claude/worktrees/<任务>/           ← 正在改的代码
+                 只用来跑测试和 Herdr 验收，不用来干活
+```
+
+- **升级工具版**：每次合并并通过 Herdr 验收后，主控把工具版切到新的提交（`git -C mmp-tool checkout --detach <commit>` 再 `npm run build`）。这样新功能马上进入日常使用，问题尽早暴露。
+- **回退**：工具版出了阻塞问题（第 6 节 P0），先把工具版切回上一个提交继续干活，同时开任务修。实在修不动时，这个任务退回到现在的做法（Claude Code 的 Sonnet/Opus subagent），修好后再切回来。
+- 两份共用用户真实的 `~/.mmp`（凭证、会话、magpie 配置）。自动测试照旧用临时 `HOME`/`MMP_HOME`，不受影响。
+
+## 3. 启动一个 mmp 工作者
+
+仓库根目录提交一份项目 Manifest（`.mmp/mmp.json`，要从 `.gitignore` 里放开这一个文件），把开发规范作为 Rules 声明进去，每个 worktree 都自动带上：
+
+```json
+{ "version": 1, "rules": ["../AGENTS.md", "../docs/dev-workflow-herdr.md"], "skills": [], "extensions": ["mmp:task"] }
+```
+
+（MMP 不自动读 `AGENTS.md`，必须声明成 Rules 才会进 system prompt。）
+
+启动命令（主控在 pane 里执行，`--approve` 只让这一次信任 worktree 的 `.mmp/mmp.json`，不写进信任记录）：
+
+```bash
+cd <worktree> && node ~/Desktop/Projects/sides/mmp-tool/dist/cli.js --approve \
+  --provider magpie --model claude/claude-sonnet-5-5 --thinking high
+```
+
+审查者把模型换成 `claude/claude-opus-5-5`。每个任务用一个新会话，不复用上一个任务的上下文。
+
+## 4. 任务交接：用文件，不靠读屏
+
+每个任务在仓库里有一个不提交的目录 `.dev/tasks/<编号>/`（加进 `.gitignore`）：
+
+| 文件 | 谁写 | 内容 |
+|---|---|---|
+| `brief.md` | 主控 | 任务说明，格式同现在第 3 节（起点、规格来源、状态清单、测试要求、测试卫生、边界、交付） |
+| `report.md` | 编码者 | 每项做了什么、对照了 Pi 的哪些函数、测试数、没验证的地方；最后一行 `STATUS: done` 或 `STATUS: blocked` |
+| `question.md` | 编码者 | 需要主控决定的问题；写完就停下等 |
+| `review-N.md` | 初审 | 第 N 轮审查：结论（可合并 / 不可合并）、按严重程度排的发现，每条标 CONFIRMED 或 PLAUSIBLE、附文件行号和复现命令 |
+
+流程：
+
+```
+主控写 brief.md
+  → pane 里发一行：Read .dev/tasks/<id>/brief.md and do the task. Write your report to .dev/tasks/<id>/report.md.
+  → 等：herdr pane wait-output <pane> --match "STATUS:"（再读 report.md 确认），超时就读屏看卡在哪
+  → 有 question.md → 主控回答（send-text）→ 继续等
+  → report.md 写完 → 主控看 diff、跑 npm test
+  → 初审 pane：Review the diff of <branch> against pi-087-upgrade per .dev/tasks/<id>/brief.md; write .dev/tasks/<id>/review-1.md. Do not modify files.
+      审完主控检查 worktree `git status` 仍然干净（mmp 没有权限系统，只读靠指令 + 事后检查）
+  → 不可合并 → 把 review-N.md 发给编码者修 → 再审（只审新提交，但重跑上一轮全部复现命令）
+  → 可合并 → 需要终审的交 Fable（第 5 节）→ 主控合并、跑完整测试、Herdr 验收 → 升级工具版
+```
+
+退回规则、测试要求、策略问题由主控拍板等，和 [dev-workflow.md](dev-workflow.md) 第 2 节一样。
+
+## 5. 质量把关
+
+- **初审**：每个任务都要，由 mmp（opus）做。
+- **终审（Fable）**：以下情况必须：
+  - 碰到硬规则（配置隔离、信任、密钥、对外接口）；
+  - 复杂状态（编辑器坐标、队列、会话切换、MCP 连接生命周期）；
+  - 改动超过约 300 行；
+  - 初审和编码者对某条发现有分歧。
+
+  其他小改动只要初审 + 主控看 diff。启用后的前 5 个任务 Fable 全部终审，用来校准初审的水平；之后按上面的条件。（这个数字是主控定的，可改。）
+- **质量记录**：`subagent-quality-log.md` 继续记，作者一栏写 `mmp-sonnet` / `mmp-opus`，另记初审漏掉、被 Fable 查出的问题数——这是判断初审能不能信任的依据。
+
+## 6. mmp 自己的问题：记录和修复顺序
+
+用 mmp 干活时看到的任何 mmp 问题（主控读屏看到的、工作者在 report 里提到的、审查发现的），都记进 `docs/dogfood-issues.md`（提交进仓库）：
+
+| 字段 | 说明 |
+|---|---|
+| 编号 | D1、D2… |
+| 级别 | P0 / P1 / P2 / P3 |
+| 现象 | 看到了什么，和期望的差别 |
+| 复现 | Herdr 命令或步骤 |
+| 状态 | 待修 / 修复中（任务编号）/ 已修（提交） |
+
+| 级别 | 定义 | 什么时候修 |
+|---|---|---|
+| P0 | 开发流程本身卡住：工具版起不来、会话丢失、工具调用坏掉 | 立刻：先回退工具版，再开任务修 |
+| P1 | 行为错误、安全或配置隔离问题、数据丢失 | 插到下一个任务 |
+| P2 | 能用但别扭：显示错、交互和 grok 不一致、性能差 | 攒几条一起修 |
+| P3 | 小毛病、文案、测试整洁 | 空闲时批量 |
+
+对比 grok 的做法不变：另开 pane 运行 `agent`，行为写进设计文档时注明"实测"。
+
+## 7. Herdr 布局
+
+在当前 workspace 新开一个 tab 专门给 mmp 开发用，不碰用户自己的 pane：
+
+| pane | 用途 |
+|---|---|
+| worker-1 | 编码者（必要时 worker-2 并行第二个任务，两个任务改的文件不重叠） |
+| reviewer | 初审 |
+| check | 主控的 Herdr 验收、跑命令 |
+| grok | 对比 grok（需要时开） |
+
+mmp 不是 Herdr 认识的 agent 类型，所以用 pane 命令（`pane run` / `send-text` / `wait-output` / `read`）操作，pane 编号记在 `.dev/panes.json`。现在放在 scratchpad 的辅助脚本 `h.sh`（`startmmp` / `quitmmp` / `say` / `scr`）移进仓库 `scripts/dev/herdr.sh`，因为 scratchpad 只在当前会话有效。
+
+## 8. 启用前要做的准备
+
+| # | 事项 | 说明 |
+|---|---|---|
+| 1 | MMP 自己的 magpie 配置 | 现在 magpie 只接到了 Pi（`~/.pi/agent/models.json`），MMP 看不到。在 `~/.mmp/pi/models.json` 里写一份 magpie provider（地址 `http://127.0.0.1:3425/v1`，只列用到的模型）。这是复制一份，不是读 Pi 的配置；magpie 改了地址或 key 时要手动同步，失败会直接报错 |
+| 2 | 工具版 | 建 `mmp-tool` worktree，切到验收通过的提交，`npm install` + `npm run build` |
+| 3 | 项目 Manifest | 提交 `.mmp/mmp.json`（第 3 节），`.gitignore` 放开它、加上 `.dev/` |
+| 4 | 辅助脚本 | `scripts/dev/herdr.sh` |
+| 5 | Herdr tab | 新开 tab 和 pane，记进 `.dev/panes.json` |
+| 6 | 试运行 | 用一个小的待办任务（例如展开后思考内容的 markdown 渲染）完整走一遍，看交接、等待、审查哪里卡，调整本文后正式切换 |
+
+## 9. 还没解决的问题
+
+- mmp 没有权限系统，编码者和审查者都能执行任意 bash。靠 worktree 隔离、指令和事后 `git status` 检查兜底。
+- 等待完成靠 `wait-output` 匹配 `STATUS:`，模型忘了写就会一直等到超时；超时后主控读屏处理。
+- magpie 的 thinking `high` 通过 `thinkingLevelMap` 传给 Claude；实际效果（是否真的开了高思考）要在试运行时确认。

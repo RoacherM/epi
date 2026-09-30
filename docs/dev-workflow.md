@@ -1,6 +1,6 @@
 # MMP 开发流程
 
-2026-09-30 起执行。记录的是开发 MMP 时实际在用、并和用户确认过的做法。产品层面的约定见 [DEVELOPMENT.md](../DEVELOPMENT.md)，关键决策见 [decisions.md](decisions.md)。
+2026-09-30 起执行。下一阶段改用 mmp 在 Herdr 里自己开发自己，见 [dev-workflow-herdr.md](dev-workflow-herdr.md)（草案，当前功能验收后启用，届时替换本文第 1–4 节）。记录的是开发 MMP 时实际在用、并和用户确认过的做法。产品层面的约定见 [DEVELOPMENT.md](../DEVELOPMENT.md)，关键决策见 [decisions.md](decisions.md)。
 
 ## 1. 角色分工
 
