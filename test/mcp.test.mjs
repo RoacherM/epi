@@ -461,7 +461,7 @@ test("/new and /reload leave exactly one MCP child process running, never zero o
     t,
     ["mmp:mcp", driver],
     [
-      ["wait", 2500],
+      ["waitReady"],
       ["type", "hi"], ["key", "enter"], ["wait", 800], ["mark", "firstReply"],
       ["pgrep", { pattern: marker, mark: "afterFirst", expectCount: 1 }],
       ["type", "/new"], ["key", "enter"], ["wait", 800],
@@ -501,7 +501,7 @@ test("the duplicate-/mcp error is visible in MMP's own TUI exactly once, not jus
   const { marks, output } = runTuiApp(
     t,
     ["mmp:mcp", rogue, driver],
-    [["wait", 2500], ["mark", "startup"], ["key", "ctrl+d"]],
+    [["waitReady"], ["mark", "startup"], ["key", "ctrl+d"]],
     { mcpServers: {} },
   );
   // The thrown error is caught by Pi's own per-handler try/catch (core/extensions/runner.js's
@@ -525,7 +525,7 @@ test("a codemode call's nested MCP tool renders exactly once, not duplicated alo
     t,
     ["mmp:mcp", driver],
     [
-      ["wait", 2500],
+      ["waitReady"],
       ["type", "go"], ["key", "enter"], ["wait", 3000],
       ["mark", "done"],
       ["key", "ctrl+d"],

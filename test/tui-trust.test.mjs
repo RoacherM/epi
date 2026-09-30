@@ -43,7 +43,7 @@ function runAppInProject(t, steps) {
 
 test("/trust saves a decision and notices it needs a restart", (t) => {
   const { output, trustDecision } = runAppInProject(t, [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "/trust"],
     ["key", "enter"],
     ["wait", 300],
@@ -57,7 +57,7 @@ test("/trust saves a decision and notices it needs a restart", (t) => {
 
 test("/trust: Do not trust persists root=false", (t) => {
   const { output, trustDecision } = runAppInProject(t, [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "/trust"],
     ["key", "enter"],
     ["wait", 300],
@@ -87,7 +87,7 @@ test("/trust: no project found from the current directory", (t) => {
       PI_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({
         steps: [
-          ["wait", 2500],
+          ["waitReady"],
           ["type", "/trust"],
           ["key", "enter"],
           ["wait", 300],

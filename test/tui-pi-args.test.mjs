@@ -161,7 +161,7 @@ function runHarness(t, extensions, args, steps) {
 
 test('mmp "hello" sends it as the first prompt without any typing', (t) => {
   const { text: out, marks } = runHarness(t, [fauxEcho], ["--no-project", "hello"], [
-    ["wait", 3000], ["mark", "afterStartup"],
+    ["waitReady"], ["waitFor", "ECHO:hello", { all: true }], ["mark", "afterStartup"],
     ["key", "ctrl+d"],
   ]);
   assert.match(marks.afterStartup, /ECHO:hello/);
@@ -184,7 +184,7 @@ test('mmp @file.txt inlines the file into the first prompt (docs/cli-design.md Â
       PI_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({
         args: ["--no-project", "@note.txt", "hello"],
-        steps: [["wait", 3000], ["mark", "afterStartup"], ["key", "ctrl+d"]],
+        steps: [["waitReady"], ["waitFor", { regex: "ECHO:.*note\\.txt.*the file's own content.*hello", flags: "s" }, { all: true }], ["mark", "afterStartup"], ["key", "ctrl+d"]],
       }),
     },
     encoding: "utf8",
@@ -197,7 +197,7 @@ test('mmp @file.txt inlines the file into the first prompt (docs/cli-design.md Â
 
 test("mmp --verbose shows loaded resources, model, and session as startup notices", (t) => {
   const { text: out, marks } = runHarness(t, [fauxEcho], ["--no-project", "--verbose"], [
-    ["wait", 3000], ["mark", "afterStartup"],
+    ["waitReady"], ["mark", "afterStartup"],
     ["key", "ctrl+d"],
   ]);
   assert.match(marks.afterStartup, /Loaded resources:/);
@@ -219,8 +219,8 @@ test("an initial CLI message does not wipe out text the startup gate had just re
     // No initial wait: submitted before the slow session_start (300ms) lets bind() finish, so the
     // startup gate puts "typed-text" back in the editor instead of sending it.
     ["type", "typed-text"], ["key", "enter"],
-    ["wait", 2000],
-    ["key", "ctrl+d"],
+    ["waitReady"], ["waitFor", "ECHO:hello", { all: true }], ["wait", 300],
+    ["detach"], // Ctrl+D would not quit: "typed-text" is still in the editor
   ]);
   assert.match(out, /Startup is still in progress/);
   // The initial message ("hello") was sent once startup finished...

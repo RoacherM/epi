@@ -71,7 +71,7 @@ test("header, /trust's cwd, and !pwd all agree with the model's own tools at sta
       MMP_TUI_HARNESS: JSON.stringify({
         args: ["--no-project", "--session", f.sessionFile],
         steps: [
-          ["wait", 2500], ["mark", "afterStartup"],
+          ["waitReady"], ["mark", "afterStartup"],
           ["type", "!pwd"], ["key", "enter"], ["wait", 600], ["mark", "afterPwd"],
           ["type", "go"], ["key", "enter"], ["wait", 800], ["mark", "afterToolCall"],
           ["key", "ctrl+d"],

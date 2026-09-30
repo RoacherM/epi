@@ -44,7 +44,7 @@ const stripAnsi = (text) => text.replace(/\x1b\[[0-9;]*m/g, "");
 // Transcript.render() snapshots in test/tui-transcript.test.mjs; this test only checks presence.
 test("thinking streams 'Thinking…' while running, then settles as 'Thought for Ns'", (t) => {
   const { marks, output } = runApp(t, [fixture("faux-thinking.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"],
+    ["waitReady"], ["type", "go"], ["key", "enter"],
     ["wait", 300], ["mark", "midstream"],
     ["wait", 2500], ["mark", "settled"],
     ["key", "ctrl+d"],
@@ -67,7 +67,7 @@ const since = (earlierMark, laterMark) => stripAnsi(laterMark.slice(earlierMark.
 
 test("Ctrl+T expands the collapsed thinking block's full text; a second press collapses it back", (t) => {
   const { marks } = runApp(t, [fixture("faux-thinking.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 3000],
+    ["waitReady"], ["type", "go"], ["key", "enter"], ["wait", 3000],
     ["mark", "collapsed"],
     ["key", "ctrl+t"], ["wait", 100], ["mark", "expanded"],
     ["key", "ctrl+t"], ["wait", 100], ["mark", "collapsedAgain"],
@@ -83,7 +83,7 @@ test("Ctrl+T expands the collapsed thinking block's full text; a second press co
 
 test("Esc during a run prints 'Stopped after Ns', not 'Worked for'", (t) => {
   const { output } = runApp(t, [fixture("faux-slow.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 1000], ["key", "esc"], ["wait", 500],
+    ["waitReady"], ["type", "go"], ["key", "enter"], ["wait", 1000], ["key", "esc"], ["wait", 500],
     ["key", "ctrl+d"],
   ]);
   const text = stripAnsi(output);
@@ -92,18 +92,18 @@ test("Esc during a run prints 'Stopped after Ns', not 'Worked for'", (t) => {
 
 test("a completed turn prints 'Worked for Ns' below the reply", (t) => {
   const { output } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["type", "hi"], ["key", "enter"], ["wait", 1500], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "hi"], ["key", "enter"], ["wait", 1500], ["key", "ctrl+d"],
   ]);
   assert.match(stripAnsi(output), /Worked for \d+\.\ds/);
 });
 
 // Item 4 (docs/tui-design.md 4.1/4.2): ≤16 rows drops the header and shortcuts bars.
 test("a 16-row terminal hides the header and shortcuts bar; a taller one keeps them", (t) => {
-  const short = runApp(t, [fixture("faux-two-models.mjs")], [["wait", 2500], ["mark", "idle"], ["key", "ctrl+d"]], { rows: 16 });
+  const short = runApp(t, [fixture("faux-two-models.mjs")], [["waitReady"], ["mark", "idle"], ["key", "ctrl+d"]], { rows: 16 });
   const shortIdle = stripAnsi(short.marks.idle);
   assert.doesNotMatch(shortIdle, /Ctrl\+o:expand/, "the shortcuts bar should be hidden at 16 rows");
 
-  const tall = runApp(t, [fixture("faux-two-models.mjs")], [["wait", 2500], ["mark", "idle"], ["key", "ctrl+d"]], { rows: 24 });
+  const tall = runApp(t, [fixture("faux-two-models.mjs")], [["waitReady"], ["mark", "idle"], ["key", "ctrl+d"]], { rows: 24 });
   assert.match(stripAnsi(tall.marks.idle), /Ctrl\+o:expand/, "the shortcuts bar should still show at 24 rows");
 });
 

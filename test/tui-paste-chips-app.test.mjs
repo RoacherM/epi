@@ -49,6 +49,8 @@ function runApp(t, extensions, steps, { env: extraEnv = {}, args, columns, rows 
 
 const PASTE_LINES = ["line1", "line2", "line3", "line4"];
 const paste = ["paste", PASTE_LINES.join("\n")];
+const chipDrawn = ["waitFor", "[Pasted: 4 lines]"];
+const streamStarted = ["waitFor", "FIRST-START"];
 
 // The harness's marks are cumulative (everything written so far), and the renderer only redraws
 // rows that changed -- so "X disappeared" can't be tested by grepping the whole mark for X's
@@ -60,7 +62,7 @@ function since(earlierMark, laterMark) {
 
 test("pasting >=4 lines shows a [Pasted: N lines] chip and its preview popup", (t) => {
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500], paste, ["wait", 300], ["mark", "afterPaste"], ["key", "ctrl+d"],
+    ["waitReady"], paste, ["waitFor", "paste again or double-click to expand"], ["mark", "afterPaste"], ["detach"],
   ]);
   assert.match(marks.afterPaste, /\[Pasted: 4 lines\]/);
   assert.match(marks.afterPaste, /line1/);
@@ -70,10 +72,10 @@ test("pasting >=4 lines shows a [Pasted: N lines] chip and its preview popup", (
 
 test("moving the caret off the chip hides the popup; moving back onto it shows it again", (t) => {
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500], paste, ["wait", 300], ["mark", "pasted"],
-    ["type", " x"], ["wait", 300], ["mark", "off"],
-    ["key", "left"], ["key", "left"], ["key", "left"], ["wait", 300], ["mark", "on"],
-    ["key", "ctrl+d"],
+    ["waitReady"], paste, ["waitFor", "paste again or double-click to expand"], ["mark", "pasted"],
+    ["type", " x"], ["waitFor", { regex: "\\[Pasted: 4 lines\\] x" }], ["mark", "off"],
+    ["key", "left"], ["key", "left"], ["key", "left"], ["waitFor", "enter or double-click to expand"], ["mark", "on"],
+    ["detach"],
   ]);
   const redrawnByMovingOff = since(marks.pasted, marks.off);
   assert.doesNotMatch(redrawnByMovingOff, /paste again or double-click to expand/);
@@ -86,8 +88,8 @@ test("moving the caret off the chip hides the popup; moving back onto it shows i
 // chipAtCursor()'s inclusive-at-end span made "just pasted" indistinguishable from "on the chip".
 test("the shortcuts bar shows Enter:expand only once the caret has moved onto the chip, not right after pasting", (t) => {
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500], paste, ["wait", 300], ["mark", "justPasted"],
-    ["key", "left"], ["wait", 300], ["mark", "onChip"], ["key", "ctrl+d"],
+    ["waitReady"], paste, chipDrawn, ["mark", "justPasted"],
+    ["key", "left"], ["waitFor", "Enter:expand"], ["mark", "onChip"], ["detach"],
   ]);
   assert.doesNotMatch(marks.justPasted, /Enter:expand/);
   assert.match(marks.onChip, /Enter:expand/);
@@ -96,16 +98,16 @@ test("the shortcuts bar shows Enter:expand only once the caret has moved onto th
 // Item 7: the footer on a text chip reads "Enter:expand │ Shift+Enter:newline", not just the first.
 test("the shortcuts bar on a text chip also offers Shift+Enter:newline", (t) => {
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500], paste, ["wait", 300],
-    ["key", "left"], ["wait", 300], ["mark", "onChip"], ["key", "ctrl+d"],
+    ["waitReady"], paste, chipDrawn,
+    ["key", "left"], ["waitFor", { regex: "Enter:expand\\s*│\\s*Shift\\+Enter:newline" }], ["mark", "onChip"], ["detach"],
   ]);
   assert.match(marks.onChip, /Enter:expand\s*│\s*Shift\+Enter:newline/);
 });
 
 test("Enter right after a paste sends it, like grok, instead of expanding it in place", (t) => {
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500], paste, ["wait", 300], ["mark", "pasted"],
-    ["key", "enter"], ["wait", 800], ["mark", "sent"], ["key", "ctrl+d"],
+    ["waitReady"], paste, chipDrawn, ["mark", "pasted"],
+    ["key", "enter"], ["waitFor", { regex: "ECHO:line1[\\s\\S]*?line2\\s+line3\\s+line4" }], ["mark", "sent"], ["key", "ctrl+d"],
   ]);
   assert.match(marks.pasted, /\[Pasted: 4 lines\]/);
   // ECHO: only appears once the model actually received the message -- "expanded in place" never
@@ -119,9 +121,11 @@ test("Enter right after a paste sends it, like grok, instead of expanding it in 
 
 test("Enter on the chip expands it in place instead of submitting, once the caret has moved onto it", (t) => {
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500], paste, ["wait", 300],
-    ["key", "left"], ["wait", 300], ["mark", "onChip"],
-    ["key", "enter"], ["wait", 300], ["mark", "expanded"], ["key", "ctrl+d"],
+    ["waitReady"], paste, chipDrawn,
+    ["key", "left"], ["waitFor", "Enter:expand"], ["mark", "onChip"],
+    // The expanded text is drawn as editor rows ("│ ❯ line1 … │", "│   line4 … │"), which a submitted
+    // message in the transcript never is; then a short window for a stray submit's reply.
+    ["key", "enter"], ["waitFor", { regex: "│ ❯ line1\\s+│[\\s\\S]*│   line4\\s+│" }], ["wait", 300], ["mark", "expanded"], ["detach"],
   ]);
   const redrawn = since(marks.onChip, marks.expanded);
   assert.doesNotMatch(redrawn, /\[Pasted: 4 lines\]/);
@@ -132,9 +136,11 @@ test("Enter on the chip expands it in place instead of submitting, once the care
 
 test("backspace deletes the whole chip in one keystroke", (t) => {
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500], paste, ["wait", 300], ["mark", "pasted"],
-    ["key", "backspace"], ["wait", 300], ["mark", "afterBackspace"],
-    ["type", "still here"], ["key", "enter"], ["wait", 800], ["mark", "sent"], ["key", "ctrl+d"],
+    ["waitReady"], paste, chipDrawn, ["mark", "pasted"],
+    // Typed straight after: the row redrawn for this text would show the chip marker too if the
+    // backspace had left it in place, so "afterBackspace" covers the deletion and what followed.
+    ["key", "backspace"], ["type", "still here"], ["waitFor", "❯ still here"], ["mark", "afterBackspace"],
+    ["key", "enter"], ["waitFor", "ECHO:still here"], ["mark", "sent"], ["key", "ctrl+d"],
   ]);
   assert.doesNotMatch(since(marks.pasted, marks.afterBackspace), /\[Pasted:/);
   assert.match(marks.sent, /ECHO:still here/);
@@ -142,8 +148,8 @@ test("backspace deletes the whole chip in one keystroke", (t) => {
 
 test("submitting after the chip sends the full pasted text to the model, not the marker", (t) => {
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500], ["type", "before "], paste, ["type", " after"],
-    ["key", "enter"], ["wait", 1000], ["mark", "sent"], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "before "], paste, ["type", " after"],
+    ["key", "enter"], ["waitFor", { regex: "ECHO:before line1[\\s\\S]*?line2\\s+line3\\s+line4 after" }], ["mark", "sent"], ["key", "ctrl+d"],
   ]);
   // The screen wraps the sent text across rows (no literal "\n" survives stripping ANSI cursor
   // moves), so match the lines in order with whatever row padding sits between them. The chip
@@ -171,13 +177,13 @@ test("a chip pasted into the draft survives Alt+Up restoring a queued follow-up 
   // fails before the fix (Enter can no longer find the chip at all) and passes after.
   const queued = "queueme with a much longer follow-up text";
   const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], // starts a streamed turn
-    ["wait", 500], ["type", queued], ["key", "enter"], // queues a follow-up while streaming
-    ["wait", 300], paste, ["wait", 300], // a fresh, unsubmitted chip now sits in the draft
-    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
-    ["key", "left"], ["wait", 300], ["mark", "onChip"], // caret onto the chip (item 2: "end" alone no longer counts)
-    ["key", "enter"], ["wait", 300], ["mark", "expanded"], // Enter on the chip should still expand it
-    ["key", "ctrl+c"], ["wait", 300], ["wait", 4000], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "go"], ["key", "enter"], streamStarted, // starts a streamed turn
+    ["type", queued], ["key", "enter"], ["waitFor", "Follow-up:"], // queues a follow-up while streaming
+    paste, chipDrawn, // a fresh, unsubmitted chip now sits in the draft
+    ["key", "alt+up"], ["waitFor", `❯ ${queued}`], ["mark", "restored"],
+    ["key", "left"], ["waitFor", "Enter:expand"], ["mark", "onChip"], // caret onto the chip (item 2: "end" alone no longer counts)
+    ["key", "enter"], ["waitFor", "line4"], ["mark", "expanded"], // Enter on the chip should still expand it
+    ["detach"],
   ]);
   assert.match(marks.restored, new RegExp(queued.slice(0, 10)));
   assert.match(marks.restored, /\[Pasted: 4 lines\]/);
@@ -196,7 +202,7 @@ test("Ctrl+V with a big block of text on the clipboard folds into a chip too, sa
   t.after(() => rmSync(clipboardFile, { recursive: true, force: true }));
   writeFileSync(clipboardFile, PASTE_LINES.join("\n"));
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500], ["key", "ctrl+v"], ["wait", 300], ["mark", "afterPaste"],
+    ["waitReady"], ["key", "ctrl+v"], chipDrawn, ["mark", "afterPaste"],
     ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],
   ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterPaste, /\[Pasted: 4 lines\]/);
@@ -207,7 +213,7 @@ test("Ctrl+V with a big block of text on the clipboard folds into a chip too, sa
 test("a paste ending with a newline shows the real line count, not one more", (t) => {
   const forty = Array.from({ length: 40 }, (_, i) => `line${i}`).join("\n");
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500], ["paste", `${forty}\n`], ["wait", 300], ["mark", "afterPaste"], ["key", "ctrl+d"],
+    ["waitReady"], ["paste", `${forty}\n`], ["waitFor", "[Pasted: 40 lines]"], ["mark", "afterPaste"], ["detach"],
   ]);
   assert.match(marks.afterPaste, /\[Pasted: 40 lines\]/);
   assert.doesNotMatch(marks.afterPaste, /\[Pasted: 41 lines\]/);
@@ -224,11 +230,11 @@ test("Alt+Up restores an image queued as a follow-up while streaming, not just t
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
   const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], // starts a streamed turn
-    ["wait", 500], ["key", "ctrl+v"], ["wait", 300], // pastes [Image #1] into the draft
-    ["key", "enter"], ["wait", 300], ["mark", "queued"], // queues it as a follow-up (still streaming)
-    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
-    ["key", "ctrl+c"], ["wait", 300], ["wait", 4000], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "go"], ["key", "enter"], streamStarted, // starts a streamed turn
+    ["key", "ctrl+v"], ["waitFor", "[Image #1]"], // pastes [Image #1] into the draft
+    ["key", "enter"], ["waitFor", "Follow-up:"], ["mark", "queued"], // queues it as a follow-up (still streaming)
+    ["key", "alt+up"], ["waitFor", { regex: "❯ .*\\[Image #\\d+\\]" }], ["mark", "restored"],
+    ["detach"],
   ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.queued, /Follow-up:/);
   const afterRestore = since(marks.queued, marks.restored);
@@ -246,12 +252,12 @@ test("Alt+Up restores a second queued follow-up's image too, not just the first 
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
   const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], // starts a streamed turn
-    ["wait", 500], ["type", "first"], ["key", "enter"], // queues follow-up #1 (plain text)
-    ["wait", 300], ["type", "second "], ["key", "ctrl+v"], ["key", "enter"], // follow-up #2: text + [Image #1]
-    ["wait", 300], ["mark", "queued"],
-    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
-    ["key", "ctrl+c"], ["wait", 300], ["wait", 4000], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "go"], ["key", "enter"], streamStarted, // starts a streamed turn
+    ["type", "first"], ["key", "enter"], ["waitFor", "Follow-up:"], // queues follow-up #1 (plain text)
+    ["type", "second "], ["key", "ctrl+v"], ["waitFor", "[Image #1]"], ["key", "enter"], // follow-up #2: text + [Image #1]
+    ["waitFor", "Follow-up: second"], ["mark", "queued"],
+    ["key", "alt+up"], ["waitFor", { regex: "❯ [\\s\\S]*second [\\s\\S]*\\[Image #\\d+\\]" }], ["mark", "restored"],
+    ["detach"],
   ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   const afterRestore = since(marks.queued, marks.restored);
   assert.match(afterRestore, /first/);
@@ -273,15 +279,14 @@ test("a queued follow-up's image isn't lost or misattributed to an extension's i
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
   const { marks } = runApp(t, [fixture("faux-queue.mjs"), fixture("inject-custom-queue-message.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "/schedule-inject followUp"], ["key", "enter"], // schedules pi.sendMessage ~800ms from now
-    ["wait", 300],
-    ["type", "go"], ["key", "enter"], // starts a streamed turn
-    ["wait", 1200], // the scheduled injection lands here, mid-stream
-    ["type", "real "], ["key", "ctrl+v"], ["key", "enter"], // real queued follow-up: text + [Image #1]
-    ["wait", 300], ["mark", "queued"],
-    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
-    ["key", "ctrl+c"], ["wait", 300], ["wait", 4000], ["key", "ctrl+d"],
+    ["type", "go"], ["key", "enter"], streamStarted, // starts a streamed turn
+    ["waitFor", "injected-custom-message sent", { all: true }], // the scheduled injection landed, mid-stream
+    ["type", "real "], ["key", "ctrl+v"], ["waitFor", "[Image #1]"], ["key", "enter"], // real queued follow-up: text + [Image #1]
+    ["waitFor", "Follow-up: real"], ["mark", "queued"],
+    ["key", "alt+up"], ["waitFor", { regex: "❯ .*\\[Image #\\d+\\]" }], ["mark", "restored"],
+    ["detach"],
   ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   const afterRestore = since(marks.queued, marks.restored);
   assert.match(afterRestore, /real/);
@@ -302,15 +307,14 @@ test("a queued follow-up's image survives an injected custom message using the d
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
   const { marks } = runApp(t, [fixture("faux-queue.mjs"), fixture("inject-custom-queue-message.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "/schedule-inject"], ["key", "enter"], // no argument: default deliverAs (steer)
-    ["wait", 300],
-    ["type", "go"], ["key", "enter"], // starts a streamed turn
-    ["wait", 1200], // the scheduled injection lands here, mid-stream, into the steering queue
-    ["type", "real "], ["key", "ctrl+v"], ["key", "enter"], // real queued follow-up: text + [Image #1]
-    ["wait", 300], ["mark", "queued"],
-    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
-    ["key", "ctrl+c"], ["wait", 300], ["wait", 4000], ["key", "ctrl+d"],
+    ["type", "go"], ["key", "enter"], streamStarted, // starts a streamed turn
+    ["waitFor", "injected-custom-message sent", { all: true }], // the scheduled injection landed, mid-stream, into the steering queue
+    ["type", "real "], ["key", "ctrl+v"], ["waitFor", "[Image #1]"], ["key", "enter"], // real queued follow-up: text + [Image #1]
+    ["waitFor", "Follow-up: real"], ["mark", "queued"],
+    ["key", "alt+up"], ["waitFor", { regex: "❯ .*\\[Image #\\d+\\]" }], ["mark", "restored"],
+    ["detach"],
   ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   const afterRestore = since(marks.queued, marks.restored);
   assert.match(afterRestore, /real/);
@@ -323,8 +327,8 @@ test("Ctrl+V with an image on the clipboard (via the test seam) becomes an [Imag
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
   const { marks } = runApp(t, [fixture("faux-echo-images.mjs")], [
-    ["wait", 2500], ["key", "ctrl+v"], ["wait", 300], ["mark", "afterPaste"],
-    ["key", "enter"], ["wait", 800], ["mark", "sent"], ["key", "ctrl+d"],
+    ["waitReady"], ["key", "ctrl+v"], ["waitFor", "Image #1 ─ PNG · 1x1 · 0.1 KB"], ["mark", "afterPaste"],
+    ["key", "enter"], ["waitFor", "ECHO:|IMAGES:image/png"], ["mark", "sent"], ["key", "ctrl+d"],
   ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterPaste, /\[Image #1\]/);
   assert.match(marks.afterPaste, /Image #1 ─ PNG · 1x1 · 0\.1 KB/);
@@ -347,7 +351,7 @@ test("an @image argument is attached as an image to the initial message", (t) =>
       PI_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({
         args: ["--no-project", "@pic.png", "describe it"],
-        steps: [["wait", 3000], ["mark", "afterStartup"], ["key", "ctrl+d"]],
+        steps: [["waitReady"], ["waitFor", "IMAGES:image/png", { all: true }], ["mark", "afterStartup"], ["key", "ctrl+d"]],
       }),
     },
     encoding: "utf8",
@@ -367,10 +371,10 @@ test("double-click on the chip through the real mouse-dispatch path expands it (
   // (0, since the chip is the only thing in the editor).
   const rows = 40;
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500], paste, ["wait", 300], ["mark", "pasted"],
+    ["waitReady"], paste, chipDrawn, ["mark", "pasted"],
     ["mouse", { x: 2 + 4 + 2, y: rows - 4, clicks: 2 }],
-    ["wait", 300], ["mark", "afterClick"],
-    ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],
+    ["waitFor", "❯ line1"], ["mark", "afterClick"],
+    ["detach"],
   ], { rows });
   // The first click of the pair also repositions the caret onto the chip, which legitimately
   // redraws that row (with the marker still there, cursor moved) before the second click expands
@@ -410,10 +414,10 @@ test("shortcuts still work after clicking a chip (Ctrl+V pastes again)", (t) => 
 test("a single click on the chip (not a double-click) still shows the popup and Enter:expand", (t) => {
   const rows = 40;
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500], paste, ["wait", 300],
+    ["waitReady"], paste, chipDrawn,
     ["mouse", { x: 2 + 4 + 2, y: rows - 4, clicks: 1 }],
-    ["wait", 300], ["mark", "afterClick"],
-    ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],
+    ["wait", 300], ["mark", "afterClick"], // settle: the assertion below is about the final state
+    ["detach"],
   ], { rows });
   // Marks are cumulative, and the press alone (before the release/click that follows it settle
   // the caret) already triggers one correct-looking redraw -- so this can't just check that the
@@ -435,7 +439,7 @@ test("a single click on the chip (not a double-click) still shows the popup and 
 for (const columns of [40, 80, 120]) {
   test(`paste chip and preview popup render without crashing at ${columns} columns`, (t) => {
     const { text } = runApp(t, [fixture("faux-echo.mjs")], [
-      ["wait", 2500], paste, ["wait", 300], ["mark", "afterPaste"],
+      ["waitReady"], paste, chipDrawn, ["mark", "afterPaste"],
       ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"], // Ctrl+D only quits an empty editor
     ], { columns, rows: 40 });
     assert.match(text, /EXIT=0/);

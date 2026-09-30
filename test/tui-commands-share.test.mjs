@@ -58,7 +58,7 @@ test("/share creates a gist through gh and prints its URL", (t) => {
     "",
   ].join("\n"));
   const { text: out, marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "hi"], ["key", "enter"], ["wait", 800], ["mark", "afterReply"],
     ["type", "/share"], ["key", "enter"], ["wait", 800], ["mark", "afterShare"],
     ["key", "ctrl+d"],
@@ -75,7 +75,7 @@ test("/share reports when gh is not logged in, without touching gist create", (t
     "",
   ].join("\n"));
   const { text: out, marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "hi"], ["key", "enter"], ["wait", 800], ["mark", "afterReply"],
     ["type", "/share"], ["key", "enter"], ["wait", 800], ["mark", "afterShare"],
     ["key", "ctrl+d"],
@@ -86,7 +86,7 @@ test("/share reports when gh is not logged in, without touching gist create", (t
 
 test("/share reports when gh is not installed", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "hi"], ["key", "enter"], ["wait", 800], ["mark", "afterReply"],
     ["type", "/share"], ["key", "enter"], ["wait", 800], ["mark", "afterShare"],
     ["key", "ctrl+d"],
@@ -97,7 +97,7 @@ test("/share reports when gh is not installed", (t) => {
 
 test("/bug declined at the consent prompt does nothing", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "/bug"], ["key", "enter"], ["wait", 500], ["mark", "consentShown"],
     ["key", "down"], ["wait", 100], ["key", "enter"], ["wait", 300], ["mark", "afterDecline"], // "No"
     ["key", "ctrl+d"],
@@ -115,7 +115,7 @@ test("/bug declined at the consent prompt does nothing", (t) => {
 // instead of a reassurance that undersold what "opening a prefilled URL" already does.
 test("/bug's consent prompt says what the URL actually carries, not that nothing is sent", (t) => {
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "/bug"], ["key", "enter"], ["wait", 500], ["mark", "consentShown"],
     ["key", "down"], ["wait", 100], ["key", "enter"], ["wait", 300],
     ["key", "ctrl+d"],
@@ -129,7 +129,7 @@ test("/bug's consent prompt says what the URL actually carries, not that nothing
 
 test("/bug [description], declining the summary, prints a prefilled GitHub issue URL with MMP's repo and versions", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "/bug the sky is falling"], ["key", "enter"], ["wait", 500], ["mark", "consentShown"],
     ["key", "enter"], ["wait", 400], ["mark", "descriptionShown"], // consent "Yes" (default option)
     ["key", "enter"], ["wait", 400], ["mark", "summaryPrompt"], // keep prefilled description, submit
@@ -159,7 +159,7 @@ test("fitIssueBody truncates a long body so the whole issue URL stays within the
 
 test("changelog is offline: shows a clear message and never reaches the network", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "/changelog"], ["key", "enter"], ["wait", 400], ["mark", "afterChangelog"],
     ["key", "ctrl+d"],
   ]);

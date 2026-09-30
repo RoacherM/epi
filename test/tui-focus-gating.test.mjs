@@ -41,11 +41,11 @@ function runApp(t, extensions, steps) {
 
 test("Esc closes an extension selector opened during a turn instead of aborting the turn", (t) => {
   const { marks, text: out } = runApp(t, [fixture("faux-queue.mjs"), fixture("ui-probe-extension.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"],
-    ["wait", 800], ["type", "/choose"], ["key", "enter"],
-    ["wait", 400], ["mark", "dialogOpen"],
-    ["key", "esc"], ["wait", 300], ["mark", "afterEsc"],
-    ["wait", 6000], ["mark", "afterTurn"],
+    ["waitReady"], ["type", "go"], ["key", "enter"],
+    ["waitFor", "FIRST-START"], ["type", "/choose"], ["key", "enter"],
+    ["waitFor", "CHOOSE-ONE"], ["mark", "dialogOpen"],
+    ["key", "esc"], ["waitFor", "select result: undefined"], ["mark", "afterEsc"],
+    ["waitFor", "FIRST-END"], ["mark", "afterTurn"],
     ["key", "ctrl+d"],
   ]);
   assert.match(marks.dialogOpen, /CHOOSE-ONE/);
@@ -60,13 +60,13 @@ test("Esc closes an extension selector opened during a turn instead of aborting 
 
 test("Ctrl+D does not quit MMP while a selector is open", (t) => {
   const { text: out } = runApp(t, [fixture("ui-probe-extension.mjs")], [
-    ["wait", 2500], ["type", "/choose"], ["key", "enter"],
-    ["wait", 300],
+    ["waitReady"], ["type", "/choose"], ["key", "enter"],
+    ["waitFor", "CHOOSE-ONE"],
     ["key", "ctrl+d"], ["wait", 300],
     // If Ctrl+D had quit MMP, the process would already be gone and this selection could never
     // be made or reported; if it only reached the dialog (no binding there, so nothing happened),
     // the app is still alive and the selector still has focus.
-    ["key", "down"], ["key", "enter"], ["wait", 300],
+    ["key", "down"], ["key", "enter"], ["waitFor", "select result: beta"],
     ["key", "ctrl+d"],
   ]);
   assert.match(out, /select result: beta/);
@@ -75,9 +75,9 @@ test("Ctrl+D does not quit MMP while a selector is open", (t) => {
 
 test("Ctrl+C cancels an open selector instead of arming the app's double-press-to-quit", (t) => {
   const { marks, text: out } = runApp(t, [fixture("ui-probe-extension.mjs")], [
-    ["wait", 2500], ["type", "/choose"], ["key", "enter"],
-    ["wait", 300], ["mark", "opened"],
-    ["key", "ctrl+c"], ["wait", 300], ["mark", "afterCtrlC"],
+    ["waitReady"], ["type", "/choose"], ["key", "enter"],
+    ["waitFor", "CHOOSE-ONE"], ["mark", "opened"],
+    ["key", "ctrl+c"], ["waitFor", "select result: undefined"], ["mark", "afterCtrlC"],
     ["key", "ctrl+d"],
   ]);
   assert.match(marks.opened, /CHOOSE-ONE/);
@@ -90,9 +90,9 @@ test("Ctrl+C cancels an open selector instead of arming the app's double-press-t
 
 test("Ctrl+L does not stack a second model selector while one is already open", (t) => {
   const { marks, text: out } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["key", "ctrl+l"], ["wait", 400], ["mark", "opened1"],
-    ["key", "ctrl+l"], ["wait", 400], ["mark", "opened2"],
-    ["key", "esc"], ["wait", 300], ["mark", "closed"],
+    ["waitReady"], ["key", "ctrl+l"], ["waitFor", "Model catalogs refreshed."], ["mark", "opened1"], // the selector's last async draw
+    ["key", "ctrl+l"], ["wait", 400], ["mark", "opened2"], // absence check: a stacked selector would draw in this window
+    ["key", "esc"], ["waitFor", "(off)"], ["mark", "closed"],
     ["key", "ctrl+d"],
   ]);
   assert.match(marks.opened1, /Enter to select/);
@@ -105,9 +105,9 @@ test("Ctrl+L does not stack a second model selector while one is already open", 
 
 test("the shortcuts bar shows the dialog's keys while it occupies the editor slot, and the editor's once closed", (t) => {
   const { marks } = runApp(t, [fixture("ui-probe-extension.mjs")], [
-    ["wait", 2500], ["mark", "idleEditor"],
-    ["type", "/choose"], ["key", "enter"], ["wait", 300], ["mark", "dialogOpen"],
-    ["key", "esc"], ["wait", 300], ["mark", "closedAgain"],
+    ["waitReady"], ["waitFor", "Ctrl+t:thinking", { all: true }], ["mark", "idleEditor"],
+    ["type", "/choose"], ["key", "enter"], ["waitFor", "Esc:cancel"], ["mark", "dialogOpen"],
+    ["key", "esc"], ["waitFor", "Ctrl+t:thinking"], ["mark", "closedAgain"],
     ["key", "ctrl+d"],
   ]);
   assert.match(marks.idleEditor, /Ctrl\+t:thinking/);

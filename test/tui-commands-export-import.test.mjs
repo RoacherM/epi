@@ -42,7 +42,7 @@ function runApp(t, extensions, steps, { cwd, home: providedHome, args } = {}) {
 
 test("/export writes HTML by default and JSONL when asked, then /import round-trips it back", (t) => {
   const { text: out, marks, root } = runApp(t, [fixture("switchto-extension.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "hello there"], ["key", "enter"], ["wait", 800], ["mark", "afterReply"],
     ["type", "/export session.html"], ["key", "enter"], ["wait", 400], ["mark", "afterHtmlExport"],
     ["type", "/export session.jsonl"], ["key", "enter"], ["wait", 400], ["mark", "afterJsonlExport"],
@@ -73,7 +73,7 @@ test("/export writes HTML by default and JSONL when asked, then /import round-tr
 
 test("/import declined leaves the current session untouched", (t) => {
   const { text: out, marks } = runApp(t, [fixture("switchto-extension.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "hi"], ["key", "enter"], ["wait", 800],
     ["type", "/export session.jsonl"], ["key", "enter"], ["wait", 400], ["mark", "afterExport"],
     ["type", "/import session.jsonl"], ["key", "enter"], ["wait", 300],
@@ -86,7 +86,7 @@ test("/import declined leaves the current session untouched", (t) => {
 
 test("/import with no path shows usage instead of throwing", (t) => {
   const { text: out, marks } = runApp(t, [fixture("switchto-extension.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "/import"], ["key", "enter"], ["wait", 300], ["mark", "afterImport"],
     ["key", "ctrl+d"],
   ]);
@@ -111,7 +111,7 @@ test("/import refuses a session file whose cwd belongs to a different project", 
   writeFileSync(foreignSession, `${JSON.stringify(header)}\n`);
 
   const { text: out, marks } = runApp(t, [], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "hi"], ["key", "enter"], ["wait", 800], ["mark", "afterReply"],
     ["type", `/import ${foreignSession}`], ["key", "enter"], ["wait", 300],
     ["key", "enter"], ["wait", 400], ["mark", "afterImportAttempt"], // confirm "Yes"

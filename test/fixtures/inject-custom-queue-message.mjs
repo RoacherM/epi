@@ -18,13 +18,14 @@ export default function (pi) {
   // on a command handler's ctx (ExtensionCommandContext) -- captured in closure here instead.
   pi.registerCommand("schedule-inject", {
     description: "test-only: queues a custom message directly into the agent's own queue, shortly",
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const deliverAs = args.trim() === "followUp" ? "followUp" : undefined;
       setTimeout(() => {
         pi.sendMessage(
           { customType: "probe", content: [{ type: "text", text: "injected-custom-message" }], display: false },
           deliverAs === undefined ? undefined : { deliverAs },
         );
+        ctx.ui.notify("injected-custom-message sent", "info");
       }, 800);
     },
   });

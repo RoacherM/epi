@@ -40,7 +40,7 @@ function runApp(t, extensions, steps) {
 
 test("!cmd output reaches the LLM context, !!cmd output does not", (t) => {
   const { text: out } = runApp(t, [fixture("faux-bash-context.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "!echo HELLO-CTX"], ["key", "enter"], ["wait", 800],
     ["type", "!!echo SECRET-CTX"], ["key", "enter"], ["wait", 800],
     ["type", "check"], ["key", "enter"], ["wait", 1500],
@@ -58,7 +58,7 @@ test("!cmd output reaches the LLM context, !!cmd output does not", (t) => {
 
 test("long output is truncated to the first 2 lines, an ellipsis, and the last 3", (t) => {
   const { text: out } = runApp(t, [], [
-    ["wait", 2500], ["type", "!seq 1 20"], ["key", "enter"], ["wait", 1000], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "!seq 1 20"], ["key", "enter"], ["wait", 1000], ["key", "ctrl+d"],
   ]);
   assert.match(out, /EXIT=0/);
   assert.match(out, /… \+15 lines/);
@@ -68,7 +68,7 @@ test("a non-zero exit code is shown", (t) => {
   // "false" itself never contains the digit the status line reports, so this can't pass by
   // accident from the unsent text still sitting in the editor while it was being typed.
   const { text: out } = runApp(t, [], [
-    ["wait", 2500], ["type", "!false"], ["key", "enter"], ["wait", 1000], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "!false"], ["key", "enter"], ["wait", 1000], ["key", "ctrl+d"],
   ]);
   assert.match(out, /EXIT=0/);
   assert.match(out, /\$ false/);
@@ -77,7 +77,7 @@ test("a non-zero exit code is shown", (t) => {
 
 test("Esc aborts a running user bash command and the app keeps working", (t) => {
   const { text: out } = runApp(t, [], [
-    ["wait", 2500], ["type", "!sleep 30"], ["key", "enter"], ["wait", 800],
+    ["waitReady"], ["type", "!sleep 30"], ["key", "enter"], ["wait", 800],
     ["key", "esc"], ["wait", 800],
     ["type", "!echo AFTER-ABORT"], ["key", "enter"], ["wait", 800],
     ["key", "ctrl+d"],
@@ -90,7 +90,7 @@ test("Esc aborts a running user bash command and the app keeps working", (t) => 
 
 test("running another bash command while one is running is refused", (t) => {
   const { text: out } = runApp(t, [], [
-    ["wait", 2500], ["type", "!sleep 30"], ["key", "enter"], ["wait", 500],
+    ["waitReady"], ["type", "!sleep 30"], ["key", "enter"], ["wait", 500],
     // Rejected: the editor gets the text back, same as Pi.
     ["type", "!echo TOO-SOON"], ["key", "enter"], ["wait", 500],
     ["key", "esc"], ["wait", 500],

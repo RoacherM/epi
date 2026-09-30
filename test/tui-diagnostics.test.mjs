@@ -42,7 +42,7 @@ test("a --models scope warning shows in the transcript at startup, not on stderr
   // "nonexistent*" matches nothing (resolveModelScopeWithDiagnostics's own "no-match" diagnostic);
   // "echo" is the real, working faux model, so the run still starts up and answers normally.
   const { status, stderr, marks } = runHarness(t, ["--no-project", "--models", "nonexistent*,echo", "hello"], [
-    ["wait", 3000], ["mark", "afterStartup"],
+    ["waitReady"], ["waitFor", "ECHO:hello", { all: true }], ["mark", "afterStartup"],
     ["key", "ctrl+d"],
   ]);
   assert.equal(status, 0, stderr);
@@ -53,7 +53,7 @@ test("a --models scope warning shows in the transcript at startup, not on stderr
 
 test("a --models scope warning also shows in the transcript on /new, not on stderr", (t) => {
   const { status, stderr, marks } = runHarness(t, ["--no-project", "--models", "nonexistent*,echo"], [
-    ["wait", 2500], ["mark", "beforeNew"],
+    ["waitReady"], ["mark", "beforeNew"],
     ["type", "/new"], ["key", "enter"], ["wait", 1000], ["mark", "afterNew"],
     ["key", "ctrl+d"],
   ]);

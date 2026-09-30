@@ -38,7 +38,7 @@ function runApp(t, extensions, steps, { keybindings, rows } = {}) {
 
 test("/name sets and shows the session name", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "/name"], ["key", "enter"], ["wait", 300], ["mark", "noArgUnset"],
     ["type", "/name My Bug Hunt"], ["key", "enter"], ["wait", 300], ["mark", "afterSet"],
     ["type", "/name"], ["key", "enter"], ["wait", 300], ["mark", "afterShow"],
@@ -52,7 +52,7 @@ test("/name sets and shows the session name", (t) => {
 
 test("/session shows the file, id, message and token counts", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "hi"], ["key", "enter"], ["wait", 800],
     ["type", "hi again"], ["key", "enter"], ["wait", 800], ["mark", "beforeSession"],
     ["type", "/session"], ["key", "enter"], ["wait", 400], ["mark", "afterSession"],
@@ -89,7 +89,7 @@ test("usageBreakdown groups cost and tokens by provider/model, preferring respon
 
 test("/hotkeys lists editor and app keys, resolved through the installed (possibly remapped) keybindings", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "/hotkeys"], ["key", "enter"], ["wait", 400], ["mark", "afterHotkeys"],
     ["key", "ctrl+d"],
   // A taller terminal than the 40-row default: the listing (now 13 App rows, one more since M4's
@@ -108,7 +108,7 @@ test("/hotkeys lists editor and app keys, resolved through the installed (possib
 
 test("/scoped-models opens Pi's model configuration editor and toggling a model updates the count", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "/scoped-models"], ["key", "enter"], ["wait", 500], ["mark", "opened"],
     ["key", "enter"], ["wait", 300], ["mark", "toggled"],
     ["key", "esc"], ["wait", 300],

@@ -42,7 +42,7 @@ function runApp(t, extensions, steps, { env: extraEnv = {}, inspect } = {}) {
 // assertions (it can only pass if the model selector, not just any dialog, is on screen).
 test("Ctrl+L lists the two faux models, proving the selector (not just any dialog) opened", (t) => {
   const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["key", "ctrl+l"], ["wait", 500], ["mark", "opened"], ["key", "esc"], ["wait", 300],
+    ["waitReady"], ["key", "ctrl+l"], ["waitFor", "Enter to select"], ["mark", "opened"], ["key", "esc"], ["waitFor", "(off)"],
     ["key", "ctrl+d"],
   ]);
   assert.match(marks.opened, /model-a/);
@@ -52,10 +52,10 @@ test("Ctrl+L lists the two faux models, proving the selector (not just any dialo
 
 test("Enter queues a follow-up while streaming; it shows in the queue display and is delivered after the turn", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-queue.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"],
-    ["wait", 1000], ["type", "later"], ["key", "enter"],
-    ["wait", 300], ["mark", "queued"],
-    ["wait", 6000], ["mark", "done"],
+    ["waitReady"], ["type", "go"], ["key", "enter"],
+    ["waitFor", "FIRST-START"], ["type", "later"], ["key", "enter"],
+    ["waitFor", "Follow-up: later"], ["mark", "queued"],
+    turnDone("SECOND-REPLY"), ["mark", "done"],
     ["key", "ctrl+d"],
   ]);
   assert.match(out, /EXIT=0/);
@@ -65,10 +65,10 @@ test("Enter queues a follow-up while streaming; it shows in the queue display an
 
 test("Alt+Enter steers a message into the running turn instead of queuing a follow-up", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-queue.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"],
-    ["wait", 1000], ["type", "later"], ["key", "alt+enter"],
-    ["wait", 300], ["mark", "queued"],
-    ["wait", 6000], ["mark", "done"],
+    ["waitReady"], ["type", "go"], ["key", "enter"],
+    ["waitFor", "FIRST-START"], ["type", "later"], ["key", "alt+enter"],
+    ["waitFor", "Steering: later"], ["mark", "queued"],
+    turnDone("SECOND-REPLY"), ["mark", "done"],
     ["key", "ctrl+d"],
   ]);
   assert.match(out, /EXIT=0/);
@@ -79,7 +79,7 @@ test("Alt+Enter steers a message into the running turn instead of queuing a foll
 
 test("Alt+Enter while idle submits like plain Enter", (t) => {
   const { text: out } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["type", "hi"], ["key", "alt+enter"], ["wait", 1500], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "hi"], ["key", "alt+enter"], ["waitFor", { regex: "PICKED=model-a[\\s\\S]*Worked for" }], ["key", "ctrl+d"],
   ]);
   assert.match(out, /EXIT=0/);
   assert.match(out, /PICKED=model-a/);
@@ -87,12 +87,11 @@ test("Alt+Enter while idle submits like plain Enter", (t) => {
 
 test("Alt+Up restores a queued follow-up to the editor", (t) => {
   const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"],
-    ["wait", 1000], ["type", "restoreme"], ["key", "enter"],
-    ["wait", 300], ["mark", "queued"],
-    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
-    ["key", "ctrl+c"], ["wait", 300],
-    ["wait", 4000], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "go"], ["key", "enter"],
+    ["waitFor", "FIRST-START"], ["type", "restoreme"], ["key", "enter"],
+    ["waitFor", "Follow-up: restoreme"], ["mark", "queued"],
+    ["key", "alt+up"], ["waitFor", "❯ restoreme"], ["mark", "restored"],
+    ["detach"],
   ]);
   assert.match(marks.queued, /Follow-up: restoreme/);
   // The frames drawn between the two marks: the queue line is gone and "restoreme" is back in the editor.
@@ -109,13 +108,12 @@ test("Alt+Up restores a queued follow-up to the editor", (t) => {
 // not just the first), so two plain-text follow-ups restore with no notice.
 test("Alt+Up restores two plain-text queued follow-ups with no false image notice", (t) => {
   const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"],
-    ["wait", 1000], ["type", "first"], ["key", "enter"],
-    ["wait", 300], ["type", "second"], ["key", "enter"],
-    ["wait", 300], ["mark", "queued"],
-    ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
-    ["key", "ctrl+c"], ["wait", 300],
-    ["wait", 4000], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "go"], ["key", "enter"],
+    ["waitFor", "FIRST-START"], ["type", "first"], ["key", "enter"],
+    ["waitFor", "Follow-up: first"], ["type", "second"], ["key", "enter"],
+    ["waitFor", "Follow-up: second"], ["mark", "queued"],
+    ["key", "alt+up"], ["waitFor", { regex: "❯ first[\\s\\S]*second" }], ["mark", "restored"],
+    ["detach"],
   ]);
   const afterDequeue = marks.restored.slice(marks.queued.length);
   assert.match(afterDequeue, /first/);
@@ -129,10 +127,10 @@ test("Alt+Enter steer sends the editor's expanded text, not a collapsed paste ma
   // Pi's own handleFollowUp expands it before sending, and Alt+Enter steer must do the same.
   const pasted = `PASTE-MARKER-TEST-${"z".repeat(1100)}`;
   const { marks } = runApp(t, [fixture("faux-queue.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"],
-    ["wait", 1000], ["paste", pasted], ["wait", 200], ["key", "alt+enter"],
-    ["wait", 300], ["mark", "queued"],
-    ["wait", 6000], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "go"], ["key", "enter"],
+    ["waitFor", "FIRST-START"], ["paste", pasted], ["waitFor", "PASTE-MARKER-TEST-zzzz"], ["key", "alt+enter"],
+    ["waitFor", "Steering: PASTE-MARKER-TEST-z"], ["mark", "queued"],
+    ["detach"],
   ]);
   // If expansion were broken, the queue line would read the literal marker instead of this text.
   assert.match(marks.queued, /Steering: PASTE-MARKER-TEST-z{50,}/);
@@ -140,14 +138,14 @@ test("Alt+Enter steer sends the editor's expanded text, not a collapsed paste ma
 
 test("Alt+Up reports when there is nothing queued", (t) => {
   const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["key", "alt+up"], ["wait", 300], ["mark", "after"], ["key", "ctrl+d"],
+    ["waitReady"], ["key", "alt+up"], ["waitFor", "No queued messages to restore"], ["mark", "after"], ["key", "ctrl+d"],
   ]);
   assert.match(marks.after, /No queued messages to restore/);
 });
 
 test("Ctrl+G opens $EDITOR and loads what it saved into the editor", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["key", "ctrl+g"], ["wait", 1500], ["mark", "afterEdit"], ["key", "ctrl+c"], ["wait", 300],
+    ["waitReady"], ["key", "ctrl+g"], ["waitFor", "FROM-EXTERNAL-EDITOR"], ["mark", "afterEdit"], ["key", "ctrl+c"], editorCleared,
     ["key", "ctrl+d"],
   ], { env: { EDITOR: `${process.execPath} ${fixture("fake-editor.mjs")}` } });
   assert.match(out, /EXIT=0/);
@@ -158,6 +156,11 @@ test("Ctrl+G opens $EDITOR and loads what it saved into the editor", (t) => {
 // inlines image chips (they're sent as attachments, not text) -- so an image chip in the draft was
 // silently gone once $EDITOR's plain-text result replaced the editor. Not recoverable (the image
 // was never handed to $EDITOR in the first place), so this is a notice, not a restore.
+// The editor row drawn empty again ("❯", then only padding up to the border).
+const editorCleared = ["waitFor", { regex: "❯ {2,}[│┃]" }];
+// A finished turn: its reply drawn, then the idle footer back (idle-only "Ctrl+t:thinking" hint).
+const turnDone = (reply) => ["waitFor", { regex: `${reply}[\\s\\S]*Ctrl\\+t:thinking` }];
+
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
@@ -169,9 +172,9 @@ test("Ctrl+G opening $EDITOR shows a notice for an image chip it drops from the 
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
   const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["key", "ctrl+v"], ["wait", 300], // pastes [Image #1] into the draft
-    ["key", "ctrl+g"], ["wait", 1500], ["mark", "afterEdit"], ["key", "ctrl+c"], ["wait", 300],
-    ["key", "ctrl+d"],
+    ["waitReady"], ["key", "ctrl+v"], ["waitFor", "[Image #1]"], // pastes [Image #1] into the draft
+    ["key", "ctrl+g"], ["waitFor", "FROM-EXTERNAL-EDITOR"], ["waitFor", "dropped 1 image"], ["mark", "afterEdit"],
+    ["detach"],
   ], { env: { EDITOR: `${process.execPath} ${fixture("fake-editor.mjs")}`, MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterEdit, /FROM-EXTERNAL-EDITOR/);
   assert.match(marks.afterEdit, /dropped 1 image/);
@@ -184,7 +187,7 @@ test("Ctrl+V pastes text from the clipboard into the editor", (t) => {
   t.after(() => rmSync(clipboardFile, { force: true }));
   writeFileSync(clipboardFile, "PASTED-TEXT");
   const { text: out, marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["key", "ctrl+v"], ["wait", 500], ["mark", "afterPaste"], ["key", "ctrl+c"], ["wait", 300],
+    ["waitReady"], ["key", "ctrl+v"], ["waitFor", "PASTED-TEXT"], ["mark", "afterPaste"], ["key", "ctrl+c"], editorCleared,
     ["key", "ctrl+d"],
   ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(out, /EXIT=0/);
