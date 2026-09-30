@@ -114,6 +114,9 @@ const DELETE_ACTIONS = [
     "tui.editor.deleteToLineStart",
     "tui.editor.deleteToLineEnd",
 ];
+/** The DELETE_ACTIONS after which Pi's Editor itself re-checks whether to open autocomplete
+ * (handleBackspace/handleForwardDelete); the word and line deletes never do. */
+const CHAR_DELETE_ACTIONS = ["tui.editor.deleteCharBackward", "tui.editor.deleteCharForward"];
 /** Pi's keys that can swap the draft for a history entry (Editor.navigateHistory). */
 const HISTORY_ACTIONS = ["tui.editor.cursorUp", "tui.editor.cursorDown", "tui.editor.historyPrevious", "tui.editor.historyNext"];
 /** A single trailing newline is the terminator of the pasted text's last line, not an extra empty
@@ -206,6 +209,7 @@ export class ChipEditor {
     lastPastedChip;
     isInPaste = false;
     pasteBuffer = "";
+    autocompleteProvider;
     onChange;
     /** Fired on Enter with the message expanded to full text and image chips extracted, in place of
      * Editor's own `onSubmit` (which only ever sees a single text string). */
@@ -246,6 +250,7 @@ export class ChipEditor {
         this.inner.addToHistory(text);
     }
     setAutocompleteProvider(provider) {
+        this.autocompleteProvider = provider;
         this.inner.setAutocompleteProvider(provider);
     }
     isShowingAutocomplete() {
@@ -388,8 +393,9 @@ export class ChipEditor {
         // happens to line up with a chip in the draft.
         const recallsHistory = HISTORY_ACTIONS.some((action) => kb.matches(data, action));
         this.innerInput(data, recallsHistory ? "replace" : "edit");
-        if (DELETE_ACTIONS.some((action) => kb.matches(data, action)))
-            this.removeChipFragments(before);
+        if (DELETE_ACTIONS.some((action) => kb.matches(data, action))) {
+            this.removeChipFragments(before, CHAR_DELETE_ACTIONS.some((action) => kb.matches(data, action)));
+        }
         this.snapOutOfChipSpan(before.lineCol);
     }
     handleMouse(event) {
@@ -563,8 +569,17 @@ export class ChipEditor {
     /** Deletes what's left of a chip label that the edit from `before` to now only partly removed
      * (Backspace at its end, Delete at its start, Ctrl+W/Alt+D/Ctrl+U/Ctrl+K reaching into it), so a
      * partially covered chip is fully deleted. Only for a pure deletion with the caret at its start,
-     * which is where every Pi delete leaves it. */
-    removeChipFragments(before) {
+     * which is where every Pi delete leaves it.
+     *
+     * The half-deleted label must not leave autocomplete behind: after Backspace, `see [Image #1`
+     * matches Pi's `#` trigger, and the 20 ms debounced request it schedules isn't cancelled by the
+     * later keystrokes whose text no longer matches, so it fires on the final `see ` and opens path
+     * completion there (dogfood D18). With no dropdown open, pending requests are dropped so the
+     * result is what the user's key alone would give on the final text: Backspace/Delete
+     * (`checksAutocomplete`) get Pi's own post-delete check from the last synthetic keystroke, the
+     * word and line deletes get none, as in Pi. With a dropdown open, Pi's updateAutocomplete
+     * already re-requests on the final text. */
+    removeChipFragments(before, checksAutocomplete) {
         const { text, cursor } = this.synced;
         if (text.length >= before.text.length)
             return;
@@ -575,12 +590,27 @@ export class ChipEditor {
         const chips = this.atomicChips(before.text);
         const cutAtStart = chips.find((chip) => chip.start < prefix && prefix < chip.end);
         const cutAtEnd = chips.find((chip) => chip.start < deletedEnd && deletedEnd < chip.end);
+        const keys = [];
         if (cutAtStart)
             for (let i = cutAtStart.start; i < prefix; i += 1)
-                this.innerInput(BACKSPACE);
+                keys.push(BACKSPACE);
         if (cutAtEnd)
             for (let i = deletedEnd; i < cutAtEnd.end; i += 1)
-                this.innerInput(FORWARD_DELETE);
+                keys.push(FORWARD_DELETE);
+        const settle = keys.length > 0 && !this.inner.isShowingAutocomplete();
+        keys.forEach((key, i) => {
+            if (settle && checksAutocomplete && i === keys.length - 1)
+                this.cancelAutocompleteRequests();
+            this.innerInput(key);
+        });
+        if (settle && !checksAutocomplete)
+            this.cancelAutocompleteRequests();
+    }
+    /** Pi's Editor has no public cancel; setAutocompleteProvider() starts with cancelAutocomplete()
+     * (docs/pi-internals.md `editor-autocomplete-cancel`). */
+    cancelAutocompleteRequests() {
+        if (this.autocompleteProvider)
+            this.inner.setAutocompleteProvider(this.autocompleteProvider);
     }
     expandTextChip(chip) {
         const cursor = this.inner.getCursor();

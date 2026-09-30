@@ -3,7 +3,7 @@
 // See test/tui-pi-args.test.mjs-style harness tests in test/tui-paste-chips-app.test.mjs for the
 // end-to-end behaviors (popup show/hide on real cursor movement, submit, the Ctrl+V/@image seams).
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -795,4 +795,59 @@ test("PromptFrame.handleMouse translates a click into the editor's own coordinat
   click(1);
   click(2);
   assert.equal(editor.getText(), "line1\nline2\nline3\nline4 ");
+});
+
+// Dogfood D18 at the component level: removing a chip leaves autocomplete as the removal key alone
+// would on the final text, like Pi's plain Editor deleting one character.
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function autocompleteEditor(t, commands = []) {
+  const cwd = tempDir(t);
+  mkdirSync(join(cwd, "home"));
+  const editor = makeEditor(cwd);
+  editor.setAutocompleteProvider(new piTui.CombinedAutocompleteProvider(commands, cwd, null));
+  const sent = [];
+  editor.onSubmitImages = (text) => sent.push(text);
+  return { editor, sent };
+}
+
+test("Backspace deleting an image chip with text after it opens no path completion (D18)", async (t) => {
+  const { editor, sent } = autocompleteEditor(t);
+  for (const char of "see foo ") editor.handleInput(char);
+  editor.insertImageChip(ONE_PIXEL_PNG, "image/png");
+  for (const char of " bar") editor.handleInput(char);
+  for (let i = 0; i < 4; i += 1) editor.handleInput("\x1b[D");
+  editor.handleInput(BACKSPACE);
+  await sleep(100); // past Pi's 20ms autocomplete debounce
+  assert.equal(editor.isShowingAutocomplete(), false);
+  editor.handleInput(ENTER);
+  assert.deepEqual(sent, ["see foo  bar"]);
+});
+
+test("a real trigger before the chip behaves like Pi's plain Editor: Backspace re-checks it, Ctrl+W doesn't (D18)", async (t) => {
+  const commands = [{ name: "model", description: "m" }];
+  const plainAfter = async (key) => {
+    const cwd = tempDir(t);
+    const plain = new piTui.Editor(fakeTui(), { borderColor: (text) => text, selectList: getSelectListTheme() }, {});
+    plain.setAutocompleteProvider(new piTui.CombinedAutocompleteProvider(commands, cwd, null));
+    for (const char of "/mox") plain.handleInput(char);
+    await sleep(100);
+    plain.handleInput(key);
+    await sleep(100);
+    return plain.isShowingAutocomplete();
+  };
+  const chipAfter = async (key) => {
+    const { editor } = autocompleteEditor(t, commands);
+    for (const char of "/mo") editor.handleInput(char);
+    editor.insertImageChip(ONE_PIXEL_PNG, "image/png");
+    await sleep(100);
+    editor.handleInput(key);
+    await sleep(100);
+    assert.equal(editor.getText(), "/mo");
+    return editor.isShowingAutocomplete();
+  };
+  assert.equal(await plainAfter(BACKSPACE), true);
+  assert.equal(await chipAfter(BACKSPACE), true);
+  assert.equal(await plainAfter("\x17"), false);
+  assert.equal(await chipAfter("\x17"), false);
 });

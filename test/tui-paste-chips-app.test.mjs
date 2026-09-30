@@ -445,3 +445,48 @@ for (const columns of [40, 80, 120]) {
     assert.match(text, /EXIT=0/);
   });
 }
+
+// Dogfood D18: after Backspace the text before the caret is `see foo [Image #1`, which matches
+// Pi's `#` autocomplete trigger; the debounced request that schedules used to survive the rest of
+// the chip deletion and open path completion on `see foo ` (the harness cwd holds `home/`), so
+// Enter picked `home/` instead of sending. Each removal key that reached that state gets a test.
+function chipRemovalSends(t, removeKeyStep) {
+  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-chip-removal-"));
+  t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
+  const clipboardFile = join(clipboardDir, "clipboard.png");
+  writeFileSync(clipboardFile, ONE_PIXEL_PNG);
+  const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
+    ["waitReady"], ["type", "see foo "], ["key", "ctrl+v"], ["waitFor", "[Image #1]"], ["mark", "chip"],
+    removeKeyStep, ["wait", 150], ["mark", "removed"], // well past Pi's 20ms autocomplete debounce
+    ["key", "enter"], ["waitFor", "ECHO:see foo"], ["mark", "sent"], ["key", "ctrl+d"],
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  const afterRemoval = since(marks.chip, marks.removed);
+  assert.doesNotMatch(afterRemoval, /\[Image #1\]/, "the chip should be gone from the redrawn prompt");
+  assert.doesNotMatch(afterRemoval, /home\//, "no path-completion row should be drawn");
+  assert.doesNotMatch(since(marks.chip, marks.sent), /home\//);
+}
+
+test("Backspace deleting an image chip, then Enter, sends the message instead of opening path completion", (t) => {
+  chipRemovalSends(t, ["key", "backspace"]);
+});
+
+test("Ctrl+W deleting an image chip, then Enter, sends the message", (t) => {
+  chipRemovalSends(t, ["raw", "\x17"]);
+});
+
+test("Alt+Backspace deleting an image chip, then Enter, sends the message", (t) => {
+  chipRemovalSends(t, ["raw", "\x1b\x7f"]);
+});
+
+test("Tab still completes a path right after an image chip was deleted", (t) => {
+  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-chip-tab-"));
+  t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
+  const clipboardFile = join(clipboardDir, "clipboard.png");
+  writeFileSync(clipboardFile, ONE_PIXEL_PNG);
+  const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
+    ["waitReady"], ["type", "see foo "], ["key", "ctrl+v"], ["waitFor", "[Image #1]"],
+    ["key", "backspace"], ["wait", 150], ["key", "tab"], ["waitFor", "❯ see foo home/"], ["mark", "completed"],
+    ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  assert.match(marks.completed, /❯ see foo home\//);
+});
