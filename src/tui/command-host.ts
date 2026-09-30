@@ -56,6 +56,9 @@ export interface CommandHost {
   restoreQueuedMessagesToEditor(): number;
   /** True while an agent turn is running. */
   isWorking(): boolean;
+  /** Drop the turn status row. Only for Esc when the row shows but the session is idle (dogfood
+   * D15): every normal path clears it from session events. */
+  clearTurnStatus(): void;
   toggleToolsExpanded(): void;
   /** Ctrl+T (docs/tui-design.md 4.2/4.6, `app.thinking.toggle`): expands/collapses every finished
    * thinking block, independent of Ctrl+O's tool/user-message toggle. */

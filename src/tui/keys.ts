@@ -24,7 +24,9 @@ export function createKeyActions(): KeyAction[] {
       // onEscape overrides): a running turn takes priority, then compaction, then bash. abort()
       // already cancels retry/branch-summary internally, so isStreaming covers those too.
       id: "app.interrupt",
-      when: (host) => !host.session().isIdle || host.session().isBashRunning,
+      // host.isWorking(): a turn status still showing with nothing running under it (dogfood D15)
+      // must not make Esc a silent no-op.
+      when: (host) => !host.session().isIdle || host.session().isBashRunning || host.isWorking(),
       run: (host) => {
         const session = host.session();
         if (session.isStreaming) {
@@ -36,6 +38,9 @@ export function createKeyActions(): KeyAction[] {
           session.abortBranchSummary();
         } else if (session.isBashRunning) {
           session.abortBash();
+        } else if (host.isWorking()) {
+          host.clearTurnStatus();
+          host.notice("Nothing was running; cleared a stale turn status.", "warning");
         }
       },
     },

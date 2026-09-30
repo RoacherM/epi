@@ -72,3 +72,22 @@ test("Esc during compaction or a /tree branch summary aborts both (Pi's isCompac
   await interrupt.run(host);
   assert.deepEqual(calls.sort(), ["branchSummary", "compaction"]);
 });
+
+test("Esc on a turn status left over with nothing running clears it with a warning (dogfood D15)", async () => {
+  const { createKeyActions } = await import("../dist/tui/keys.js");
+  const calls = [];
+  const session = { isIdle: true, isStreaming: false, isCompacting: false, isBashRunning: false };
+  let working = true;
+  const host = {
+    session: () => session,
+    isWorking: () => working,
+    clearTurnStatus: () => { working = false; calls.push("clear"); },
+    notice: (text, tone) => calls.push(`${tone}:${text}`),
+  };
+  const interrupt = createKeyActions().find((action) => action.id === "app.interrupt");
+  assert.equal(interrupt.when(host), true);
+  await interrupt.run(host);
+  assert.deepEqual(calls, ["clear", "warning:Nothing was running; cleared a stale turn status."]);
+  // Once cleared (or when nothing ever showed), Esc falls through to its other uses again.
+  assert.equal(interrupt.when(host), false);
+});
