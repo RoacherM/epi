@@ -3,7 +3,7 @@
 // tests connect to a real (local, offline) stdio fixture server -- no network, ever.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -150,6 +150,35 @@ test("mmp mcp remove drops an existing server; removing an unknown one exits 1 w
   const unknown = run(f, ["remove", "does-not-exist"]);
   assert.equal(unknown.status, 1);
   assert.match(unknown.stderr, /No global MCP server named "does-not-exist"/);
+});
+
+// Mirrors cli.js's own remove: not found in the requested scope names where it actually lives, with
+// MMP's own paths and flag (-l, not Pi's --local).
+test("mmp mcp remove names the other scope when the server is defined there instead", async (t) => {
+  const f = fixture(t);
+  run(f, ["add", "fixture", "--", "node", fixtureServerPath]);
+  const removedWithLocal = run(f, ["remove", "fixture", "-l", "--approve"]);
+  assert.equal(removedWithLocal.status, 1);
+  assert.match(removedWithLocal.stderr, /No project MCP server named "fixture"/);
+  assert.match(removedWithLocal.stderr, new RegExp(`It is defined in ${globalMcpPath(f).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}; omit -l\\.`));
+  // The global entry must still be there -- a failed remove never touches an unrelated file.
+  assert.deepEqual(JSON.parse(readFileSync(globalMcpPath(f), "utf8")).mcpServers.fixture, { command: "node", args: [fixtureServerPath] });
+
+  // Now the reverse: a trusted project has its own "fixturedirect", removing it globally (no -l)
+  // should point back at the project's file.
+  mkdirSync(join(f.project, ".mmp"), { recursive: true });
+  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
+  const { ProjectTrustStore } = await import("@earendil-works/pi-coding-agent");
+  mkdirSync(join(f.home, ".mmp", "pi"), { recursive: true });
+  new ProjectTrustStore(join(f.home, ".mmp", "pi")).set(f.project, true);
+  run(f, ["add", "fixturedirect", "-l", "--", "node", fixtureServerPath]);
+  const removedGlobal = run(f, ["remove", "fixturedirect"]);
+  assert.equal(removedGlobal.status, 1);
+  assert.match(removedGlobal.stderr, /No global MCP server named "fixturedirect"/);
+  // findNearestProjectManifest resolves symlinks in cwd (macOS: /tmp -> /private/tmp), so the
+  // project's reported source path isn't byte-identical to the un-resolved fixture path.
+  const realProjectMcpPath = join(realpathSync(f.project), ".mmp", "mcp.json");
+  assert.match(removedGlobal.stderr, new RegExp(`It is defined in ${realProjectMcpPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}; use -l\\.`));
 });
 
 test("mmp mcp list with a real fixture server: exit 0, connected, and its tools", (t) => {

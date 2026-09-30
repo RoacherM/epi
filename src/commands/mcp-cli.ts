@@ -319,7 +319,14 @@ function removeCommand(args: readonly string[], ctx: McpCliContext): number {
     console.log(`Removed ${local ? "project" : "global"} MCP server "${name}" from ${path}.`);
     return 0;
   }
-  console.error(`No ${local ? "project" : "global"} MCP server named "${name}" in ${path}.`);
+  const scope = local ? "project" : "global";
+  // Mirrors cli.js's remove: not found in the requested scope doesn't mean not configured at all --
+  // check the other scope (within what MMP already trusts enough to read; unlike Pi's own CLI, this
+  // never reads an untrusted project's mcp.json just for a nicer error) and name where it actually
+  // lives, with MMP's own paths and flag (`-l`, not Pi's `--local`).
+  const other = resolveListConfig(ctx).loaded.servers.find((server) => server.name === name && (server.scope ?? "global") !== scope);
+  const otherHint = other === undefined ? "" : ` It is defined in ${other.source}${other.scope === "project" ? "; use -l" : "; omit -l"}.`;
+  console.error(`No ${scope} MCP server named "${name}" in ${path}.${otherHint}`);
   return 1;
 }
 
