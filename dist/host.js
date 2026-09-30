@@ -12,6 +12,7 @@ import { buildInlineExtensions } from "./extensions/index.js";
 import { isInteractivePiRun } from "./interactive.js";
 import { isListModelsRun, runListModels } from "./list-models.js";
 import { resolveMmpPaths } from "./paths.js";
+import { rewritePiStderr } from "./pi-output.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { installProviderCostValidation } from "./provider-validation.js";
 import { createMmpRuntimeIdentity, } from "./runtime-identity.js";
@@ -291,6 +292,7 @@ export async function runMmp(argv) {
         });
         return;
     }
+    rewritePiStderr();
     await piMain(prepared.piArgs, { extensionFactories });
 }
 //# sourceMappingURL=host.js.map

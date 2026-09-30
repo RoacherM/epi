@@ -20,6 +20,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { MmpArgumentError } from "../errors.js";
+import { EXTENSION_LOAD_FAILURE_HINT } from "../pi-output.js";
 import { crossProjectRefusal, type ProjectIdentity } from "./project-guard.js";
 
 export interface MmpSessionOptions {
@@ -292,6 +293,19 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
     // the initial model is picked from a stale snapshot. A refresh started now is the latest one.
     await services.modelRuntime.refresh({ allowNetwork: false });
     const diagnostics: Diagnostic[] = [...services.diagnostics];
+    // createAgentSessionServices leaves extension load results out of its diagnostics; Pi's main.js
+    // adds them itself (~641-648). Without this, a Manifest extension that failed to load was
+    // skipped with nothing on screen (dogfood D45).
+    const extensions = services.resourceLoader.getExtensions();
+    const extensionLoadErrors = new Set<Diagnostic>();
+    for (const { path, error } of extensions.errors) {
+      const diagnostic: Diagnostic = { type: "error", message: `Failed to load extension "${path}": ${error}` };
+      extensionLoadErrors.add(diagnostic);
+      diagnostics.push(diagnostic);
+    }
+    for (const { path, warning } of extensions.warnings ?? []) {
+      diagnostics.push({ type: "warning", message: `Extension package "${path}": ${warning}` });
+    }
 
     const cli = parsed.provider || parsed.model || parsed.thinking
       ? resolveCliModel({
@@ -358,9 +372,16 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
     // just startup -- after the TUI's alt screen is up, that writes raw over the fullscreen UI. Pi
     // shows startup diagnostics in the transcript instead (interactive-mode.js ~817); MMP's `bind()`
     // does the same with `runtime.diagnostics`, so nothing is dropped, it just isn't printed here.
-    const errors = diagnostics.filter((diagnostic) => diagnostic.type === "error");
+    // Extension load errors are fatal only for the initial runtime, like Pi (main.js exits after the
+    // first createAgentSessionRuntime only). Extensions re-run on every /new, /resume, /fork and
+    // /import; there a load error stays a diagnostic, which bind() shows as a transcript notice.
+    const isInitialRuntime = sessionStartEvent === undefined;
+    const errors = diagnostics.filter((diagnostic) =>
+      diagnostic.type === "error" && (isInitialRuntime || !extensionLoadErrors.has(diagnostic)));
     if (errors.length > 0) {
-      throw new Error(errors.map((diagnostic) => diagnostic.message).join("\n"));
+      const lines = errors.map((diagnostic) => diagnostic.message);
+      if (isInitialRuntime && extensionLoadErrors.size > 0) lines.push(EXTENSION_LOAD_FAILURE_HINT);
+      throw new Error(lines.join("\n"));
     }
 
     const created = await createAgentSessionFromServices({

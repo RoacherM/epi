@@ -171,6 +171,27 @@ const registry = [
     },
   },
   {
+    id: "pi-extension-load-hint",
+    async check() {
+      const { PI_EXTENSION_LOAD_FAILURE_HINT } = await import(pathToFileURL(join(root, "dist", "pi-output.js")).href);
+      const mainPath = join(piDist, "main.js");
+      const piText = readFileSync(mainPath, "utf8");
+      const declaration = /const EXTENSION_LOAD_FAILURE_HINT = `([^`]*)`;/.exec(piText);
+      assert.ok(declaration, `${mainPath} no longer defines EXTENSION_LOAD_FAILURE_HINT`);
+      const { APP_NAME } = await importDeep("config.js");
+      assert.equal(
+        declaration[1].replaceAll("${APP_NAME}", APP_NAME),
+        PI_EXTENSION_LOAD_FAILURE_HINT,
+        "Pi's extension load hint changed; src/pi-output.ts no longer rewrites it",
+      );
+      assert.match(
+        piText,
+        /console\.error\(chalk\.yellow\(EXTENSION_LOAD_FAILURE_HINT\)\)/,
+        `${mainPath} no longer writes the hint to stderr in one console.error call`,
+      );
+    },
+  },
+  {
     id: "extension-temp-folder",
     check() {
       const text = readFileSync(join(root, "src", "update.ts"), "utf8");

@@ -23,6 +23,7 @@ import { buildInlineExtensions } from "./extensions/index.js";
 import { isInteractivePiRun } from "./interactive.js";
 import { isListModelsRun, runListModels } from "./list-models.js";
 import { resolveMmpPaths } from "./paths.js";
+import { rewritePiStderr } from "./pi-output.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { installProviderCostValidation } from "./provider-validation.js";
 import {
@@ -373,5 +374,6 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
     });
     return;
   }
+  rewritePiStderr();
   await piMain(prepared.piArgs, { extensionFactories });
 }

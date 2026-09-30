@@ -16,11 +16,30 @@ function failureMessage(error) {
  * the same message to stderr there is a fallback, not a duplicate: those modes' stdout is the
  * model's reply/JSON stream, so the failure has to go somewhere else to be seen without corrupting it.
  */
-function notifyVisibly(context, message, type) {
+function notifyVisibly(context, text, type) {
+    const message = displayLine(text);
     context.ui.notify(message, type);
     if (context.mode === "print" || context.mode === "json") {
         process.stderr.write(`mmp: ${message}\n`);
     }
+}
+/**
+ * Hook reasons and a failing command's stderr tail are text from user-configured programs. Shown
+ * raw, a newline breaks the one-line TUI notice and the `mmp: ...` stderr line, and an escape
+ * sequence restyles or moves the terminal. Drops ANSI escape sequences and other control
+ * characters and joins the lines with " | ". The text's own spacing is kept.
+ */
+function displayLine(text) {
+    return text
+        // CSI (ESC [ ... final byte) and terminated OSC (ESC ] ... BEL or ESC \) sequences, then any
+        // other ESC pair. An unterminated OSC loses only its ESC ], not the rest of the text.
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+        .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+        .replace(/\x1b[@-_]?/g, "")
+        .split(/\r\n|\r|\n/)
+        .map((line) => line.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim())
+        .filter((line) => line.length > 0)
+        .join(" | ");
 }
 function notifyFailure(context, error) {
     notifyVisibly(context, failureMessage(error), "error");
@@ -30,9 +49,26 @@ function notifyFailure(context, error) {
  * extension to show its own feedback (Pi's examples/extensions/input-transform.ts notifies, then
  * returns `handled`). Without this the prompt vanished from the editor with nothing on screen.
  */
-function notifyPromptBlocked(context, decision) {
+function promptBlockedMessage(decision) {
     const verb = decision.action === "cancel" ? "cancelled" : "blocked";
-    notifyVisibly(context, `Prompt ${verb} by user_prompt hook: ${blockReason(decision)}`, "warning");
+    // No reason: just say what happened. blockReason()'s "Blocked by MMP hook" fallback would read
+    // "Prompt cancelled by user_prompt hook: Blocked by MMP hook".
+    const reason = displayLine(decision.reason ?? "");
+    return `Prompt ${verb} by user_prompt hook${reason.length > 0 ? `: ${reason}` : ""}`;
+}
+/**
+ * The user_prompt handler must return `handled` even when the notice can't be shown: Pi's
+ * `emitInput` treats a rejected handler as `continue`, which would send a blocked prompt to the
+ * model. A notify that throws is reported once on stderr instead.
+ */
+function notifyPromptFailClosed(context, text, type) {
+    try {
+        notifyVisibly(context, text, type);
+    }
+    catch (error) {
+        const detail = displayLine(error instanceof Error ? error.message : String(error));
+        process.stderr.write(`mmp: ${displayLine(text)} (could not show the notice: ${detail})\n`);
+    }
 }
 function taskPayload(event) {
     if (event.type === "task_start") {
@@ -161,21 +197,24 @@ export function createHooksInlineExtension(options) {
                 }
             });
             pi.on("input", async (event, context) => {
+                let decision;
                 try {
-                    const decision = await runtime.run(inputPayload(event, context), context);
-                    if (decision.action === "transform") {
-                        return { action: "transform", text: decision.text ?? "" };
-                    }
-                    if (decision.action === "block" || decision.action === "cancel") {
-                        notifyPromptBlocked(context, decision);
-                        return { action: "handled" };
-                    }
-                    return { action: "continue" };
+                    decision = await runtime.run(inputPayload(event, context), context);
                 }
                 catch (error) {
-                    notifyFailure(context, error);
+                    notifyPromptFailClosed(context, failureMessage(error), "error");
                     return { action: "handled" };
                 }
+                if (decision.action === "transform") {
+                    return { action: "transform", text: decision.text ?? "" };
+                }
+                if (decision.action === "block" || decision.action === "cancel") {
+                    // Outside the try: a notify that throws is not a hook failure, and must not be reported
+                    // a second time as one.
+                    notifyPromptFailClosed(context, promptBlockedMessage(decision), "warning");
+                    return { action: "handled" };
+                }
+                return { action: "continue" };
             });
             pi.on("tool_call", async (event, context) => {
                 try {

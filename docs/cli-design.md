@@ -28,6 +28,8 @@ MMP 是**改名叫 mmp 的定制版 Pi**：
 
 MMP 自己维护这份清单。清单外的短参数（`-x`）一律报错退出。清单外的长参数（`--foo`）不会立刻报错：和 Pi 自己的 `parseArgs`（`unknownFlags`）一样先原样保留，交给两条路径各自的运行时（`-p` 等非交互走 `piMain`；MMP 自己的界面走 `src/tui/services.ts`）在扩展加载完之后核对——某个已加载的扩展用 `pi.registerFlag` 声明过这个参数就接受，否则在启动界面前按参数名报错退出（Pi 的 `agent-session-services.js` `applyExtensionFlagValues`）。`mmp --help` 打印 MMP 自己的帮助文本，覆盖下表所有参数，不附上 Pi 的帮助；如果 Manifest 里的扩展注册了参数，额外打印一段"Extension options"（和 Pi 自己的 `--help` 一样，为此会先加载一遍扩展——只加载扩展，不建会话/连模型；加载失败就跳过这一段，`--help` 本身始终成功）。
 
+Manifest 里的扩展启动时加载失败，两条路径都和 Pi 一样报错退出（退出码 1）：显示 Pi 的原始错误 `Failed to load extension "<path>": ...`，后面跟 MMP 自己的提示 `Hint: Fix the extension, or remove it from the Manifest that declares it ("mmp list" shows which).`。Pi 原来的提示 `Start without extensions using "pi -ne"` 不会出现（MMP 没有 `-ne`）：`piMain` 路径在 stderr 上把这一行换掉（`src/pi-output.ts`，登记在 docs/pi-internals.md `pi-extension-load-hint`），MMP 自己的界面在 `src/tui/services.ts` 里把加载错误当作启动错误（D45；之前界面会跳过失败的扩展直接启动，什么都不显示）。只有启动时的第一个运行时会因此退出；`/new`、`/resume`、`/fork`、`/import` 会重新加载扩展，这时的加载错误和 Pi 一样作为提示显示在对话里，界面继续运行。
+
 | 参数 | 和 Pi 对齐 | 说明 |
 |---|---|---|
 | `--provider`、`--model`、`--thinking`、`--api-key`、`--models` | 是 | |
