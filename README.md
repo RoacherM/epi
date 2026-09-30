@@ -7,8 +7,7 @@ MMP (Make My Pi) 是基于固定版本 Pi SDK 的显式、确定性 Harness。�
 当前固定版本：
 
 - Node.js `>=22.19.0`
-- `@earendil-works/pi-coding-agent`：见 `package.json`
-- `pi-mcp-adapter`：见 `package.json`
+- `@earendil-works/pi-coding-agent`：见 `package.json`（MCP 用它 0.99 起的原生支持，不再有独立的 adapter 依赖，见 [docs/mcp-design.md](docs/mcp-design.md)）
 
 MMP 不调用 PATH 中的 `pi`，也不自动读取 `~/.pi/agent`、`.pi/`、`.agents/`、`AGENTS.md` 或 `CLAUDE.md`。所有 Harness 资源必须在 MMP Manifest 中显式声明。
 

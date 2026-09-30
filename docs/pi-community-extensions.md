@@ -18,7 +18,7 @@ Pi 内核不带 MCP。作者 badlogic 在 2026-01-08 的 issue 里给过一份�
 
 ### pi-mcp-adapter（nicobailon）：事实标准
 
-MMP 现在就以库的方式内嵌它（package.json 里 `pi-mcp-adapter` 2.17.0，`mmp:mcp` 调 `createMcpAdapter`）。
+**已过期（2026-09-30，Pi 0.99 升级）**：MMP 当时（本文调研时）以库的方式内嵌它（package.json 里 `pi-mcp-adapter` 2.17.0，`mmp:mcp` 调 `createMcpAdapter`）；升级到 Pi 0.99 后已经整个去掉，改用 Pi 自己的原生 MCP 支持，见 [mcp-design.md](mcp-design.md)。下面这段仍是当时对 pi-mcp-adapter 本身的调研，作为第三方包的背景保留，不再代表 MMP 现在的接法。
 仓库 https://github.com/nicobailon/pi-mcp-adapter ，约 1,460 星，MIT，最后提交 2026-09-13。
 npm 最新 2.33.0（2026-09-10）。MMP 用的 2.17.0 落后 16 个小版本。来源 https://registry.npmjs.org/pi-mcp-adapter
 官方 Discussions 里有用户说它是"我唯一持续在用的外部扩展"。来源 https://github.com/earendil-works/pi/discussions/3373
@@ -108,7 +108,7 @@ qualisero/awesome-pi-agent：1,097 星但 README 自称已退休，2026-06 停�
 
 第一，0.84.0 成了新扩展的分水岭。tintinweb/pi-subagents 与 pi-cc-extensions 都要求 Pi ^0.84.0，SoL-Pi 固定 0.84.2。MMP 停在 0.83.0 会越来越装不上东西。这是升级 Pi 的第二个理由，第一个理由见 docs/sol-pi-research.md 里 OCC 的两个失败用例。
 
-第二，MMP 的 `mmp:mcp` 已经站在正确的地基上，只是版本旧。pi-mcp-adapter 2.17.0 到 2.33.0 之间新增的 OAuth 凭据库、socket 传输、approveTools、Agent Plugins 导入，是否要暴露到 Manifest 需要另评估。
+第二，MMP 的 `mmp:mcp` 已经站在正确的地基上，只是版本旧（**已过期，2026-09-30**：Pi 0.99 升级后 `mmp:mcp` 改用 Pi 原生 MCP，不再基于 pi-mcp-adapter，这一条不再适用，见 [mcp-design.md](mcp-design.md)）。pi-mcp-adapter 2.17.0 到 2.33.0 之间新增的 OAuth 凭据库、socket 传输、approveTools、Agent Plugins 导入，是否要暴露到 Manifest 需要另评估。
 
 第三，子代理没有现成的"同进程"方案，社区一致用子进程。MMP 若要做 `mmp:agents`，可以沿用 Pi 官方示例的 `pi --mode json` 子进程模型，代理档案用 MMP 已有的 agents/*.md，这与 tintinweb 与 mjakl 的 Markdown 加 frontmatter 习惯一致。
 
