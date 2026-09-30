@@ -25,7 +25,7 @@
 | D19 | P2 | 完整测试又变回约 5 分钟：D11 新增的 `test/tui-image-numbering.test.mjs` 里二十多个测试每个 17–24 秒，同一文件内串行执行，整个文件就要几分钟，抵消了 D2 的提速 | `node --test --test-reporter=tap test/*.test.mjs`，按耗时排序 | 已修（合并 D19：固定等待改成等画面、同文件并行；该文件 305 秒 → 约 9 秒，完整 `npm test` 约 64 秒） |
 | D20 | P3 | D11 复审提出的小问题：同一条草稿里出现两次同一个标签会把图片发两次；`/fork` 一条没有标签的图片消息会丢图（D11 之前就有）；`/tree` 恢复图片没有测试 | D11 的 review-3.md | 已修（合并 D20：重复标签只发一次图；`/fork` 无标签的图片消息把图放回为新标签；`/tree` 恢复有测试；未附图样式在换行和光标处也生效） |
 | D21 | P2 | `/settings` 还没做（tui-design 第 7 节 P2 唯一剩下的命令）。Pi 的设置项里有些只对 Pi 自己的界面有意义，要先挑出适用于 MMP 的 | 输入 `/settings` | 待做（从旧待办迁来） |
-| D22 | P3 | 展开后的思考内容里 markdown 没有渲染（`**标题**` 原样显示），缩进也和正文不一致（M4 Herdr 实测） | 用会输出思考的模型问一个问题，Ctrl+T 展开 | 待修（从旧待办迁来） |
+| D22 | P3 | 展开后的思考内容里 markdown 没有渲染（`**标题**` 原样显示），缩进也和正文不一致（M4 Herdr 实测） | 用会输出思考的模型问一个问题，Ctrl+T 展开 | 已修（合并 D22：按 Pi 的 Markdown 渲染，和正文同列，有对照 Pi 的逐字节测试） |
 | D23 | P3 | 回答进行中排队的追问，和原来的问题共用一行 `Worked for`；grok 是每轮各显示一行（M4 Fable 审查） | 运行中输入一句按 Enter 排队，等两轮都结束 | 待修（从旧待办迁来） |
 | D24 | P3 | 思考结束时没有闪烁提示（grok 有；M4 Fable 审查） | 看一次思考结束 | 待修（从旧待办迁来） |
 | D25 | P3 | 在 Herdr 里退出 mmp 后，pane 里留着退出前的最后一帧画面（Ghostty 里是否也有未确认） | Herdr pane 里启动再 Ctrl+D | 待查（从旧待办迁来；可能是 Herdr 对备用屏幕的处理） |
@@ -42,3 +42,4 @@
 | D36 | P3 | D20 复审的小问题：光标正好在把未附图标签拆到两行的那个空格上时，标签不画成暗色删除线；`chrome.ts` 的 `displayText` 按标签出现次数（而不是不同标签数）计算要显示几个 `[Image]`，与 `labelStoredImages` 不一致（只有扩展构造的消息会碰到） | D20 的 review-1.md | 待修 |
 | D37 | P3 | D17 复审第 2 轮的小缺口：压缩进行中输入 `/compact` 会中止这一轮，但结尾写 `Worked for`（`runCompact` 没调用 `markRunStopped()`）；扩展在自己的 `agent_settled` 里调用 `ctx.abort()` 会把正常结束的一轮写成 `Stopped after`（`abortHandler` 缺 `isStreaming` 判断）。修法见 D17 的 review-2.md | D17 的 review-2.md 第 1、2 条 | 待修 |
 | D38 | P3 | `src/tui/services.ts` 的 `configureHttp` 只抄了 Pi `core/http-dispatcher.js` 的一部分：没有 `autoSelectFamilyAttemptTimeout`、按来源建客户端、undici 错误监听；`HTTP_PROXY ??= proxy` 在 `/reload` 时也会生效（Pi 只在启动时）。D21 之后它在每次绑定/重载/改设置时都会跑（D21 复审 F3） | 对照 `http-dispatcher.js:68-95` | 待修（或登记进 pi-internals 说明差异） |
+| D39 | P3 | D22 复审第 2 轮的小问题：`test/tui-thinking-parity.test.mjs` 在模块顶层装 MMP 主题，`--test-isolation=none`（多文件共用进程）时会失败；思考文字的斜体只有 `FORCE_COLOR` 开启时才被测到（`npm test` 下不测） | D22 的 review-2.md F4、F5 | 待修 |
