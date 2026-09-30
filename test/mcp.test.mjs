@@ -277,7 +277,7 @@ function runNonTuiMcp(t, mode, mcpConfig) {
   mkdirSync(mmpHome, { recursive: true });
   const driver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
   writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", driver] });
-  writeJson(join(mmpHome, "mcp.json"), mcpConfig);
+  if (mcpConfig !== undefined) writeJson(join(mmpHome, "mcp.json"), mcpConfig);
 
   const args =
     mode === "json"
@@ -318,6 +318,43 @@ for (const mode of ["print", "json"]) {
     assert.equal(result.stderr, "", context);
   });
 }
+
+test("zero configured MCP servers: -p writes nothing to stderr and does not wait", (t) => {
+  const started = Date.now();
+  const result = runNonTuiMcp(t, "print", undefined);
+  const context = `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+  assert.equal(result.status, 0, context);
+  assert.equal(result.stdout, "ECHO:hi\n", context);
+  // Also never Pi's own zero-server text, which names .pi/mcp.json, a path MMP never reads.
+  assert.equal(result.stderr, "", context);
+  // Pi's startup wait is 10 s; with nothing to connect there must be nothing to wait for.
+  assert.ok(Date.now() - started < 8_000, `took ${Date.now() - started} ms\n${context}`);
+});
+
+// A server that never answers "initialize" must not hold up the first prompt past Pi's own startup
+// bound (createMcpExtension's startupWaitMs, 10 s by default; MMP passes none). The server's own
+// request timeout is set to 14 s so the process can exit soon after the prompt: Pi's
+// McpServerConnection.close() does not abort a connect still in flight, so the pending "initialize"
+// request keeps the process alive until that timeout (Pi's default is 60 s; same in plain Pi).
+// Before the fix the prompt waited for the 14 s timeout and reported "failed ... timed out" instead.
+test("print mode: a server that never answers initialize is reported as still connecting and does not hold up the prompt", (t) => {
+  const { args: fixtureArgs, marker } = fixtureServerArgs();
+  const result = runNonTuiMcp(t, "print", {
+    mcpServers: {
+      hung: { command: process.execPath, args: fixtureArgs, env: { MMP_FIXTURE_HANG_INITIALIZE: "1" }, timeout: 14 },
+    },
+  });
+  const context = `marker=${marker}\nstatus=${result.status} signal=${result.signal}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+  assert.equal(result.status, 0, context);
+  assert.equal(result.stdout, "ECHO:hi\n", context);
+  assert.equal(
+    result.stderr,
+    "mcp: hung is still connecting; its tools become available once connected\n",
+    context,
+  );
+  const leftover = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" });
+  assert.equal(leftover.stdout.trim(), "", `hung fixture server still running after exit\n${context}`);
+});
 
 // ── Offline end-to-end: real stdio fixture server, codemode + direct calls, cleanup ────────────
 

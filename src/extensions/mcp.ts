@@ -87,27 +87,36 @@ function emptyStateMessage(mmpHome: string): string {
   );
 }
 
+type McpArgumentCompletions = NonNullable<RegisteredCommand["getArgumentCompletions"]>;
+
 /**
- * Pulls only the problem lines (a failed connection or a pending sign-in) out of Pi's own `/mcp`
- * status text (`extensions/mcp/index.js`'s `formatStatus()`): one line per server, e.g.
- * `broken: failed (codemode)` followed by an indented error-detail continuation line, or
- * `github: needs sign-in, run /mcp login github (direct)`. A healthy server's line (`fixture:
- * connected, 2 tools (codemode)`) is dropped, so a working config never produces a false alarm.
- * Config errors (`config error: ...`) are dropped too: those already surface eagerly, before Pi
- * ever starts (`buildInlineExtensions` throwing `MmpConfigError`, docs/mcp-design.md §2) -- this
- * is only for a syntactically valid entry that failed to connect or needs auth at runtime.
+ * One stderr line per enabled MCP server that needs attention, read from Pi's own per-server state
+ * without waiting for anything. The state comes from the "/mcp" command's own completions for
+ * `reconnect ` (`extensions/mcp/index.js`): one item per server that has a connection, labelled with
+ * its name and described by Pi's private `describeState()` -- `failed: <first error line>`,
+ * `needs sign-in`, `connecting…`, `connected · N tools`. Healthy servers produce nothing (no false
+ * alarm). A server still connecting -- or one without a connection yet because Pi's MCP runtime has
+ * not even loaded -- gets a "still connecting" line. Config errors are not reported here: those
+ * already fail eagerly before Pi starts (`buildInlineExtensions` throwing `MmpConfigError`,
+ * docs/mcp-design.md §2).
  */
-function extractMcpProblemLines(statusText: string): string[] {
-  const kept: string[] = [];
-  let keepingContinuation = false;
-  for (const line of statusText.split("\n")) {
-    const isContinuation = /^\s/.test(line);
-    if (!isContinuation) {
-      keepingContinuation = /: failed\b/.test(line) || / needs sign-in\b/.test(line);
+async function mcpProblemLines(
+  completions: McpArgumentCompletions,
+  enabledServerNames: string[],
+): Promise<string[]> {
+  const states = new Map(
+    ((await completions("reconnect ")) ?? []).map((item) => [item.label, item.description ?? ""]),
+  );
+  const lines: string[] = [];
+  for (const name of new Set([...enabledServerNames, ...states.keys()])) {
+    const state = states.get(name);
+    if (state === undefined || state.startsWith("connecting")) {
+      lines.push(`mcp: ${name} is still connecting; its tools become available once connected`);
+    } else if (state.startsWith("failed") || state.startsWith("needs sign-in")) {
+      lines.push(`${name}: ${state}`);
     }
-    if (keepingContinuation) kept.push(line);
   }
-  return kept;
+  return lines;
 }
 
 const DUPLICATE_MCP_COMMAND_MESSAGE =
@@ -152,12 +161,12 @@ export function createMmpMcpExtension(source: McpConfigSource): InlineExtension 
   return {
     name: "mmp:mcp",
     factory: async (pi: ExtensionAPI) => {
-      // F3 (Fable milestone review, hard rule 3): captured so session_start below can call Pi's
-      // own "/mcp" handler itself, in non-TUI modes, to surface a connection failure or a pending
-      // sign-in that Pi's own async reportProblems() -> ctx.ui.notify would otherwise drop silently
+      // F3 (Fable milestone review, hard rule 3): captured so before_agent_start below can read
+      // each server's state, in non-TUI modes, to surface a connection failure, a pending sign-in,
+      // or a server still connecting that Pi's own ctx.ui.notify would otherwise drop silently
       // (verified empirically: ctx.ui.notify is a no-op in print/json mode -- modes/print-mode.js's
       // bindExtensions passes no uiContext).
-      let piMcpHandler: RegisteredCommand["handler"] | undefined;
+      let piMcpCompletions: McpArgumentCompletions | undefined;
 
       const wrappedPi = new Proxy(pi, {
         get(target, prop, _receiver) {
@@ -169,7 +178,7 @@ export function createMmpMcpExtension(source: McpConfigSource): InlineExtension 
               if (name !== "mcp") {
                 return target.registerCommand(name, commandOptions);
               }
-              piMcpHandler = commandOptions.handler;
+              piMcpCompletions = commandOptions.getArgumentCompletions;
               return target.registerCommand(name, {
                 ...commandOptions,
                 handler: async (args, ctx) => {
@@ -219,31 +228,31 @@ export function createMmpMcpExtension(source: McpConfigSource): InlineExtension 
 
       // F3: in the TUI, a connection failure or pending sign-in is already visible (Pi's own
       // reportProblems() reaches a real ctx.ui.notify there, and /mcp's panel shows it too). In
-      // print and json mode there is no equivalent, so MMP calls Pi's own "/mcp" handler itself --
-      // the simplest correct fix: it already does `await pending` (waiting for every enabled
-      // server's connection attempt to settle) before formatting each server's status, so this
-      // reuses Pi's own connection-state machine and text instead of re-implementing either. Only
-      // the problem lines (a failed connection or a pending sign-in -- never a healthy server, and
-      // never a config error, which already fails eagerly before Pi starts, docs/mcp-design.md §2)
-      // are written to stderr; stdout is never touched, since -p and --mode json consumers read it.
-      pi.on("session_start", async (_event, ctx) => {
-        if (ctx.mode === "tui" || piMcpHandler === undefined) return;
-        const statusTexts: string[] = [];
-        // Calling with empty args only ever reaches the "/mcp" handler's `action === undefined`
-        // branch (extensions/mcp/index.js), which uses nothing beyond ExtensionContext (`mode`,
-        // `ui.notify`) -- so a real ExtensionCommandContext (with newSession/fork/etc.) is never
-        // needed here, and this session_start event only hands us an ExtensionContext to begin
-        // with. The cast documents that gap rather than silently widening the type.
-        const stderrCtx = {
-          ...ctx,
-          ui: { ...ctx.ui, notify: (message: string) => statusTexts.push(message) },
-        } as unknown as Parameters<NonNullable<typeof piMcpHandler>>[1];
-        await piMcpHandler("", stderrCtx);
-        for (const statusText of statusTexts) {
-          const problemLines = extractMcpProblemLines(statusText);
-          if (problemLines.length > 0) {
-            process.stderr.write(`${problemLines.join("\n")}\n`);
-          }
+      // print and json mode ctx.ui.notify is a no-op, so MMP writes the problem servers to stderr
+      // itself; stdout is never touched, since -p and --mode json consumers read it.
+      //
+      // When: at the first before_agent_start of a session, *after* Pi's own handler for the same
+      // event. Pi's handler (registered inside piFactory above, so it runs first: the runner awaits
+      // one extension's handlers in registration order) waits for the startup connections, bounded
+      // by createMcpExtension's startupWaitMs (Pi's default, 10 s, since MMP passes none). So by
+      // the time this runs, every server has either settled or is still connecting past Pi's bound,
+      // and reading the state is instant -- MMP adds no wait of its own. Doing the check at
+      // session_start instead would wait before the prompt starts, and then Pi's own timer would
+      // start from zero on top of that, doubling the bound for a hung server. Nothing is left
+      // running after this handler returns, so a server that settles later cannot print anything.
+      let reportedThisSession = false;
+      pi.on("session_start", () => {
+        reportedThisSession = false;
+      });
+      pi.on("before_agent_start", async (_event, ctx) => {
+        if (ctx.mode === "tui" || reportedThisSession || piMcpCompletions === undefined) return;
+        reportedThisSession = true;
+        const configured = loadConfig(ctx).servers.filter((entry) => entry.config.enabled !== false);
+        const registered = pi.getMcpServers().filter((server) => server.config.enabled !== false);
+        const enabledServerNames = [...configured, ...registered].map((server) => server.name);
+        const lines = await mcpProblemLines(piMcpCompletions, enabledServerNames);
+        if (lines.length > 0) {
+          process.stderr.write(`${lines.join("\n")}\n`);
         }
       });
     },

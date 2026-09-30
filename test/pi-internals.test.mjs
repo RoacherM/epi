@@ -286,21 +286,47 @@ const registry = [
     },
   },
   {
-    id: "mcp-status-text-problem-lines",
+    id: "mcp-reconnect-completion-states",
+    check() {
+      const indexPath = join(piDist, "extensions", "mcp", "index.js");
+      const indexText = readFileSync(indexPath, "utf8");
+      const why = "mcpProblemLines (src/extensions/mcp.ts) reads each server's state from these completions";
+      assert.match(
+        indexText,
+        /label: candidate\.entry\.name,\s*description: describeState\(candidate\)/,
+        `${indexPath}'s "/mcp" completions no longer label items with the server name and describe them with describeState() -- ${why}`,
+      );
+      for (const [pattern, state] of [
+        [/return withError \? `failed: \$\{firstLine/, "failed: <first error line>"],
+        [/return "needs sign-in";/, "needs sign-in"],
+        [/return "connecting…";/, "connecting…"],
+      ]) {
+        assert.match(indexText, pattern, `${indexPath}'s describeState() no longer returns "${state}" -- ${why}`);
+      }
+      const runtimePath = join(piDist, "extensions", "mcp", "runtime.js");
+      assert.match(
+        readFileSync(runtimePath, "utf8"),
+        /this\.state = this\.closed \? "closed" : "failed"/,
+        `${runtimePath} no longer sets a failed connection's state to the literal string "failed" -- ${why}`,
+      );
+    },
+  },
+  {
+    id: "mcp-startup-wait-before-agent-start",
     check() {
       const indexPath = join(piDist, "extensions", "mcp", "index.js");
       const indexText = readFileSync(indexPath, "utf8");
       assert.match(
         indexText,
-        /needs sign-in, run \/mcp login/,
-        `${indexPath} no longer phrases a pending sign-in as "needs sign-in, run /mcp login ..." -- extractMcpProblemLines (src/extensions/mcp.ts) would silently stop matching it`,
+        /pi\.on\("before_agent_start", async \(_event, ctx\) => \{\s*const startup = pending;[\s\S]{0,400}setTimeout\(\(\) => resolve\(false\), startupWaitMs\)/,
+        `${indexPath} no longer waits for startup connections in before_agent_start, bounded by startupWaitMs -- src/extensions/mcp.ts's problem report would read server states before they had a chance to connect`,
       );
-      const runtimePath = join(piDist, "extensions", "mcp", "runtime.js");
-      const runtimeText = readFileSync(runtimePath, "utf8");
+      const runnerPath = join(piDist, "core", "extensions", "runner.js");
+      const runnerText = readFileSync(runnerPath, "utf8");
       assert.match(
-        runtimeText,
-        /this\.state = this\.closed \? "closed" : "failed"/,
-        `${runtimePath} no longer sets a failed connection's state to the literal string "failed" -- extractMcpProblemLines (src/extensions/mcp.ts) would silently stop matching it`,
+        runnerText,
+        /snapshotEventHandlers\(this\.extensions, "before_agent_start"\)\) \{\s*for \(const handler of handlers\) \{[\s\S]{0,600}await handler\(event, ctx\)/,
+        `${runnerPath}'s emitBeforeAgentStart no longer awaits handlers one after another -- MMP's handler might run before Pi's startup wait is over`,
       );
     },
   },

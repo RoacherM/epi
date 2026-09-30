@@ -16,6 +16,9 @@
 // process.env.MMP_FIXTURE_MARKER, if set, is touched once at startup, before the first stdin byte
 // is even read -- ambient-isolation tests use this to prove the process was never spawned at all
 // (not merely that its tools didn't reach the model).
+//
+// process.env.MMP_FIXTURE_HANG_INITIALIZE=1 makes the server read "initialize" and never answer it:
+// a server stuck connecting, for the test that the first prompt does not wait past Pi's startup bound.
 
 import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -86,6 +89,7 @@ rl.on("line", (line) => {
 
   switch (message.method) {
     case "initialize":
+      if (process.env.MMP_FIXTURE_HANG_INITIALIZE === "1") break;
       respond(message.id, {
         // Echo back whatever the client asked for: it always checks its own answer against its own
         // supported-version list, so this never needs to track Pi's protocol version literal.
