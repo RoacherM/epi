@@ -21,7 +21,8 @@ export declare function piProviderLoginHelp(): string;
 /**
  * Dogfood D55: swaps Pi's login guidance for MMP's in text on its way to the user (a TUI notice or
  * error line, Pi's stderr, and Pi's JSON lines on stdout, where it arrives JSON-escaped). The error
- * before it ("No API key found for ...") is kept as it is.
+ * before it ("No API key found for ...") is kept as it is. Plain or colored line by line by chalk
+ * (D57); MMP's guidance is one line, so the codes inside Pi's go with it.
  */
 export declare function rewritePiText(text: string): string;
 /**

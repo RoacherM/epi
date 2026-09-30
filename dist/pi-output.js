@@ -27,18 +27,23 @@ export function piProviderLoginHelp() {
         `  ${join(getDocsPath(), "models.md")}`,
     ].join("\n");
 }
+/** SGR codes around a line break: chalk closes and reopens its color at every newline, so Pi's
+ * `chalk.red(formatNoModelsAvailableMessage())` on a color terminal splits the guidance there. */
+const SGR_LINE_BREAK = String.raw `(?:\x1b\[[\d;]*m)*\r?\n(?:\x1b\[[\d;]*m)*`;
 /**
  * Dogfood D55: swaps Pi's login guidance for MMP's in text on its way to the user (a TUI notice or
  * error line, Pi's stderr, and Pi's JSON lines on stdout, where it arrives JSON-escaped). The error
- * before it ("No API key found for ...") is kept as it is.
+ * before it ("No API key found for ...") is kept as it is. Plain or colored line by line by chalk
+ * (D57); MMP's guidance is one line, so the codes inside Pi's go with it.
  */
 export function rewritePiText(text) {
     if (!text.includes("Use /login to log into a provider"))
         return text;
     const pi = piProviderLoginHelp();
     const piJson = JSON.stringify(pi).slice(1, -1);
+    const piLines = new RegExp(pi.split("\n").map((line) => line.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(SGR_LINE_BREAK), "g");
     return text
-        .replaceAll(pi, PROVIDER_LOGIN_HELP)
+        .replace(piLines, () => PROVIDER_LOGIN_HELP)
         .replaceAll(piJson, JSON.stringify(PROVIDER_LOGIN_HELP).slice(1, -1));
 }
 function rewriteStream(stream, rewrite) {

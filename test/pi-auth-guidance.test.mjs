@@ -5,12 +5,17 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
+import { initTheme } from "@earendil-works/pi-coding-agent";
+
 import { PROVIDER_LOGIN_HELP, piProviderLoginHelp, rewritePiText } from "../dist/pi-output.js";
+import { AssistantBlock } from "../dist/tui/assistant-block.js";
+import { createMmpTheme } from "../dist/tui/theme.js";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
@@ -54,6 +59,34 @@ test("rewritePiText replaces Pi's guidance in each of Pi's own messages, raw and
     assert.equal(rewritePiText(line), `${JSON.stringify({ type: "response", success: false, error: mmp })}\n`);
   }
   assert.equal(rewritePiText("unrelated text"), "unrelated text");
+});
+
+test("rewritePiText replaces Pi's guidance colored line by line by chalk, as main.js writes it on a color terminal (D57)", async () => {
+  const guidance = await import(pathToFileURL(join(piEntry, "..", "core", "auth-guidance.js")).href);
+  // Pi's own chalk: it closes and reopens the color around every newline.
+  const { Chalk } = await import(pathToFileURL(createRequire(piEntry).resolve("chalk")).href);
+  const red = new Chalk({ level: 1 }).red;
+  const colored = red(guidance.formatNoModelsAvailableMessage());
+  assert.match(colored, /See:\x1b\[39m\n\x1b\[31m  /, "chalk no longer splits colors at newlines; this test no longer covers the split form");
+  assert.equal(rewritePiText(`${colored}\n`), `${red(`No models available. ${PROVIDER_LOGIN_HELP}`)}\n`);
+  const selected = red(guidance.formatNoModelSelectedMessage());
+  assert.equal(rewritePiText(selected), red(`No model selected.\n\n${PROVIDER_LOGIN_HELP}\n\nThen use /model to select a model.`));
+});
+
+test("a failed reply's error line in the TUI shows MMP's guidance, not Pi's docs (D57)", async () => {
+  const guidance = await import(pathToFileURL(join(piEntry, "..", "core", "auth-guidance.js")).href);
+  initTheme("dark");
+  const message = {
+    role: "assistant", content: [], timestamp: Date.now(), usage: {},
+    stopReason: "error", errorMessage: guidance.formatNoApiKeyFoundMessage("anthropic"),
+  };
+  // Wide enough that neither guidance wraps.
+  const lines = new AssistantBlock(createMmpTheme("dark"), message, [], false).render(400)
+    .map((line) => line.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "").replace(/\x1b\[[0-9;]*m/g, "").trim());
+  const context = lines.join("\n");
+  assert.ok(lines.some((line) => line.startsWith("Error: No API key found for anthropic.")), context);
+  assert.ok(lines.includes(PROVIDER_LOGIN_HELP), context);
+  assertNoPiGuidance(context, context);
 });
 
 for (const args of [["-p", "hi"], ["--mode", "json", "hi"]]) {
