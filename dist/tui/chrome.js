@@ -2,6 +2,7 @@
 // turn status row, framed prompt, shortcuts bar. Pure render functions of the state they are given.
 import { homedir } from "node:os";
 import { basename, sep } from "node:path";
+import { imageLabelNumbers } from "./paste-chips.js";
 import { piTui } from "./pi-tui.js";
 const { truncateToWidth, visibleWidth } = piTui;
 /** Shared with assistant-block.ts (the assistant-message timestamp reuses this row layout). */
@@ -56,26 +57,51 @@ export function headerBar(theme, state) {
     });
 }
 // ── user message block ────────────────────────────────────────────────────────
+// The notes Pi appends to a prompt's text after the user's own words when it resizes or converts an
+// image (utils/image-resize.js's formatDimensionNote, utils/image-process.js's conversionHint;
+// docs/pi-internals.md `image-hint-wording`). The model still gets them; the transcript hides them
+// (D9). `[Image omitted: ...]` failure notes are not listed here on purpose: failures stay visible.
+const IMAGE_HINT_LINE = /^\[(?:Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+(?:\.\d+)? to map to original image\.|Image converted from [^\s\]]+ to [^\s\]]+\.)\]$/;
+const IMAGE_OMITTED_LINE = /^\[Image omitted: [^\]]*\]$/;
+/** Drops Pi's resize/convert notes from the block of note lines at the end of `text` (Pi appends
+ * them per image, in order, after a blank line); `[Image omitted: ...]` lines in that block stay. */
+export function withoutImageHints(text) {
+    const lines = text.trimEnd().split("\n");
+    let start = lines.length;
+    while (start > 0 && (IMAGE_HINT_LINE.test(lines[start - 1] ?? "") || IMAGE_OMITTED_LINE.test(lines[start - 1] ?? "")))
+        start -= 1;
+    const tail = lines.slice(start);
+    if (!tail.some((line) => IMAGE_HINT_LINE.test(line)))
+        return text;
+    return [...lines.slice(0, start), ...tail.filter((line) => !IMAGE_HINT_LINE.test(line))].join("\n").trimEnd();
+}
 const FILE_BLOCK_RE = /<file name="([^"]*)">[\s\S]*?<\/file>\n?/g;
-/** A user message's own display text: `<file name="...">...</file>` blocks (file-arguments.ts's
- * `@file` inlining) collapse to `[File: name]`, and image content parts (never inlined as text)
- * show as `[Image #N]` -- the model still gets the full `content` array unchanged; this only
- * affects what's drawn in the transcript (item 5, docs/tui-design.md 4.3's 发送 row). */
-function displayText(content) {
-    const text = typeof content === "string"
+/** The text parts of a user message's content, joined. */
+export function messageText(content) {
+    return typeof content === "string"
         ? content
         : Array.isArray(content)
             ? content.filter((part) => part?.type === "text").map((part) => part.text).join("")
             : "";
+}
+/** A user message's own display text: `<file name="...">...</file>` blocks (file-arguments.ts's
+ * `@file` inlining) collapse to `[File: name]` and Pi's image notes are hidden (D9); this only
+ * affects what's drawn in the transcript (item 5, docs/tui-design.md 4.3's 发送 row). An image
+ * sent from the editor already has its `[Image #N]` label in the text, which the model sees too
+ * (D11). Image parts beyond the text's labels (an extension's `sendUserMessage`, the `@pic.png`
+ * startup message, sessions from before D11) show as `[Image]`, unnumbered. */
+function displayText(content) {
+    const text = messageText(content);
     const imageCount = Array.isArray(content) ? content.filter((part) => part?.type === "image").length : 0;
-    const withFileChips = text.replace(FILE_BLOCK_RE, (_match, name) => `[File: ${basename(name)}]\n`).trim();
-    const images = Array.from({ length: imageCount }, (_, index) => `[Image #${index + 1}]`).join(" ");
+    const withFileChips = (imageCount > 0 ? withoutImageHints(text) : text).replace(FILE_BLOCK_RE, (_match, name) => `[File: ${basename(name)}]\n`).trim();
+    const unlabelled = Math.max(0, imageCount - imageLabelNumbers(withFileChips).length);
+    const images = Array.from({ length: unlabelled }, () => "[Image]").join(" ");
     return [withFileChips, images].filter((part) => part !== "").join("\n");
 }
 const COLLAPSED_LINES = 3;
-/** A line holding nothing but `[Image #N]` / `[File: name]` chips (what displayText() emits for
- * attachments and `@file` blocks). */
-const CHIP_ONLY_LINE = /^\s*(?:\[(?:Image #\d+|File: [^\]\n]*)\]\s*)+$/;
+/** A line holding nothing but `[Image #N]` / `[Image]` / `[File: name]` chips (image labels and
+ * what displayText() emits for unlabelled images and `@file` blocks). */
+const CHIP_ONLY_LINE = /^\s*(?:\[(?:Image(?: #\d+)?|File: [^\]\n]*)\]\s*)+$/;
 /** Cuts the text after its `COLLAPSED_LINES`-th logical line and appends `…`. Chip-only lines don't
  * count toward the limit: three `@file` arguments plus a one-line question must still show the
  * question. */

@@ -10,7 +10,7 @@ import { errorText } from "./errors.js";
 import { createExtensionUIContext } from "./ext-host.js";
 import { installKeybindings } from "./keybindings.js";
 import { createKeyActions } from "./keys.js";
-import { ChipEditor } from "./paste-chips.js";
+import { ChipEditor, unattachedImageLabels } from "./paste-chips.js";
 import { pastePreview } from "./paste-preview.js";
 import { piTui } from "./pi-tui.js";
 import { crossProjectRefusal } from "./project-guard.js";
@@ -97,7 +97,7 @@ export async function runTuiApp(options) {
     const editor = new ChipEditor(tui, {
         borderColor: (text) => theme.fg("border", text),
         selectList: getSelectListTheme(),
-    }, { getCwd: () => session.sessionManager.getCwd() });
+    }, { getCwd: () => session.sessionManager.getCwd(), getHighestImageNumber: () => transcript.highestImageNumber });
     const prompt = new PromptFrame(theme, editor, () => {
         const model = session.model;
         const hasModel = model !== undefined && runtime.services.modelRuntime.getAvailableSnapshot().length > 0;
@@ -286,6 +286,7 @@ export async function runTuiApp(options) {
         addBlock: (component) => transcript.addBlock(component),
         getEditorText: () => editor.getText(),
         setEditorText: (text) => surface.setEditorText(text),
+        restoreEditorDraft: (text, images) => surface.setEditorText(editor.restoreDraftImages(text, images)),
         getExpandedEditorText: () => editor.getExpandedText(),
         getEditorImages: () => editor.getImageAttachments(),
         insertEditorText: (text) => {
@@ -302,6 +303,7 @@ export async function runTuiApp(options) {
         },
         addToHistory: (text) => editor.addToHistory(text),
         submit: (text, images) => submit(text, images),
+        steer: (text, images) => steer(text, images),
         restoreQueuedMessagesToEditor: () => restoreQueuedMessagesToEditor(),
         isWorking: () => turn !== undefined,
         clearTurnStatus: () => {
@@ -760,12 +762,7 @@ export async function runTuiApp(options) {
         const queued = [...steering, ...followUp];
         if (queued.length === 0)
             return 0;
-        const queuedText = queued
-            .map((message) => [
-            message.text,
-            ...message.images.map((image) => editor.registerImage(Buffer.from(image.data, "base64"), image.mimeType)),
-        ].filter((part) => part !== "").join(" "))
-            .join("\n\n");
+        const queuedText = queued.map((message) => editor.restoreDraftImages(message.text, message.images)).join("\n\n");
         const current = editor.getText();
         editor.setText([queuedText, current].filter((text) => text.trim() !== "").join("\n\n"));
         tui.requestRender();
@@ -826,12 +823,12 @@ export async function runTuiApp(options) {
             return;
         if (!ready) {
             // Mirrors Pi's handleStartupSubmit.
-            editor.setText(text);
+            editor.setText(editor.restoreDraftImages(text, images));
             transcript.notice("Startup is still in progress; try again in a moment.");
             return;
         }
         editor.addToHistory(text);
-        editor.setText("");
+        editor.clearDraft();
         const [, command, commandArgs = ""] = /^\/(\S+)\s*([\s\S]*)$/.exec(trimmed) ?? [];
         const builtin = command === undefined ? undefined : findBuiltin(command);
         if (builtin?.kind === "run") {
@@ -848,7 +845,7 @@ export async function runTuiApp(options) {
             session.extensionRunner.getRegisteredCommands().some((registered) => registered.invocationName === command);
         if (builtin !== undefined && !isExtensionCommand) {
             transcript.notice(builtin.message, "warning");
-            editor.setText(text);
+            editor.setText(editor.restoreDraftImages(text, images));
             return;
         }
         if (await runUserBash(commandHost, trimmed))
@@ -867,20 +864,46 @@ export async function runTuiApp(options) {
                 }
                 return;
             }
+            transcript.noteImageLabels(text);
+            warnUnattachedImages(text, images);
             compactionQueue.push({ text, images, mode: "followUp" });
             transcript.notice("Queued message for after compaction.");
             tui.requestRender();
             return;
         }
+        transcript.noteImageLabels(text);
+        if (!isExtensionCommand)
+            warnUnattachedImages(text, images);
         try {
             await session.prompt(text, { images, ...(session.isStreaming ? { streamingBehavior: "followUp" } : {}) });
         }
         catch (error) {
-            // No model, no auth: say why and keep the text.
+            // No model, no auth: say why and keep the text, with its images.
             transcript.notice(errorText(error), "error");
             if (editor.getText() === "")
-                editor.setText(text);
+                editor.setText(editor.restoreDraftImages(text, images));
         }
+    }
+    /** Alt+Enter while streaming: into the running turn. */
+    async function steer(text, images) {
+        editor.clearDraft();
+        transcript.noteImageLabels(text);
+        warnUnattachedImages(text, images);
+        try {
+            await session.prompt(text, { images, streamingBehavior: "steer" });
+        }
+        catch (error) {
+            transcript.notice(errorText(error), "error");
+            if (editor.getText() === "")
+                editor.setText(editor.restoreDraftImages(text, images));
+        }
+    }
+    /** A label with no image behind it (typed, or restored from history without its data) goes to
+     * the model as text only; say so rather than let it pass for an attachment. */
+    function warnUnattachedImages(text, images) {
+        const labels = unattachedImageLabels(text, images).map((id) => `[Image #${id}]`);
+        if (labels.length > 0)
+            transcript.notice(`No image attached for ${labels.join(", ")}; sent as text.`, "warning");
     }
     editor.onSubmitImages = (text, images) => void submit(text, images);
     // Pi binds these on the editor itself (defaultEditor.onAction/onEscape/onCtrlD), so they only

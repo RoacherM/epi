@@ -19,6 +19,11 @@ export interface HeaderState {
     contextWindow: number | undefined;
 }
 export declare function headerBar(theme: Theme, state: () => HeaderState): Component;
+/** Drops Pi's resize/convert notes from the block of note lines at the end of `text` (Pi appends
+ * them per image, in order, after a blank line); `[Image omitted: ...]` lines in that block stay. */
+export declare function withoutImageHints(text: string): string;
+/** The text parts of a user message's content, joined. */
+export declare function messageText(content: unknown): string;
 /** Full-width `userMessageBg` block with one row of padding, `❯ text` and the time on the right.
  * Collapses past `COLLAPSED_LINES` *logical* lines (not wrapped rows) to `…` -- observed in grok
  * 1.0.44 (docs/tui-design.md 4.2/4.3): a sent 12-line paste renders as its first 3 lines then `…`.

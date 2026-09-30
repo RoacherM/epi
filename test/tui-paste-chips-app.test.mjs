@@ -328,11 +328,11 @@ test("Ctrl+V with an image on the clipboard (via the test seam) becomes an [Imag
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
   const { marks } = runApp(t, [fixture("faux-echo-images.mjs")], [
     ["waitReady"], ["key", "ctrl+v"], ["waitFor", "Image #1 ─ PNG · 1x1 · 0.1 KB"], ["mark", "afterPaste"],
-    ["key", "enter"], ["waitFor", "ECHO:|IMAGES:image/png"], ["mark", "sent"], ["key", "ctrl+d"],
+    ["key", "enter"], ["waitFor", "ECHO:[Image #1]|IMAGES:image/png"], ["mark", "sent"], ["key", "ctrl+d"],
   ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterPaste, /\[Image #1\]/);
   assert.match(marks.afterPaste, /Image #1 ─ PNG · 1x1 · 0\.1 KB/);
-  assert.match(marks.sent, /ECHO:\|IMAGES:image\/png/);
+  assert.match(marks.sent, /ECHO:\[Image #1\]\|IMAGES:image\/png/);
 });
 
 test("an @image argument is attached as an image to the initial message", (t) => {

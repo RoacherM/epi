@@ -3,7 +3,15 @@
 // (interactive-mode.js) built from the components Pi exports.
 import { ExtensionEditorComponent, ExtensionSelectorComponent, TreeSelectorComponent, UserMessageSelectorComponent, } from "@earendil-works/pi-coding-agent";
 import { errorText } from "./errors.js";
+import { labelStoredImages } from "./paste-chips.js";
 import { piTui } from "./pi-tui.js";
+/** The image parts of a user (or custom) message entry, read before /fork or /tree switches away
+ * from it, so the text Pi puts back in the editor gets its images too. */
+function entryImages(host, entryId) {
+    const entry = host.session().sessionManager.getEntry(entryId);
+    const content = entry?.type === "message" && entry.message.role === "user" ? entry.message.content : entry?.type === "custom_message" ? entry.content : undefined;
+    return Array.isArray(content) ? content.filter((part) => part?.type === "image") : [];
+}
 /** `/fork`: pick a previous user message, then `runtime.fork(entryId)`. Like Pi, the original
  * text is put back in the editor so the user can edit it before resending down the new branch. */
 export async function runFork(host) {
@@ -17,10 +25,12 @@ export async function runFork(host) {
         let restore = () => { };
         const selector = new UserMessageSelectorComponent(userMessages.map((message) => ({ id: message.entryId, text: message.text })), (entryId) => {
             restore();
+            const images = entryImages(host, entryId);
             void host.runtime.fork(entryId).then((result) => {
                 if (result.cancelled)
                     return;
-                host.setEditorText(result.selectedText ?? "");
+                const text = result.selectedText ?? "";
+                host.restoreEditorDraft(text, labelStoredImages(text, images));
                 host.notice("Forked to new session.");
             }, (error) => host.notice(`Fork failed: ${errorText(error)}`, "error")).finally(resolve);
         }, () => {
@@ -143,6 +153,7 @@ async function navigateTo(host, entryId) {
     if (choice.summarize)
         host.notice("Summarizing branch…");
     try {
+        const images = entryImages(host, entryId);
         const result = await session.navigateTree(entryId, {
             summarize: choice.summarize,
             ...(choice.customInstructions === undefined ? {} : { customInstructions: choice.customInstructions }),
@@ -158,7 +169,7 @@ async function navigateTo(host, entryId) {
         }
         host.resetTranscript();
         if (result.editorText !== undefined && host.getEditorText().trim() === "") {
-            host.setEditorText(result.editorText);
+            host.restoreEditorDraft(result.editorText, labelStoredImages(result.editorText, images));
         }
         host.notice("Navigated to selected point.");
     }

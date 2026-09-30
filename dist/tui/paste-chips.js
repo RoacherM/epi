@@ -21,7 +21,9 @@
 // exactly one entry per text-chip label, in document order, and a non-null entry's content was
 // pasted under that very label -- so no label ever resolves to another chip's content.
 // `[Image #N]` labels carry their id; image data stays in `imageChips` until the draft is sent,
-// and ids are never reused, so a label deleted and brought back by undo resolves to its own image.
+// and ids are never reused within a draft (a new id is above every id the draft has seen), so a
+// label deleted and brought back by undo resolves to its own image. A label whose id has no data
+// (typed, or recalled from history) is not a chip: drawn unattached, edited as plain text.
 //
 // How `slots` follows edits:
 // - Undo and history. pi-tui's `pushUndoSnapshot()` structuredClones `Editor.state` onto its undo
@@ -61,6 +63,44 @@ const IMAGE_CHIP_SOURCE = String.raw `\[Image #(\d+)\]`;
 const CHIP_REGEX_G = new RegExp(`${TEXT_CHIP_SOURCE}|${IMAGE_CHIP_SOURCE}`, "g");
 const TEXT_CHIP_REGEX_G = new RegExp(TEXT_CHIP_SOURCE, "g");
 const IMAGE_CHIP_SINGLE = new RegExp(`^${IMAGE_CHIP_SOURCE}$`);
+/** Every `[Image #N]` label in a text; group 1 is N. For `replace`/`matchAll` only (it's global). */
+export const IMAGE_LABEL_G = new RegExp(IMAGE_CHIP_SOURCE, "g");
+/** The numbers of the `[Image #N]` labels in `text`, in order. */
+export function imageLabelNumbers(text) {
+    return [...text.matchAll(IMAGE_LABEL_G)].map((match) => Number(match[1]));
+}
+// The label each image was sent under (set when a draft is resolved for sending). The tag rides on
+// the image object itself, which Pi hands through its steering/follow-up queue unchanged, so a
+// restored draft gets each image back under its own label, whatever else the text holds.
+const sentLabels = new WeakMap();
+/** The `[Image #N]` number `image` was sent under, if it came from the editor. */
+export function sentImageLabel(image) {
+    return sentLabels.get(image);
+}
+/** Images from a stored user message (/fork, /tree), tagged with the labels they were sent under,
+ * or none when that can't be known. The editor takes an image out of the text only for a label
+ * that had data, in order, and Pi keeps that order; so when the text has exactly as many labels
+ * as the message has images, no label went out without data and no image was dropped, and the
+ * i-th label is the i-th image's own. Otherwise (a label typed without an image, an image Pi
+ * omitted) the pairing is unknown and the labels stay without data. */
+export function labelStoredImages(text, images) {
+    if (images.every((image) => sentLabels.has(image)))
+        return [...images];
+    const labels = imageLabelNumbers(text);
+    if (labels.length !== images.length)
+        return [];
+    images.forEach((image, index) => sentLabels.set(image, labels[index]));
+    return [...images];
+}
+/** The labels in `text` that none of `images` was sent under: they go out as text only. */
+export function unattachedImageLabels(text, images) {
+    const attached = new Set(images.map((image) => sentLabels.get(image)));
+    return [...new Set(imageLabelNumbers(text))].filter((id) => !attached.has(id));
+}
+// A label with no image data behind it is drawn dim and struck through, so it never looks like an
+// attached image (it isn't a chip either: no preview, not deleted as a unit).
+const UNATTACHED_ON = "\x1b[2;9m";
+const UNATTACHED_OFF = "\x1b[22;29m";
 const LEFT_ARROW = "\x1b[D";
 const RIGHT_ARROW = "\x1b[C";
 const BACKSPACE = "\x7f";
@@ -153,11 +193,12 @@ function alignEdit(before, beforeCursor, after, afterCursor) {
 export class ChipEditor {
     inner;
     getCwd;
+    getHighestImageNumber;
+    lastImageId = 0;
     /** Content of every text chip pasted into this draft, by content id; see the module comment. */
     textContents = new Map();
     textContentCounter = 0;
     imageChips = new Map();
-    imageCounter = 0;
     /** The text, caret offset and slots as of the last `sync()`. */
     synced = { text: "", cursor: 0, slots: [] };
     /** Cursor position immediately after the most recent paste-created chip, for the "paste again to
@@ -171,6 +212,7 @@ export class ChipEditor {
     onSubmitImages;
     constructor(tui, theme, options) {
         this.getCwd = options.getCwd;
+        this.getHighestImageNumber = options.getHighestImageNumber ?? (() => this.lastImageId);
         this.inner = new piTui.Editor(tui, theme, options);
         this.inner.onChange = (text) => this.onChange?.(text);
         this.inner.onSubmit = (text) => this.deliverSubmit(text);
@@ -189,7 +231,7 @@ export class ChipEditor {
         this.inner.borderColor = value;
     }
     render(width) {
-        return this.inner.render(width);
+        return this.inner.render(width).map((line) => line.replace(IMAGE_LABEL_G, (label, id) => (this.imageChips.has(Number(id)) ? label : `${UNATTACHED_ON}${label}${UNATTACHED_OFF}`)));
     }
     invalidate() {
         this.inner.invalidate();
@@ -214,6 +256,32 @@ export class ChipEditor {
      * session-tree-commands.ts) or the /fork editor-slot restore prepends to the raw, unexpanded text
      * (`getText`, not `getExpandedText`), so every chip already in it survives. Pi's `setText` pushes
      * an undo snapshot, so Ctrl+- after /new or Ctrl+G brings back the old draft with its chips. */
+    /** Empties the editor for a message that was just sent some way other than Enter (Alt+Enter,
+     * a submit from app.ts): like Enter, the new draft starts without the old chips' data. */
+    clearDraft() {
+        this.setText("");
+        this.resetChips();
+    }
+    /** Text that was sent, back into a draft (a prompt that failed, Esc/Alt+Up queue restore, /fork,
+     * /tree): each image comes back under the label it was sent under (`sentImageLabel`), whatever
+     * the position of that label in the text. An image with no label in the text (an extension's
+     * queued message) is added as a new chip at the end. Labels left without an image stay as
+     * text, drawn as unattached. Returns the text to put in the editor. */
+    restoreDraftImages(text, images) {
+        const labels = new Set(imageLabelNumbers(text));
+        const restored = new Map();
+        const extra = [];
+        for (const image of images) {
+            const id = sentLabels.get(image);
+            const bytes = Buffer.from(image.data, "base64");
+            if (id === undefined || !labels.has(id))
+                extra.push(this.registerImage(bytes, image.mimeType));
+            else if (!restored.has(id))
+                restored.set(id, this.registerImage(bytes, image.mimeType, id));
+        }
+        const relabelled = text.replace(IMAGE_LABEL_G, (label, id) => restored.get(Number(id)) ?? label);
+        return [relabelled, ...extra].filter((part) => part !== "").join(" ");
+    }
     setText(text) {
         this.inner.setText(text);
         this.sync();
@@ -231,8 +299,8 @@ export class ChipEditor {
     pasteText(text) {
         this.handlePaste(text);
     }
-    /** Text chips expanded to their full content, image chips stripped out entirely (they're sent
-     * as attachments, not inlined -- docs/tui-design.md 4.3's 发送 row). Non-destructive: safe to
+    /** Text chips expanded to their full content; image chips keep their `[Image #N]` label in the
+     * text and their data goes out as attachments (docs/tui-design.md 4.3's 发送 row, D11). Non-destructive: safe to
      * call more than once before the caller decides what to do with the result (e.g. keys.ts reads
      * this and `getImageAttachments()` separately for Alt+Enter). */
     getExpandedText() {
@@ -242,13 +310,14 @@ export class ChipEditor {
         return this.resolveForSubmit(this.inner.getText(), this.synced.slots).images;
     }
     /** Registers an image's data without inserting anything -- for a caller building the marker into
-     * arbitrary text itself (Esc/Alt+Up queue restore, app.ts's restoreQueuedMessagesToEditor) ahead
-     * of one `setText()` call, rather than at the current cursor. Returns the `[Image #N]` label to
-     * place in that text. */
-    registerImage(bytes, mimeType) {
-        this.imageCounter += 1;
-        const id = this.imageCounter;
+     * arbitrary text itself (restoreDraftImages) ahead of one `setText()` call, rather than at the
+     * current cursor. Returns the `[Image #N]` label to place in that text. `preferredId` (the
+     * number the image was sent under) is used unless the draft holds a different image under it. */
+    registerImage(bytes, mimeType, preferredId) {
         const base64 = Buffer.from(bytes).toString("base64");
+        const usable = preferredId !== undefined && (this.imageChips.get(preferredId) === undefined || this.imageChips.get(preferredId)?.base64 === base64);
+        const id = usable ? preferredId : Math.max(this.getHighestImageNumber(), ...this.imageChips.keys(), ...imageLabelNumbers(this.inner.getText())) + 1;
+        this.lastImageId = id;
         const dimensions = piTui.getImageDimensions(base64, mimeType);
         this.imageChips.set(id, {
             id,
@@ -503,7 +572,7 @@ export class ChipEditor {
         if (prefix + suffix !== text.length || cursor !== prefix)
             return;
         const deletedEnd = before.text.length - suffix;
-        const chips = chipMatches(before.text, CHIP_REGEX_G);
+        const chips = this.atomicChips(before.text);
         const cutAtStart = chips.find((chip) => chip.start < prefix && prefix < chip.end);
         const cutAtEnd = chips.find((chip) => chip.start < deletedEnd && deletedEnd < chip.end);
         if (cutAtStart)
@@ -606,7 +675,15 @@ export class ChipEditor {
      * line, matching `inner.getCursor().col`/`moveCursorToColumn`'s coordinate space. */
     findChip(line, contains) {
         const text = this.inner.getText().split("\n")[line] ?? "";
-        return chipMatches(text, CHIP_REGEX_G).find((match) => contains(match.start, match.end));
+        return this.atomicChips(text).find((match) => contains(match.start, match.end));
+    }
+    /** The chip labels in `text` that act as one unit: every text chip, and image labels that have
+     * data. A label without an image is plain text: the caret can enter it and a delete cuts it. */
+    atomicChips(text) {
+        return chipMatches(text, CHIP_REGEX_G).filter((match) => {
+            const imageId = IMAGE_CHIP_SINGLE.exec(match.text)?.[1];
+            return imageId === undefined || this.imageChips.has(Number(imageId));
+        });
     }
     chipInfo(line, match) {
         const imageId = IMAGE_CHIP_SINGLE.exec(match.text)?.[1];
@@ -636,8 +713,10 @@ export class ChipEditor {
                 const meta = this.imageChips.get(Number(imageId));
                 if (!meta)
                     return match;
-                images.push({ type: "image", data: meta.base64, mimeType: meta.mimeType });
-                return "";
+                const image = { type: "image", data: meta.base64, mimeType: meta.mimeType };
+                sentLabels.set(image, Number(imageId));
+                images.push(image);
+                return match;
             }
             const content = this.textContent(slots[textIndex], match);
             textIndex += 1;

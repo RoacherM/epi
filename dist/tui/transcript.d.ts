@@ -10,6 +10,7 @@ export declare class Transcript {
     private readonly messages;
     private readonly groupedMessages;
     private messageCount;
+    private highestImage;
     private readonly tools;
     private readonly userMessages;
     private readonly assistantBlocks;
@@ -33,6 +34,12 @@ export declare class Transcript {
     constructor(tui: TUI, theme: Theme, session: AgentSession);
     /** New session after /new, /resume, /reload: clear and replay its history. */
     reset(session: AgentSession): void;
+    /** The highest `[Image #N]` label in this session's user messages: those shown, and those
+     * handed to the session but not shown yet (queued, steered, or still on the way). The editor
+     * numbers its next chip above it (D11). */
+    get highestImageNumber(): number;
+    /** A user message's text was shown or handed to the session: its labels are used up. */
+    noteImageLabels(text: string): void;
     /** Ctrl+O (docs/tui-design.md 4.3, item 5): the same toggle that expands tool output also
      * expands a user message collapsed past 3 lines, instead of a second toggle. */
     setToolsExpanded(expanded: boolean): void;

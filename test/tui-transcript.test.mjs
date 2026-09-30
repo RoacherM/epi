@@ -104,7 +104,7 @@ test("a single long line never collapses, even wrapped across many rows on a nar
   assert.doesNotMatch(rendered, /…/);
 });
 
-test("a user message's image content parts show as [Image #N], not silently dropped", () => {
+test("a user message's unlabelled image content parts show as [Image], not silently dropped", () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   transcript.handle({
     type: "message_start",
@@ -120,8 +120,9 @@ test("a user message's image content parts show as [Image #N], not silently drop
   });
   const rendered = transcript.root.render(80).join("\n");
   assert.match(rendered, /describe these/);
-  assert.match(rendered, /\[Image #1\]/);
-  assert.match(rendered, /\[Image #2\]/);
+  // No label in the text (an extension's message, a session from before D11): no invented number.
+  assert.match(rendered, /\[Image\] \[Image\]/);
+  assert.doesNotMatch(rendered, /\[Image #/);
 });
 
 // file-arguments.ts's `<file name="...">...</file>` inlining (an `@file` argument's full content)

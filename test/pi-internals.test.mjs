@@ -271,6 +271,26 @@ const registry = [
     },
   },
   {
+    id: "image-hint-wording",
+    async check() {
+      const { withoutImageHints } = await import(pathToFileURL(join(root, "dist", "tui", "chrome.js")).href);
+      const { formatDimensionNote } = await importDeep("utils", "image-resize.js");
+      assertFunction(formatDimensionNote, "formatDimensionNote");
+      const note = formatDimensionNote({ wasResized: true, originalWidth: 4000, originalHeight: 3000, width: 2000, height: 1500 });
+      assert.equal(typeof note, "string", "formatDimensionNote no longer returns a string for a resized image");
+      assert.equal(withoutImageHints(`hi\n\n${note}`), "hi", `Pi's dimension note wording changed; update IMAGE_HINT_LINE in src/tui/chrome.ts: ${note}`);
+      const process = readFileSync(join(piDist, "utils", "image-process.js"), "utf8");
+      assert.match(process, /`\[Image converted from \$\{from\} to \$\{to\}\.\]`/, "utils/image-process.js's conversionHint wording changed; update IMAGE_HINT_LINE in src/tui/chrome.ts");
+      assert.equal(withoutImageHints("hi\n\n[Image converted from image/bmp to image/png.]"), "hi");
+      assert.equal(
+        withoutImageHints("hi\n\n[Image omitted: could not be resized below the inline image size limit.]"),
+        "hi\n\n[Image omitted: could not be resized below the inline image size limit.]",
+        "failure notes must stay visible",
+      );
+      assert.match(process, /\[Image omitted: /, "utils/image-process.js no longer has [Image omitted: ...] failure notes");
+    },
+  },
+  {
     id: "mcp-native-runtime",
     async check() {
       const runtime = await importDeep("extensions", "mcp", "runtime.js");

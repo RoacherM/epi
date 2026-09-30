@@ -3,7 +3,8 @@
 import { CustomMessageComponent, getMarkdownTheme, } from "@earendil-works/pi-coding-agent";
 import { AssistantBlock } from "./assistant-block.js";
 import { UserBashBlock } from "./bash-block.js";
-import { formatDuration, UserMessageBlock } from "./chrome.js";
+import { formatDuration, messageText, UserMessageBlock } from "./chrome.js";
+import { imageLabelNumbers } from "./paste-chips.js";
 import { piTui } from "./pi-tui.js";
 import { toolBlock } from "./tools/block.js";
 import { asGroupKind, GroupedMessages, ToolEntry } from "./tools/group.js";
@@ -20,6 +21,7 @@ export class Transcript {
     messages = new piTui.Container();
     groupedMessages;
     messageCount = 0;
+    highestImage = 0;
     tools = new Map();
     userMessages = [];
     assistantBlocks = [];
@@ -63,6 +65,7 @@ export class Transcript {
         this.groupedMessages.dispose();
         this.messages.clear();
         this.messageCount = 0;
+        this.highestImage = 0;
         this.tools.clear();
         this.userMessages.length = 0;
         this.assistantBlocks.length = 0;
@@ -76,6 +79,23 @@ export class Transcript {
         for (const message of session.messages) {
             this.addFinishedMessage(message);
         }
+        // After a compaction, session.messages start at the summary; the compacted-away user messages
+        // are still on the branch, and the summary may still name their labels, so those stay used
+        // (D11). Test stand-ins without getBranch have no compaction to account for.
+        for (const entry of session.sessionManager.getBranch?.() ?? []) {
+            if (entry.type === "message" && entry.message.role === "user")
+                this.noteImageLabels(messageText(entry.message.content));
+        }
+    }
+    /** The highest `[Image #N]` label in this session's user messages: those shown, and those
+     * handed to the session but not shown yet (queued, steered, or still on the way). The editor
+     * numbers its next chip above it (D11). */
+    get highestImageNumber() {
+        return this.highestImage;
+    }
+    /** A user message's text was shown or handed to the session: its labels are used up. */
+    noteImageLabels(text) {
+        this.highestImage = Math.max(this.highestImage, ...imageLabelNumbers(text));
     }
     /** Ctrl+O (docs/tui-design.md 4.3, item 5): the same toggle that expands tool output also
      * expands a user message collapsed past 3 lines, instead of a second toggle. */
@@ -254,6 +274,7 @@ export class Transcript {
     addFinishedMessage(message) {
         switch (message.role) {
             case "user": {
+                this.noteImageLabels(messageText(message.content));
                 const block = new UserMessageBlock(this.theme, message.content, new Date(message.timestamp ?? Date.now()));
                 block.setExpanded(this.toolsExpanded);
                 this.userMessages.push(block);
