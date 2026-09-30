@@ -4,6 +4,9 @@ export interface DiscoverSkillRootsOptions {
      * honored instead of the real `os.homedir()` so tests never touch the real user's home. */
     environment: NodeJS.ProcessEnv;
     mmpHome: string;
+    /** MMP's own Pi data dir (`<mmpHome>/pi`) -- a discovered root resolving inside it (e.g. a
+     * project's `.mmp/skills` symlinked to it) is rejected, not silently skipped. */
+    agentDir: string;
     /** The trusted project's root (ProjectManifestState.root), or undefined when there is no
      * trusted project for this run -- the same gate `.mmp/mmp.json` itself uses. */
     trustedProjectRoot: string | undefined;

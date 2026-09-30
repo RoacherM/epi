@@ -94,6 +94,7 @@ export function resolveAssembly(
   const discoveredSkills = discoverSkillRoots({
     environment: options.environment,
     mmpHome: options.mmpHome,
+    agentDir: options.agentDir,
     trustedProjectRoot: project.discovery === "loaded" ? project.state?.root : undefined,
   });
   // Declared groups come first: a discovered root that canonicalizes to the same path as a

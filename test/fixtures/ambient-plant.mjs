@@ -4,7 +4,7 @@
 // list here -- a future Pi adding a new discovery source gets planted automatically, and one that
 // moves the source Pi reads them from fails loudly instead of silently going untested.
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { contextFileCandidateNames, trustRequiringProjectConfigResources } from "./pi-ambient-sources.mjs";
 
@@ -96,6 +96,10 @@ export function plantAmbientWorld({ home, project, marks }) {
   plantContextFiles(join(home, ".mmp", "pi"), "mmp-agent-global");
   plantContextFiles(project, "project-root");
   plantSkill(join(project, ".agents", "skills"), "ambient-skill-project-agents");
+  // Not just the project's own .agents/skills -- one in an ancestor directory above it must stay
+  // forbidden too (MMP never discovers project .agents/skills at any depth, only the three fixed
+  // roots in docs/decisions.md S1).
+  plantSkill(join(dirname(project), ".agents", "skills"), "ambient-skill-ancestor-agents");
 }
 
 export const AMBIENT_MARKER = /AMBIENT-[A-Z]+-[\w-]+|ambient-(?:ext|skill|prompt|theme)-[\w-]+/g;

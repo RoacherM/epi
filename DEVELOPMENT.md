@@ -389,11 +389,13 @@ Extension 自己负责其配置文件的 schema 和 global/project 合并语义�
 
 除 Manifest 声明的 skill 路径外，`resolveAssembly`（`src/assembly.ts` 调用 `src/skill-discovery.ts` 的 `discoverSkillRoots`）还固定发现三个目录，缺失时跳过：
 
-- 全局 `~/.agents/skills`（`HOME` 通过与其它地方一致的方式解析——`environment.HOME`，缺省时才用真实 `os.homedir()`；测试通过 `environment.HOME`/进程 `HOME` 注入临时目录，绝不触碰真实 home）；
+- 全局 `~/.agents/skills`；
 - MMP 自己的全局 `<mmpHome>/skills`；
 - 被信任项目的 `<project.root>/.mmp/skills`——`trustedProjectRoot` 只在 `project.discovery === "loaded"` 时给出，即项目必须先有 `.mmp/mmp.json` 才算 MMP 项目；只有 `.mmp/skills`、没有 `.mmp/mmp.json` 的目录不会被当成项目，其 skills 也不会被发现。
 
-永远不读取 Pi 自己的 skill 位置（`~/.pi/agent/skills`、MMP 的 Pi 数据目录 `<mmpHome>/pi/skills`、项目 `.pi/skills`），也不读取项目 `.agents/skills`（不是用户为 MMP 选定的目录，`test/ambient-isolation.test.mjs`/`test/tui-services.test.mjs` 持续验证这四处保持不可见）。
+`HOME` 通过 `src/paths.ts` 导出的 `resolveHomeDir(environment)` 解析——`environment.HOME` 优先，缺省时才用真实 `os.homedir()`；`resolveMmpPaths` 的 `~/.mmp` 缺省值和 skill 自动发现共用这一个函数，不会出现一个读真实 home、另一个读测试注入的 fake HOME 的不一致。测试通过 `environment.HOME`/进程 `HOME` 注入临时目录，绝不触碰真实 home。
+
+永远不读取 Pi 自己的 skill 位置（`~/.pi/agent/skills`、MMP 的 Pi 数据目录 `<mmpHome>/pi/skills`、项目 `.pi/skills`），也不读取项目 `.agents/skills`（不是用户为 MMP 选定的目录，`test/ambient-isolation.test.mjs`/`test/tui-services.test.mjs` 持续验证这四处保持不可见）。这条规则对 symlink 也生效：`discoverSkillRoots` 对每个候选目录先 `realpathSync`，再检查 canonical 路径是否落在 `agentDir`（`<mmpHome>/pi`）之下、或路径里任何一段字面量等于 `.pi`——命中就 `throw MmpConfigError`（说明声明路径和它实际指向哪里），不会静默跳过。这样一个项目 `.mmp/skills -> <mmpHome>/pi/skills` 的符号链接、或 `~/.agents/skills` 本身是指向 Pi 目录的符号链接，都会让本次运行直接失败，而不是悄悄加载 Pi 的 skills。**范围之外**：某个已发现目录内部单个 skill 文件夹本身是指向 Pi 位置的符号链接（例如 `~/.agents/skills/foo -> ~/.pi/agent/skills/bar`）不做检查——Pi 的 resource loader 会照常跟随这类链接加载它；这是用户往 `~/.agents/skills` 里放什么内容的自主选择，MMP 只保证三个固定根目录本身不指向 Pi。
 
 合并顺序：`mergeUnique([globalManifest.skills, projectSkills, discoveredSkills], ...)`——声明的两组在前，发现的一组在后，按 canonical path 去重时声明的一方保留（其 `source`/`declaredIn` 不变，也没有 `discovered` 字段）。发现到的 skill root 和声明的一样，以显式绝对路径传给 Pi（`mmp:runtime` 的 `resources_discover` handler，`src/extensions/runtime.ts`）。
 

@@ -120,14 +120,30 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Origin + pathname only, from the URL as declared in hooks.json (never the `${ENV}`-expanded
+ * one) -- a failure message must not repeat a secret from a query string, userinfo, or fragment
+ * (e.g. `?token=${API_KEY}` expands to the real key). A placeholder literally inside the path
+ * (`/hook/${TOKEN}`) stays as that literal text, never the expanded value, since this never reads
+ * the expanded `handler.url`. An unparsable URL (should not happen -- resolveHandler already
+ * validated the expanded form) never falls through to printing the raw string. */
+function httpUrlLabel(declaredUrl: string): string {
+  try {
+    const parsed = new URL(declaredUrl);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return "<unparsable URL>";
+  }
+}
+
 /** Names which handler failed, for the wrapped error `run()` throws (naming the hook is the point
- * of "failures must show" -- a bare "hook command could not be started" doesn't say which hook). */
+ * of "failures must show" -- a bare "hook command could not be started" doesn't say which hook).
+ * Never includes headers or a request/response body -- only enough to identify the handler. */
 function handlerLabel(handler: HookHandler): string {
   switch (handler.type) {
     case "command":
       return `command ${handler.command}`;
     case "http":
-      return `http ${handler.method} ${handler.url}`;
+      return `http ${handler.method} ${httpUrlLabel(handler.declaredUrl ?? handler.url)}`;
     case "prompt":
       return `prompt${handler.model === undefined ? "" : ` (${handler.model})`}`;
     case "agent":
@@ -464,13 +480,14 @@ export class HooksRuntime {
       }
       output.push(chunk);
     });
-    // Bounded tail only, for a non-zero exit's error message -- not the decision channel (stdout is).
-    let stderrBytes = 0;
-    const stderrTail: Buffer[] = [];
+    // Bounded TAIL (last MAX_HOOK_ERROR_TAIL_BYTES, not first) for a non-zero exit's error message
+    // -- not the decision channel (stdout is). The real error is usually the last thing a failing
+    // command prints, so keeping only the earliest bytes would drop it behind any earlier output.
+    let stderrTail = Buffer.alloc(0);
     child.stderr.on("data", (chunk: Buffer) => {
-      stderrBytes += chunk.byteLength;
-      if (stderrBytes <= MAX_HOOK_ERROR_TAIL_BYTES) {
-        stderrTail.push(chunk);
+      stderrTail = Buffer.concat([stderrTail, chunk]);
+      if (stderrTail.byteLength > MAX_HOOK_ERROR_TAIL_BYTES) {
+        stderrTail = stderrTail.subarray(stderrTail.byteLength - MAX_HOOK_ERROR_TAIL_BYTES);
       }
     });
     child.once("error", (error) => {
@@ -496,7 +513,7 @@ export class HooksRuntime {
         );
       }
       if (result.code !== 0) {
-        const tail = Buffer.concat(stderrTail).toString("utf8").trim();
+        const tail = stderrTail.toString("utf8").trim();
         throw new Error(
           tail.length > 0
             ? `hook command exited with code ${result.code}: ${handler.command}: ${tail}`

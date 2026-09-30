@@ -23,17 +23,21 @@ function createProjectFixture(t) {
   const nestedCwd = join(projectRoot, "nested");
   const projectMmp = join(projectRoot, ".mmp");
   const mmpHome = join(root, "home");
+  // Isolated HOME (distinct from mmpHome): a real ~/.agents/skills must not affect these runs
+  // (docs/decisions.md S1 auto-discovery reads it regardless of project trust).
+  const realHome = join(root, "realhome");
   mkdirSync(nestedCwd, { recursive: true });
   mkdirSync(projectMmp, { recursive: true });
+  mkdirSync(realHome, { recursive: true });
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  return { root, projectRoot, nestedCwd, projectMmp, mmpHome };
+  return { root, projectRoot, nestedCwd, projectMmp, mmpHome, realHome };
 }
 
 function runDry(fixture, flags = []) {
   return spawnSync(process.execPath, [cliPath.pathname, ...flags, "--dry-run"], {
     cwd: fixture.nestedCwd,
     encoding: "utf8",
-    env: { ...process.env, MMP_HOME: fixture.mmpHome },
+    env: { ...process.env, HOME: fixture.realHome, MMP_HOME: fixture.mmpHome },
   });
 }
 

@@ -518,6 +518,7 @@ export function runListCommand(argv) {
     const discovered = discoverSkillRoots({
         environment: process.env,
         mmpHome: mmpPaths.mmpHome,
+        agentDir: mmpPaths.agentDir,
         trustedProjectRoot,
     });
     lines.push("Discovered skill roots:");

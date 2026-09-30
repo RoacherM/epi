@@ -6,7 +6,7 @@
 // only edit there). Every run here uses a temp HOME/MMP_HOME -- never the real user's home.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -201,4 +201,62 @@ test("/reload picks up a skill created after startup", (t) => {
   assert.doesNotMatch(marks.dropdownBefore, /reload-discovered-skill/);
   assert.match(marks.reloaded.slice(marks.dropdownBefore.length), /Reloaded keybindings, extensions, skills, prompts, themes, and context files\./);
   assert.match(marks.dropdownAfter.slice(marks.reloaded.length), /reload-discovered-skill/);
+});
+
+// Hard rule 1 (AGENTS.md): MMP never reads Pi's own state, even through a symlink one of the
+// three fixed discovery roots happens to be or contain.
+test("a trusted project's .mmp/skills symlinked into MMP's own Pi data dir is rejected, not silently skipped", (t) => {
+  const f = fixture(t);
+  writeGlobalManifest(f);
+  mkdirSync(join(f.project, ".mmp"), { recursive: true });
+  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
+  const agentSkills = join(f.mmpHome, "pi", "skills");
+  mkdirSync(agentSkills, { recursive: true });
+  symlinkSync(agentSkills, join(f.project, ".mmp", "skills"));
+
+  const result = spawnSync(process.execPath, [cliPath, "--approve", "--dry-run"], {
+    cwd: f.project,
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_OFFLINE: "1" },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(result.status, 2, `expected a config-error exit, got:\n${result.stdout}${result.stderr}`);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /inside Pi's own data/);
+  assert.match(result.stderr, /\.mmp[\\/]skills/);
+});
+
+test("~/.agents/skills symlinked into Pi's own agent skills dir is rejected", (t) => {
+  const f = fixture(t);
+  writeGlobalManifest(f);
+  const piAgentSkills = join(f.home, ".pi", "agent", "skills");
+  mkdirSync(piAgentSkills, { recursive: true });
+  mkdirSync(join(f.home, ".agents"), { recursive: true });
+  symlinkSync(piAgentSkills, join(f.home, ".agents", "skills"));
+
+  const result = spawnSync(process.execPath, [cliPath, "--no-project", "--dry-run"], {
+    cwd: f.project,
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_OFFLINE: "1" },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(result.status, 2, `expected a config-error exit, got:\n${result.stdout}${result.stderr}`);
+  assert.match(result.stderr, /inside Pi's own data/);
+});
+
+test("MMP's own <MMP_HOME>/skills symlinked into MMP's own Pi data dir is rejected", (t) => {
+  const f = fixture(t);
+  const agentSkills = join(f.mmpHome, "pi", "skills");
+  mkdirSync(agentSkills, { recursive: true });
+  symlinkSync(agentSkills, join(f.mmpHome, "skills"));
+  writeGlobalManifest(f);
+
+  const result = spawnSync(process.execPath, [cliPath, "--no-project", "--dry-run"], {
+    cwd: f.project,
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_OFFLINE: "1" },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(result.status, 2, `expected a config-error exit, got:\n${result.stdout}${result.stderr}`);
+  assert.match(result.stderr, /inside Pi's own data/);
 });

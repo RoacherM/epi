@@ -162,7 +162,8 @@ test("--dry-run validates declared MCP configuration before starting Pi", (t) =>
     [cliPath, "--dry-run", "--no-project"],
     {
       encoding: "utf8",
-      env: { ...process.env, MMP_HOME: root },
+      // Isolated HOME: the real ~/.agents/skills must not affect this run (docs/decisions.md S1).
+      env: { ...process.env, HOME: root, MMP_HOME: root },
     },
   );
   assert.equal(result.status, 2);

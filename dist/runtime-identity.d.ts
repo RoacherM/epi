@@ -43,9 +43,17 @@ export interface MmpRuntimeIdentity {
         };
     };
     resourcePolicy: {
-        discovery: "manifest-only";
+        discovery: "manifest-and-fixed-skill-roots";
         relativePaths: "declaring-manifest-directory";
-        ambientResourceDirectoriesLoaded: false;
+        /** The only three directories skills are auto-discovered from beyond the Manifest
+         * (docs/decisions.md S1); entries actually loaded from them are tagged `discovered` in
+         * `skillRoots` below. Never Pi's own discovery paths (~/.pi/agent/skills, MMP's Pi data dir,
+         * project .pi/skills) or a project's .agents/skills. */
+        fixedSkillRoots: readonly [string, string, string];
+        /** Whether Pi's own ambient discovery paths (~/.pi/agent/skills, cwd .pi/skills, cwd
+         * .agents/skills, ...) were loaded -- always false; MMP always passes noSkills etc. and feeds
+         * Pi only the paths in `skillRoots` via resources_discover. */
+        piDiscoveryPathsLoaded: false;
     };
     declaredResources: {
         rules: MmpRuntimeResource[];

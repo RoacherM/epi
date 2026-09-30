@@ -42,9 +42,10 @@ const identity = {
     },
   },
   resourcePolicy: {
-    discovery: "manifest-only",
+    discovery: "manifest-and-fixed-skill-roots",
     relativePaths: "declaring-manifest-directory",
-    ambientResourceDirectoriesLoaded: false,
+    fixedSkillRoots: ["~/.agents/skills", "<mmpHome>/skills", "<trusted project>/.mmp/skills"],
+    piDiscoveryPathsLoaded: false,
   },
   declaredResources: {
     rules: [],

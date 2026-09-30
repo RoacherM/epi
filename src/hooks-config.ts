@@ -95,7 +95,10 @@ const hooksConfigSchema = z.object({
 type MatchScalar = z.infer<typeof matchScalarSchema>;
 export type HookMatchValue = MatchScalar | MatchScalar[];
 export type HookEventName = z.infer<typeof hookSchema>["event"];
-export type HookHandler = z.infer<typeof handlerSchema>;
+// `declaredUrl` (http only): the URL exactly as written in hooks.json, before `${ENV}` expansion --
+// kept only so a failure message can name which hook failed without repeating an expanded secret
+// (src/hooks-runtime.ts's handlerLabel). Never used for the actual request; `url` (expanded) is.
+export type HookHandler = z.infer<typeof handlerSchema> & { declaredUrl?: string };
 
 export interface ResolvedHook {
   event: HookEventName;
@@ -226,6 +229,7 @@ function resolveHandler(
     return {
       ...handler,
       url,
+      declaredUrl: handler.url,
       ...(handler.headers === undefined
         ? {}
         : {

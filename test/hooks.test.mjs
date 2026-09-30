@@ -582,6 +582,86 @@ test("a non-zero exit's stderr tail is included in the hook failure message", as
   await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
 });
 
+// Regression: the stderr tail used to be the *first* MAX_HOOK_ERROR_TAIL_BYTES seen (a rolling
+// stop, not a rolling window), so a command that logs a lot before its real error lost that error
+// entirely. The real error is usually the last thing printed, so the kept bytes must be the tail.
+test("the stderr tail keeps the END of a long failure, not the start", async (t) => {
+  const root = createFixture(t);
+  const handlers = new Map();
+  const failingScript = join(root, "fail-with-long-stderr.mjs");
+  writeFileSync(
+    failingScript,
+    "process.stderr.write('x'.repeat(5000) + '\\n'); process.stderr.write('REAL ERROR: policy denied\\n'); process.exit(1);\n",
+  );
+  const inline = createHooksInlineExtension({
+    hooks: [hook("tool_call", [
+      { type: "command", command: process.execPath, args: [failingScript], timeoutMs: 5000 },
+    ], { toolName: "bash" })],
+    mmpHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: undefined,
+    workerPath: fakeWorker,
+  });
+  await inline.factory(fakePiWithBus(handlers));
+  const context = createContext(root);
+
+  const result = await handlers.get("tool_call")(
+    { type: "tool_call", toolCallId: "call-1", toolName: "bash", input: {} },
+    context,
+  );
+  assert.equal(result.block, true);
+  assert.match(result.reason, /REAL ERROR: policy denied/, `tail was dropped:\n${result.reason.slice(0, 160)}`);
+  await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
+});
+
+// Regression: an http hook's failure message used to print handler.url, which hooks-config.ts's
+// resolveHandler had already expanded ${ENV} placeholders into -- a secret in the URL (a query
+// token, most commonly) reached the model (tool_call block reason, saved in the session),
+// TUI notices, and stderr. The label must use the URL exactly as declared (never expanded), and
+// even that gets trimmed to origin + pathname (no query, userinfo, or fragment).
+test("an http hook failure never repeats a secret from an ${ENV}-expanded URL", async (t) => {
+  const root = createFixture(t);
+  const configPath = join(root, "hooks.json");
+  writeFileSync(configPath, JSON.stringify({
+    version: 1,
+    hooks: [{
+      event: "tool_call",
+      handlers: [{
+        type: "http",
+        method: "POST",
+        url: "http://127.0.0.1:9/hook?token=${HOOK_SECRET}",
+        timeoutMs: 1000,
+      }],
+    }],
+  }));
+  const loaded = loadHooksConfig(configPath, "global", { ...process.env, HOOK_SECRET: "sk-live-SUPERSECRET" });
+  const handlers = new Map();
+  const inline = createHooksInlineExtension({
+    hooks: loaded.hooks,
+    mmpHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: undefined,
+    workerPath: fakeWorker,
+  });
+  await inline.factory(fakePiWithBus(handlers));
+  const notifications = [];
+  const context = createContext(root, {
+    ui: { notify(message, level) { notifications.push(message); } },
+  });
+
+  const result = await handlers.get("tool_call")(
+    { type: "tool_call", toolCallId: "call-1", toolName: "bash", input: {} },
+    context,
+  );
+  assert.equal(result.block, true);
+  assert.doesNotMatch(result.reason, /SUPERSECRET/, `tool_call reason leaked the secret: ${result.reason}`);
+  assert.match(result.reason, /http POST http:\/\/127\.0\.0\.1:9\/hook/);
+  for (const message of notifications) {
+    assert.doesNotMatch(message, /SUPERSECRET/, `ui.notify leaked the secret: ${message}`);
+  }
+  await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
+});
+
 // session_start, session_before_compact, and session_shutdown share notifyFailure with user_prompt
 // (hooks.ts) -- one fixed function, one test proving the stderr fallback covers all of them.
 test("a session_start hook failure also falls back to stderr outside the TUI", async (t) => {

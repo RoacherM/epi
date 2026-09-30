@@ -143,6 +143,7 @@ function resolveHandler(handler, configPath, environment, index) {
         return {
             ...handler,
             url,
+            declaredUrl: handler.url,
             ...(handler.headers === undefined
                 ? {}
                 : {
