@@ -76,12 +76,38 @@ test("/copy and Ctrl+X copy the last assistant reply, and refuse when there is n
   ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.beforeAnyReply, /No agent messages to copy yet\./);
   assert.match(marks.afterReply, /FIRST-REPLY/);
-  assert.match(marks.afterCopy.slice(marks.afterReply.length), /Copied last agent message to clipboard\./);
+  // Pi's own status, with no closing period (interactive-mode.js handleCopyCommand).
+  assert.match(marks.afterCopy.slice(marks.afterReply.length), /Copied last agent message to clipboard(?!\.)/);
   // The key confirms with Pi's flash, /copy with Pi's notice (interactive-mode.js handleCopyCommand).
   assert.match(marks.afterCtrlX.slice(marks.afterCopy.length), /Copied!/);
   assert.doesNotMatch(marks.afterCtrlX.slice(marks.afterCopy.length), /Copied last agent message/);
   assert.equal(readFileSync(clipboardFile, "utf8"), "FIRST-REPLY");
   assert.match(out, /EXIT=0/);
+});
+
+test("/copy and Ctrl+X refuse an empty last reply, as Pi's `!text` check does", async (t) => {
+  const { runCopy } = await import("../dist/tui/session-commands.js");
+  // Should a regression reach the clipboard, it writes this file, never the real clipboard.
+  const dir = mkdtempSync(join(tmpdir(), "mmp-clipboard-test-"));
+  const clipboardFile = join(dir, "clipboard.txt");
+  const previous = process.env.MMP_TEST_CLIPBOARD_FILE;
+  process.env.MMP_TEST_CLIPBOARD_FILE = clipboardFile;
+  t.after(() => {
+    if (previous === undefined) delete process.env.MMP_TEST_CLIPBOARD_FILE;
+    else process.env.MMP_TEST_CLIPBOARD_FILE = previous;
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const shown = [];
+  const host = {
+    tui: {},
+    session: () => ({ getLastAssistantText: () => "" }),
+    notice: (text, level) => shown.push([text, level]),
+    flash: (text) => shown.push([text, "flash"]),
+  };
+  await runCopy(host);
+  await runCopy(host, { fromKey: true });
+  assert.deepEqual(shown, [["No agent messages to copy yet.", "warning"], ["No agent messages to copy yet.", "warning"]]);
+  assert.equal(existsSync(clipboardFile), false);
 });
 
 test("/resume lists sessions from MMP's own agent dir and replays a previous one", (t) => {

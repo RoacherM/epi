@@ -44,12 +44,16 @@ export class Transcript {
      * leaves behind). `turnFooter()` ORs this with `lastTurnMessages`'s own
      * aborted check, the ordinary case (Esc during a normal response). */
     turnAborted = false;
-    /** The timed turn's last assistant reply, once it ended with no tool calls: the agent would have
-     * stopped there, so a user message arriving after it (a queued follow-up, or a steer the loop
-     * picked up at that point) starts a new turn with its own footer (dogfood D23). Cleared as soon
-     * as another assistant message starts. A steer delivered between tool calls finds this unset
-     * and stays part of the running turn. */
+    /** The timed turn's last assistant reply, once it ended with no tool calls or its tool batch
+     * ended with every tool returning `terminate: true`: the agent would have stopped there, so a
+     * user message arriving after it (a queued follow-up, or a steer the loop picked up at that
+     * point) starts a new turn with its own footer (dogfood D23, D43). Cleared as soon as another
+     * assistant message starts. A steer delivered between tool calls finds this unset and stays part
+     * of the running turn. */
     finishedReply;
+    /** The last reply with tool calls, and whether every tool of its batch that has ended so far
+     * returned `terminate: true` (undefined before the first one ends). */
+    toolBatch;
     constructor(tui, theme, session) {
         this.tui = tui;
         this.theme = theme;
@@ -87,6 +91,7 @@ export class Transcript {
         this.lastTurnMessages = [];
         this.turnAborted = false;
         this.finishedReply = undefined;
+        this.toolBatch = undefined;
         for (const message of session.messages) {
             this.addFinishedMessage(message);
         }
@@ -164,6 +169,7 @@ export class Transcript {
                 }
                 else if (event.message.role === "assistant") {
                     this.finishedReply = undefined;
+                    this.toolBatch = undefined;
                     this.streaming = this.assistant(event.message, true);
                 }
                 break;
@@ -181,6 +187,7 @@ export class Transcript {
                     this.streaming = undefined;
                     const hasToolCalls = event.message.content.some((part) => part.type === "toolCall");
                     this.finishedReply = hasToolCalls ? undefined : event.message;
+                    this.toolBatch = hasToolCalls ? { reply: event.message, terminates: undefined } : undefined;
                 }
                 else if (event.message.role === "custom") {
                     this.addFinishedMessage(event.message);
@@ -239,6 +246,12 @@ export class Transcript {
                 if (event.parentToolCallId !== undefined)
                     break;
                 this.tool(event.toolName, event.toolCallId).updateResult({ ...event.result, isError: event.isError }, false);
+                // Pi also stops, and drains follow-ups, after a batch whose every tool returned `terminate:
+                // true` (agent-loop.js shouldTerminateToolBatch; each of the batch's calls ends here once).
+                if (this.toolBatch !== undefined) {
+                    this.toolBatch.terminates = (this.toolBatch.terminates ?? true) && event.result?.terminate === true;
+                    this.finishedReply = this.toolBatch.terminates ? this.toolBatch.reply : undefined;
+                }
                 break;
             case "compaction_end":
                 // event.errorMessage already reads e.g. "Compaction failed: ..." or "Auto-compaction
@@ -309,6 +322,7 @@ export class Transcript {
         this.lastTurnMessages = [];
         this.turnAborted = false;
         this.finishedReply = undefined;
+        this.toolBatch = undefined;
         const label = aborted ? "Stopped after" : "Worked for";
         this.add(new piTui.Text(this.theme.fg("muted", `${label} ${formatDuration(duration)}`), CONTENT_PAD, 0), true, false);
     }

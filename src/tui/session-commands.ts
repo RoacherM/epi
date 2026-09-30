@@ -199,14 +199,14 @@ export async function runCopy(host: CommandHost, options: { fromKey?: boolean } 
     return;
   }
   const text = host.session().getLastAssistantText();
-  if (text === undefined) {
+  if (!text) {
     host.notice("No agent messages to copy yet.", "warning");
     return;
   }
   try {
     await writeClipboardText(text);
     if (options.fromKey) host.flash("Copied!");
-    else host.notice("Copied last agent message to clipboard.");
+    else host.notice("Copied last agent message to clipboard");
   } catch (error) {
     host.notice(errorText(error), "error");
   }

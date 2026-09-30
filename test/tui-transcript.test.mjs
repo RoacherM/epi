@@ -658,6 +658,38 @@ test("a steer between tool calls stays in the running turn; one after a finished
   assert.match(rendered, /STEER-MID[\s\S]*REPLY-ONE[\s\S]*Worked for[\s\S]*FOLLOW-UP[\s\S]*REPLY-TWO[\s\S]*Worked for/);
 });
 
+// Dogfood D43: Pi also stops (and drains follow-ups) after a tool batch whose every tool returned
+// `terminate: true` (agent-loop.js shouldTerminateToolBatch); a batch with any other result goes on.
+test("a user message after a batch where every tool terminated starts a new turn; after a mixed batch it doesn't", () => {
+  const transcript = new Transcript(stubTui(), theme, { ...stubSession(), getToolDefinition: () => undefined, getAllTools: () => [] });
+  const user = (text) => ({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
+  const batch = (ids, terminates) => {
+    const message = assistantMessage(ids.map((id) => ({ type: "toolCall", id, name: "custom_tool", arguments: {} })), { stopReason: "toolUse" });
+    transcript.handle({ type: "message_start", message });
+    transcript.handle({ type: "message_end", message });
+    ids.forEach((id, index) => {
+      const result = { content: [{ type: "text", text: "ok" }], details: {}, ...(terminates[index] ? { terminate: true } : {}) };
+      transcript.handle({ type: "tool_execution_start", toolCallId: id, toolName: "custom_tool", args: {} });
+      transcript.handle({ type: "tool_execution_end", toolCallId: id, toolName: "custom_tool", result, isError: false });
+    });
+  };
+  transcript.handle({ type: "agent_start" });
+  transcript.handle({ type: "message_start", message: user("go") });
+  batch(["c1", "c2"], [true, false]);
+  transcript.handle({ type: "message_start", message: user("STEER-MID") });
+  batch(["c3", "c4"], [true, true]);
+  transcript.handle({ type: "message_start", message: user("FOLLOW-UP") });
+  const last = assistantMessage([{ type: "text", text: "REPLY-TWO" }]);
+  transcript.handle({ type: "message_start", message: last });
+  transcript.handle({ type: "message_end", message: last });
+  transcript.handle({ type: "agent_end", messages: [last] });
+  transcript.handle({ type: "agent_settled" });
+  const rendered = stripAnsi(transcript.root.render(80).join("\n"));
+  assert.deepEqual(rendered.match(/Worked for|Stopped after/g), ["Worked for", "Worked for"], rendered);
+  assert.match(rendered, /STEER-MID[\s\S]*Worked for[\s\S]*FOLLOW-UP[\s\S]*REPLY-TWO[\s\S]*Worked for/);
+  assert.doesNotMatch(rendered, /Worked for[\s\S]*STEER-MID/);
+});
+
 test("a stop pending when a drained follow-up arrives marks the follow-up's turn, not the finished one", () => {
   const transcript = new Transcript(stubTui(), theme, { ...stubSession(), getToolDefinition: () => undefined, getAllTools: () => [] });
   const user = (text) => ({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });

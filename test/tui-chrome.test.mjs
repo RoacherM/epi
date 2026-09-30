@@ -78,6 +78,14 @@ test("user message collapse doesn't count [File: …] / [Image] lines toward its
   assert.doesNotMatch(collapsed, /four/);
 });
 
+test("D36: a label written twice counts once against the message's images", () => {
+  const image = { type: "image", data: "", mimeType: "image/png" };
+  const block = new UserMessageBlock(theme, [{ type: "text", text: "[Image #1] and again [Image #1]" }, image, image], new Date(2026, 8, 29, 17, 10));
+  const text = block.render(80).map(plain).join("\n");
+  // Two images, one distinct label: one image has no label and shows as `[Image]`.
+  assert.match(text, /\[Image #1\] and again \[Image #1\][\s\S]*\[Image\]/);
+});
+
 test("turn status shows nothing when idle and hides the phase timer below 60 columns", (t) => {
   let turn;
   const status = new TurnStatus(theme, () => turn, () => {});
