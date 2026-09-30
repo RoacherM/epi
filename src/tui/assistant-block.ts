@@ -12,6 +12,7 @@ import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-wo
 
 import { fit, formatDuration, markPromptZone, spread, splitPromptZone, clockColumns } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
+import { createFlashState, disposeFlash, type FlashState, paintFlashRail, startFlash } from "./tools/flash.js";
 
 type ContentPart = AssistantMessage["content"][number];
 
@@ -79,6 +80,7 @@ class ThinkingBlock implements Component {
     // The whole message's streaming state, which Pi hands to the thinking transformers too -- an
     // earlier, finished run of a still-streaming message gets `true`, as in Pi.
     private readonly isStreaming: boolean,
+    private readonly flash: FlashState,
   ) {}
 
   private renderLines(width: number): string[] {
@@ -130,7 +132,8 @@ class ThinkingBlock implements Component {
   }
 
   render(width: number): string[] {
-    return this.renderLines(width);
+    // The rail column is the blank first column of `pad`; it flashes once when the run ends.
+    return paintFlashRail(this.renderLines(width), this.flash, this.theme);
   }
 
   /** Only the header row (the `Thought for Ns` / `Thinking…` line) toggles -- clicking into an
@@ -152,6 +155,12 @@ export class AssistantBlock implements Component {
   private lastStreaming = false;
   private readonly timing = new Map<number, ThinkingTiming>();
   private readonly expandedOverride = new Map<number, boolean>();
+  /** Completion flash per thinking run, keyed like `timing` (docs/tui-design.md 4.2 "完成闪烁"). */
+  private readonly flashes = new Map<number, FlashState>();
+  /** The run drawn as live "Thinking…" by the last rebuild. Only a run seen active here flashes
+   * when it ends, so replayed history (never streamed in this process) never does -- the same
+   * guard as a tool's `started` flag. */
+  private activeThinking: number | undefined;
   private globalExpanded = false;
   private readonly clock: string;
 
@@ -165,6 +174,8 @@ export class AssistantBlock implements Component {
     // call would trigger a second full rebuild of every segment on every single replayed message,
     // for no visible difference the vast majority of the time (Ctrl+T defaults to off).
     globalExpanded = false,
+    // Draws the frame after a completion flash clears, when nothing else would.
+    private readonly requestRender: () => void = () => {},
   ) {
     // Captured once, like UserMessageBlock's `time`: the component is reused across every
     // streaming update for this message, so this must not drift as content arrives.
@@ -217,6 +228,13 @@ export class AssistantBlock implements Component {
     // (a plain, thinking-free reply rendering two blank rows instead of one).
     if (hasVisibleContent && segments[0]?.kind === "thinking") this.container.addChild(new piTui.Spacer(1));
 
+    const lastSegment = segments[segments.length - 1];
+    const activeThinking = this.lastStreaming && lastSegment?.kind === "thinking" ? lastSegment.startIndex : undefined;
+    if (this.activeThinking !== undefined && this.activeThinking !== activeThinking) {
+      startFlash(this.flash(this.activeThinking), "success", this.requestRender);
+    }
+    this.activeThinking = activeThinking;
+
     segments.forEach((segment, segmentIndex) => {
       if (segment.kind === "thinking") {
         const text = segment.parts.map((part) => part.thinking.trim()).filter((part) => part !== "").join("\n\n");
@@ -231,7 +249,7 @@ export class AssistantBlock implements Component {
           this.expandedOverride.set(segment.startIndex, !(this.expandedOverride.get(segment.startIndex) ?? this.globalExpanded));
           if (this.lastMessage !== undefined) this.rebuild(splitSegments(this.lastMessage.content));
         };
-        this.container.addChild(new ThinkingBlock(this.theme, text, active, timing, expanded, toggle, this.transformers, this.lastStreaming));
+        this.container.addChild(new ThinkingBlock(this.theme, text, active, timing, expanded, toggle, this.transformers, this.lastStreaming, this.flash(segment.startIndex)));
         return;
       }
       // A text/tool-call run: Pi's own component, fed only this run's `content` and a neutral
@@ -273,6 +291,20 @@ export class AssistantBlock implements Component {
         this.container.addChild(new piTui.Text(this.theme.fg("error", `Error: ${message.errorMessage ?? "Unknown error"}`), CONTENT_PAD, 0));
       }
     }
+  }
+
+  private flash(startIndex: number): FlashState {
+    let flash = this.flashes.get(startIndex);
+    if (flash === undefined) {
+      flash = createFlashState();
+      this.flashes.set(startIndex, flash);
+    }
+    return flash;
+  }
+
+  /** Drops pending flash timers when the transcript is cleared (/new, /resume, /reload). */
+  dispose(): void {
+    for (const flash of this.flashes.values()) disposeFlash(flash);
   }
 
   /** The width the inner container is actually rendered at -- narrower than the component's own,

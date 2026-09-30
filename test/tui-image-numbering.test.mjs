@@ -76,10 +76,12 @@ const ECHO_IMAGES = fixture("faux-echo-images-many.mjs");
 // number (the assertions check the number). While a reply streams, lines below it are redrawn, so
 // a paste into an editor that already shows a preview waits for its own number instead.
 const pasted = ["waitFor", { regex: "Image #\\d+ ─" }];
-// The prompt run is over: `Worked for` is drawn at agent_settled, once any queued messages it
-// picked up were delivered too.
+// The turn is over: its `Worked for` is drawn. Each queued message delivered into the run is a turn
+// of its own with its own footer (D23), so with messages queued, wait for the one after the last
+// of them to be delivered (`deliveredLast`) instead.
 const settled = ["waitFor", "Worked for"];
 const turnDone = (reply) => ["waitFor", { regex: `${reply}[\\s\\S]*Worked for` }];
+const deliveredLast = (text) => turnDone(`❯ ${text.replace(/[[\]]/g, "\\$&")}`);
 // The editor row drawn empty again ("❯", then only padding up to the border).
 const editorCleared = ["waitFor", { regex: "❯ {2,}[│┃]" }];
 // A session selector with its entries loaded (`›` marks the highlighted one).
@@ -233,7 +235,7 @@ describe("image numbering", { concurrency: Math.min(8, Math.max(2, availablePara
       ["waitFor", "FIRST-START"], ["key", "ctrl+v"], pasted, ["mark", "chip1"],
       ["key", "enter"], ["waitFor", "Follow-up:"], ["mark", "queued1"],
       ["key", "ctrl+v"], pasted, ["mark", "chip2"], // the first is still queued, not yet shown
-      ["key", "enter"], settled, ["mark", "delivered"],
+      ["key", "enter"], deliveredLast("[Image #2]"), ["mark", "delivered"],
       ["key", "ctrl+d"],
     ]);
     assert.match(since(marks.chip1, marks.queued1), /Follow-up:/);
@@ -267,7 +269,7 @@ describe("image numbering", { concurrency: Math.min(8, Math.max(2, availablePara
       // shown in the transcript) can tell the next chip it is #2.
       ["type", "x"], ["key", "enter"], ["waitFor", "Follow-up: x"],
       ["key", "ctrl+v"], pasted, ["mark", "chip2"],
-      ["key", "enter"], settled, ["mark", "delivered"],
+      ["key", "enter"], deliveredLast("[Image #2]"), ["mark", "delivered"],
       ["key", "ctrl+d"],
     ]);
     assert.match(marks.chip2, /\[Image #2\]/);
@@ -392,7 +394,7 @@ describe("image numbering", { concurrency: Math.min(8, Math.max(2, availablePara
       ["waitFor", "FIRST-START"], ["type", "AAA "], ["key", "ctrl+v"], pasted,
       ["key", "enter"], ["waitFor", "Follow-up:"],
       ["type", "BBB "], ["key", "ctrl+v"], pasted, ["mark", "chipB"],
-      ["key", "alt+enter"], settled, ["mark", "delivered"],
+      ["key", "alt+enter"], deliveredLast("AAA [Image #1]"), ["mark", "delivered"],
       ["key", "ctrl+d"],
     ]);
     assert.match(marks.chipB, /BBB \[Image #2\]/);
