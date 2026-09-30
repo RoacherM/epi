@@ -77,6 +77,8 @@ cd <worktree> && node ~/Desktop/Projects/sides/mmp-tool/dist/cli.js --approve \
   → 一个阶段的任务都合并后 → 主控打审查包交 Fable 终审（第 5 节）
 ```
 
+退回时主控先把上一轮的 `report.md` 改名为 `report-N.md` 再发指令，否则旧文件里的 `STATUS:` 会让等待立刻结束（D2 试跑时发现）。
+
 退回规则、测试要求、策略问题由主控拍板等，和 [dev-workflow.md](dev-workflow.md) 第 2 节一样。
 
 ## 5. 质量把关
