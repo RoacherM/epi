@@ -282,6 +282,7 @@ test("HTTP hook handlers receive rendered JSON templates", async (t) => {
       type: "http",
       method: "POST",
       url: `http://127.0.0.1:${address.port}/hook`,
+      declaredUrl: `http://127.0.0.1:${address.port}/hook`,
       body: {
         tool: "{{event.toolName}}",
         event: "{{event}}",
@@ -452,6 +453,384 @@ test("Pi maps prompt transforms, result replacements, and compaction cancellatio
     { type: "session_shutdown", reason: "quit" },
     context,
   );
+});
+
+function fakePiWithBus(handlers) {
+  const busHandlers = new Map();
+  return {
+    events: {
+      emit(channel, value) { busHandlers.get(channel)?.(value); },
+      on(channel, handler) { busHandlers.set(channel, handler); return () => busHandlers.delete(channel); },
+    },
+    on(event, handler) { handlers.set(event, handler); },
+  };
+}
+
+async function withCapturedStderr(fn) {
+  const original = process.stderr.write.bind(process.stderr);
+  const chunks = [];
+  process.stderr.write = (chunk) => { chunks.push(String(chunk)); return true; };
+  try {
+    return { result: await fn(), stderr: () => chunks.join("") };
+  } finally {
+    process.stderr.write = original;
+  }
+}
+
+// Reported bug: a user_prompt hook whose command can't be spawned (e.g. a relative path that
+// doesn't resolve against the session cwd) used to block the turn with `{action: "handled"}` and
+// an `ui.notify` call that Pi's own print/json modes silently drop (noOpUIContext.notify in Pi's
+// core/extensions/runner.js) -- an empty reply with no visible reason anywhere. The fix keeps the
+// same fail-closed "handled" result (README "Hooks": user_prompt maps fail-closed) but also writes
+// to stderr outside the TUI, and names the failing hook + the underlying spawn error in the message.
+for (const mode of ["print", "json"]) {
+  test(`a user_prompt hook spawn failure shows on stderr in ${mode} mode and still blocks the turn`, async (t) => {
+    const root = createFixture(t);
+    const handlers = new Map();
+    const inline = createHooksInlineExtension({
+      hooks: [hook("user_prompt", [
+        { type: "command", command: "./does-not-exist.mjs", args: [], timeoutMs: 1000 },
+      ])],
+      mmpHome: root,
+      agentDir: join(root, "pi"),
+      projectAgentsDir: undefined,
+      workerPath: fakeWorker,
+    });
+    await inline.factory(fakePiWithBus(handlers));
+    const notifications = [];
+    const context = createContext(root, {
+      mode,
+      ui: { notify(message, level) { notifications.push({ message, level }); } },
+    });
+
+    const { result, stderr } = await withCapturedStderr(() => handlers.get("input")(
+      { type: "input", text: "hello", images: [], source: "interactive" },
+      context,
+    ));
+
+    assert.deepEqual(result, { action: "handled" }, "a failing hook must still fail closed");
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].level, "error");
+    assert.match(notifications[0].message, /user_prompt hook/);
+    assert.match(notifications[0].message, /does-not-exist\.mjs/);
+    assert.match(notifications[0].message, /ENOENT/);
+    // The point of the fix: the same message also reaches stderr, since ui.notify alone is a no-op here.
+    assert.match(stderr(), /user_prompt hook/);
+    assert.match(stderr(), /does-not-exist\.mjs/);
+    assert.match(stderr(), /ENOENT/);
+
+    await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
+  });
+}
+
+test("a user_prompt hook spawn failure does not also spam stderr in tui mode (ui.notify already shows it there)", async (t) => {
+  const root = createFixture(t);
+  const handlers = new Map();
+  const inline = createHooksInlineExtension({
+    hooks: [hook("user_prompt", [
+      { type: "command", command: "./does-not-exist.mjs", args: [], timeoutMs: 1000 },
+    ])],
+    mmpHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: undefined,
+    workerPath: fakeWorker,
+  });
+  await inline.factory(fakePiWithBus(handlers));
+  const notifications = [];
+  const context = createContext(root, {
+    mode: "tui",
+    ui: { notify(message, level) { notifications.push({ message, level }); } },
+  });
+
+  const { result, stderr } = await withCapturedStderr(() => handlers.get("input")(
+    { type: "input", text: "hello", images: [], source: "interactive" },
+    context,
+  ));
+
+  assert.deepEqual(result, { action: "handled" });
+  assert.equal(notifications.length, 1);
+  assert.equal(stderr(), "");
+  await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
+});
+
+test("a non-zero exit's stderr tail is included in the hook failure message", async (t) => {
+  const root = createFixture(t);
+  const handlers = new Map();
+  const failingScript = join(root, "fail-with-stderr.mjs");
+  writeFileSync(
+    failingScript,
+    "process.stderr.write('boom: policy denied\\n'); process.exit(3);\n",
+  );
+  const inline = createHooksInlineExtension({
+    hooks: [hook("tool_call", [
+      { type: "command", command: process.execPath, args: [failingScript], timeoutMs: 1000 },
+    ], { toolName: "bash" })],
+    mmpHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: undefined,
+    workerPath: fakeWorker,
+  });
+  await inline.factory(fakePiWithBus(handlers));
+  const context = createContext(root);
+
+  const result = await handlers.get("tool_call")(
+    { type: "tool_call", toolCallId: "call-1", toolName: "bash", input: {} },
+    context,
+  );
+  assert.equal(result.block, true);
+  assert.match(result.reason, /exited with code 3/);
+  assert.match(result.reason, /boom: policy denied/);
+  await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
+});
+
+// Regression: the stderr tail used to be the *first* MAX_HOOK_ERROR_TAIL_BYTES seen (a rolling
+// stop, not a rolling window), so a command that logs a lot before its real error lost that error
+// entirely. The real error is usually the last thing printed, so the kept bytes must be the tail.
+test("the stderr tail keeps the END of a long failure, not the start", async (t) => {
+  const root = createFixture(t);
+  const handlers = new Map();
+  const failingScript = join(root, "fail-with-long-stderr.mjs");
+  writeFileSync(
+    failingScript,
+    "process.stderr.write('x'.repeat(5000) + '\\n'); process.stderr.write('REAL ERROR: policy denied\\n'); process.exit(1);\n",
+  );
+  const inline = createHooksInlineExtension({
+    hooks: [hook("tool_call", [
+      { type: "command", command: process.execPath, args: [failingScript], timeoutMs: 5000 },
+    ], { toolName: "bash" })],
+    mmpHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: undefined,
+    workerPath: fakeWorker,
+  });
+  await inline.factory(fakePiWithBus(handlers));
+  const context = createContext(root);
+
+  const result = await handlers.get("tool_call")(
+    { type: "tool_call", toolCallId: "call-1", toolName: "bash", input: {} },
+    context,
+  );
+  assert.equal(result.block, true);
+  assert.match(result.reason, /REAL ERROR: policy denied/, `tail was dropped:\n${result.reason.slice(0, 160)}`);
+  await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
+});
+
+// The 4 KiB tail cut can land inside a multi-byte UTF-8 character; its leftover continuation
+// bytes must not decode to a leading U+FFFD. 6000 bytes of "中" (3 bytes each) + 12-byte trailer
+// = 6012, so the cut lands 1 byte before a character boundary; one extra leading "x" makes it 2.
+for (const prefix of ["", "x"]) {
+  test(`the stderr tail drops a character split by the cut (prefix ${JSON.stringify(prefix)})`, async (t) => {
+    const root = createFixture(t);
+    const failingScript = join(root, "fail-multibyte.mjs");
+    writeFileSync(
+      failingScript,
+      `process.stderr.write(${JSON.stringify(prefix)} + "中".repeat(2000) + "\\nREAL ERROR\\n"); process.exit(1);\n`,
+    );
+    const runtime = createRuntime(t, root, [hook("tool_call", [
+      { type: "command", command: process.execPath, args: [failingScript], timeoutMs: 5000 },
+    ])]);
+
+    await assert.rejects(
+      runtime.run({ type: "tool_call", cwd: root, toolName: "bash", input: {} }, createContext(root)),
+      (error) => {
+        assert.match(error.message, /REAL ERROR/);
+        assert.ok(!error.message.includes("\uFFFD"), `tail starts with U+FFFD: ${error.message.slice(0, 200)}`);
+        assert.ok(error.message.includes(`${process.execPath}: 中中`), error.message.slice(0, 200));
+        return true;
+      },
+    );
+  });
+}
+
+// Regression: an http hook's failure message used to print handler.url, which hooks-config.ts's
+// resolveHandler had already expanded ${ENV} placeholders into -- a secret in the URL (a query
+// token, most commonly) reached the model (tool_call block reason, saved in the session),
+// TUI notices, and stderr. The label must use the URL exactly as declared (never expanded), and
+// even that gets trimmed to origin + pathname (no query, userinfo, or fragment).
+test("an http hook failure never repeats a secret from an ${ENV}-expanded URL", async (t) => {
+  const root = createFixture(t);
+  const configPath = join(root, "hooks.json");
+  writeFileSync(configPath, JSON.stringify({
+    version: 1,
+    hooks: [{
+      event: "tool_call",
+      handlers: [{
+        type: "http",
+        method: "POST",
+        url: "http://127.0.0.1:9/hook?token=${HOOK_SECRET}",
+        timeoutMs: 1000,
+      }],
+    }],
+  }));
+  const loaded = loadHooksConfig(configPath, "global", { ...process.env, HOOK_SECRET: "sk-live-SUPERSECRET" });
+  const handlers = new Map();
+  const inline = createHooksInlineExtension({
+    hooks: loaded.hooks,
+    mmpHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: undefined,
+    workerPath: fakeWorker,
+  });
+  await inline.factory(fakePiWithBus(handlers));
+  const notifications = [];
+  const context = createContext(root, {
+    ui: { notify(message, level) { notifications.push(message); } },
+  });
+
+  const result = await handlers.get("tool_call")(
+    { type: "tool_call", toolCallId: "call-1", toolName: "bash", input: {} },
+    context,
+  );
+  assert.equal(result.block, true);
+  assert.doesNotMatch(result.reason, /SUPERSECRET/, `tool_call reason leaked the secret: ${result.reason}`);
+  assert.match(result.reason, /http POST http:\/\/127\.0\.0\.1:9\/hook/);
+  for (const message of notifications) {
+    assert.doesNotMatch(message, /SUPERSECRET/, `ui.notify leaked the secret: ${message}`);
+  }
+  await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
+});
+
+// fetch (undici) always rejects a URL with user:password@ and quotes the whole expanded URL in its
+// error, so a credentials URL can never work and would only leak the secret: refuse it at load.
+test("hook config rejects an http URL with credentials without repeating them", (t) => {
+  const root = createFixture(t);
+  const configPath = join(root, "hooks.json");
+  for (const url of [
+    "http://user:${HOOK_SECRET}@127.0.0.1:9/hook",
+    "http://${HOOK_SECRET}@127.0.0.1:9/hook",
+  ]) {
+    writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      hooks: [{ event: "tool_call", handlers: [{ type: "http", url }] }],
+    }));
+    assert.throws(
+      () => loadHooksConfig(configPath, "global", { HOOK_SECRET: "sk-live-SUPERSECRET" }),
+      (error) => {
+        assert.equal(error.name, "MmpConfigError");
+        assert.match(error.message, /hooks handler 0\.url must not contain credentials/);
+        assert.doesNotMatch(error.message, /SUPERSECRET/);
+        assert.ok(!error.message.includes("${HOOK_SECRET}"), error.message);
+        return true;
+      },
+    );
+  }
+});
+
+// Defense in depth for the load-time check above: if fetch's own error text quotes the expanded
+// URL (raw, as undici does, or normalized by new URL()), the failure message must replace it with
+// the declared, trimmed label. The handlers are built directly because loadHooksConfig would
+// already refuse them.
+for (const [name, url, stubFetch] of [
+  ["undici's own credentials error (raw URL)", "http://user:sk-live-SUPERSECRET@127.0.0.1:9/hook", false],
+  ["a fetch error quoting the normalized URL", "http://127.0.0.1:9/a/../hook?token=sk-live-SUPERSECRET", true],
+]) {
+  test(`an http hook's fetch error never repeats the expanded URL: ${name}`, async (t) => {
+    const root = createFixture(t);
+    if (stubFetch) {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (input) => {
+        throw new TypeError(`fetch failed for ${new URL(input).href}`);
+      };
+      t.after(() => { globalThis.fetch = originalFetch; });
+    }
+    const declaredUrl = url.replace("sk-live-SUPERSECRET", "${HOOK_SECRET}");
+    const hooks = [hook("tool_call", [{
+      type: "http",
+      method: "POST",
+      url,
+      declaredUrl,
+      timeoutMs: 1000,
+    }])];
+
+    const runtime = createRuntime(t, root, hooks);
+    await assert.rejects(
+      runtime.run({ type: "tool_call", cwd: root, toolName: "bash", input: {} }, createContext(root)),
+      (error) => {
+        assert.match(error.message, /http POST http:\/\/127\.0\.0\.1:9\//);
+        assert.doesNotMatch(error.message, /SUPERSECRET/, `runtime error leaked the secret: ${error.message}`);
+        return true;
+      },
+    );
+
+    const handlers = new Map();
+    const inline = createHooksInlineExtension({
+      hooks,
+      mmpHome: root,
+      agentDir: join(root, "pi"),
+      projectAgentsDir: undefined,
+      workerPath: fakeWorker,
+    });
+    await inline.factory(fakePiWithBus(handlers));
+    const notifications = [];
+    const context = createContext(root, {
+      ui: { notify(message) { notifications.push(message); } },
+    });
+    const { result, stderr } = await withCapturedStderr(() => handlers.get("tool_call")(
+      { type: "tool_call", toolCallId: "call-1", toolName: "bash", input: {} },
+      context,
+    ));
+    assert.equal(result.block, true);
+    for (const output of [result.reason, stderr(), ...notifications]) {
+      assert.doesNotMatch(output, /SUPERSECRET/, `hook failure output leaked the secret: ${output}`);
+    }
+    await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
+  });
+}
+
+// undici's bare "fetch failed" hides why; the cause's error code is kept, but never the cause's
+// message, which quotes the expanded address.
+test("an http hook's fetch failure keeps the cause's error code but not its message", async (t) => {
+  const root = createFixture(t);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const cause = Object.assign(new Error(`connect ECONNREFUSED ${input}`), { code: "ECONNREFUSED" });
+    throw new TypeError("fetch failed", { cause });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const runtime = createRuntime(t, root, [hook("tool_call", [{
+    type: "http",
+    method: "POST",
+    url: "http://127.0.0.1:9/hook?token=sk-live-SUPERSECRET",
+    declaredUrl: "http://127.0.0.1:9/hook?token=${HOOK_SECRET}",
+    timeoutMs: 1000,
+  }])]);
+
+  await assert.rejects(
+    runtime.run({ type: "tool_call", cwd: root, toolName: "bash", input: {} }, createContext(root)),
+    (error) => {
+      assert.match(error.message, /failed: fetch failed \(ECONNREFUSED\)$/);
+      assert.doesNotMatch(error.message, /SUPERSECRET/);
+      assert.equal(error.cause, undefined);
+      return true;
+    },
+  );
+});
+
+// session_start, session_before_compact, and session_shutdown share notifyFailure with user_prompt
+// (hooks.ts) -- one fixed function, one test proving the stderr fallback covers all of them.
+test("a session_start hook failure also falls back to stderr outside the TUI", async (t) => {
+  const root = createFixture(t);
+  const handlers = new Map();
+  const inline = createHooksInlineExtension({
+    hooks: [hook("session_start", [
+      { type: "command", command: "./does-not-exist.mjs", args: [], timeoutMs: 1000 },
+    ])],
+    mmpHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: undefined,
+    workerPath: fakeWorker,
+  });
+  await inline.factory(fakePiWithBus(handlers));
+  const context = createContext(root, { mode: "print" });
+
+  const { stderr } = await withCapturedStderr(() => handlers.get("session_start")(
+    { type: "session_start", reason: "startup" },
+    context,
+  ));
+
+  assert.match(stderr(), /session_start hook/);
+  assert.match(stderr(), /does-not-exist\.mjs/);
+  await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
 });
 
 test("hook extension rejects unknown agent handlers before Pi starts", (t) => {

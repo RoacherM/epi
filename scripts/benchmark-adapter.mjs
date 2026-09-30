@@ -682,6 +682,11 @@ async function main(argv) {
 
   const environment = {
     ...process.env,
+    // HOME isolation matters beyond auth/session state now: MMP auto-discovers skills from
+    // ~/.agents/skills (docs/decisions.md S1), so a real HOME would leak the operator's own
+    // skills into every trial, breaking "capability tier is decided by the bundle alone" for
+    // mmp-core-empty and making assemblyDigest differ machine to machine.
+    HOME: trialHome,
     MMP_HOME: trialHome,
     PI_CODING_AGENT_DIR: join(trialHome, "pi"),
   };

@@ -89,10 +89,10 @@ test("MMP runtime identity injects authoritative loaded skills", async () => {
   assert.match(result.systemPrompt, /^PI BASE PROMPT\n\n# MMP Runtime Contract/);
   assert.match(result.systemPrompt, /hosted by MMP \(Make My Pi\)/);
   assert.match(result.systemPrompt, /not as stock Pi alone/);
-  assert.match(result.systemPrompt, /"ambientResourceDirectoriesLoaded": false/);
+  assert.match(result.systemPrompt, /"piDiscoveryPathsLoaded": false/);
   assert.match(result.systemPrompt, /"name": "fixture-skill"/);
   assert.match(result.systemPrompt, /"modelInvocable": true/);
-  assert.match(result.systemPrompt, /Do not scan ambient ~\/\.pi/);
+  assert.match(result.systemPrompt, /Do not scan ~\/\.pi/);
 
   const command = commands.get("mmp");
   assert.equal(

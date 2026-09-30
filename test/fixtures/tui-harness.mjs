@@ -2,6 +2,9 @@
 // Usage: MMP_TUI_HARNESS='{"args":[],"steps":[["wait",3000],["type","hi"],["key","enter"],...]}' node tui-harness.mjs
 // ["mark", name] records what had been drawn at that moment, to assert timing without further input.
 // Prints the exit code, the marks, and everything the app wrote (ANSI stripped) as JSON.
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { prepareMmpRun } from "../../dist/host.js";
 import { runTuiApp } from "../../dist/tui/app.js";
 import { createRuntimeFromPrepared, projectIdentityFromPrepared, startupOptionsFromPiArgs } from "../../dist/tui/start.js";
@@ -58,6 +61,13 @@ for (const [kind, value] of steps) {
   else if (kind === "type") for (const char of value) { onInput(char); await sleep(10); }
   // A real terminal delivers a paste as one bracketed chunk, not keystroke by keystroke.
   else if (kind === "paste") onInput(`\x1b[200~${value}\x1b[201~`);
+  // Writes a SKILL.md between steps (e.g. before "/reload"), for tests proving a skill created
+  // mid-session is picked up -- a real terminal can't do this, only the test process behind it.
+  else if (kind === "plantSkill") {
+    const dir = join(value.skillsDir, value.name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), `---\nname: ${value.name}\ndescription: ${value.name}\n---\n${value.name}\n`);
+  }
   else if (kind === "key") {
     if (!(value in KEYS)) throw new Error(`tui-harness.mjs: unknown key "${value}"`);
     onInput(KEYS[value]);

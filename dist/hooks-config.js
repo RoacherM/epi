@@ -140,9 +140,17 @@ function resolveHandler(handler, configPath, environment, index) {
         if (!z.url().safeParse(url).success) {
             throw new MmpConfigError(`${configPath}: ${location}.url must be a valid URL`);
         }
+        // fetch (undici) always rejects a URL with user:password@, and its error text repeats the whole
+        // expanded URL -- so such a config can never work and would only leak the credentials. The
+        // message names the field, never its value.
+        const parsed = new URL(url);
+        if (parsed.username !== "" || parsed.password !== "") {
+            throw new MmpConfigError(`${configPath}: ${location}.url must not contain credentials (user:password@); send them in a header instead`);
+        }
         return {
             ...handler,
             url,
+            declaredUrl: handler.url,
             ...(handler.headers === undefined
                 ? {}
                 : {

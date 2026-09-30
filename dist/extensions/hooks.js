@@ -8,8 +8,20 @@ function failureMessage(error) {
     const detail = error instanceof Error ? error.message : String(error);
     return `MMP hook handler failed: ${detail}`;
 }
+/**
+ * `context.ui.notify` shows up in MMP's own TUI (`transcript.notice`) and in Pi's `rpc` mode (its
+ * own notify method over the RPC channel), but Pi's `print` and `json` modes use a no-op UI context
+ * (`noOpUIContext.notify` in Pi's `core/extensions/runner.js`) -- a hook failure there would
+ * otherwise leave the turn blocked with no visible reason at all ("failures must show"). Writing
+ * the same message to stderr there is a fallback, not a duplicate: those modes' stdout is the
+ * model's reply/JSON stream, so the failure has to go somewhere else to be seen without corrupting it.
+ */
 function notifyFailure(context, error) {
-    context.ui.notify(failureMessage(error), "error");
+    const message = failureMessage(error);
+    context.ui.notify(message, "error");
+    if (context.mode === "print" || context.mode === "json") {
+        process.stderr.write(`mmp: ${message}\n`);
+    }
 }
 function taskPayload(event) {
     if (event.type === "task_start") {

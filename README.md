@@ -97,7 +97,7 @@ MMP 自有、和 Pi 行为不同的参数：
 
 其余模型、Session、工具、输出参数（`--provider`、`--model`、`--thinking`、`-c/--continue`、`--session*`、`-p/--print`、`--mode`、`--list-models`、`--export`、`--offline`、`--verbose` 等）和 Pi 对齐，参数名和取值语义不变。`--verbose` 在交互界面里把启动信息（已加载的 Rules/Skills/Extensions 数量、当前模型、当前 Session）显示成对话区提示；非交互模式行为和 Pi 一致。`@file` 参数：文本文件原文内联进第一条消息，图片文件按路径提示（交互界面的首条消息没有二进制附件通道），文件不存在会报错退出。`--session-dir` 没给时依次看 `MMP_SESSION_DIR` 环境变量、`~/.mmp/pi/settings.json` 里的 `sessionDir`（和 Pi 的 `--session-dir`/`PI_CODING_AGENT_SESSION_DIR`/`sessionDir` 顺序一致，只是变量名换成 MMP 自己的——Pi 装置里设置的 `PI_CODING_AGENT_SESSION_DIR` 不会被读取，不会跟 MMP 共享）。
 
-以下参数**不提供**：`--use-theme`、`--tui-mode`（界面已经是 grok 风格的单一全屏主题，由 MMP 管理）；`--extension`/`-e`、`--skill`、`--prompt-template`、`--theme`、`--system-prompt`、`--append-system-prompt` 及其 `--no-*` 形式（Rules/Skills/Extensions 只能通过 Manifest 声明，直接传入会报错并提示改用 `mmp install`/编辑 Manifest）。
+以下参数**不提供**：`--use-theme`、`--tui-mode`（界面已经是 grok 风格的单一全屏主题，由 MMP 管理）；`--extension`/`-e`、`--skill`、`--prompt-template`、`--theme`、`--system-prompt`、`--append-system-prompt` 及其 `--no-*` 形式（Rules/Extensions 只能通过 Manifest 声明；Skills 除 Manifest 声明外还会从固定目录自动发现，见"Manifest"一节；这些 flag 都不提供，直接传入会报错并提示改用 `mmp install`/编辑 Manifest）。
 
 如需隔离配置，设置绝对路径：
 
@@ -127,7 +127,7 @@ mmp auth print-api-key|print-bearer-token|check                # 打印或检查
 ~/.mmp/
 ├── mmp.json             # 全局 Manifest
 ├── RULES.md             # 示例 Rule，由 Manifest 显式声明
-├── skills/              # 示例 Skill 目录，由 Manifest 显式声明
+├── skills/              # 自动发现（也可额外被 Manifest 显式声明）
 ├── agents/*.md          # mmp:task 与 agent Hook 使用的 Agent profile
 ├── mcp.json             # mmp:mcp 配置
 ├── hooks.json           # mmp:hooks 配置
@@ -139,6 +139,7 @@ mmp auth print-api-key|print-bearer-token|check                # 打印或检查
 ```text
 <repo>/.mmp/
 ├── mmp.json
+├── skills/              # 自动发现，仅在项目可信时读取
 ├── agents/*.md
 ├── mcp.json
 └── hooks.json
@@ -175,6 +176,14 @@ mmp auth print-api-key|print-bearer-token|check                # 打印或检查
 - 外部 Extension 可使用本地路径、`npm:` 或 `git:` source；MMP 仍关闭 Pi 的 ambient discovery。
 
 Rules 按装配顺序拼接到 Pi system prompt。Skills 使用 Pi 的 `SKILL.md` 格式，并通过绝对路径显式加载。
+
+Skills 的资源只由 Manifest 声明这一条承诺有三个固定例外：除 Manifest 声明的 Skill 路径外，MMP 还会自动发现三个目录（缺失时跳过，不报错）：
+
+- 全局 `~/.agents/skills`（跨 Agent 通用约定目录）；
+- MMP 自己的全局 `<MMP_HOME>/skills`（默认 `~/.mmp/skills`，和 `mmp.json` 同级）；
+- 被信任项目的 `.mmp/skills`（信任规则与 `.mmp/mmp.json` 一致——项目如果没有 `.mmp/mmp.json`，就不算 MMP 项目，其 `.mmp/skills` 也不会被发现，`--approve` 也不例外）。
+
+永远不会读取 Pi 自己的 Skill 目录（`~/.pi/agent/skills`、项目 `.pi/skills`），也不读取项目的 `.agents/skills`（不是用户为 MMP 选定的目录）。`<MMP_HOME>/pi` 是 MMP 存放 Pi 运行状态（登录凭据、会话、模型目录、设置）的目录，不是 Skill 目录；三个自动发现的目录解析符号链接后，如果落在它或 `~/.pi` 里面、或者是它们的上级目录，本次运行直接报配置错误。自动发现的目录和 Manifest 声明的目录一样，以显式绝对路径传给 Pi；canonical path 与已声明的 Skill 相同时去重，声明的一方保留其 source/declaredIn。`mmp --dry-run`、`/mmp`、启动页和 `mmp list` 都会标注每个自动发现 skill root 的来源（`discovered: agents` / `discovered: mmp` / `discovered: project`）。
 
 Manifest 修改后：
 
@@ -316,7 +325,7 @@ Handler 类型：
 - `prompt`：字段为 `prompt`、可选 `model`/`timeoutMs`。缺省 model 使用当前 Parent 模型。
 - `agent`：字段为 `agent`、`prompt`、可选 `timeoutMs`。`agent` 必须引用已加载的 Task Agent profile；未知名称在 Pi 启动前失败。Agent Child 同样不能递归派生 Task。
 
-`timeoutMs` 默认 `10000`，最大 `300000`。超时、非零 command exit、非 2xx HTTP、超限输出、malformed JSON 和非法决策都视为 Hook 失败。阻断型 Pi 事件会 fail-closed；Session shutdown 会取消仍在运行的 handlers 并回收进程。
+`timeoutMs` 默认 `10000`，最大 `300000`。超时、非零 command exit（错误信息包含退出码和一段 stderr 尾部）、spawn 失败（如 command 找不到）、非 2xx HTTP、超限输出、malformed JSON 和非法决策都视为 Hook 失败，错误信息会指出具体是哪个 Hook（event + 声明它的文件）和哪个 handler。阻断型 Pi 事件会 fail-closed；Session shutdown 会取消仍在运行的 handlers 并回收进程。`tool_call`/`tool_result` 失败通过对应 tool result 显示；没有 tool result 可用的事件（`session_start`、`user_prompt`、`session_before_compact`、`session_shutdown`）失败时会调用 Pi UI 通知，在 MMP 自己的界面和 Pi 的 `rpc` 模式下可见；Pi 的 `print`/`json` 模式没有可用 UI（Pi 的 `noOpUIContext`），这两种模式下同一条消息还会写到 stderr，确保失败不会安静地留下一个空回复。
 
 HTTP `body`、`url`、`headers` 与 command `env` 支持 `${ENV_NAME}`。HTTP body 还支持事件模板：
 

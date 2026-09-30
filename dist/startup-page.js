@@ -101,6 +101,10 @@ function heading(text, theme) {
 function assemblyRows(identity, theme, width) {
     const resources = identity.declaredResources;
     const extensionCount = resources.inlineExtensions.length + resources.externalExtensions.length;
+    const discoveredRootCount = resources.skillRoots.filter((root) => root.discovered !== undefined).length;
+    const rootsLabel = discoveredRootCount > 0
+        ? `roots ${resources.skillRoots.length} (${discoveredRootCount} discovered)`
+        : `roots ${resources.skillRoots.length}`;
     const rule = theme.fg("borderMuted", "─".repeat(width));
     return [
         heading("ASSEMBLY", theme),
@@ -108,7 +112,7 @@ function assemblyRows(identity, theme, width) {
         `${dataLabel("identity", theme)}${theme.fg("success", "mmp:runtime active")}`,
         `${dataLabel("manifest", theme)}${manifestState(identity, theme)}`,
         `${dataLabel("project", theme)}${projectState(identity)}`,
-        `${dataLabel("declared", theme)}rules ${resources.rules.length} · roots ${resources.skillRoots.length} · ext ${extensionCount}`,
+        `${dataLabel("resources", theme)}rules ${resources.rules.length} · ${rootsLabel} · ext ${extensionCount}`,
         rule,
         heading("COMPOSITION", theme),
         `${theme.fg("mdCode", "rules + skills + extensions")}`,
@@ -139,7 +143,7 @@ function heroRows(identity, theme, options) {
         theme.fg("text", options.modelName ?? options.modelId ?? "No model selected"),
         theme.fg("dim", modelMeta(identity, options)),
         "",
-        theme.fg("dim", "manifest-only · deterministic"),
+        theme.fg("dim", "manifest + fixed skill roots · deterministic"),
         "",
     ];
 }

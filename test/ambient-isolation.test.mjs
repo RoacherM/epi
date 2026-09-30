@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { AMBIENT_MARKER, plantAmbientWorld } from "./fixtures/ambient-plant.mjs";
+import { AMBIENT_MARKER, plantAmbientWorld, plantSkill } from "./fixtures/ambient-plant.mjs";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const probeExtension = fileURLToPath(new URL("./fixtures/ambient-probe-extension.mjs", import.meta.url));
@@ -46,6 +46,39 @@ for (const [name, extraArgs] of [
     assert.deepEqual(seen.match(AMBIENT_MARKER) ?? [], []);
   });
 }
+
+// The ambient-probe-extension above captures context.getSystemPrompt() at session_start, before
+// AgentSession.extendResourcesFromExtensions (core/agent-session.js) merges resources_discover's
+// skillPaths and rebuilds the prompt -- so it can prove ambient skills stay OUT (an absent skills
+// block either way), but not that a legitimately discovered one gets IN. Proving that on the piMain
+// (-p) path needs an actual model turn: before_agent_start (which sees the rebuilt prompt) only
+// fires once a model responds, so this drives a real turn through a faux provider and has it echo
+// the system prompt it received back as the reply.
+test("a skill discovered from ~/.agents/skills is visible to the model on the piMain path", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "mmp-ambient-skill-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(project, { recursive: true });
+  plantSkill(join(home, ".agents", "skills"), "ambient-isolation-discovered-skill");
+  const driver = fileURLToPath(new URL("./fixtures/faux-skill-probe.mjs", import.meta.url));
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [driver] }));
+
+  const result = spawnSync(process.execPath, [cliPath, "--no-project", "--model", "mmp-faux/model-a", "-p", "hi"], {
+    cwd: project,
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
+    input: "",
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.match(
+    result.stdout,
+    /ambient-isolation-discovered-skill/,
+    `system prompt sent to the model did not include the discovered skill:\n${result.stdout}${result.stderr}`,
+  );
+});
 
 // Project .pi/settings.json picks faux model-b; Pi falls back to model-a when it ignores the file.
 for (const [name, extraArgs] of [

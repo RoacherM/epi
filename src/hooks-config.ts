@@ -95,7 +95,13 @@ const hooksConfigSchema = z.object({
 type MatchScalar = z.infer<typeof matchScalarSchema>;
 export type HookMatchValue = MatchScalar | MatchScalar[];
 export type HookEventName = z.infer<typeof hookSchema>["event"];
-export type HookHandler = z.infer<typeof handlerSchema>;
+// `declaredUrl` (http only): the URL exactly as written in hooks.json, before `${ENV}` expansion --
+// kept only so a failure message can name which hook failed without repeating an expanded secret
+// (src/hooks-runtime.ts's handlerLabel). Never used for the actual request; `url` (expanded) is.
+type DeclaredHookHandler = z.infer<typeof handlerSchema>;
+export type HookHandler =
+  | Exclude<DeclaredHookHandler, { type: "http" }>
+  | (Extract<DeclaredHookHandler, { type: "http" }> & { declaredUrl: string });
 
 export interface ResolvedHook {
   event: HookEventName;
@@ -179,7 +185,7 @@ function resolveCommandPath(command: string, configPath: string): string {
 }
 
 function resolveHandler(
-  handler: HookHandler,
+  handler: DeclaredHookHandler,
   configPath: string,
   environment: NodeJS.ProcessEnv,
   index: number,
@@ -223,9 +229,19 @@ function resolveHandler(
     if (!z.url().safeParse(url).success) {
       throw new MmpConfigError(`${configPath}: ${location}.url must be a valid URL`);
     }
+    // fetch (undici) always rejects a URL with user:password@, and its error text repeats the whole
+    // expanded URL -- so such a config can never work and would only leak the credentials. The
+    // message names the field, never its value.
+    const parsed = new URL(url);
+    if (parsed.username !== "" || parsed.password !== "") {
+      throw new MmpConfigError(
+        `${configPath}: ${location}.url must not contain credentials (user:password@); send them in a header instead`,
+      );
+    }
     return {
       ...handler,
       url,
+      declaredUrl: handler.url,
       ...(handler.headers === undefined
         ? {}
         : {
