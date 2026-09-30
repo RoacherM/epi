@@ -19,8 +19,8 @@ MMP 是**改名叫 mmp 的定制版 Pi**：
 
 | 运行方式 | 走哪条路 |
 |---|---|
-| 交互（stdin、stdout 都是终端，且没有 `-p`、`--mode`、`--help`、`--list-models`、`--export`） | MMP 自己的界面（`src/tui/`） |
-| 非交互：`-p`、`--mode json`、`--mode rpc`、`--export`、非终端 | 底层用 Pi 的实现（`piMain`），对外参数和帮助是 MMP 的 |
+| 交互（stdin、stdout 都是终端，且没有 `-p`、`--mode json/rpc`、`--help`、`--list-models`、`--export`；`--mode text` 也算交互，和 Pi 的 `resolveAppMode` 一致，dogfood D53） | MMP 自己的界面（`src/tui/`）；Pi 自己的交互界面永远不会启动 |
+| 非交互：`-p`、`--mode json`、`--mode rpc`、`--export`、非终端 | 底层用 Pi 的实现（`piMain`），对外参数和帮助是 MMP 的。读 stdout 的一方提前关掉管道（`\| head -c1`、`\| true`）算正常结束：不再写 stdout，停掉这次运行、跳过剩下的 `-p` 消息，照常关闭会话（`session_shutdown` 跑完），按这次运行本来的退出码安静退出（dogfood D54，`src/closed-stdout.ts`） |
 | `--list-models [search]` | MMP 自己实现（`src/list-models.ts`，dogfood D48）：Pi 的这条路不报扩展诊断、空列表时打印 Pi 的 `/login` 文案和文档链接 |
 | 子命令：`mmp update / install / remove / uninstall / list / config / auth` | MMP 自己的子命令（第 3 节） |
 

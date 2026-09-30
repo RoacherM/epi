@@ -15,6 +15,7 @@ import {
   type ResolvedAssembly,
 } from "./assembly.js";
 import { parseMmpArgs, passthroughHasFlag, renderHelp, type MmpArgs } from "./args.js";
+import { guardClosedStdout } from "./closed-stdout.js";
 import { runAuthCommand } from "./commands/auth-cli.js";
 import { runConfigCommand, runInstallCommand, runListCommand, runRemoveCommand } from "./commands/manifest-cli.js";
 import { runMcpCommand } from "./commands/mcp-cli.js";
@@ -375,7 +376,9 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
     return;
   }
   rewritePiStderr();
-  await piMain(prepared.piArgs, { extensionFactories });
+  // Before piMain: Pi's output guard binds process.stdout.write when it takes stdout over (D54).
+  const closedStdout = guardClosedStdout();
+  await piMain(prepared.piArgs, { extensionFactories: [...extensionFactories, closedStdout] });
   // Deviation from Pi (dogfood D50): after print/json mode, Pi's main.js only sets process.exitCode
   // and returns, so a loaded extension holding a timer or handle keeps the process alive, on success
   // and on failure. Every other piMain path (rpc, --export, errors) already calls process.exit and

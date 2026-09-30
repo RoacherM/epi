@@ -83,7 +83,7 @@ function expandTilde(value: string): string {
 
 /**
  * Which Pi CLI arguments MMP's TUI host understands, in one place, so it's easy to see what's
- * missing. `isInteractivePiRun` (../interactive.ts) already keeps `--print`/`-p`, `--mode`,
+ * missing. `isInteractivePiRun` (../interactive.ts) already keeps `--print`/`-p`, `--mode json/rpc`,
  * `--help`/`-h`, `--list-models` and `--export` off this path entirely (those go through piMain's
  * print/non-interactive modes instead of reaching here). Resource flags (`--extension`,
  * `--skill`, `--theme`, `--system-prompt`, ...) are rejected even earlier, in parseMmpArgs
