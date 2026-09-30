@@ -8,6 +8,7 @@
 // isn't broken, just reused per text run instead of once for the whole message.
 import { AssistantMessageComponent, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { fit, formatDuration, markPromptZone, spread, splitPromptZone, clockColumns } from "./chrome.js";
+import { rewritePiText } from "../pi-output.js";
 import { piTui } from "./pi-tui.js";
 import { createFlashState, disposeFlash, paintFlashRail, startFlash } from "./tools/flash.js";
 // Matches transcript.ts's CONTENT_PAD: a 1-column rail plus 2 columns of padding, so thinking lines
@@ -279,7 +280,7 @@ export class AssistantBlock {
             }
             else if (message.stopReason === "error") {
                 this.container.addChild(new piTui.Spacer(1));
-                this.container.addChild(new piTui.Text(this.theme.fg("error", `Error: ${message.errorMessage ?? "Unknown error"}`), CONTENT_PAD, 0));
+                this.container.addChild(new piTui.Text(this.theme.fg("error", `Error: ${rewritePiText(message.errorMessage ?? "Unknown error")}`), CONTENT_PAD, 0));
             }
         }
     }

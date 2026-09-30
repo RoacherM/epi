@@ -11,6 +11,7 @@ import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
 import { fit, formatDuration, markPromptZone, spread, splitPromptZone, clockColumns } from "./chrome.js";
+import { rewritePiText } from "../pi-output.js";
 import { piTui } from "./pi-tui.js";
 import { createFlashState, disposeFlash, type FlashState, paintFlashRail, startFlash } from "./tools/flash.js";
 
@@ -288,7 +289,7 @@ export class AssistantBlock implements Component {
         this.container.addChild(new piTui.Text(this.theme.fg("error", text), CONTENT_PAD, 0));
       } else if (message.stopReason === "error") {
         this.container.addChild(new piTui.Spacer(1));
-        this.container.addChild(new piTui.Text(this.theme.fg("error", `Error: ${message.errorMessage ?? "Unknown error"}`), CONTENT_PAD, 0));
+        this.container.addChild(new piTui.Text(this.theme.fg("error", `Error: ${rewritePiText(message.errorMessage ?? "Unknown error")}`), CONTENT_PAD, 0));
       }
     }
   }

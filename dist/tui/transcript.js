@@ -4,6 +4,7 @@ import { CustomMessageComponent, getMarkdownTheme, } from "@earendil-works/pi-co
 import { AssistantBlock } from "./assistant-block.js";
 import { UserBashBlock } from "./bash-block.js";
 import { formatDuration, messageText, UserMessageBlock } from "./chrome.js";
+import { rewritePiText } from "../pi-output.js";
 import { imageLabelNumbers } from "./paste-chips.js";
 import { piTui } from "./pi-tui.js";
 import { toolBlock } from "./tools/block.js";
@@ -139,7 +140,8 @@ export class Transcript {
      */
     notice(text, tone = "info") {
         const color = tone === "error" ? "error" : tone === "warning" ? "warning" : "muted";
-        this.add(new piTui.Text(this.theme.fg(color, text), 1, 0), true, false);
+        // Every notice passes here, including Pi's errors ("No API key found for ...", dogfood D55).
+        this.add(new piTui.Text(this.theme.fg(color, rewritePiText(text)), 1, 0), true, false);
         this.tui.requestRender();
     }
     /** A block from the host (command output, info panels), separated like any other message. */
