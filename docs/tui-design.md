@@ -358,7 +358,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | `autocompact` | Pi 核心 | `session.setAutoCompactionEnabled` |
 | `auto-resize-images`、`block-images` | Pi 核心（每次发请求时读） | 只写设置 |
 | `skill-commands` | MMP 接线 | 重建补全（`slashCompletions` 读它） |
-| `show-hardware-cursor` | MMP 接线 | `tui.setShowHardwareCursor`。没设置时 Pi 的 getter 看 `PI_HARDWARE_CURSOR` 环境变量，照 Pi |
+| `show-hardware-cursor` | MMP 接线 | `tui.setShowHardwareCursor`。没设置时是关，不看 `PI_HARDWARE_CURSOR`（主控 2026-10-01：MMP 不认用户 Pi 环境里的 `PI_*` 变量，同 `MMP_SESSION_DIR` 的先例）。Pi 的 `getShowHardwareCursor` 会回退到这个环境变量，所以界面和 `/settings` 都用 `settings-command.ts` 的 `showHardwareCursor()`（`getGlobalSettings().showHardwareCursor ?? false`） |
 | `autocomplete-max-visible` | MMP 接线 | `Editor.setAutocompleteMaxVisible` |
 | `steering-mode`、`follow-up-mode` | Pi 核心 | `session.setSteeringMode`/`setFollowUpMode`。说明文字改了：MMP 里运行中 Enter 是 follow-up、Alt+Enter 是 steer（4.7 节），和 Pi 相反 |
 | `transport` | Pi 核心 | 写设置并改 `session.agent.transport`，同 Pi |

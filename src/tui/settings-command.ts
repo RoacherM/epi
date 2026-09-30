@@ -42,6 +42,17 @@ interface MmpSetting {
 const bool = (value: boolean) => (value ? "true" : "false");
 
 /**
+ * MMP's show-hardware-cursor value. Pi's getShowHardwareCursor falls back to the PI_HARDWARE_CURSOR
+ * environment variable when settings.json has no value; MMP never honours a user's Pi environment
+ * (like MMP_SESSION_DIR instead of PI_CODING_AGENT_SESSION_DIR, docs/cli-design.md), so unset is
+ * off. Global settings are all of MMP's settings: its SettingsManager never loads a project's
+ * .pi/settings.json (services.ts, `projectTrusted: false`).
+ */
+export function showHardwareCursor(settings: SettingsManager): boolean {
+  return settings.getGlobalSettings().showHardwareCursor ?? false;
+}
+
+/**
  * The items in Pi's order. Each apply mirrors the Pi callback wired in interactive-mode.js
  * showSettingsSelector; `host.applySettings()` stands for the UI half of those callbacks (Pi's
  * applyRuntimeSettings plus setupAutocompleteProvider), so /settings, startup and /reload all apply
@@ -100,7 +111,7 @@ export function settingsItems(host: CommandHost): MmpSetting[] {
         id: "show-hardware-cursor",
         label: "Show hardware cursor",
         description: "Show the terminal cursor while still positioning it for IME support",
-        currentValue: bool(settings.getShowHardwareCursor()),
+        currentValue: bool(showHardwareCursor(settings)),
         values: ["true", "false"],
       },
       apply: (value) => {

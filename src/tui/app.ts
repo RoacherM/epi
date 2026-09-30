@@ -35,6 +35,7 @@ import { pastePreview } from "./paste-preview.js";
 import { piTui } from "./pi-tui.js";
 import { crossProjectRefusal, type ProjectIdentity } from "./project-guard.js";
 import { configureHttp } from "./services.js";
+import { showHardwareCursor } from "./settings-command.js";
 import { confirmMissingSessionCwd, missingSessionCwdIssue, runResume } from "./session-commands.js";
 import { Transcript } from "./transcript.js";
 
@@ -252,7 +253,8 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
    * start, not only after bind(). */
   function applyUiSettings(): void {
     const settings = session.settingsManager;
-    tui.setShowHardwareCursor(settings.getShowHardwareCursor());
+    // Not Pi's getShowHardwareCursor: that one reads PI_HARDWARE_CURSOR (settings-command.ts).
+    tui.setShowHardwareCursor(showHardwareCursor(settings));
     // T3 (docs/decisions.md): copy on select stays on when unset; Pi's getter defaults to true.
     tui.setCopyOnSelect(settings.getFullscreenCopyOnSelect());
     tui.setWheelScrollLines(settings.getFullscreenWheelScrollLines());

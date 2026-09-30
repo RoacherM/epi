@@ -233,6 +233,20 @@ test("Show hardware cursor turns the terminal cursor on at once and at startup",
   assert.equal(startup.run([["waitReady"], ["rawMark", "start"], ...quit]).marks.start.includes(SHOW), true);
 });
 
+test("Show hardware cursor ignores Pi's PI_HARDWARE_CURSOR: unset in settings.json means off, and /settings says false", (t) => {
+  // Pi's getter falls back to PI_HARDWARE_CURSOR=1; MMP does not honour a user's Pi environment
+  // (the MMP_SESSION_DIR precedent, docs/cli-design.md).
+  const env = makeEnv(t);
+  const { marks } = env.run([
+    ["waitReady"], ["type", "x"], ["wait", 100], ["rawMark", "typed"], ["key", "ctrl+c"], ["wait", 100],
+    ["type", "/settings"], ["key", "enter"], ["waitFor", "Type to search"], ["type", "Show hardware cursor"], ["wait", 100],
+    ["mark", "shown"], ["key", "esc"], ["wait", 100], ...quit,
+  ], { env: { PI_HARDWARE_CURSOR: "1" } });
+  assert.equal(marks.typed.includes("\x1b[?25h"), false);
+  assert.match(marks.shown, /→ Show hardware cursor +false/);
+  assert.doesNotMatch(marks.shown, /→ Show hardware cursor +true/);
+});
+
 test("Fullscreen copy on select: on when unset (decision T3), off at once from /settings, off from settings.json", (t) => {
   const OSC52 = "\x1b]52;c;";
   // Drag across the startup page's first line: press, move with the button held, release.
@@ -277,6 +291,11 @@ test("MMP's items match Pi's SettingsSelectorComponent: same order, labels, desc
   const agentDir = mkdtempSync(join(tmpdir(), "mmp-settings-drift-"));
   t.after(() => rmSync(agentDir, { recursive: true, force: true }));
   process.env.PI_CODING_AGENT_DIR = agentDir;
+  // Pi's getShowHardwareCursor reads PI_HARDWARE_CURSOR, MMP's value never does; compare the two
+  // with it unset so the developer's environment can't make them differ.
+  const hardwareCursorEnv = process.env.PI_HARDWARE_CURSOR;
+  delete process.env.PI_HARDWARE_CURSOR;
+  t.after(() => { if (hardwareCursorEnv !== undefined) process.env.PI_HARDWARE_CURSOR = hardwareCursorEnv; });
   const { SettingsManager, SettingsSelectorComponent } = await import("@earendil-works/pi-coding-agent");
   const { installMmpTheme } = await import("../dist/tui/theme.js");
   const { settingsItems } = await import("../dist/tui/settings-command.js");
