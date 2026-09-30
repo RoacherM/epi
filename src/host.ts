@@ -350,9 +350,9 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
   if (process.env.MMP_SESSION_DIR !== undefined && process.env.MMP_SESSION_DIR !== "") {
     process.env.PI_CODING_AGENT_SESSION_DIR = process.env.MMP_SESSION_DIR;
   }
-  // Every interactive run takes MMP's own TUI (docs/tui-design.md); no environment switch. All
-  // other runs (print/json/rpc, --help, --list-models, --export, Pi CLI subcommands, non-TTY)
-  // keep going through piMain unchanged (docs/decisions.md D3).
+  // Every interactive run takes MMP's own TUI (docs/tui-design.md); no environment switch.
+  // `--help` and `--list-models` are MMP's own too (above/below); all other runs (print/json/rpc,
+  // --export, Pi CLI subcommands, non-TTY) keep going through piMain unchanged (docs/decisions.md D3).
   if (isInteractivePiRun(args.passthrough, process.stdin.isTTY === true, process.stdout.isTTY === true)) {
     const tui = await import("./tui/start.js");
     // A failed startup (bind() rejecting) is reported here rather than by cli.ts, so it exits too.
