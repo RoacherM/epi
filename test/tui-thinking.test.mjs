@@ -57,26 +57,28 @@ test("thinking streams 'Thinking…' while running, then settles as 'Thought for
   assert.match(stripAnsi(output), /THINK-DONE/);
 });
 
-// The precise expand/collapse/click-one semantics (that collapsed genuinely shows nothing past the
-// header, that a second Ctrl+T genuinely collapses it back) are the direct Transcript unit tests'
-// job: clean render() snapshots, not this harness's cumulative, differentially-rendered log, where
-// neither a "the text is present" nor a "the text is not present *anymore*" check is reliable (see
-// the note above -- and differential rendering means even a mark's own *trailing* bytes aren't
-// reliably "the current screen": an idle frame's last redraw can be the footer or cursor blink,
-// nowhere near the reasoning text, even though that text is still on screen unchanged). What this
-// test can and does check: Ctrl+T is really wired to a live key press (Pi's `app.thinking.toggle`
-// through to `CommandHost.toggleThinkingExpanded`) and, once it runs, the resulting expanded render
-// actually contains real reasoning text (not an error, not empty output) -- i.e. the code path
-// behind the key executes successfully end to end, which a bare exit-code check does not prove.
-test("Ctrl+T is wired to a live key press and its expanded render shows real reasoning text", (t) => {
+// Marks are cumulative (every byte the app ever wrote), so "the text is present" doesn't prove
+// Ctrl+T *changed* anything -- it could have already scrolled past during streaming. What proves the
+// toggle fired is the *delta* between two marks (the bytes newly written in between, same technique
+// as tui-paste-chips-app.test.mjs's `since()`): expanding a 1-row header into a multi-row block must
+// write those new reasoning rows; collapsing it must rewrite that space with whatever now sits there
+// (the reply text, shifted back up) -- a no-op key press writes neither.
+const since = (earlierMark, laterMark) => stripAnsi(laterMark.slice(earlierMark.length));
+
+test("Ctrl+T expands the collapsed thinking block's full text; a second press collapses it back", (t) => {
   const { marks } = runApp(t, [fixture("faux-thinking.mjs")], [
     ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 3000],
-    ["key", "ctrl+t"], ["wait", 100], ["mark", "after"],
+    ["mark", "collapsed"],
+    ["key", "ctrl+t"], ["wait", 100], ["mark", "expanded"],
+    ["key", "ctrl+t"], ["wait", 100], ["mark", "collapsedAgain"],
     ["key", "ctrl+d"],
   ]);
-  const after = stripAnsi(marks.after);
-  assert.match(after, /THINK-DONE/);
-  assert.match(after, /reasoning step \d/, "the expanded thinking block should show its own reasoning text");
+  const expandDelta = since(marks.collapsed, marks.expanded);
+  assert.match(expandDelta, /reasoning step 7/, "Ctrl+T must redraw the block with its full text");
+
+  const collapseDelta = since(marks.expanded, marks.collapsedAgain);
+  assert.doesNotMatch(collapseDelta, /reasoning step/, "collapsing rewrites those rows with what's below, not reasoning text");
+  assert.match(collapseDelta, /THINK-DONE/, "the reply row shifted back up and was redrawn -- proof something actually collapsed");
 });
 
 test("Esc during a run prints 'Stopped after Ns', not 'Worked for'", (t) => {
