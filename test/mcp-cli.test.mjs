@@ -103,6 +103,42 @@ test("mmp mcp add -l --approve writes the project's own mcp.json instead of the 
   assert.deepEqual(config.mcpServers.fixture, { command: "node", args: [fixtureServerPath] });
 });
 
+// A written .mmp/mcp.json that nothing will ever load is exactly the "failure must be visible"
+// violation Pi's own cli.js:294-296 hint exists to prevent for its own (Manifest-always-exists)
+// case; --approve is this-run-only and never persists, so both gaps need their own hint.
+test("mmp mcp add -l --approve in a bare directory (no .mmp/mmp.json yet) warns the file is not a project yet", (t) => {
+  const f = fixture(t);
+  const result = run(f, ["add", "fixture", "-l", "--approve", "--", "node", fixtureServerPath]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /is not an MMP project -- .*\.mmp[\\/]mcp\.json is ignored until you run `mmp install -l`/);
+  assert.ok(existsSync(projectMcpPath(f)), "the file is still written -- only the hint is new");
+});
+
+test("mmp mcp add -l --approve with a Manifest present but trust not persisted warns it is still ignored", (t) => {
+  const f = fixture(t);
+  mkdirSync(join(f.project, ".mmp"), { recursive: true });
+  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
+  const result = run(f, ["add", "fixture", "-l", "--approve", "--", "node", fixtureServerPath]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /project is not trusted, so .*\.mmp[\\/]mcp\.json is ignored until you start mmp in the project and trust it/);
+});
+
+test("mmp mcp add -l with the project already trusted (no --approve needed) shows no ignored-file warning", async (t) => {
+  const f = fixture(t);
+  mkdirSync(join(f.project, ".mmp"), { recursive: true });
+  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
+  // Persist the trust decision through Pi's own ProjectTrustStore, the same class
+  // src/trust-prompt.ts's saveProjectTrustChoice uses -- not a hand-guessed file format.
+  const { ProjectTrustStore } = await import("@earendil-works/pi-coding-agent");
+  mkdirSync(join(f.home, ".mmp", "pi"), { recursive: true });
+  new ProjectTrustStore(join(f.home, ".mmp", "pi")).set(f.project, true);
+  const result = run(f, ["add", "fixture", "-l", "--", "node", fixtureServerPath]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /is ignored/);
+  const config = JSON.parse(readFileSync(projectMcpPath(f), "utf8"));
+  assert.deepEqual(config.mcpServers.fixture, { command: "node", args: [fixtureServerPath] });
+});
+
 test("mmp mcp remove drops an existing server; removing an unknown one exits 1 without touching the file", (t) => {
   const f = fixture(t);
   run(f, ["add", "fixture", "--", "node", fixtureServerPath]);

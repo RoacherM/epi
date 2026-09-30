@@ -251,6 +251,26 @@ const registry = [
     },
   },
   {
+    id: "mcp-command-collision-suffix",
+    check() {
+      const runnerPath = join(piDist, "core", "extensions", "runner.js");
+      const text = readFileSync(runnerPath, "utf8");
+      assert.match(
+        text,
+        /resolveRegisteredCommands/,
+        `${runnerPath} no longer defines resolveRegisteredCommands`,
+      );
+      // The exact renaming rule src/extensions/mcp.ts's hasDuplicateMcpCommand depends on: a name
+      // registered more than once gets "<name>:<occurrence>" for *every* registration, not just the
+      // second one -- so a plain "mcp" never survives a collision for MMP to mistake as the only one.
+      assert.match(
+        text,
+        /\(counts\.get\(command\.name\)\s*\?\?\s*0\)\s*>\s*1\s*\?\s*`\$\{command\.name\}:\$\{occurrence\}`\s*:\s*command\.name/,
+        `${runnerPath}'s collision-renaming rule no longer matches the "<name>:<occurrence>" shape hasDuplicateMcpCommand's /^mcp:\\d+$/ regex depends on`,
+      );
+    },
+  },
+  {
     id: "mcp-native-runtime",
     async check() {
       const runtime = await importDeep("extensions", "mcp", "runtime.js");

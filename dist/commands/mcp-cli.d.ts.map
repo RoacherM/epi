@@ -1,1 +1,1 @@
-{"version":3,"file":"mcp-cli.d.ts","sourceRoot":"","sources":["../../src/commands/mcp-cli.ts"],"names":[],"mappings":"AAyiBA,wBAAsB,aAAa,CAAC,IAAI,EAAE,SAAS,MAAM,EAAE,GAAG,OAAO,CAAC,MAAM,CAAC,CAqB5E"}
+{"version":3,"file":"mcp-cli.d.ts","sourceRoot":"","sources":["../../src/commands/mcp-cli.ts"],"names":[],"mappings":"AAsjBA,wBAAsB,aAAa,CAAC,IAAI,EAAE,SAAS,MAAM,EAAE,GAAG,OAAO,CAAC,MAAM,CAAC,CAqB5E"}

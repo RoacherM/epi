@@ -72,9 +72,23 @@ for (const [kind, value] of steps) {
   // Counts live processes matching `value.pattern` (a `pgrep -f` argument) mid-run, from outside
   // the app -- e.g. exactly one MCP stdio child surviving a /new or /reload (docs/mcp-design.md's
   // state checklist: connections must not leak or duplicate across a session-replacement path).
-  // Records the trimmed PID list (one per line, "" when none) into marks[value.mark].
+  // Records the trimmed PID list (one per line, "" when none) into marks[value.mark]. When
+  // `value.expectCount` is given, polls (every 100ms, up to `value.timeoutMs`, default 3000) until
+  // that many lines match or the deadline passes -- closing a stdio transport is a real async
+  // teardown (stdin close, a grace period, then SIGTERM: pi-mcp's transports/stdio.js), so the old
+  // process can still be exiting for a moment after the new one has already started. This still
+  // catches a genuine stuck-at-N leak: it only ever returns early on a match, never gives up before
+  // the deadline on a mismatch.
   else if (kind === "pgrep") {
-    marks[value.mark] = spawnSync("pgrep", ["-f", value.pattern], { encoding: "utf8" }).stdout.trim();
+    const deadline = Date.now() + (value.timeoutMs ?? 3000);
+    let output;
+    do {
+      output = spawnSync("pgrep", ["-f", value.pattern], { encoding: "utf8" }).stdout.trim();
+      const count = output === "" ? 0 : output.split("\n").length;
+      if (value.expectCount === undefined || count === value.expectCount) break;
+      await sleep(100);
+    } while (Date.now() < deadline);
+    marks[value.mark] = output;
   }
   else if (kind === "key") {
     if (!(value in KEYS)) throw new Error(`tui-harness.mjs: unknown key "${value}"`);

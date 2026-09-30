@@ -7,6 +7,7 @@
 // registered in docs/pi-internals.md, extending the same "mcp-native-config-loader" row and a new
 // "mcp-native-runtime" row) -- so the file format, validation, and connection behavior stay
 // identical to Pi's and upgrade automatically.
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { MmpArgumentError } from "../errors.js";
@@ -227,6 +228,19 @@ function addCommand(args, ctx) {
         throw new MmpArgumentError(`Could not update ${path}: ${errorMessage(addError)}`);
     }
     console.log(`${replaced ? "Replaced" : "Added"} ${local ? "project" : "global"} MCP server "${name}" in ${path}.`);
+    if (local) {
+        // assertProjectTrustedFor above only gates *this write* (an --approve override is this-run-only,
+        // never persisted) -- without one of these two hints, a plain future `mmp` or `mmp mcp list`
+        // would silently ignore the file just written, which is exactly the "failure must be visible"
+        // violation Pi's own cli.js:294-296 hint (a different case: it always creates the project
+        // Manifest first, so only the trust half applies there) also exists to prevent.
+        if (!existsSync(join(ctx.cwd, ".mmp", "mmp.json"))) {
+            console.log(`${ctx.cwd} has no .mmp/mmp.json yet, so it is not an MMP project -- ${path} is ignored until you run \`mmp install -l\` (or \`mmp config -l\`) here.`);
+        }
+        else if (readProjectTrustDecision(resolveMmpPaths(process.env).agentDir, ctx.cwd) !== true) {
+            console.log(`The project is not trusted, so ${path} is ignored until you start mmp in the project and trust it (mmp --approve or /trust).`);
+        }
+    }
     const mayNeedSignIn = "url" in validated && !Object.keys(validated.headers ?? {}).some((header) => header.toLowerCase() === "authorization");
     console.log(`Check it with: mmp mcp list${mayNeedSignIn ? `. If it requires sign-in: mmp mcp login ${name}` : ""}`);
     return 0;
