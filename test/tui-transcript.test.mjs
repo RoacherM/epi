@@ -341,6 +341,21 @@ test("a compaction continuation (two agent_end pairs, one agent_settled) prints 
   assert.equal(matches.length, 1, `expected exactly one footer line, got: ${rendered}`);
 });
 
+// Dogfood D17: a cancelled manual /compact runs outside any prompt run, so it has no footer of its
+// own and must not mark the next run as stopped.
+test("a cancelled manual /compact between runs leaves the next run's footer at 'Worked for'", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  transcript.handle({ type: "compaction_end", reason: "manual", aborted: true, willRetry: false });
+  transcript.handle({ type: "agent_start" });
+  transcript.handle({ type: "agent_end", messages: [assistantMessage([{ type: "text", text: "done" }])], willRetry: false });
+  transcript.handle({ type: "agent_settled" });
+  const rendered = transcript.root.render(80).join("\n");
+  assert.match(rendered, /Compaction cancelled/);
+  assert.doesNotMatch(rendered, /Context compacted\./);
+  assert.match(rendered, /Worked for \d+\.\ds/);
+  assert.doesNotMatch(rendered, /Stopped after/);
+});
+
 // Every new block this change adds (timestamp, thinking streaming/collapsed/expanded, the turn
 // footer) must still fit narrow and wide terminals, like the existing tool/message renderers do.
 test("assistant messages with thinking fit widths 40, 80, and 120", () => {

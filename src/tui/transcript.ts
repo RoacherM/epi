@@ -46,10 +46,11 @@ export class Transcript {
   /** The most recent `agent_end`'s own messages, read back on `agent_settled` (the point that's
    * actually "this run is over") to find the last assistant reply's `stopReason`. */
   private lastTurnMessages: readonly { role: string; stopReason?: string }[] = [];
-  /** Set only by `auto_retry_end`'s "Retry cancelled" (Esc during a retry's backoff sleep never
-   * reaches another `agent_end`, so it has no `stopReason` of its own to read back from
-   * `lastTurnMessages` -- this is the only signal it leaves behind). `turnFooter()` ORs this with
-   * `lastTurnMessages`'s own aborted check, the ordinary case (Esc during a normal response). */
+  /** Set by `auto_retry_end`'s "Retry cancelled" and by an aborted automatic `compaction_end`
+   * inside a run (Esc during a retry's backoff sleep or a post-run compaction never reaches another
+   * `agent_end`, so it has no `stopReason` of its own to read back from `lastTurnMessages` -- this
+   * is the only signal it leaves behind). `turnFooter()` ORs this with `lastTurnMessages`'s own
+   * aborted check, the ordinary case (Esc during a normal response). */
   private turnAborted = false;
 
   constructor(
@@ -229,6 +230,12 @@ export class Transcript {
         // key, since nothing the user asked for was lost) for one the agent started on its own.
         else if (event.aborted) this.notice(event.reason === "manual" ? "Compaction cancelled" : "Auto-compaction cancelled", event.reason === "manual" ? "error" : "info");
         else this.notice("Context compacted.");
+        // Dogfood D17: Esc on an automatic compaction stops the run it belongs to (after an overflow,
+        // the retry that would have followed). Pi has no turn footer; its only record is the
+        // "Auto-compaction cancelled" status above, so the footer reads the same stop as "Stopped
+        // after", not "Worked for". Only inside a timed run: a manual /compact runs after Pi's
+        // compact() has aborted and settled the run, and its cancel must not mark the next run.
+        if (event.aborted && this.turnStartedAt !== undefined) this.turnAborted = true;
         break;
       case "auto_retry_start":
         this.notice(`Retrying (${event.attempt}/${event.maxAttempts}) in ${Math.round(event.delayMs / 1000)}s: ${event.errorMessage}`, "warning");

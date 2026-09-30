@@ -26,10 +26,11 @@ export declare class Transcript {
     /** The most recent `agent_end`'s own messages, read back on `agent_settled` (the point that's
      * actually "this run is over") to find the last assistant reply's `stopReason`. */
     private lastTurnMessages;
-    /** Set only by `auto_retry_end`'s "Retry cancelled" (Esc during a retry's backoff sleep never
-     * reaches another `agent_end`, so it has no `stopReason` of its own to read back from
-     * `lastTurnMessages` -- this is the only signal it leaves behind). `turnFooter()` ORs this with
-     * `lastTurnMessages`'s own aborted check, the ordinary case (Esc during a normal response). */
+    /** Set by `auto_retry_end`'s "Retry cancelled" and by an aborted automatic `compaction_end`
+     * inside a run (Esc during a retry's backoff sleep or a post-run compaction never reaches another
+     * `agent_end`, so it has no `stopReason` of its own to read back from `lastTurnMessages` -- this
+     * is the only signal it leaves behind). `turnFooter()` ORs this with `lastTurnMessages`'s own
+     * aborted check, the ordinary case (Esc during a normal response). */
     private turnAborted;
     constructor(tui: TUI, theme: Theme, session: AgentSession);
     /** New session after /new, /resume, /reload: clear and replay its history. */

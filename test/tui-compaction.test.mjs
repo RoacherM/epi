@@ -373,3 +373,43 @@ test("a threshold compaction after the run's last reply leaves no Compacting… 
   assert.doesNotMatch(lastFrame, /Compacting…/);
   assert.match(lastFrame, /Ctrl\+t:thinking/);
 });
+
+// Dogfood D17: two ways a run ends from Esc without another agent_end, so neither agent_end nor
+// the next agent_start clears the status. The review of D15 found both left their status row on
+// screen after the footer; only compaction_end/auto_retry_end and the agent_settled clear catch
+// them. The screen is checked from the footer down: that's the status row, editor and footer.
+const afterStop = (screen) => screen.slice(screen.lastIndexOf("Stopped after"));
+
+test("Esc during a retry backoff leaves no Retrying… status once the run settles", (t) => {
+  const { marks, text: out } = runApp(t, [fixture("faux-retry.mjs")], [
+    ["waitReady"],
+    ["type", "go"], ["key", "enter"], ["waitFor", "Retrying (1/3)…"],
+    ["key", "esc"], ["waitFor", "Stopped after"],
+    ["waitFor", "Ctrl+t:thinking", { all: true, timeoutMs: 3000 }],
+    // An absence window: a stuck status row would be redrawn by its own timer within it.
+    ["wait", 300], ["mark", "settled"],
+    ["key", "ctrl+d"],
+  ], { settings: { retry: { baseDelayMs: 5000, maxRetries: 3 } } });
+  assert.match(out, /Retry failed: Retry cancelled/);
+  const lastFrame = afterStop(marks.settled);
+  assert.doesNotMatch(lastFrame, /Retrying|Waiting for response/);
+  assert.match(lastFrame, /Ctrl\+t:thinking/);
+});
+
+test("Esc during a post-run overflow compaction leaves no Compacting… status and reads Stopped after", (t) => {
+  const { marks, text: out } = runApp(t, [fixture("faux-overflow.mjs")], [
+    ...overflowTurn,
+    ["key", "esc"], ["waitFor", "Auto-compaction cancelled"],
+    ["waitFor", "Stopped after"],
+    ["waitFor", "Ctrl+t:thinking", { all: true, timeoutMs: 3000 }],
+    ["wait", 300], ["mark", "settled"],
+    ["key", "ctrl+d"],
+  ], KEEP_NO_RECENT);
+  const lastFrame = afterStop(marks.settled);
+  assert.doesNotMatch(lastFrame, /Compacting…|Waiting for response…/);
+  assert.match(lastFrame, /Ctrl\+t:thinking/);
+  // Cancelled, so no summary and no retry of the overflowed request.
+  assert.doesNotMatch(out, /Context compacted\.|AFTER-RECOVERY/);
+  // The second prompt's footer: only the first one ("BEFORE-OVERFLOW") reads "Worked for".
+  assert.equal(out.match(/Worked for/g)?.length, 1);
+});
