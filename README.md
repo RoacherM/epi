@@ -18,7 +18,7 @@ MMP 不调用 PATH 中的 `pi`，也不自动读取 `~/.pi/agent`、`.pi/`、`.a
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/RoacherM/mmp/releases/download/v0.1.4/install.sh | sh
+  https://github.com/RoacherM/mmp/releases/latest/download/install.sh | sh
 ```
 
 安装器检查 Node.js/npm，验证发行包的 SHA-256 后再执行全局安装，不会自动使用 `sudo`。不希望把脚本直接交给 shell 时，可以先下载并审阅 `install.sh`。
@@ -39,11 +39,11 @@ mmp update
 
 `mmp update` 查询 GitHub 上最新的 Release；有新版就下载该版本的 `install.sh` 并运行，安装器同样会校验 SHA-256。交互模式每天最多检查一次新版本（后台进行，超时 3 秒），有新版时在底栏显示 `Update available! … Run: mmp update`。检查结果缓存在 `~/.mmp/update-check.json`，检查失败时错误也记在这里。非交互模式、`--offline`、`PI_OFFLINE`、`CI` 环境下不检查；设置 `MMP_DISABLE_UPDATE_CHECK=1` 可以完全关闭。MMP 会关掉 Pi 自带的更新提示，因为它提示的 `pi update` 不会更新 MMP 锁定的 Pi。MMP 不做后台自动安装。安装器不会自动使用 `sudo`：如果当初是装在需要 root 权限的全局目录里，`mmp update` 会失败退出，需要按当初的方式手动重装。
 
-也可以直接通过 npm 安装同一个 GitHub Release：
+也可以直接通过 npm 安装同一个 GitHub Release；`<version>` 换成 [Releases 页面](https://github.com/RoacherM/mmp/releases)上的最新版本号（tgz 的文件名带版本号，没有 `latest` 别名）：
 
 ```bash
 npm install --global \
-  https://github.com/RoacherM/mmp/releases/download/v0.1.4/mmp-0.1.4.tgz
+  https://github.com/RoacherM/mmp/releases/download/v<version>/mmp-<version>.tgz
 mmp --version
 ```
 

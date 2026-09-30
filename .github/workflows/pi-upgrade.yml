@@ -1,0 +1,113 @@
+name: Pi upgrade
+
+# Runs the offline gate itself before opening anything (see docs/pi-upgrade-design.md §2-§3): a PR
+# opened with the default GITHUB_TOKEN does not trigger other workflows, so ci.yml will NOT run on
+# the PR this creates. To also get CI on that PR, push to it using a personal access token stored as
+# a repo secret (e.g. PI_UPGRADE_PAT with `contents:write`/`pull-requests:write`) instead of
+# GITHUB_TOKEN, and github.token elsewhere in this file; nothing here requires that secret to exist.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: pi-upgrade
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Optional PAT so ci.yml runs on the PR this creates (a PR opened with the default
+          # GITHUB_TOKEN doesn't trigger other workflows). Falls back to GITHUB_TOKEN when absent.
+          token: ${{ secrets.PI_UPGRADE_PAT || github.token }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+      - run: npm ci
+
+      - name: Run pi:upgrade
+        id: upgrade
+        run: |
+          set +e
+          npm run pi:upgrade -- --report report.md
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Fail the job on a script error
+        if: steps.upgrade.outputs.exit_code == '2'
+        run: |
+          echo "pi:upgrade exited 2 (script error), see the log above"
+          exit 1
+
+      - name: Read the upgrade result
+        id: info
+        if: steps.upgrade.outputs.exit_code != '2'
+        run: |
+          node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync("report.md.json", "utf8"));
+            const out = process.env.GITHUB_OUTPUT;
+            fs.appendFileSync(out, `upgraded=${r.upgraded}\n`);
+            fs.appendFileSync(out, `gate_passed=${r.gatePassed}\n`);
+            fs.appendFileSync(out, `model_visible_changed=${r.modelVisibleChanged}\n`);
+            fs.appendFileSync(out, `new_pi_version=${r.newPiVersion ?? ""}\n`);
+          '
+
+      - name: Nothing new
+        if: steps.info.outputs.new_pi_version == ''
+        run: echo "Already on the latest compatible Pi version; nothing to do."
+
+      # --- Gate passed: open (or update) the upgrade PR -----------------------------------------
+      - name: Open or update the upgrade PR
+        if: steps.info.outputs.upgraded == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PI_UPGRADE_PAT || github.token }}
+          BRANCH: pi-upgrade/${{ steps.info.outputs.new_pi_version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add package.json package-lock.json src/host.ts dist
+          git commit -m "chore: upgrade Pi to ${{ steps.info.outputs.new_pi_version }}"
+          git push --force origin "$BRANCH"
+
+          gh label create pi-upgrade --color 5319e7 --force
+          if [ "${{ steps.info.outputs.model_visible_changed }}" = "true" ]; then
+            gh label create model-visible-change --color b60205 --force
+            labels="pi-upgrade,model-visible-change"
+          else
+            labels="pi-upgrade"
+          fi
+
+          existing=$(gh pr list --head "$BRANCH" --json number --jq '.[].number')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --body-file report.md
+          else
+            gh pr create --title "Pi upgrade to ${{ steps.info.outputs.new_pi_version }}" \
+              --body-file report.md --label "$labels" --head "$BRANCH" --base main
+          fi
+
+      # --- Gate failed: open (or update) an issue with the report --------------------------------
+      - name: Open or update the failure issue
+        if: steps.info.outputs.new_pi_version != '' && steps.info.outputs.upgraded != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create pi-upgrade-failed --color b60205 --force
+          title="Pi upgrade to ${{ steps.info.outputs.new_pi_version }} failed the gate"
+          existing=$(gh issue list --label pi-upgrade-failed --state open --json number,title \
+            --jq ".[] | select(.title == \"$title\") | .number")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file report.md
+          else
+            gh issue create --title "$title" --body-file report.md --label pi-upgrade-failed
+          fi

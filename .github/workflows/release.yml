@@ -1,0 +1,27 @@
+name: Release
+
+# Runs on every push to main; scripts/release.mjs itself skips the work (exits 0) when the tag for
+# package.json's current version already exists, so a push that doesn't bump the version is a
+# no-op here. This runs independently of, and in parallel with, ci.yml -- it does not wait for CI.
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run release
+        env:
+          GH_TOKEN: ${{ github.token }}

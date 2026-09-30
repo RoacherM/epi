@@ -1,9 +1,12 @@
 #!/bin/sh
 set -eu
 
-MMP_VERSION="0.1.4"
+# Placeholders below are filled in by scripts/release.mjs when it renders this file as a release
+# asset -- the repo copy is a template, never a real version/hash. Running the repo copy unrendered
+# fails the SHA-256 format check further down with a clear message.
+MMP_VERSION="__MMP_VERSION__"
 DEFAULT_DOWNLOAD_URL="https://github.com/RoacherM/mmp/releases/download/v${MMP_VERSION}/mmp-${MMP_VERSION}.tgz"
-DEFAULT_PACKAGE_SHA256="adf77043ad0e2545c177604d33b4efcadd5a9ad46312c5a227515b1739e07745"
+DEFAULT_PACKAGE_SHA256="__MMP_PACKAGE_SHA256__"
 
 die() {
   printf 'mmp installer: %s\n' "$*" >&2

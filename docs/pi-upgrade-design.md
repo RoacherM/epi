@@ -73,16 +73,24 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 
 ## 5. 发布自动化
 
-合并升级 PR 后，发布脚本 `scripts/release.mjs` 按这个顺序执行：
+**版本号谁来加。** MMP 的 patch 版本号在升级 PR 里就已经加好了：`scripts/pi-upgrade.mjs` 门禁通过后顺手把 `package.json` 和 `src/host.ts` 里的 `MMP_VERSION` 一起加一个 patch 版本，这样这条 PR 本身就是"可发布"的（见第 8 节步 3）。`scripts/release.mjs` 只读 `package.json` 里已经写好的版本号，自己不改版本号，也不提交任何东西。
 
-1. MMP 版本号加一个 patch 版本；
-2. `npm pack`；
-3. 计算 SHA-256；
-4. 更新 `install.sh` 和 README 里的下载地址和校验值；
-5. 打 tag；
-6. `gh release create`。
+**SHA-256 只算一次，仓库里不存哈希。** `install.sh` 在仓库里是一份模板，`MMP_VERSION` 和 `DEFAULT_PACKAGE_SHA256` 两处都是占位符（`__MMP_VERSION__` / `__MMP_PACKAGE_SHA256__`），从来不是真的版本号或哈希——直接跑这份模板会在 SHA-256 格式校验那一步就报错退出，不需要额外代码。真正的哈希只在发布时算一次：
 
-对外发布是否需要你每次点一下，由你定（U2）。
+1. 从 `package.json` 读版本号 `X`，tag 定为 `vX`；
+2. tag 已存在（`git ls-remote --tags origin refs/tags/vX`）就跳过，直接结束——这样 `release.yml` 每次 push 到 main 都能安全地跑，不需要额外判断"是不是刚发布过"；
+3. `npm pack --json` 打包出 `mmp-X.tgz`；
+4. 用 `node:crypto` 对这个 tgz 算 SHA-256（不用 `npm pack` 自带的 `shasum`，那是 SHA-1）；
+5. 把算出来的版本号和哈希填进 `install.sh` 模板的两个占位符，渲染到临时文件；
+6. `gh release create vX <tgz> <渲染后的 install.sh> --generate-notes --target <commit>`：tag 由这一步顺带创建，不需要单独 `git tag` / `git push`，CI 也就不需要给 main 推任何提交。
+
+`releases/download/vX/install.sh` 和 `releases/latest/download/install.sh` 都能拿到这份渲染好的文件（后者随最新 release 自动指向新版本，README 的一键安装命令用这个，不用每次发布改链接）；`mmp update`（`src/update.ts` 的 `installerUrl`）用的是前一种带具体版本号的地址，跟发布产物的命名对得上，不用改。
+
+`gh` / `git` / `npm` 都是 `scripts/release.mjs` 里的可注入依赖（`exec` 参数），测试用假的实现驱动，不碰真实网络或真实仓库；`test/release.test.mjs` 验证「tag 已存在就跳过」「打包、算哈希、渲染 install.sh、发布」两条路径，`test/install.test.mjs` 额外验证「渲染后的 install.sh 能跑通完整安装流程」和「没渲染就跑会报错」。
+
+对外发布是否需要你每次点一下，由你定（U2）：目前是"升级 PR 你点合并，合并后发布脚本自动跑"，`release.yml` 监听 push to main，跳过判断（tag 已存在）保证它不会重复发布。
+
+**升级 PR 上没有 CI。** `pi-upgrade.yml` 用默认 `GITHUB_TOKEN` 开 PR 时，GitHub 不会为这个 PR 触发别的 workflow（包括 `ci.yml`），这是平台限制，不是 bug——升级脚本自己已经在开 PR 之前跑过完整门禁，所以这不影响正确性，只是那条 PR 页面上看不到绿色的 CI 勾。想要 PR 页面也有 CI，加一个 repo secret `PI_UPGRADE_PAT`（有 `contents:write` / `pull-requests:write` 权限的 PAT）：`pi-upgrade.yml` 已经写好 `secrets.PI_UPGRADE_PAT || github.token` 的兜底逻辑，不需要改代码，加了 secret 就自动生效，没加也能正常工作。
 
 ## 5.1 用户侧：更新提示（参照 Claude Code）
 
