@@ -17,6 +17,7 @@ import {
 import { parseMmpArgs, passthroughHasFlag, renderHelp, type MmpArgs } from "./args.js";
 import { runAuthCommand } from "./commands/auth-cli.js";
 import { runConfigCommand, runInstallCommand, runListCommand, runRemoveCommand } from "./commands/manifest-cli.js";
+import { runMcpCommand } from "./commands/mcp-cli.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { isInteractivePiRun } from "./interactive.js";
 import { resolveMmpPaths } from "./paths.js";
@@ -55,7 +56,7 @@ export const MMP_HELP = renderHelp();
 /** `mmp <subcommand>`: routed before any flag parsing, and never forwarded to Pi's own CLI
  * dispatcher (docs/cli-design.md §3) -- each reads/writes the Manifest or MMP's own agent
  * directory directly. */
-const MMP_SUBCOMMANDS = new Set(["install", "remove", "uninstall", "list", "config", "auth"]);
+const MMP_SUBCOMMANDS = new Set(["install", "remove", "uninstall", "list", "config", "auth", "mcp"]);
 
 async function runSubcommand(subcommand: string, argv: readonly string[]): Promise<number> {
   switch (subcommand) {
@@ -71,6 +72,10 @@ async function runSubcommand(subcommand: string, argv: readonly string[]): Promi
       return runConfigCommand(argv);
     case "auth":
       return runAuthCommand(argv);
+    case "mcp":
+      // Never reaches piMain (docs/mcp-design.md §6): Pi's own `pi mcp` reads/writes .pi/mcp.json
+      // and Pi's ProjectTrustStore, both wrong for MMP.
+      return runMcpCommand(argv);
     default:
       throw new Error(`unreachable subcommand: ${subcommand}`);
   }

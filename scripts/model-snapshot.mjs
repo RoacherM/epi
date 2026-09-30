@@ -34,10 +34,6 @@ const bundleTemplate = join(root, "test", "fixtures", "full-runtime");
 // README/docs/examples paths), which npm resolves through node_modules -- realpathSync follows any
 // symlink (e.g. a worktree's node_modules) to the actual on-disk path that ends up in the prompt.
 const piPackageDir = realpathSync(dirname(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")))));
-// pi-mcp-adapter ships its own skill (mcp-scripting), whose absolute file path Pi's skill loader
-// records verbatim in loadedSkills -- same install-location problem as piPackageDir, one level up
-// since this package's entry has no "dist" segment to strip.
-const mcpAdapterPackageDir = realpathSync(dirname(fileURLToPath(import.meta.resolve("pi-mcp-adapter"))));
 
 function parseArgs(argv) {
   const options = {};
@@ -72,11 +68,14 @@ function captureModelVisibleContent() {
 
     const hookLog = join(work, "hook-acceptance.log");
     const options = { args: ["--no-project", "--no-session"], prompt: "Describe your capabilities." };
-    // cwd is the repo root, not an empty temp dir: full-runtime's hooks.json and mcp.json spawn
+    // cwd is the repo root, not an empty temp dir: full-runtime's hooks.json spawns
     // `node test/fixtures/...` with that relative path resolved against the session's cwd (only a
     // handler's own `command`, if it starts with "/", resolves against hooks.json's directory --
     // src/hooks-config.ts's resolveCommandPath -- args do not). --no-project still disables all
     // project-level manifest/resource discovery at this cwd, so this stays fully offline and fixed.
+    // full-runtime declares "mmp:mcp" but has no mcp.json of its own, so this always sees zero
+    // configured servers -- the point is a clean "adapter tools go away" diff (docs/mcp-design.md
+    // §5), not exercising native MCP itself (test/mcp.test.mjs does that).
     const result = spawnSync(process.execPath, [runner], {
       cwd: root,
       encoding: "utf8",
@@ -86,8 +85,6 @@ function captureModelVisibleContent() {
         HOME: home,
         MMP_HOME: mmpHome,
         PI_OFFLINE: "1",
-        MMP_MCP_CWD: root,
-        MMP_MCP_FIXTURE_VALUE: "unused-by-snapshot",
         HOOK_ACCEPTANCE_LOG: hookLog,
         MMP_MODEL_SNAPSHOT_OUT: captureFile,
         MMP_SDK_RUNNER: JSON.stringify(options),
@@ -104,7 +101,6 @@ function captureModelVisibleContent() {
       [work, "$TMP"],
       [realpathSync(work), "$TMP"],
       [piPackageDir, "$PI_PACKAGE_DIR"],
-      [mcpAdapterPackageDir, "$MCP_ADAPTER_PACKAGE_DIR"],
       [root, "$CWD"],
     ];
     // mmp:runtime's inventory embeds both versions verbatim (engineVersion, runtime.version): left

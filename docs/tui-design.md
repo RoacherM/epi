@@ -174,7 +174,7 @@ Pi 加载文件形式的扩展时，会把扩展里的 `@earendil-works/pi-tui` 
 
 **做法**：新界面的代码不直接写 `import ... from "@earendil-works/pi-tui"`，统一经过一个 `src/tui/pi-tui.ts`。它从 pi-coding-agent 的安装位置解析 pi-tui（`createRequire` 指向 pi-coding-agent 的 `package.json`），和 Pi 的解析方式一致。类型仍从顶层的 pi-tui 取，两份版本号相同。加一条测试：`src/tui/pi-tui.ts` 拿到的模块和 Pi 组件用的是同一个实例。
 
-**遗留问题，不在本次范围**：`mmp:mcp` 用 `tsImport` 从 MMP 的位置加载 pi-mcp-adapter，adapter 里的 `pi-tui`、`pi-ai` 解析到的是顶层那份。它的面板只用纯函数和传进来的 keybindings，目前没问题；但 sampling 功能调用的 `pi-ai` 的 `complete` 用的不是 Pi 那份，是否有影响没验证。
+**遗留问题已解决（Pi 0.99 升级，2026-09-30）**：这条原本记的是 `mmp:mcp` 用 `tsImport` 从 MMP 的位置加载 pi-mcp-adapter，adapter 里的 `pi-tui`、`pi-ai` 解析到的是顶层那份、和 Pi 不一致，sampling 功能是否受影响没验证过。Pi 0.99 升级把 pi-mcp-adapter 整个去掉，改用 Pi 自己的原生 MCP 扩展（`createMcpExtension`，见 [mcp-design.md](mcp-design.md)），它和 Pi 其余部分一样从 pi-coding-agent 的安装位置解析 pi-tui/pi-ai，不再有这个不一致。
 
 ### 3.3 配置隔离：MMP 和 Pi 不共享配置
 
@@ -487,7 +487,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | 地方 | 要做的 |
 |---|---|
 | `package.json` | `pi-coding-agent`、`pi-tui`、`pi-ai` 都改成 0.87.x 的精确版本。嵌套安装是 Pi 的 shrinkwrap 决定的，去不掉（3.2 节） |
-| `pi-mcp-adapter` 2.17.0 | 重跑 DEVELOPMENT.md 里的真实 stdio MCP `search → call` 验收 |
+| `pi-mcp-adapter` 2.17.0（历史：这一步是 0.87 升级时做的；Pi 0.99 升级已经把 `pi-mcp-adapter` 整个去掉，改用 Pi 原生 MCP，见 [mcp-design.md](mcp-design.md)） | 重跑 DEVELOPMENT.md 里的真实 stdio MCP `search → call` 验收 |
 | 版本字面量 | `MMP_HELP`、各测试、`fixtures/fake-benchmark-harness.mjs`、benchmark 的 `EXPECTED_PI_VERSION` 和变体名 |
 | 文档 | README、DEVELOPMENT.md 里的 0.83 |
 | 回归 | 对照 0.84 到 0.87 的 CHANGELOG，检查 MMP 用到的 Pi 接口 |

@@ -195,6 +195,141 @@ const registry = [
       }
     },
   },
+  {
+    id: "mcp-native-config-loader",
+    async check() {
+      const { loadMcpConfig, addMcpServerConfig, removeMcpServerConfig, getMcpToolExposure } =
+        await importDeep("extensions", "mcp", "config.js");
+      assertFunction(loadMcpConfig, "loadMcpConfig");
+      assertFunction(addMcpServerConfig, "addMcpServerConfig");
+      assertFunction(removeMcpServerConfig, "removeMcpServerConfig");
+      assertFunction(getMcpToolExposure, "getMcpToolExposure");
+      const os = await import("node:os");
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mmp-pi-internals-mcp-"));
+      try {
+        const empty = loadMcpConfig({ agentDir: dir, cwd: dir, projectTrusted: false });
+        assert.deepEqual(empty.servers, [], "loadMcpConfig no longer returns {servers: []} for a missing mcp.json");
+        assert.deepEqual(empty.errors, [], "loadMcpConfig no longer returns {errors: []} for a missing mcp.json");
+        fs.writeFileSync(
+          path.join(dir, "mcp.json"),
+          JSON.stringify({ mcpServers: { probe: { command: "node" } } }),
+        );
+        const loaded = loadMcpConfig({ agentDir: dir, cwd: dir, projectTrusted: false });
+        assert.equal(loaded.servers.length, 1, "loadMcpConfig no longer reads join(agentDir, \"mcp.json\")");
+        assert.equal(loaded.servers[0].name, "probe");
+        assert.equal(loaded.servers[0].source, path.join(dir, "mcp.json"), "loadMcpConfig's entry.source is no longer the config file path -- src/extensions/mcp.ts's /mcp write-back routing (Pi's own default updateConfig) relies on this");
+        assert.equal(loaded.servers[0].scope, "global", "loadMcpConfig no longer tags agentDir-sourced entries scope: \"global\"");
+        // projectTrusted: false must never read <cwd>/.pi/mcp.json -- this is the isolation MMP
+        // depends on (docs/mcp-design.md §2): MMP always passes false and varies agentDir instead.
+        fs.mkdirSync(path.join(dir, ".pi"));
+        fs.writeFileSync(
+          path.join(dir, ".pi", "mcp.json"),
+          JSON.stringify({ mcpServers: { untrusted: { command: "node" } } }),
+        );
+        const stillOne = loadMcpConfig({ agentDir: dir, cwd: dir, projectTrusted: false });
+        assert.equal(stillOne.servers.length, 1, "loadMcpConfig read <cwd>/.pi/mcp.json even with projectTrusted: false");
+        assert.equal(getMcpToolExposure({ command: "node" }, "any_tool"), "codemode", "getMcpToolExposure no longer defaults to \"codemode\"");
+        const added = addMcpServerConfig(path.join(dir, "written.json"), "wrote", { command: "node" });
+        assert.equal(added, false, "addMcpServerConfig no longer returns false for a brand-new entry");
+        assert.equal(removeMcpServerConfig(path.join(dir, "written.json"), "wrote"), true, "removeMcpServerConfig no longer returns true after removing an entry it just added");
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  },
+  {
+    id: "mcp-native-validate-config",
+    async check() {
+      const { validateMcpServerConfig } = await importDeep("core", "mcp-servers.js");
+      assertFunction(validateMcpServerConfig, "validateMcpServerConfig");
+      const ok = validateMcpServerConfig("fixture", { command: "node" });
+      assert.equal(typeof ok, "object", "validateMcpServerConfig no longer returns the config object for a valid entry");
+      const bad = validateMcpServerConfig("fixture", {});
+      assert.equal(typeof bad, "string", "validateMcpServerConfig no longer returns an error string for an invalid entry");
+    },
+  },
+  {
+    id: "mcp-command-collision-suffix",
+    check() {
+      const runnerPath = join(piDist, "core", "extensions", "runner.js");
+      const text = readFileSync(runnerPath, "utf8");
+      assert.match(
+        text,
+        /resolveRegisteredCommands/,
+        `${runnerPath} no longer defines resolveRegisteredCommands`,
+      );
+      // The exact renaming rule src/extensions/mcp.ts's hasDuplicateMcpCommand depends on: a name
+      // registered more than once gets "<name>:<occurrence>" for *every* registration, not just the
+      // second one -- so a plain "mcp" never survives a collision for MMP to mistake as the only one.
+      assert.match(
+        text,
+        /\(counts\.get\(command\.name\)\s*\?\?\s*0\)\s*>\s*1\s*\?\s*`\$\{command\.name\}:\$\{occurrence\}`\s*:\s*command\.name/,
+        `${runnerPath}'s collision-renaming rule no longer matches the "<name>:<occurrence>" shape hasDuplicateMcpCommand's /^mcp:\\d+$/ regex depends on`,
+      );
+    },
+  },
+  {
+    id: "mcp-native-runtime",
+    async check() {
+      const runtime = await importDeep("extensions", "mcp", "runtime.js");
+      for (const name of ["McpServerConnection", "createDefaultTransport", "McpOAuthCredentialStore", "McpSignInCancelledError", "signInMcpServer", "McpServerLog"]) {
+        assert.ok(name in runtime, `extensions/mcp/runtime.js no longer exports ${name}`);
+      }
+      assertFunction(runtime.createDefaultTransport, "createDefaultTransport");
+      assertFunction(runtime.signInMcpServer, "signInMcpServer");
+      assertFunction(runtime.McpServerConnection, "McpServerConnection");
+      const store = new runtime.McpOAuthCredentialStore();
+      assertFunction(store.forServer, "McpOAuthCredentialStore.prototype.forServer");
+      assertFunction(store.remove, "McpOAuthCredentialStore.prototype.remove");
+    },
+  },
+  {
+    id: "mcp-reconnect-completion-states",
+    check() {
+      const indexPath = join(piDist, "extensions", "mcp", "index.js");
+      const indexText = readFileSync(indexPath, "utf8");
+      const why = "mcpProblemLines (src/extensions/mcp.ts) reads each server's state from these completions";
+      assert.match(
+        indexText,
+        /label: candidate\.entry\.name,\s*description: describeState\(candidate\)/,
+        `${indexPath}'s "/mcp" completions no longer label items with the server name and describe them with describeState() -- ${why}`,
+      );
+      for (const [pattern, state] of [
+        [/return withError \? `failed: \$\{firstLine/, "failed: <first error line>"],
+        [/return "needs sign-in";/, "needs sign-in"],
+        [/return "connecting…";/, "connecting…"],
+      ]) {
+        assert.match(indexText, pattern, `${indexPath}'s describeState() no longer returns "${state}" -- ${why}`);
+      }
+      const runtimePath = join(piDist, "extensions", "mcp", "runtime.js");
+      assert.match(
+        readFileSync(runtimePath, "utf8"),
+        /this\.state = this\.closed \? "closed" : "failed"/,
+        `${runtimePath} no longer sets a failed connection's state to the literal string "failed" -- ${why}`,
+      );
+    },
+  },
+  {
+    id: "mcp-startup-wait-before-agent-start",
+    check() {
+      const indexPath = join(piDist, "extensions", "mcp", "index.js");
+      const indexText = readFileSync(indexPath, "utf8");
+      assert.match(
+        indexText,
+        /pi\.on\("before_agent_start", async \(_event, ctx\) => \{\s*const startup = pending;[\s\S]{0,400}setTimeout\(\(\) => resolve\(false\), startupWaitMs\)/,
+        `${indexPath} no longer waits for startup connections in before_agent_start, bounded by startupWaitMs -- src/extensions/mcp.ts's problem report would read server states before they had a chance to connect`,
+      );
+      const runnerPath = join(piDist, "core", "extensions", "runner.js");
+      const runnerText = readFileSync(runnerPath, "utf8");
+      assert.match(
+        runnerText,
+        /snapshotEventHandlers\(this\.extensions, "before_agent_start"\)\) \{\s*for \(const handler of handlers\) \{[\s\S]{0,600}await handler\(event, ctx\)/,
+        `${runnerPath}'s emitBeforeAgentStart no longer awaits handlers one after another -- MMP's handler might run before Pi's startup wait is over`,
+      );
+    },
+  },
 ];
 
 test("every docs/pi-internals.md row still matches the installed Pi", async () => {
@@ -284,6 +419,9 @@ const KNOWN_DEEP_PATHS = new Map([
   ["undici", "undici"],
   ["@earendil-works/pi-tui", "pi-tui-nested-copy"],
   ["diff", "pi-diff-package"],
+  ["extensions/mcp/config.js", "mcp-native-config-loader"],
+  ["core/mcp-servers.js", "mcp-native-validate-config"],
+  ["extensions/mcp/runtime.js", "mcp-native-runtime"],
 ]);
 
 test("every join(piDist, ...)/importFromPi/createRequire(piEntry).resolve deep reach is registered in docs/pi-internals.md", () => {

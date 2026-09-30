@@ -171,12 +171,25 @@ export class Transcript {
                 }
                 break;
             case "tool_execution_start":
+                // Nested calls (from codemode scripts) render inside their parent's own block (Pi's
+                // "CallToolResult"/console output there); a separate top-level block for the same call
+                // would duplicate it. Mirrors Pi's own interactive-mode.js: "Nested calls (from codemode
+                // scripts) are shown inside their parent's row" -- `if (event.parentToolCallId) break;`.
+                // Unlike Pi's pendingTools.get() (a plain no-op lookup for an unknown id), MMP's tool()
+                // helper always creates a new entry on first reference, so update/end must skip explicitly
+                // too, not just rely on start never having created one.
+                if (event.parentToolCallId !== undefined)
+                    break;
                 this.tool(event.toolName, event.toolCallId, event.args).markExecutionStarted();
                 break;
             case "tool_execution_update":
+                if (event.parentToolCallId !== undefined)
+                    break;
                 this.tool(event.toolName, event.toolCallId).updateResult({ ...event.partialResult, isError: false }, true);
                 break;
             case "tool_execution_end":
+                if (event.parentToolCallId !== undefined)
+                    break;
                 this.tool(event.toolName, event.toolCallId).updateResult({ ...event.result, isError: event.isError }, false);
                 break;
             case "compaction_end":

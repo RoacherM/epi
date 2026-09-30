@@ -303,6 +303,7 @@ Subcommands:
   mmp list                                                       List Manifest-declared rules, skills, extensions
   mmp config [-l] [--approve|--no-approve]                       Edit the Manifest in $VISUAL/$EDITOR
   mmp auth print-api-key|print-bearer-token|check                Print or check provider credentials
+  mmp mcp add|remove|list|login|logout                           Configure and check MCP servers
   mmp <subcommand> --help                                        Show help for that subcommand
 
 Options:

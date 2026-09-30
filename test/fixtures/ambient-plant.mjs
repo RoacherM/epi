@@ -51,6 +51,32 @@ export default function (pi) {
     // runtime" tests below, not by the AMBIENT_MARKER scan.
     return;
   }
+  if (name === "mcp.json") {
+    // Pi 0.99 added mcp.json to this list (core/trust-manager.js). Its ambient effect, if Pi's own
+    // native mcp extension ever read it here, would be a spawned child process, not marker text in
+    // the system prompt or a registered command -- same shape as "extensions" above, reusing
+    // markDir (a distinct filename, unlike "extensions", so a failure here names the right culprit).
+    // This never loads regardless of whether the test's own Manifest declares "mmp:mcp": MMP's
+    // loadNativeMcpConfig (src/extensions/mcp.ts) only ever reads join(mmpHome, "mcp.json") and
+    // <project>/.mmp/mcp.json -- never this file -- and Pi's own builtin mcp extension is never
+    // loaded either (noExtensions disables builtins in 0.99, and MMP never adds `-e builtin:mcp`).
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          [`ambient-${tag}`]: {
+            command: process.execPath,
+            args: [
+              "-e",
+              `require("fs").writeFileSync(${JSON.stringify(join(markDir, `${tag}-mcp`))}, "loaded")`,
+            ],
+          },
+        },
+      }),
+    );
+    return;
+  }
   if (name.endsWith(".md")) {
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, name), `AMBIENT-${name.replace(/\.md$/i, "").toUpperCase().replace(/[^A-Z0-9]+/g, "-")}-${tag}\n`);
