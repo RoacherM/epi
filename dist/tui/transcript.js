@@ -1,10 +1,11 @@
 // Session events -> transcript blocks. v0 reuses Pi's exported message components; grok-style
 // blocks replace them in M4 (docs/tui-design.md 4.2).
-import { AssistantMessageComponent, CustomMessageComponent, getMarkdownTheme, ToolExecutionComponent, } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, CustomMessageComponent, getMarkdownTheme, } from "@earendil-works/pi-coding-agent";
 import { UserBashBlock } from "./bash-block.js";
 import { UserMessageBlock } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
 import { toolBlock } from "./tools/block.js";
+import { asGroupKind, GroupedMessages, ToolEntry } from "./tools/group.js";
 import { builtInToolRenderers } from "./tools/index.js";
 // grok block layout: a 1-column rail plus 2 columns of padding before block content.
 const CONTENT_PAD = 3;
@@ -16,6 +17,7 @@ export class Transcript {
     root = new piTui.Container();
     header = new piTui.Container();
     messages = new piTui.Container();
+    groupedMessages;
     messageCount = 0;
     tools = new Map();
     userMessages = [];
@@ -25,15 +27,23 @@ export class Transcript {
         this.tui = tui;
         this.theme = theme;
         this.session = session;
+        this.groupedMessages = new GroupedMessages(this.messages, this.tui, this.theme);
         this.root.addChild({
             render: (width) => (this.messageCount === 0 ? this.header.render(width) : []),
             invalidate: () => this.header.invalidate(),
         });
-        this.root.addChild(this.messages);
+        // Grouping (docs/tui-design.md 4.2, tools/group.ts) is a render-time fold over `messages`'s own
+        // children, so `add()` and everything below it are untouched -- only what wraps `messages` here.
+        this.root.addChild(this.groupedMessages);
     }
     /** New session after /new, /resume, /reload: clear and replay its history. */
     reset(session) {
         this.session = session;
+        // Drop pending completion-flash timers (tools/flash.ts) before the entries they belong to go
+        // away, and the same for any group line mid-flash.
+        for (const tool of this.tools.values())
+            tool.dispose();
+        this.groupedMessages.dispose();
         this.messages.clear();
         this.messageCount = 0;
         this.tools.clear();
@@ -51,6 +61,9 @@ export class Transcript {
             tool.setExpanded(expanded);
         for (const block of this.userMessages)
             block.setExpanded(expanded);
+        // Ctrl+O is authoritative over grouping too: it always wins over a group left unfolded (or
+        // partly revealed) by a click (tools/group.ts's GroupedMessages doc comment).
+        this.groupedMessages.setToolsExpanded(expanded);
     }
     /**
      * A notice ("/tree is not in MMP TUI v2 yet", an extension load warning) is not a real
@@ -194,7 +207,7 @@ export class Transcript {
         const definition = this.session.getToolDefinition(toolName);
         const isBuiltIn = this.session.getAllTools().find((tool) => tool.name === toolName)?.sourceInfo.source === "builtin";
         const renderers = toolBlock(toolName, (isBuiltIn ? builtInToolRenderers[toolName] : undefined) ?? definition);
-        const component = new ToolExecutionComponent(toolName, toolCallId, args ?? {}, undefined, renderers, this.tui, this.session.sessionManager.getCwd());
+        const component = new ToolEntry(toolName, toolCallId, args ?? {}, renderers, this.tui, this.session.sessionManager.getCwd(), this.theme, asGroupKind(toolName, isBuiltIn));
         component.setExpanded(this.toolsExpanded);
         this.tools.set(toolCallId, component);
         // Pi's tool component starts with its own blank row.

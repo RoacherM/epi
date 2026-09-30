@@ -8,6 +8,7 @@ export declare class Transcript {
     readonly root: Container;
     readonly header: Container;
     private readonly messages;
+    private readonly groupedMessages;
     private messageCount;
     private readonly tools;
     private readonly userMessages;
