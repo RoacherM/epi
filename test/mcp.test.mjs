@@ -8,6 +8,7 @@
 //   - a full offline end-to-end run: a real stdio fixture server, one call via codemode, one via
 //     "direct" exposure, env var expansion, and child-process cleanup on session exit
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +22,16 @@ import { createMmpMcpExtension, loadNativeMcpConfig } from "../dist/extensions/m
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const fixtureServerPath = fileURLToPath(new URL("./fixtures/mcp-server.mjs", import.meta.url));
+
+/** `pgrep -f fixtureServerPath` alone would also match `test/mcp-cli.test.mjs`'s own fixture-server
+ * spawns when both files' tests run concurrently (`node --test` runs test *files* in parallel) --
+ * a per-test random token appended to the spawned command's args (mcp-server.mjs ignores extra
+ * argv) makes `pgrep -f <token>` match only this test's own process(es), never a sibling file's or
+ * (for the /new and /reload lifecycle test) an old-vs-new process from a different test run. */
+function fixtureServerArgs() {
+  const marker = randomUUID();
+  return { args: [fixtureServerPath, marker], marker };
+}
 
 function createFixture(t) {
   const root = mkdtempSync(join(tmpdir(), "mmp-mcp-"));
@@ -227,17 +238,18 @@ test("declared MCP servers: codemode call, direct call, env expansion, and child
   const mmpHome = join(root, "home", ".mmp");
   mkdirSync(mmpHome, { recursive: true });
   const driver = fileURLToPath(new URL("./fixtures/faux-mcp-driver.mjs", import.meta.url));
+  const { args: fixtureArgs, marker } = fixtureServerArgs();
 
   writeJson(join(mmpHome, "mcp.json"), {
     mcpServers: {
       fixture: {
         command: process.execPath,
-        args: [fixtureServerPath],
+        args: fixtureArgs,
         env: { MMP_FIXTURE_VALUE: "${MMP_MCP_FIXTURE_VALUE}" },
       },
       fixturedirect: {
         command: process.execPath,
-        args: [fixtureServerPath],
+        args: fixtureArgs,
         env: { MMP_FIXTURE_VALUE: "${MMP_MCP_FIXTURE_VALUE}" },
         exposure: "direct",
       },
@@ -277,7 +289,7 @@ test("declared MCP servers: codemode call, direct call, env expansion, and child
 
   let leftovers = "";
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    leftovers = spawnSync("pgrep", ["-f", fixtureServerPath], { encoding: "utf8" }).stdout.trim();
+    leftovers = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" }).stdout.trim();
     if (leftovers === "") break;
     spawnSync("sleep", ["0.1"]);
   }
@@ -318,22 +330,23 @@ function runTuiApp(t, extensions, steps, mcpConfig) {
 
 test("/new and /reload leave exactly one MCP child process running, never zero or two", (t) => {
   const driver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
+  const { args: fixtureArgs, marker } = fixtureServerArgs();
   const { marks, exit, output } = runTuiApp(
     t,
     ["mmp:mcp", driver],
     [
       ["wait", 2500],
       ["type", "hi"], ["key", "enter"], ["wait", 800], ["mark", "firstReply"],
-      ["pgrep", { pattern: fixtureServerPath, mark: "afterFirst", expectCount: 1 }],
+      ["pgrep", { pattern: marker, mark: "afterFirst", expectCount: 1 }],
       ["type", "/new"], ["key", "enter"], ["wait", 800],
-      ["pgrep", { pattern: fixtureServerPath, mark: "afterNew", expectCount: 1 }],
+      ["pgrep", { pattern: marker, mark: "afterNew", expectCount: 1 }],
       ["type", "hi again"], ["key", "enter"], ["wait", 800], ["mark", "afterNewReply"],
       ["type", "/reload"], ["key", "enter"], ["wait", 800],
-      ["pgrep", { pattern: fixtureServerPath, mark: "afterReload", expectCount: 1 }],
+      ["pgrep", { pattern: marker, mark: "afterReload", expectCount: 1 }],
       ["type", "hi once more"], ["key", "enter"], ["wait", 800], ["mark", "afterReloadReply"],
       ["key", "ctrl+d"],
     ],
-    { mcpServers: { fixture: { command: process.execPath, args: [fixtureServerPath] } } },
+    { mcpServers: { fixture: { command: process.execPath, args: fixtureArgs } } },
   );
 
   const context = `output:\n${output}`;
@@ -349,7 +362,7 @@ test("/new and /reload leave exactly one MCP child process running, never zero o
 
   let leftovers = "";
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    leftovers = spawnSync("pgrep", ["-f", fixtureServerPath], { encoding: "utf8" }).stdout.trim();
+    leftovers = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" }).stdout.trim();
     if (leftovers === "") break;
     spawnSync("sleep", ["0.1"]);
   }
