@@ -35,7 +35,7 @@ Manifest 里的扩展启动时加载失败，两条路径都和 Pi 一样报错�
 | `--provider`、`--model`、`--thinking`、`--api-key`、`--models` | 是 | |
 | `-c/--continue`、`-r/--resume`、`--session`、`--session-id`、`--fork`、`--session-dir`、`--no-session`、`-n/--name` | 是 | `--session-dir` 和 Pi 一样展开 `~`；没给时依次看 `MMP_SESSION_DIR`（MMP 自己的变量，语义和 Pi 的 `PI_CODING_AGENT_SESSION_DIR` 一样，但从不读取后者——Pi 装置设置的这个变量不会泄漏进 MMP）、设置里的 `sessionDir`。两条运行路径（`piMain` 和 `src/tui/services.ts`）用同一份解析结果：非交互路径调用 Pi 前会清掉进程里的 `PI_CODING_AGENT_SESSION_DIR`，再按 `MMP_SESSION_DIR` 重新赋值 |
 | `-t/--tools`、`-xt/--exclude-tools`、`-nt/--no-tools`、`-nbt/--no-builtin-tools` | 是 | |
-| `-p/--print`、`--mode text/json/rpc` | 是 | benchmark 的标准入口 `mmp --mode json --no-session --no-approve -p "…"`（DEVELOPMENT.md 第 20 节）保持不变 |
+| `-p/--print`、`--mode text/json/rpc` | 是 | benchmark 的标准入口 `mmp --mode json --no-session --no-approve -p "…"`（DEVELOPMENT.md 第 20 节）保持不变。print/json 跑完后 MMP 等 stdout、stderr 写完就 `process.exit`（退出码不变）：Pi 这里只设 `process.exitCode` 再返回，扩展占着定时器/句柄时进程不退出（dogfood D50，和 Pi 不同）；rpc 和其他已经自己退出的路径不受影响 |
 | `--list-models [search]` | 是 | 输出表格和 Pi 一样。扩展诊断（注册 provider 失败、扩展加载失败）和 `-p` 一样打到 stderr，有错误就退出 1；没有模型时打印 MMP 自己的提示（`/login` 或在 Manifest 里声明 provider 扩展）。不加载 Pi 内置的 llama.cpp 扩展（和交互界面一样）。表格总是写到 stdout，和 `-p`/`--mode` 同用时也是（Pi 那时写到 stderr）；多余或缺值的扩展参数现在和 `-p` 一样报错退出 1 |
 | `--export <file>` | 是 | |
 | `--offline`、`--verbose` | 是 | `--verbose` 让启动信息显示在消息区 |
