@@ -141,7 +141,7 @@ mmp 不是 Herdr 认识的 agent 类型，所以用 pane 命令（`pane run` / `
 | 3 | 项目 Manifest | **已完成**：`.mmp/mmp.json`（第 3 节），`.gitignore` 放开它、忽略 `.dev/` |
 | 4 | 辅助脚本 | **已完成**：`scripts/dev/herdr.sh`（`startmmp` / `quitmmp` / `say` / `scr` / `waitreport`） |
 | 5 | Herdr tab | 新开 tab 和 pane，记进 `.dev/panes.json` |
-| 6 | 试运行 | 用一个小的待办任务（例如展开后思考内容的 markdown 渲染）完整走一遍，看交接、等待、审查哪里卡，调整本文后正式切换 |
+| 6 | 试运行 | 用 `docs/dogfood-issues.md` 的 D2（加速界面测试）完整走一遍，看交接、等待、审查哪里卡，调整本文后正式切换 |
 
 ## 9. MMP 的扩展放在哪
 
