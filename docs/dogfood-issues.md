@@ -18,3 +18,5 @@
 | D12 | P2 | 按 Ctrl+T 没有任何反馈：屏幕上没有思考内容时，看起来像按键失灵（用户报告）。Pi 会提示 "Thinking blocks: hidden/visible" | 在一个没有思考块的会话里按 Ctrl+T | 已修（Ctrl+T 在右下角闪 "Thinking: expanded/collapsed"） |
 | D13 | P3 | 测试辅助只能看"写到屏幕上的所有输出"，看不到"现在屏幕上显示的是什么"。所以"某行本该消失却一直留着"这类 bug（比如中止后队列提示不消失）没有测试能抓到（D2 复审发现，A4–A6、C1 四个改坏场景） | D2 的 review-2.md 第 2 条 | 待排期：给 tui-harness 加一个读取当前屏幕内容的步骤 |
 | D14 | P3 | D2 的 worker（旧工具版 b0d88c4，跑了约 1.5 小时）空输入框按 Ctrl+D 等 15 秒没退出，输入 `/quit` 4 秒内退出。没有点过图片标签。同样旧版本的 reviewer 上 Ctrl+D 1 秒退出，没复现 | 长时间运行的会话里按 Ctrl+D | 待复现（在新版本上留意） |
+| D15 | P0 | 上下文超长的自动恢复失败后，界面永远停在 "Compacting…"（实测 76 分钟），Esc 也停不下来。原因：Pi 在回合结束后的收尾阶段做恢复压缩，`compaction_end` 到达时 `isStreaming` 仍为 true，MMP 不清状态；之后的 `agent_settled` 也不清 | D11 worker 会话（magpie，约 176K token 时报 "Prompt is too long"） | 修复中（任务 D15） |
+| D16 | P1 | magpie 的上下文上限配错：MMP 的 magpie 扩展照抄了 magpie 给 Pi 的 100 万，实际约 20 万，所以 Pi 从不自动压缩，直接撞上 "Prompt is too long"；恢复时的摘要请求又被 magpie 以 `content_filter` 拒绝 | 长任务里看上下文用量 | 已修（`~/.mmp/extensions/magpie/index.mjs` 改为 200000）；`content_filter` 的原因待查 |
