@@ -32,3 +32,6 @@
 | D26 | P3 | `mmp:hooks` 的 `user_prompt` 钩子拦下一轮时，界面上可能看不到拦截原因（旧待办的简记，细节没留下；钩子启动失败的情况已按"失败要可见"修过） | 写一个返回 block 的 `user_prompt` 钩子，发一句话 | 待复现 |
 | D27 | P3 | 用退格删掉图片标签后按 Ctrl+-（撤销），标签一个字符一个字符地回来（约 10 次才恢复完整）：删标签时的每次模拟退格各是 Pi 的一个撤销快照（D18 worker 发现，D18 之前就有） | `see foo `，Ctrl+V，退格，Ctrl+- | 待修 |
 | D28 | P3 | kitty 协议下 Shift+退格（`\x1b[127;2u`）只删掉标签的 `]`，不会整个删掉：`shift+backspace` 不在 `DELETE_ACTIONS` 里（D18 worker 发现，初审未复现，真实终端未确认） | Ghostty 里贴图后按 Shift+退格 | 待确认 |
+| D29 | P3 | `/settings` 里没有 Pi 的"每个模型的默认思考档位"（model-thinking 子菜单）：D21 先不做，现有 `/thinking` 和 Shift+Tab 只改当前模型 | 对照 Pi 的 `/settings` | 待排期 |
+| D30 | P3 | 空输入框按两次 Esc 没有动作；Pi 可以设成打开 `/tree` 或 `/fork`（double-escape-action），D21 里隐藏了这个设置项 | 空输入框按 Esc Esc | 待排期 |
+| D31 | P3 | 没有终端标签栏进度提示（Pi 的 terminal-progress，OSC 9;4），D21 里隐藏了这个设置项 | 在支持 OSC 9;4 的终端里跑一个长回合 | 待排期 |
