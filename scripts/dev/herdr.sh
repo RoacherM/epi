@@ -35,10 +35,23 @@ quitmmp() {
 }
 
 # Wait until a task report ends with a STATUS line (section 4). $1 = report path, $2 = timeout seconds.
+# Also stops early (exit 2) when the worker in $P needs attention, so a stuck worker is noticed:
+# - it is idle (footer shows Shift+Tab:effort) for 2 minutes without having written the STATUS line;
+# - "Compacting…" has been on screen for 10 minutes or more;
+# - mmp is no longer running in the pane.
 waitreport() {
-  local report=$1 limit=${2:-3600}
-  for _ in $(seq 1 "$limit"); do
-    grep -qE '^STATUS: (done|blocked)' "$report" 2>/dev/null && { grep -E '^STATUS:' "$report" | tail -1; return 0; }
+  local report=$1 limit=${2:-3600} idle=0 i
+  for i in $(seq 1 "$limit"); do
+    if grep -qE '^STATUS: (done|blocked)' "$report" 2>/dev/null; then grep -E '^STATUS:' "$report" | tail -1; return 0; fi
+    if (( i % 30 == 0 )); then
+      local screen; screen=$(herdr pane read "$P" --source visible 2>/dev/null)
+      if ! mmp_running; then echo "(mmp is not running in $P)" >&2; return 2; fi
+      if grep -qE 'Compacting… ([0-9]{2,}|[1-9][0-9]*m)' <<<"$screen" && grep -qE 'Compacting… [0-9]+m' <<<"$screen" && [[ $(grep -oE 'Compacting… [0-9]+m' <<<"$screen" | grep -oE '[0-9]+' | tail -1) -ge 10 ]]; then
+        echo "(worker in $P has been compacting for 10+ minutes)" >&2; return 2
+      fi
+      if tail -3 <<<"$screen" | grep -q 'Shift+Tab'; then idle=$((idle + 30)); else idle=0; fi
+      if (( idle >= 120 )); then echo "(worker in $P is idle without a STATUS line)" >&2; return 2; fi
+    fi
     sleep 1
   done
   echo "(no STATUS line in $report after ${limit}s)" >&2; return 1
