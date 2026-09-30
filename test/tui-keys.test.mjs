@@ -10,6 +10,7 @@ import { piTui } from "../dist/tui/pi-tui.js";
 
 const CTRL_L = "\x0c";
 const CTRL_Q = "\x11";
+const CTRL_P = "\x10";
 
 test("Pi's key map loads from its package file and becomes pi-tui's global map", (t) => {
   const agentDir = mkdtempSync(join(tmpdir(), "mmp-keys-"));
@@ -27,6 +28,24 @@ test("keybindings.json is read from MMP's agent dir", (t) => {
   const keybindings = installKeybindings(agentDir);
   assert.equal(keybindings.matches(CTRL_Q, "app.model.select"), true);
   assert.equal(keybindings.matches(CTRL_L, "app.model.select"), false);
+});
+
+// Decision K1 keeps Ctrl+P for the command palette, so MMP ships Pi's model-cycle ids unbound.
+test("model cycling is unbound by default, bindable in keybindings.json, and stays unbound after reload", (t) => {
+  const agentDir = mkdtempSync(join(tmpdir(), "mmp-keys-"));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+  const keybindings = installKeybindings(agentDir);
+  assert.deepEqual(keybindings.getKeys("app.model.cycleForward"), []);
+  assert.deepEqual(keybindings.getKeys("app.model.cycleBackward"), []);
+  assert.equal(keybindings.matches(CTRL_P, "app.model.cycleForward"), false);
+  keybindings.reload();
+  assert.deepEqual(keybindings.getKeys("app.model.cycleForward"), []);
+  writeFileSync(join(agentDir, "keybindings.json"), JSON.stringify({ "app.model.cycleForward": "ctrl+p" }));
+  keybindings.reload();
+  assert.equal(keybindings.matches(CTRL_P, "app.model.cycleForward"), true);
+  assert.deepEqual(keybindings.getKeys("app.model.cycleBackward"), []);
+  // Every other id keeps Pi's default.
+  assert.equal(keybindings.matches(CTRL_L, "app.model.select"), true);
 });
 
 test("built-in lookup separates wired and planned commands", () => {

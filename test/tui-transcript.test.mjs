@@ -6,6 +6,8 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { piTui } from "../dist/tui/pi-tui.js";
 import { createMmpTheme } from "../dist/tui/theme.js";
 import { Transcript } from "../dist/tui/transcript.js";
+import { AssistantBlock } from "../dist/tui/assistant-block.js";
+import { UserMessageBlock } from "../dist/tui/chrome.js";
 
 initTheme("dark");
 const theme = createMmpTheme("dark");
@@ -491,4 +493,27 @@ test("clicking the 'Thought' row still works when an earlier text segment wraps 
   assert.ok(result?.handled, "expected the click on the header row to be handled");
   const after = stripAnsi(transcript.root.render(width).join("\n"));
   assert.match(after, /deep reason/, "expected the click to expand this run, not miss it");
+});
+
+// Dogfood D10: Ctrl+Up/Down (TuiAltScreen.scrollToPrompt) stop on rows starting with OSC 133;A.
+// Pi marks every user message and every assistant message without tool calls as one zone.
+test("user messages and tool-call-free assistant messages are each one OSC 133 prompt zone", () => {
+  const START = "\x1b]133;A\x07";
+  const starts = (lines) => lines.flatMap((line, index) => (line.includes(START) ? [index] : []));
+  const user = new UserMessageBlock(theme, "hello", new Date()).render(60);
+  assert.deepEqual(starts(user), [0]);
+  assert.ok(user.at(-1).startsWith("\x1b]133;B\x07\x1b]133;C\x07"));
+
+  const text = new AssistantBlock(theme, assistantMessage([{ type: "text", text: "answer" }]), [], false, false).render(60);
+  assert.deepEqual(starts(text), [0]);
+  // Thinking then text: MMP splits this into segments, but it is still one zone, starting on row 0.
+  const thinking = new AssistantBlock(theme, assistantMessage([
+    { type: "thinking", thinking: "hmm" }, { type: "text", text: "answer" },
+  ]), [], false, false).render(60);
+  assert.deepEqual(starts(thinking), [0]);
+  const toolCall = new AssistantBlock(theme, assistantMessage([
+    { type: "text", text: "let me look" }, { type: "toolCall", id: "t1", name: "read", arguments: { path: "x" } },
+  ]), [], false, false).render(60);
+  assert.deepEqual(starts(toolCall), []);
+  assert.ok(!toolCall.some((line) => line.includes("\x1b]133;")), "no stray markers from Pi's per-segment component");
 });

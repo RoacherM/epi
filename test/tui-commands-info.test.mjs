@@ -103,6 +103,14 @@ test("/hotkeys lists editor and app keys, resolved through the installed (possib
   // The remap from ~/.mmp/pi/keybindings.json shows up instead of Pi's ctrl+l default.
   assert.match(shown, /ctrl\+q\s+Open model selector/);
   assert.doesNotMatch(shown, /ctrl\+l\s+Open model selector/);
+  // Pi 0.99's keys (dogfood D10): model cycling is unbound by default (decision K1); the transcript
+  // keys TuiAltScreen handles itself are listed under their own heading.
+  assert.match(shown, /unbound\s+Cycle to next model/);
+  assert.match(shown, /unbound\s+Cycle to previous model/);
+  assert.match(shown, /Transcript/);
+  assert.match(shown, /ctrl\+shift\+up\/ctrl\+up\s+Jump to previous prompt or answer/);
+  assert.match(shown, /ctrl\+shift\+f\s+Search the transcript/);
+  assert.match(shown, /escape\s+Close search/);
   assert.match(out, /EXIT=0/);
 });
 
