@@ -72,6 +72,9 @@ export class Transcript {
     this.toolsExpanded = expanded;
     for (const tool of this.tools.values()) tool.setExpanded(expanded);
     for (const block of this.userMessages) block.setExpanded(expanded);
+    // Ctrl+O is authoritative over grouping too: it always wins over a group left unfolded (or
+    // partly revealed) by a click (tools/group.ts's GroupedMessages doc comment).
+    this.groupedMessages.setToolsExpanded(expanded);
   }
 
   /**

@@ -49,22 +49,74 @@ function runApp(t, extensions, steps) {
   return `EXIT=${parsed.exit}\n${parsed.output}`;
 }
 
+function runAppMarks(t, extensions, steps) {
+  const root = mkdtempSync(join(tmpdir(), "mmp-tui-group-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  const result = spawnSync(process.execPath, [harness], {
+    cwd: root,
+    env: {
+      PATH: process.env.PATH,
+      HOME: home,
+      MMP_HOME: join(home, ".mmp"),
+      PI_OFFLINE: "1",
+      MMP_TUI_HARNESS: JSON.stringify({ steps }),
+    },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+// The group line's own text doesn't change while it flashes (only its rail color does), and
+// pi-tui's differential renderer repaints a line whenever *anything* about it changes -- so a flash
+// repaint makes the plain text "◈ Read 3 files" appear more than once in the raw output even with no
+// Ctrl+O press at all. Counting occurrences can't discriminate "flashed" from "expanded and
+// re-collapsed"; marks (cumulative output at a point in time) and their deltas can.
 test("real app: three reads in one turn group into ◈ Read 3 files, Ctrl+O expands and re-collapses", (t) => {
-  const out = runApp(t, [fixture("faux-read-group.mjs")], [
+  const parsed = runAppMarks(t, [fixture("faux-read-group.mjs")], [
     ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 2500],
-    ["key", "ctrl+o"], ["wait", 300],
-    ["key", "ctrl+o"], ["wait", 300],
+    ["mark", "settled"],
+    ["key", "ctrl+o"], ["wait", 300], ["mark", "expanded"],
+    ["key", "ctrl+o"], ["wait", 300], ["mark", "collapsedAgain"],
     ["key", "ctrl+d"],
   ]);
-  assert.match(out, /EXIT=0/);
-  assert.match(out, /GROUP-DONE/);
-  const collapsedCount = (out.match(/◈ Read 3 files/g) ?? []).length;
-  // Appears at least twice: once collapsed after the turn finishes, and again once Ctrl+O
-  // collapses the expanded view back.
-  assert.ok(collapsedCount >= 2, `expected the group line at least twice, saw ${collapsedCount}`);
-  assert.match(out, /one\.txt/);
-  assert.match(out, /two\.txt/);
-  assert.match(out, /three\.txt/);
+  assert.match(`EXIT=${parsed.exit}`, /EXIT=0/);
+  assert.match(parsed.output, /GROUP-DONE/);
+
+  assert.match(parsed.marks.settled, /◈ Read 3 files/, "collapsed once the turn settles, before any Ctrl+O");
+
+  const expandDelta = parsed.marks.expanded.slice(parsed.marks.settled.length);
+  assert.match(expandDelta, /◆ read/, "Ctrl+O drew individual blocks");
+  assert.match(expandDelta, /one\.txt/);
+  assert.match(expandDelta, /two\.txt/);
+  assert.match(expandDelta, /three\.txt/);
+
+  const collapseDelta = parsed.marks.collapsedAgain.slice(parsed.marks.expanded.length);
+  assert.match(collapseDelta, /◈ Read 3 files/, "the second Ctrl+O redrew the merged line");
+});
+
+test("real app: clicking the group line unfolds to collapsed blocks, not full output", (t) => {
+  const parsed = runAppMarks(t, [fixture("faux-read-group.mjs")], [
+    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 2500],
+    ["mark", "settled"],
+    // Screen row of the group line under the header/chrome, at the default 120x40 harness size.
+    ["mouse", { x: 6, y: 6 }], ["wait", 300], ["mark", "clicked"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(`EXIT=${parsed.exit}`, /EXIT=0/);
+  const delta = parsed.marks.clicked.slice(parsed.marks.settled.length);
+  assert.match(delta, /◆ read/, "the click unfolded into individual blocks");
+  assert.match(delta, /two\.txt/);
+  assert.match(delta, /three\.txt/);
+  assert.match(delta, /◈ fold/, "a fold affordance appears for a click-unfolded run");
+  // faux-read-group.mjs writes "file 2\n"/"file 3\n" as each file's *content* -- distinct from the
+  // filename. A collapsed block shows the filename and a line count, never the content.
+  assert.doesNotMatch(delta, /file 2/, "unfolding must not print a member's file content");
+  assert.doesNotMatch(delta, /file 3/, "unfolding must not print a member's file content");
 });
 
 function stubTui() {
@@ -128,6 +180,12 @@ function renderLines(transcript, width = 80) {
 /** Unstripped: only the flash tests need this, to look for the actual color escape. */
 function renderRaw(transcript, width = 80) {
   return transcript.root.render(width).join("\n");
+}
+
+// A generous, fixed `height`: this only needs to be "at least as tall as whatever we click", not an
+// exact viewport size, and the transcript can grow once a click below unfolds/reveals a run.
+function click(y, x = 2) {
+  return { type: "click", button: "left", x, y, screenX: x, screenY: y, width: 80, height: 1000, shift: false, alt: false, ctrl: false };
 }
 
 test("three consecutive reads collapse to one line: ◈ Read 3 files", () => {
@@ -216,19 +274,49 @@ test("an extension tool named 'read' never groups", () => {
   assert.equal((out.match(/◆ read/g) ?? []).length, 3);
 });
 
-test("more than 10 items: collapsed stays one line, Ctrl+O caps individual blocks at 10 + N more", () => {
+test("more than 10 items, Ctrl+O: shows every member uncapped, no 'more' line", () => {
+  // Ctrl+O means "I want to see everything"; capping would hide the very tools Ctrl+O was pressed
+  // to inspect. Capping is reserved for the click-to-unfold path (next test): see it in group.ts's
+  // GroupedMessages doc comment.
   const transcript = new Transcript(stubTui(), theme, stubSession());
   for (let i = 0; i < 12; i += 1) runTool(transcript, "read", `c${i}`);
-  const collapsed = render(transcript);
-  assert.match(collapsed, /◈ Read 12 files/);
+  assert.match(render(transcript), /◈ Read 12 files/);
 
   transcript.setToolsExpanded(true);
   const expanded = render(transcript);
-  assert.equal((expanded.match(/◆ read/g) ?? []).length, 10, "expanded view caps at 10 individual blocks");
-  assert.match(expanded, /◈ 2 more/);
+  assert.equal((expanded.match(/◆ read/g) ?? []).length, 12, "Ctrl+O shows all 12, not capped at 10");
+  assert.doesNotMatch(expanded, /more/);
+  assert.doesNotMatch(expanded, /fold/, "Ctrl+O has no per-run fold affordance -- Ctrl+O itself folds everything");
 
   transcript.setToolsExpanded(false);
   assert.match(render(transcript), /◈ Read 12 files/, "collapsing restores the group");
+});
+
+test("more than 10 items, click-unfold: shows the 10 most recent + a clickable 'N more', and a fold line", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  // Distinct paths so "most recent visible / oldest hidden" is actually observable in the output.
+  for (let i = 0; i < 12; i += 1) runTool(transcript, "read", `c${i}`, { args: { path: `/tmp/n${i}.txt` } });
+  const groupLineIndex = renderLines(transcript).findIndex((line) => line.includes("◈ Read 12 files"));
+  transcript.root.handleMouse(click(groupLineIndex));
+
+  const unfolded = render(transcript);
+  assert.equal((unfolded.match(/◆ read/g) ?? []).length, 10, "click-unfold caps at 10, unlike Ctrl+O");
+  assert.match(unfolded, /◈ 2 more/);
+  assert.match(unfolded, /◈ fold/);
+  // The most *recent* 10 show by default (the newest/likely-still-running calls), not the oldest.
+  assert.match(unfolded, /n11\.txt/, "the newest call is visible");
+  assert.doesNotMatch(unfolded, /n0\.txt/, "the oldest call is hidden behind 'more'");
+
+  const moreIndex = renderLines(transcript).findIndex((line) => line.includes("more"));
+  transcript.root.handleMouse(click(moreIndex));
+  const revealed = render(transcript);
+  assert.equal((revealed.match(/◆ read/g) ?? []).length, 12, "'more' reveals every member");
+  assert.match(revealed, /n0\.txt/, "the previously-hidden oldest call is now shown too");
+  assert.doesNotMatch(revealed, /more/);
+
+  const foldIndex = renderLines(transcript).findIndex((line) => line.includes("◈ fold"));
+  transcript.root.handleMouse(click(foldIndex));
+  assert.match(render(transcript), /◈ Read 12 files/, "'fold' collapses this run back to its summary line");
 });
 
 test("Ctrl+O expands a group to individual blocks and back", () => {
@@ -249,10 +337,10 @@ test("Ctrl+O expands a group to individual blocks and back", () => {
   assert.match(render(transcript), /◈ Read 1 file, Searched 1 pattern, Listed 1 dir/);
 });
 
-test("clicking a folded group line expands it, and a click below the group still reaches its target", () => {
+test("clicking a folded group line unfolds it (without expanding output), and a click below still reaches its target", () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
-  runTool(transcript, "read", "c1");
-  runTool(transcript, "read", "c2");
+  runTool(transcript, "read", "c1", { args: { path: "/tmp/one.txt" } });
+  runTool(transcript, "read", "c2", { args: { path: "/tmp/two.txt" } });
   runTool(transcript, "bash", "c3", { args: { command: "echo hi" } });
   const before = renderLines(transcript);
   const groupLineIndex = before.findIndex((line) => line.includes("◈ Read 2 files"));
@@ -260,25 +348,81 @@ test("clicking a folded group line expands it, and a click below the group still
   const bashLineIndex = before.findIndex((line) => line.includes("$ echo hi"));
   assert.ok(bashLineIndex > groupLineIndex);
 
-  // A generous, fixed `height`: this only needs to be "at least as tall as whatever we click",
-  // not an exact viewport size, and the transcript grows once the group click below expands it.
-  const click = (y) => ({
-    type: "click", button: "left", x: 2, y, screenX: 2, screenY: y,
-    width: 80, height: 1000, shift: false, alt: false, ctrl: false,
-  });
   const groupResult = transcript.root.handleMouse(click(groupLineIndex));
   assert.ok(groupResult?.handled, "clicking the group line must be handled");
   const afterGroupClick = render(transcript);
-  assert.doesNotMatch(afterGroupClick, /◈ Read 2 files/, "the group expanded into individual blocks");
+  assert.doesNotMatch(afterGroupClick, /◈ Read 2 files/, "the group unfolded into individual blocks");
   assert.match(afterGroupClick, /◆ read/);
+  assert.match(afterGroupClick, /◈ fold/, "a fold affordance appears once unfolded");
+  // Unfolding shows each member's normal *collapsed* one-liner, not its full (here: single-line,
+  // so this mostly checks the member's own expandedFlag stayed false) output.
+  assert.equal(transcript.tools.get("c1").expandedFlag, false);
+  assert.equal(transcript.tools.get("c2").expandedFlag, false);
 
-  // Recompute the bash row's position post-expand and confirm a click still reaches it (proving
+  // Recompute the bash row's position post-unfold and confirm a click still reaches it (proving
   // the wrapper's own mouse dispatch uses post-fold heights, not the pre-fold children heights).
   const afterLines = renderLines(transcript);
   const newBashIndex = afterLines.findIndex((line) => line.includes("$ echo hi"));
   assert.ok(newBashIndex >= 0);
   const bashResult = transcript.root.handleMouse(click(newBashIndex));
-  assert.ok(bashResult?.handled, "a click below an (expanded) group must still reach its own target");
+  assert.ok(bashResult?.handled, "a click below an unfolded group must still reach its own target");
+});
+
+test("clicking the group line doesn't touch Ctrl+O: the very next Ctrl+O press already shows expanded output", () => {
+  // Bug this guards: an earlier version called setExpanded(true) on every member from the group
+  // click itself, which (a) is Pi's *output* expansion, not a fold toggle, and (b) never touched
+  // Transcript's toolsExpanded flag, so the first real Ctrl+O afterwards was a no-op (everything was
+  // "already" expanded) and a second press was needed to actually collapse.
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  runTool(transcript, "read", "c1");
+  runTool(transcript, "read", "c2");
+  const groupLineIndex = renderLines(transcript).findIndex((line) => line.includes("◈ Read 2 files"));
+  transcript.root.handleMouse(click(groupLineIndex));
+  const afterClick = render(transcript);
+
+  transcript.setToolsExpanded(true);
+  const afterFirstCtrlO = render(transcript);
+  assert.notEqual(afterFirstCtrlO, afterClick, "the first Ctrl+O after a group click must still change the view (it also expands output)");
+
+  transcript.setToolsExpanded(false);
+  assert.match(render(transcript), /◈ Read 2 files/, "the second Ctrl+O collapses back to the group, not a third press");
+});
+
+test("a new member joining an unfolded (by click) run stays unfolded -- no mixed collapsed/individual view", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  runTool(transcript, "read", "c1");
+  runTool(transcript, "read", "c2");
+  const groupLineIndex = renderLines(transcript).findIndex((line) => line.includes("◈ Read 2 files"));
+  transcript.root.handleMouse(click(groupLineIndex));
+  assert.doesNotMatch(render(transcript), /◈ Read/);
+
+  runTool(transcript, "read", "c3");
+  const out = render(transcript);
+  assert.doesNotMatch(out, /◈ Read/, "the group must not re-form just because a new member arrived");
+  assert.equal((out.match(/◆ read/g) ?? []).length, 3, "all three, including the new one, render individually");
+});
+
+// The guard for the private-field coupling in ToolEntry: Pi's own click-to-toggle region
+// (createResultRegion, tool-execution.js) mutates its private `expanded` field directly; ToolEntry's
+// `expandedFlag` must track it via the overridden setExpanded, not by reading that private field.
+test("clicking a member's own line (Pi's real click region) toggles expandedFlag, and Ctrl+O re-forms the group regardless", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  runTool(transcript, "read", "c1");
+  runTool(transcript, "read", "c2");
+  const groupLineIndex = renderLines(transcript).findIndex((line) => line.includes("◈ Read 2 files"));
+  transcript.root.handleMouse(click(groupLineIndex)); // unfold via click (not Ctrl+O) -- expandedFlag stays false
+  assert.equal(transcript.tools.get("c1").expandedFlag, false);
+
+  const callLineIndex = renderLines(transcript).findIndex((line) => line.includes("◆ read"));
+  assert.ok(callLineIndex >= 0);
+  const clickResult = transcript.root.handleMouse(click(callLineIndex));
+  assert.ok(clickResult?.handled, "the click must reach the tool's own MouseRegion");
+  assert.equal(transcript.tools.get("c1").expandedFlag, true, "ToolEntry's expandedFlag must follow Pi's real click");
+
+  // Ctrl+O off is authoritative over the click-unfold state, even though c1's own expandedFlag
+  // is still true from the click above.
+  transcript.setToolsExpanded(false);
+  assert.match(render(transcript), /◈ Read 2 files/, "the group re-forms once Ctrl+O clears the unfold, regardless of any member's own expandedFlag");
 });
 
 test("replay after /resume (Transcript.reset) groups identically to a live run", () => {
@@ -338,38 +482,36 @@ test("completion flash: a failed tool flashes error color, not success", async (
   assert.ok(!renderRaw(transcript).includes(errorBar));
 });
 
-test("completion flash: a collapsed group's own rail flashes once its last member finishes", async () => {
+// Deliberately no render() call between "still running" and "finished": pi-tui's own render
+// throttle can (and in the real app, does) coalesce a fast run's frames so no such render ever
+// happens. The group's flash must still show on the very first render taken after settling, purely
+// from each member's own (already-independent) flash state -- not from observing a transition.
+test("completion flash: a collapsed group's own rail flashes once its last member finishes, with no render in between", async () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   runTool(transcript, "read", "c1");
-  assistantEnd(transcript, [toolCall("read", "c2")]);
-  transcript.handle({ type: "tool_execution_start", toolName: "read", toolCallId: "c2", args: {} });
-  // Render once while c2 is still running, so the group records "something was running" before the
-  // last-member-finishes transition the group-level flash triggers on.
-  renderRaw(transcript);
-  transcript.handle({
-    type: "tool_execution_end", toolName: "read", toolCallId: "c2",
-    result: { content: [{ type: "text", text: "ok" }] }, isError: false,
-  });
+  runTool(transcript, "read", "c2");
   const successBar = theme.fg("success", "┃");
   assert.ok(renderRaw(transcript).includes(successBar), "the group line's rail must flash once fully settled");
   await new Promise((resolve) => setTimeout(resolve, 500));
   assert.ok(!renderRaw(transcript).includes(successBar));
 });
 
-test("completion flash: a collapsed group flashes error when the last member to finish failed", async () => {
+test("completion flash: a collapsed group flashes error when the last member to finish failed, with no render in between", async () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   runTool(transcript, "read", "c1");
-  assistantEnd(transcript, [toolCall("read", "c2")]);
-  transcript.handle({ type: "tool_execution_start", toolName: "read", toolCallId: "c2", args: {} });
-  renderRaw(transcript);
-  transcript.handle({
-    type: "tool_execution_end", toolName: "read", toolCallId: "c2",
-    result: { content: [{ type: "text", text: "boom" }] }, isError: true,
-  });
+  runTool(transcript, "read", "c2", { isError: true });
   const errorBar = theme.fg("error", "┃");
   assert.ok(renderRaw(transcript).includes(errorBar));
   await new Promise((resolve) => setTimeout(resolve, 500));
   assert.ok(!renderRaw(transcript).includes(errorBar));
+});
+
+test("flash timer is unref'd: it never keeps the process alive", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  runTool(transcript, "read", "c1");
+  const entry = transcript.tools.get("c1");
+  assert.notEqual(entry.flash.timer, undefined, "a flash timer should be pending right after finishing");
+  assert.equal(entry.flash.timer.hasRef(), false, "the flash timer must be unref'd (Ctrl+D right after must exit immediately)");
 });
 
 test("verbGroupLine fits widths 40, 80, 120", () => {
@@ -384,7 +526,11 @@ test("verbGroupLine fits widths 40, 80, 120", () => {
   }
 });
 
-test("verbGroupLine: find uses its own verb, not grep's", () => {
+test("verbGroupLine: find counts calls (paths searched), not results found", () => {
+  // "Found 1 file" was rejected on review: it reads as a *result* count (1 file was found) when the
+  // number actually counts *calls* (find was invoked once, and could have returned any number of
+  // files). "Searched 1 path" names what was searched instead of implying what was found.
   const line = verbGroupLine([{ groupKind: "find", status: "done" }], theme, 80);
-  assert.match(line, /Found 1 file/);
+  assert.match(line, /Searched 1 path/);
+  assert.doesNotMatch(line, /Found/);
 });

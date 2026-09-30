@@ -26,6 +26,9 @@ export function startFlash(state: FlashState, tone: "success" | "error", request
     state.timer = undefined;
     requestRender();
   }, FLASH_MS);
+  // Never hold the process open just to clear a color after 400ms (e.g. Ctrl+D right after a tool
+  // finishes must exit immediately, not wait out the flash).
+  state.timer.unref?.();
 }
 
 export function isFlashing(state: FlashState): boolean {
@@ -40,13 +43,18 @@ export function disposeFlash(state: FlashState): void {
 }
 
 /**
- * Recolors column 0 of each line from a blank rail to the flash tone's "┃", for the 400ms after
- * something finishes. Only lines that start with a plain, uncolored space are touched -- that's
- * the rail column a settled tool/thinking block leaves blank -- so an already-colored running rail,
- * or an image escape line, passes through untouched.
+ * Recolors column 0 of each line from a blank rail to `tone`'s "┃". Only lines that start with a
+ * plain, uncolored space are touched -- that's the rail column a settled tool/thinking block leaves
+ * blank -- so an already-colored running rail, or an image escape line, passes through untouched.
+ * Unconditional: callers that already know they want the paint (e.g. a group line combining several
+ * members' flash states) use this directly; `paintFlashRail` below is the single-state shortcut.
  */
-export function paintFlashRail(lines: string[], state: FlashState, theme: Theme): string[] {
-  if (!isFlashing(state)) return lines;
-  const bar = theme.fg(state.tone, "┃");
+export function paintRailTone(lines: string[], tone: "success" | "error", theme: Theme): string[] {
+  const bar = theme.fg(tone, "┃");
   return lines.map((line) => (line.startsWith(" ") ? bar + line.slice(1) : line));
+}
+
+/** Recolors column 0 for the 400ms `state` is flashing, otherwise returns `lines` unchanged. */
+export function paintFlashRail(lines: string[], state: FlashState, theme: Theme): string[] {
+  return isFlashing(state) ? paintRailTone(lines, state.tone, theme) : lines;
 }

@@ -61,6 +61,9 @@ export class Transcript {
             tool.setExpanded(expanded);
         for (const block of this.userMessages)
             block.setExpanded(expanded);
+        // Ctrl+O is authoritative over grouping too: it always wins over a group left unfolded (or
+        // partly revealed) by a click (tools/group.ts's GroupedMessages doc comment).
+        this.groupedMessages.setToolsExpanded(expanded);
     }
     /**
      * A notice ("/tree is not in MMP TUI v2 yet", an extension load warning) is not a real
