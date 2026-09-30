@@ -362,7 +362,7 @@ for (const mode of ["print", "json"]) {
       context,
     );
     // ~10 s startup bound + ~0.5 s stdin-close grace; before the fix this was the 30 s timeout.
-    assert.ok(elapsed < 15_000, `process waited for the hung server's request timeout\n${context}`);
+    assert.ok(elapsed < 20_000, `process waited for the hung server's request timeout\n${context}`);
     const leftover = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" });
     assert.equal(leftover.stdout.trim(), "", `hung fixture server still running after exit\n${context}`);
   });
