@@ -13,7 +13,7 @@
 | D7 | P1 | 在 Ghostty（以及 kitty、WezTerm 这类支持 kitty 键盘协议的终端）里，每个快捷键都会触发两次：Ctrl+V 贴出两张图；Ctrl+T、Ctrl+O 这类开关按了等于没按；Shift+Tab 一次跳两档。原因：终端会额外发送"按键松开"事件，MMP 的快捷键处理没有把它过滤掉 | Herdr 里 `send-text $'\e[118;5u'` 再 `send-text $'\e[118;5:3u'` | 已修（18b8ad6，工具版已升级） |
 | D8 | P1 | 点一下输入框里的图片标签（看预览）之后，所有快捷键都失效：Ctrl+V 贴不了图、Shift+Tab、Esc、Ctrl+D 都没反应，只有打字还能用。原因：点击后 pi-tui 把焦点交给了包着输入框的 PromptFrame（它会把打字转给输入框），而 MMP 的快捷键只认输入框本身 | 贴一张图，鼠标点一下 `[Image #1]`，再按 Ctrl+V | 已修（见下一提交，工具版已升级） |
 | D9 | P2 | Pi 0.99 会把图片缩放说明（`[Image: original WxH, displayed at …]`）追加到发给模型的文字里，MMP 的用户消息块把它原样显示出来；用户用"选中即复制"拖选这行后，Ctrl+V 贴出的是这段文字而不是图（用户会话里第二条消息实际没有图片，只有这行字） | 贴一张大于 2000px 的图并发送，看用户消息块 | 已修（合并 e1d545c，决策 T4） |
-| D10 | P2 | Pi 0.99 新增的快捷键 MMP 没接：`app.model.cycleForward/Backward`、`tui.altScreen.previousPrompt/nextPrompt`、`tui.altScreen.search` | 对照 Pi 的 `core/keybindings.js` | 待排期 |
+| D10 | P2 | Pi 0.99 新增的快捷键 MMP 没接：`app.model.cycleForward/Backward`、`tui.altScreen.previousPrompt/nextPrompt`、`tui.altScreen.search` | 对照 Pi 的 `core/keybindings.js` | 已修（合并 D10：Ctrl+↑/↓ 跳到上/下一条提问或回答；切换模型的动作已接上但按 K1 默认不绑键；Ctrl+Shift+F 搜索原本就能用，补了测试和 `/hotkeys`） |
 | D11 | P2 | 图片编号前后对不上：输入框里的标签按启动以来累加（第二张是 `[Image #2]`），发出去后对话区每条消息各自从 1 数，都显示 `[Image #1]` | 连发两条各带一张图的消息 | 已修（合并 e1d545c，决策 T4） |
 | D12 | P2 | 按 Ctrl+T 没有任何反馈：屏幕上没有思考内容时，看起来像按键失灵（用户报告）。Pi 会提示 "Thinking blocks: hidden/visible" | 在一个没有思考块的会话里按 Ctrl+T | 已修（Ctrl+T 在右下角闪 "Thinking: expanded/collapsed"） |
 | D13 | P3 | 测试辅助只能看"写到屏幕上的所有输出"，看不到"现在屏幕上显示的是什么"。所以"某行本该消失却一直留着"这类 bug（比如中止后队列提示不消失）没有测试能抓到（D2 复审发现，A4–A6、C1 四个改坏场景） | D2 的 review-2.md 第 2 条 | 待排期：给 tui-harness 加一个读取当前屏幕内容的步骤 |
@@ -35,3 +35,4 @@
 | D29 | P3 | `/settings` 里没有 Pi 的"每个模型的默认思考档位"（model-thinking 子菜单）：D21 先不做，现有 `/thinking` 和 Shift+Tab 只改当前模型 | 对照 Pi 的 `/settings` | 待排期 |
 | D30 | P3 | 空输入框按两次 Esc 没有动作；Pi 可以设成打开 `/tree` 或 `/fork`（double-escape-action），D21 里隐藏了这个设置项 | 空输入框按 Esc Esc | 待排期 |
 | D31 | P3 | 没有终端标签栏进度提示（Pi 的 terminal-progress，OSC 9;4），D21 里隐藏了这个设置项 | 在支持 OSC 9;4 的终端里跑一个长回合 | 待排期 |
+| D32 | P3 | D10 复审的小问题：`test/pi-internals.test.mjs` 的 osc133 检查用固定 40ms 等待画面（机器忙时可能偶发失败）；测试辅助会去掉 OSC 序列，所以没有应用层测试能发现 OSC 133 标记漏到终端上（只靠跳转测试间接发现） | D10 的 review-1.md 第 1、2 条 | 待修 |
