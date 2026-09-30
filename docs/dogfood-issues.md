@@ -28,7 +28,7 @@
 | D22 | P3 | 展开后的思考内容里 markdown 没有渲染（`**标题**` 原样显示），缩进也和正文不一致（M4 Herdr 实测） | 用会输出思考的模型问一个问题，Ctrl+T 展开 | 已修（合并 D22：按 Pi 的 Markdown 渲染，和正文同列，有对照 Pi 的逐字节测试） |
 | D23 | P3 | 回答进行中排队的追问，和原来的问题共用一行 `Worked for`；grok 是每轮各显示一行（M4 Fable 审查） | 运行中输入一句按 Enter 排队，等两轮都结束 | 待修（从旧待办迁来） |
 | D24 | P3 | 思考结束时没有闪烁提示（grok 有；M4 Fable 审查） | 看一次思考结束 | 待修（从旧待办迁来） |
-| D25 | P3 | 在 Herdr 里退出 mmp 后，pane 里留着退出前的最后一帧画面（Ghostty 里是否也有未确认） | Herdr pane 里启动再 Ctrl+D | 已修（合并 D35：退出用 `stop({ preserveScreen: true })`，Herdr 实测退出后 pane 干净；外部编辑器/Ctrl+Z 之后退出仍会留一帧，见 D41） |
+| D25 | P3 | 在 Herdr 里退出 mmp 后，pane 里留着退出前的最后一帧画面（Ghostty 里是否也有未确认） | Herdr pane 里启动再 Ctrl+D | 已修（合并 D35、D41：所有退出路径都不留画面，Herdr 实测） |
 | D26 | P3 | `mmp:hooks` 的 `user_prompt` 钩子拦下一轮时，界面上可能看不到拦截原因（旧待办的简记，细节没留下；钩子启动失败的情况已按"失败要可见"修过） | 写一个返回 block 的 `user_prompt` 钩子，发一句话 | 待复现 |
 | D27 | P3 | 用退格删掉图片标签后按 Ctrl+-（撤销），标签一个字符一个字符地回来（约 10 次才恢复完整）：删标签时的每次模拟退格各是 Pi 的一个撤销快照（D18 worker 发现，D18 之前就有） | `see foo `，Ctrl+V，退格，Ctrl+- | 待修 |
 | D28 | P3 | kitty 协议下 Shift+退格（`\x1b[127;2u`）只删掉标签的 `]`，不会整个删掉：`shift+backspace` 不在 `DELETE_ACTIONS` 里（D18 worker 发现，初审未复现，真实终端未确认） | Ghostty 里贴图后按 Shift+退格 | 待确认 |
@@ -44,5 +44,5 @@
 | D38 | P3 | `src/tui/services.ts` 的 `configureHttp` 只抄了 Pi `core/http-dispatcher.js` 的一部分：没有 `autoSelectFamilyAttemptTimeout`、按来源建客户端、undici 错误监听；`HTTP_PROXY ??= proxy` 在 `/reload` 时也会生效（Pi 只在启动时）。D21 之后它在每次绑定/重载/改设置时都会跑（D21 复审 F3） | 对照 `http-dispatcher.js:68-95` | 待修（或登记进 pi-internals 说明差异） |
 | D39 | P3 | D22 复审第 2 轮的小问题：`test/tui-thinking-parity.test.mjs` 在模块顶层装 MMP 主题，`--test-isolation=none`（多文件共用进程）时会失败；思考文字的斜体只有 `FORCE_COLOR` 开启时才被测到（`npm test` 下不测） | D22 的 review-2.md F4、F5 | 待修 |
 | D40 | P2 | Pi 0.99.2（`e029c3e`）起只有 direct 曝光的 MCP 服务会挡住第一条消息，codemode 服务改为后台连接。升级到 0.99.2 后：① D3 那种"`-p` 结束时有服务还在连接、进程等到超时才退出"会更常见（D3 的修复应当覆盖）；② MMP 在 `before_agent_start` 打的 "still connecting" 提示（`src/extensions/mcp.ts`）会对正常、只是还没连上的服务也报出来 | 升级 Pi 到 0.99.2 后，`mmp -p hi` 配一个 codemode MCP 服务 | 升级 0.99.2 时处理（D3 worker 发现） |
-| D41 | P3 | D35 复审的后续：① 启动时 `bind()` 还在等（扩展的 `session_start` 没返回）时按 Ctrl+D，界面退了但进程不退出（`process.exit` 只在 `runTuiApp` 返回后调用），启动失败路径同理；② 用过 Ctrl+G 外部编辑器或 Ctrl+Z 挂起后再退出，普通屏幕上留一帧旧画面（`key-handlers.ts` 的 `tui.stop()` 没带 `preserveScreen`；Pi 也这样）；③ 退出过程中 `session_shutdown` 处理抛的错被送到已关闭的对话区，看不见（应改走 stderr） | D35 的 review-1.md 第 1、2、3、6 条 | 待修 |
+| D41 | P3 | D35 复审的后续：① 启动时 `bind()` 还在等（扩展的 `session_start` 没返回）时按 Ctrl+D，界面退了但进程不退出（`process.exit` 只在 `runTuiApp` 返回后调用），启动失败路径同理；② 用过 Ctrl+G 外部编辑器或 Ctrl+Z 挂起后再退出，普通屏幕上留一帧旧画面（`key-handlers.ts` 的 `tui.stop()` 没带 `preserveScreen`；Pi 也这样）；③ 退出过程中 `session_shutdown` 处理抛的错被送到已关闭的对话区，看不见（应改走 stderr） | D35 的 review-1.md 第 1、2、3、6 条 | 已修（合并 D41；Ctrl+G/Ctrl+Z 用 `preserveScreen` 是有意和 Pi 不同，为了"退出后终端里不留对话"） |
 | D42 | P3 | 声明了 `mmp:mcp` 但没有配置任何服务时，D3 之后也会加载 Pi 的 `extensions/mcp/runtime.js`（约 12 ms）；Pi 自己特意推迟到有服务时才加载（`index.js:726`）（D3 复审 F1） | 只声明 `mmp:mcp`、不配服务，测启动时间 | 待排期 |
