@@ -738,6 +738,8 @@ Project agent 仅在项目 trust 生效后可见。
 
 ## 13. MCP Extension
 
+> 升级到 Pi 0.99 时改用 Pi 原生 MCP、去掉 pi-mcp-adapter，设计见 [docs/mcp-design.md](docs/mcp-design.md)（草案，待确认）。本节描述的是升级前的现状。
+
 MMP 不实现 MCP 协议栈。`mmp:mcp` 只负责：
 
 ```text

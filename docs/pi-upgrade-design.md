@@ -201,3 +201,5 @@ Pi 0.99 加入了原生 MCP 支持（`core/mcp-servers.js`），把 `mcp.json` �
 - 如果两者共存，`mcp.json` 的 schema、trust 语义和生效顺序会不会冲突，MMP 该以哪一份为准。
 
 这不是自动化能替人拍板的决定，先在这里记一笔，免得升级脚本悄悄把 0.99 当成又一次普通的 patch 升级放过去。
+
+2026-09-30 已决定：改用 Pi 原生 MCP，只读 MMP 自己的 `mcp.json`（决策 MCP1、MCP2，设计见 [mcp-design.md](mcp-design.md)）。
