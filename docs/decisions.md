@@ -28,14 +28,14 @@
 | 2026-09-29 | T2 | 交互模式下首次进入带 `.mmp/mmp.json` 的项目时询问是否信任并记住（选项同 Pi）；非交互模式不问 | 用户决定 | 只靠 `--approve` | 已定 | DEVELOPMENT.md 8.2 节 |
 | 2026-09-29 | M5 | 去掉 MMP_TUI=v2：交互模式只走 MMP 自己的界面，不再启动 Pi 的经典交互界面；非交互模式仍走 piMain | 用户决定：只保留 mmp 一个入口 | 保留环境变量开关 | 已定 | tui-design 第 15 节 |
 | 2026-09-29 | M6 | MMP 定位为改名叫 mmp 的定制版 Pi：功能优先对齐官方 Pi，界面换成 grok 风格；对外只暴露 mmp 自己的参数、子命令和帮助；install/remove/list/config 读写 Manifest，/bug 改为给 MMP 仓库开 issue | 用户决定 | 只保留 MMP 独有功能；透传 Pi 的 CLI | 已定 | [cli-design.md](cli-design.md) |
+| 2026-09-30 | U1 | Pi 内核升级用做法 B：版本仍然锁死，升级过程自动化（定时任务发现新版本后自动升级三个 Pi 包和 adapter、跑离线兼容性门禁） | 用户同意推荐方案；做法 A（放宽版本范围）在 Pi 还是 0.x 阶段风险太高，做法 C（运行时用本机装的 Pi）有同样的可复现性问题 | A. 放宽版本范围；C. 运行时用本机装的 Pi | 已定 | pi-upgrade-design 第 1 节 |
+| 2026-09-30 | U2 | 门禁通过、模型可见内容也没变时，先开 PR 由你合并，合并后发布脚本自动跑；稳定一段时间后再考虑全自动 | 用户同意推荐方案 | 门禁通过即自动合并并发布 | 已定 | pi-upgrade-design 第 7 节 |
+| 2026-09-30 | U3 | 新建 GitHub Actions（每日定时任务 + PR 检查），门禁全部离线，不需要 secrets | 用户同意推荐方案 | 不建 CI，继续手工升级 | 已定 | pi-upgrade-design 第 7 节 |
 
 ## 待定
 
 | 编号 | 问题 | 我的推荐 | 依据 |
 |---|---|---|---|
-| U1 | Pi 内核升级用哪种做法 | 版本锁死，升级过程自动化，每天检查、跑离线门禁、开 PR | pi-upgrade-design 第 1 节 |
-| U2 | 门禁通过后自动发布，还是每次你点一下 | 先开 PR 由你合并，合并后自动发布 | pi-upgrade-design 第 7 节 |
-| U3 | 新建 GitHub Actions（仓库目前没有 CI） | 建 | pi-upgrade-design 第 7 节 |
 | — | 配色里标"我定"的几个颜色 | 看截图时确认 | [tui-theme.md](tui-theme.md) |
 | — | 重跑 benchmark 基线和真实模型冒烟（会花钱） | Pi 0.87 改了 system prompt 格式，旧基线不能直接比，建议重跑 | DEVELOPMENT.md 第 20 节 |
 

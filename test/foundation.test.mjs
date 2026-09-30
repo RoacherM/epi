@@ -6,6 +6,9 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 
+import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
+
+import { MMP_PACKAGE_VERSION as MMP_VERSION } from "./fixtures/mmp-package-version.mjs";
 import { parseMmpArgs } from "../dist/args.js";
 import { MmpArgumentError } from "../dist/errors.js";
 import {
@@ -122,7 +125,7 @@ test("version reports both pinned components", () => {
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, "mmp 0.1.4\npi 0.87.1\n");
+  assert.equal(result.stdout, `mmp ${MMP_VERSION}\npi ${PI_VERSION}\n`);
   assert.equal(result.stderr, "");
 });
 
@@ -269,8 +272,8 @@ test("dry-run is JSON-only and does not create MMP_HOME", () => {
   assert.equal(result.stderr, "");
   assert.equal(existsSync(mmpHome), false);
   assert.deepEqual(JSON.parse(result.stdout), {
-    mmpVersion: "0.1.4",
-    piVersion: "0.87.1",
+    mmpVersion: MMP_VERSION,
+    piVersion: PI_VERSION,
     sdkEntry: "@earendil-works/pi-coding-agent#main",
     mmpHome,
     agentDir: join(mmpHome, "pi"),
@@ -281,9 +284,9 @@ test("dry-run is JSON-only and does not create MMP_HOME", () => {
     runtimeIdentity: {
       runtime: {
         name: "MMP",
-        version: "0.1.4",
+        version: MMP_VERSION,
         engine: "Pi",
-        engineVersion: "0.87.1",
+        engineVersion: PI_VERSION,
       },
       paths: {
         mmpHome,

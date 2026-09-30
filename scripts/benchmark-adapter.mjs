@@ -23,6 +23,7 @@ import { StringDecoder } from "node:string_decoder";
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 
 import { BASE_PI_RESOURCE_ARGS } from "../dist/host.js";
+import { canonicalize, normalizeSnapshot } from "./normalize-snapshot.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const defaultMmpEntry = join(root, "dist", "cli.js");
@@ -34,8 +35,11 @@ const defaultPiEntry = join(
   "dist",
   "cli.js",
 );
-const MMP_VERSION = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
-const EXPECTED_PI_VERSION = "0.87.1";
+const PACKAGE_JSON = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+const MMP_VERSION = PACKAGE_JSON.version;
+// package.json's dependency entry is the single source of truth for the pinned Pi version
+// (docs/pi-upgrade-design.md 4): this catches a node_modules install that drifted from it.
+const EXPECTED_PI_VERSION = PACKAGE_JSON.dependencies["@earendil-works/pi-coding-agent"];
 const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
 const MAX_JSONL_LINE_BYTES = 16 * 1024 * 1024;
 const KILL_GRACE_MS = 2000;
@@ -47,7 +51,7 @@ const EXIT_CODE = {
   grader: 5,
 };
 const VARIANTS = new Set([
-  "pi-0.87-baseline",
+  "pi-baseline",
   "mmp-core-empty",
   "mmp-rules-skills",
   "mmp-full",
@@ -223,7 +227,7 @@ function resolveOptions(raw) {
   const cwd = resolve(raw.cwd);
   const promptFile = raw.promptFile === undefined ? undefined : resolve(raw.promptFile);
   const entry = resolve(
-    raw.entry ?? (raw.variant === "pi-0.87-baseline" ? defaultPiEntry : defaultMmpEntry),
+    raw.entry ?? (raw.variant === "pi-baseline" ? defaultPiEntry : defaultMmpEntry),
   );
   requirePathType(bundle, "directory", "--bundle");
   requirePathType(cwd, "directory", "--cwd");
@@ -255,7 +259,7 @@ function resolveOptions(raw) {
     promptFile,
     grader,
     graderTimeoutMs,
-    harness: raw.variant === "pi-0.87-baseline" ? "pi" : "mmp",
+    harness: raw.variant === "pi-baseline" ? "pi" : "mmp",
   };
 }
 
@@ -294,50 +298,6 @@ function copyBundle(bundle, trialHome, harness) {
       return !sensitiveBundlePath(source, bundle);
     },
   });
-}
-
-function canonicalize(value) {
-  if (Array.isArray(value)) {
-    return value.map(canonicalize);
-  }
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.keys(value)
-        .sort()
-        .map((key) => [key, canonicalize(value[key])]),
-    );
-  }
-  return value;
-}
-
-function normalizePathString(value, roots) {
-  for (const [rootPath, token] of roots) {
-    if (value === rootPath) {
-      return token;
-    }
-    if (value.startsWith(`${rootPath}${sep}`)) {
-      return `${token}/${relative(rootPath, value).split(sep).join("/")}`;
-    }
-  }
-  return value;
-}
-
-function normalizeSnapshot(value, roots) {
-  if (typeof value === "string") {
-    return normalizePathString(value, roots);
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => normalizeSnapshot(item, roots));
-  }
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        key,
-        normalizeSnapshot(item, roots),
-      ]),
-    );
-  }
-  return value;
 }
 
 function hashBytes(value) {

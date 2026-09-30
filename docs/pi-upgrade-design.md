@@ -50,13 +50,14 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 |---|---|---|---|
 | 编译 + 类型检查 | Pi 导出接口的类型变了 | 通过 | 已有 |
 | 全部测试（`npm test`） | 行为回归 | 发现 MCP adapter 加载失败、8 个文件的版本号写死 | 已有 |
-| ambient 资源隔离 | Pi 新增的自动发现来源 | 手工从 CHANGELOG 找到 `AGENTS.override.md` 补进测试；`SYSTEM.md` / `APPEND_SYSTEM.md` 一直没被覆盖，今天才发现并修好 | 今天新增（`test/ambient-isolation.test.mjs`）。**要改进**：需要埋设的路径清单，在测试里直接从安装好的 Pi 读取（`trust-manager.js` 里的 `TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES`，以及资源加载代码里发现的文件名），不再手写。Pi 新增一种来源，测试就会自动覆盖 |
+| ambient 资源隔离 | Pi 新增的自动发现来源 | 手工从 CHANGELOG 找到 `AGENTS.override.md` 补进测试；`SYSTEM.md` / `APPEND_SYSTEM.md` 一直没被覆盖，今天才发现并修好 | 已改进（2026-09-30）：埋设的资源清单改为在测试里直接从安装好的 Pi 读取（`test/fixtures/pi-ambient-sources.mjs` 读 `trust-manager.js` 的 `TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES` 和 `resource-loader.js` 的 context-file 候选名单），不再手写；`test/ambient-isolation.test.mjs` 用它埋设。Pi 新增一种来源，测试就会自动覆盖；读取的位置本身登记在 `docs/pi-internals.md` |
 | 配置隔离 | 项目 `.pi/settings.json`、`~/.pi/agent` 被读取 | 实测：启动阶段总会读项目设置；`--approve` 时运行阶段也生效（已修复） | 运行阶段已是正式测试（`test/ambient-isolation.test.mjs`）。启动阶段的读取还挡不住，只能在报告里记录 |
 | MCP 离线验收 | adapter 和新 Pi 不兼容 | 正好能发现 `complete` 被删掉 | 今天新增（`test/mcp.test.mjs`，用 faux provider 按剧本调用） |
-| 模型可见内容快照 | system prompt 和工具 schema 的变化 | 0.87 把 system prompt 改成了 `<tools>`、`<rules>` 这样的分段格式，没有任何测试发现 | 新增。只报告、不判失败：一旦有变化，就提示需要重跑 benchmark 基线 |
+| 模型可见内容快照 | system prompt 和工具 schema 的变化 | 0.87 把 system prompt 改成了 `<tools>`、`<rules>` 这样的分段格式，没有任何测试发现 | 已实现（2026-09-30，`scripts/model-snapshot.mjs` + `test/snapshots/model-visible.json`）。用固定的离线装配（rules+skills+三个内置 Extension，全部能离线加载）跑一次 faux 模型，截获它实际收到的 system prompt 和工具声明；路径、cwd、MMP/Pi 版本号都做了归一化，两次运行逐字节相同。只报告、不判失败：`--diff` 恒定退出码 0，没变化打印 `NO MODEL-VISIBLE CHANGES`，变了打印统一 diff，提示需要重跑 benchmark 基线 |
 | 启动契约 | `piMain` 路径和 SDK 路径给模型的内容不一致（新 TUI 之后才有两条路径） | — | 新增，随新 TUI 一起做（tui-design 3.1 节） |
-| Pi 接口清单 | MMP 用到的 Pi 符号被删掉或改名 | — | 新增。自动收集 `src/` 里所有从 Pi 包 import 的名字，逐个断言存在、类型对得上。门禁不通过时，能直接指出是哪个符号出了问题 |
-| 复制代码的漂移 | 从 Pi 复制过来的代码，上游改了 | — | 新增。`vendor.json` 记录每个复制文件对应的上游路径、版本和哈希。升级脚本比较新旧两个版本的上游文件，一有变化就判失败，交给人看 |
+| Pi 接口清单 | MMP 用到的 Pi 符号被删掉或改名 | — | 已实现（2026-09-30，`test/pi-interface-inventory.test.mjs`）。用 TypeScript 编译器 API 静态收集 `src/**/*.ts` 里所有从 `pi-coding-agent`/`pi-tui`/`pi-ai` import 的名字（含 `import type`/内联 `type`），值导入对已安装包的运行时导出断言存在，类型导入对其 `.d.ts` 的导出断言存在。门禁不通过时报告具体符号和引用它的文件 |
+| Pi 内部依赖清单 | MMP 按文件路径深导入的 Pi 内部模块、私有字段/方法、或 Pi 自己嵌套安装的依赖，被移动/改名/删除 | — | 已实现（2026-09-30，`test/pi-internals.test.mjs` + `docs/pi-internals.md`）。见第 6 节：每处深耦合登记为文档里的一行，测试对每行做实际检查；还会扫描 `src/`/`test/fixtures/`/`scripts/` 里新出现的 `join(piDist, ...)` 深路径，没登记的直接判失败 |
+| 复制代码的漂移 | 从 Pi 复制过来的代码，上游改了 | — | 新增（设计阶段，还没实现）。`vendor.json` 记录每个复制文件对应的上游路径、版本和哈希。升级脚本比较新旧两个版本的上游文件，一有变化就判失败，交给人看 |
 | pi-tui 实例检查 | 顶层 pi-tui 和 Pi 自带的 pi-tui 版本不一致 | — | 新增。启动时也检查，不一致就直接报错 |
 | 交互冒烟 | 交互界面起不来或崩溃 | 0.87 启动页正常；退出流程没能测到 | 已有脚本（`pty-smoke.py`），要修好退出步骤，再改写成正式测试 |
 
@@ -137,9 +138,9 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 
 | 耦合方式 | 规则 |
 |---|---|
-| Pi 包入口导出的接口 | 当作契约来用，由"Pi 接口清单"检查兜底 |
+| Pi 包入口导出的接口 | 当作契约来用，由"Pi 接口清单"检查兜底（`test/pi-interface-inventory.test.mjs`） |
 | 从 Pi 复制过来的代码 | 只允许小段，并且必须登记在 `vendor.json` 里接受漂移检查。目前计划复制的有：`app.*` 键位定义（约 114 行）、`resolveAppMode`（13 行）、项目信任流程 |
-| 按文件路径直接 import Pi 没导出的模块，或读取 `globalThis` 上的私有 symbol | 禁止 |
+| 按文件路径直接 import Pi 没导出的模块、读取私有字段/方法，或依赖 Pi 自己嵌套安装的其他包 | 现实是新 TUI 已经用了好几处（pi-tui 的 `Editor.state`、`KeybindingsManager`、剪贴板读取、scoped-models 选择器、`pi-agent-core` 的 `Agent`……）。规则改为：**允许，但必须登记在 [`docs/pi-internals.md`](pi-internals.md) 并由 `test/pi-internals.test.mjs` 覆盖**；未登记的 `join(piDist, ...)` 深路径、`importFromPi(...)` 或 `createRequire(piEntry).resolve(...)` 深导入会让那个测试失败（按这三种固定写法扫描 `src/`/`test/fixtures/`/`scripts/`，其它写法的深导入目前扫不到），登记过的一项如果被 Pi 升级移动或改名，也会在那个测试里指名失败，而不是禁止后被绕开 |
 
 ## 7. 待你拍板
 
@@ -164,3 +165,12 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 | 6 | 更新提示：关掉 Pi 自带的提示、后台检查与缓存、启动页和底栏显示、`mmp update`（新 TUI 里改为显示在快捷键栏右侧） |
 
 新 TUI 开发期间同样执行第 6 节的规则，漂移检查和启动契约随 TUI 代码一起加。
+
+## 9. 已知：升到 Pi 0.99 时需要人决定的一件事
+
+Pi 0.99 加入了原生 MCP 支持（`core/mcp-servers.js`），把 `mcp.json` 变成 Pi 自己识别、并纳入 project trust 的一项资源。MMP 现在的隔离假设是"Pi 不认识 `mcp.json`，只有 `mmp:mcp` + `pi-mcp-adapter` 认识它"——0.99 打破这个假设。升到 0.99（或更高）时，在自动化门禁跑完、开 PR 之前，需要人决定：
+
+- ambient 隔离要不要新增一项：阻止 Pi 原生读取项目/全局的 `mcp.json`（同 `SYSTEM.md`/`APPEND_SYSTEM.md` 现在的做法），还是改用 Pi 原生 MCP 取代 `mmp:mcp` + `pi-mcp-adapter`；
+- 如果两者共存，`mcp.json` 的 schema、trust 语义和生效顺序会不会冲突，MMP 该以哪一份为准。
+
+这不是自动化能替人拍板的决定，先在这里记一笔，免得升级脚本悄悄把 0.99 当成又一次普通的 patch 升级放过去。

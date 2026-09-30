@@ -13,6 +13,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
+
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const adapter = join(root, "scripts", "benchmark-adapter.mjs");
 const fakeHarness = join(root, "test", "fixtures", "fake-benchmark-harness.mjs");
@@ -84,13 +86,13 @@ test("benchmark adapter emits reproducible isolated trial artifacts without glob
       "baseline",
       "BENCHMARK_OK",
       [],
-      "pi-0.87-baseline",
+      "pi-baseline",
     );
     assert.equal(first.result.status, 0, first.result.stderr);
     assert.equal(second.result.status, 0, second.result.stderr);
     assert.equal(baseline.result.status, 0, baseline.result.stderr);
     assert.equal(baseline.metadata.harness, "pi");
-    assert.equal(baseline.metadata.versions.pi, "0.87.1");
+    assert.equal(baseline.metadata.versions.pi, PI_VERSION);
     assert.equal(existsSync(join(baseline.outputDir, "mmp-home", "mmp.json")), false);
     assert.equal(existsSync(join(baseline.outputDir, "mmp-home", "pi", "settings.json")), true);
     assert.equal(first.metadata.result.success, true);
