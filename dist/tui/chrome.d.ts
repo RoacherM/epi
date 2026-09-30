@@ -3,6 +3,9 @@ import type { Component, EditorComponent, TuiMouseEvent, TuiMouseEventResult } f
 /** Shared with assistant-block.ts (the assistant-message timestamp reuses this row layout). */
 export declare function fit(text: string, width: number): string;
 /** Left and right segments on one row; the left side is truncated first. */
+/** Columns kept free for a message's time on every row ("12:00 PM"), so text wraps at the same place
+ * whatever the time reads; a longer locale string widens it. */
+export declare function clockColumns(clock: string): number;
 export declare function spread(left: string, right: string, width: number): string;
 /** grok: `~` for home, middle components shortened to their first letter, last two kept full. */
 export declare function shortenPath(path: string, home?: string): string;

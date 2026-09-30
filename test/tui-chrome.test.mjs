@@ -220,3 +220,10 @@ test("a tool that draws its own frame is left alone", () => {
   const own = { renderShell: "self", renderCall: () => ({ render: () => ["own"], invalidate() {} }) };
   assert.equal(toolBlock("own", own), own);
 });
+
+test("a user message wraps at the same place whatever its time reads (9:05 AM vs 10:05 AM)", () => {
+  const text = Array.from({ length: 12 }, (_, i) => `word${i}`).join(" ");
+  const body = (date) => new UserMessageBlock(theme, text, date).render(40)
+    .map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").replace(/\d{1,2}:\d{2}\s*[AP]M/, "").trimEnd());
+  assert.deepEqual(body(new Date(2026, 8, 30, 9, 5)), body(new Date(2026, 8, 30, 10, 5)));
+});
