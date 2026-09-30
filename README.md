@@ -7,8 +7,8 @@ MMP (Make My Pi) 是基于固定版本 Pi SDK 的显式、确定性 Harness。�
 当前固定版本：
 
 - Node.js `>=22.19.0`
-- `@earendil-works/pi-coding-agent@0.87.1`
-- `pi-mcp-adapter@2.38.0`
+- `@earendil-works/pi-coding-agent`：见 `package.json`
+- `pi-mcp-adapter`：见 `package.json`
 
 MMP 不调用 PATH 中的 `pi`，也不自动读取 `~/.pi/agent`、`.pi/`、`.agents/`、`AGENTS.md` 或 `CLAUDE.md`。所有 Harness 资源必须在 MMP Manifest 中显式声明。
 
@@ -60,11 +60,11 @@ npm test
 npm link
 ```
 
-版本检查应输出：
+版本检查应输出 MMP 版本和 `package.json` 里固定的 Pi 版本：
 
 ```text
 mmp 0.1.4
-pi 0.87.1
+pi <package.json 中 @earendil-works/pi-coding-agent 的版本>
 ```
 
 首次安装不要求创建 Manifest；`mmp --no-project --dry-run` 可以空配置启动。MMP 使用独立 Pi 运行目录 `~/.mmp/pi`。认证可通过 Pi 支持的 provider 环境变量提供；也可以启动 `mmp` 后使用 Pi 的 `/login`。认证、settings、sessions 与 project trust 都不会从 `~/.pi/agent` 自动继承。
@@ -249,7 +249,7 @@ Review only the requested change. Return findings with file and line evidence.
 }
 ```
 
-每个 server 必须且只能声明一个 transport：`command`、`socket` 或 `url`。`${ENV_NAME}` 在启动前展开；缺失变量 fail-fast。可信项目的 `<repo>/.mmp/mcp.json` 在全局配置之后合并。MMP 只负责校验和装配，MCP transport、OAuth、连接生命周期、tool discovery/call 与进程回收由固定的 `pi-mcp-adapter@2.38.0` 提供。
+每个 server 必须且只能声明一个 transport：`command`、`socket` 或 `url`。`${ENV_NAME}` 在启动前展开；缺失变量 fail-fast。可信项目的 `<repo>/.mmp/mcp.json` 在全局配置之后合并。MMP 只负责校验和装配，MCP transport、OAuth、连接生命周期、tool discovery/call 与进程回收由固定版本的 `pi-mcp-adapter`（见 `package.json`）提供。
 
 ## Hooks
 
@@ -352,7 +352,7 @@ npm run benchmark -- \
   --timeout-ms 600000
 ```
 
-`--variant` 必须是 `pi-0.87-baseline`、`mmp-core-empty`、`mmp-rules-skills` 或 `mmp-full`。三个 MMP variant 的能力层级由传入的 bundle 内容决定；`pi-0.87-baseline` 直接运行同一依赖中的 Pi `0.87.1`，并关闭所有 ambient resource。
+`--variant` 必须是 `pi-baseline`、`mmp-core-empty`、`mmp-rules-skills` 或 `mmp-full`。三个 MMP variant 的能力层级由传入的 bundle 内容决定；`pi-baseline` 直接运行同一依赖中锁定的 Pi（版本见 `package.json`），并关闭所有 ambient resource。
 
 每个 MMP trial 会把 bundle 复制到独立的 `<output-dir>/mmp-home`；Pi baseline 只复制其中的 `pi/` settings/models。复制时排除 `.env*`、Pi auth/trust/session、旧 runtime capsule 和 artifacts；模型凭证必须通过 runner 环境变量注入。adapter 连续执行两次 MMP `--dry-run`，校验输出完全一致，并用规范化装配快照和实际参与 trial 的 bundle 文件 SHA-256 生成 `assemblyDigest`。
 

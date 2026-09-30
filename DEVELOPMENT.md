@@ -3,15 +3,15 @@
 - 项目：MMP（Make My Pi）
 - 状态：阶段 A-E、Benchmark adapter 与 benchmark-ready 契约测试已完成
 - 目标目录：`~/Desktop/Projects/Devs/mmp`
-- 目标依赖：`@earendil-works/pi-coding-agent@0.87.1`；Node.js `>=22.19.0`
-- 当前验证环境：Pi `0.87.1` 已通过全部契约测试、ambient 隔离测试和离线 MCP 验收；真实模型冒烟和 benchmark adapter 冒烟是 Pi `0.83.0` 时做的，`0.87.1` 上还没重做。OMP `17.1.3` 仅作能力边界参考，不是运行依赖
-- Pi 升级：设计见 `docs/pi-upgrade-design.md`（版本锁死、升级自动化，草案待定）
+- 目标依赖：`@earendil-works/pi-coding-agent`（见 `package.json`）；Node.js `>=22.19.0`
+- 当前验证环境：`package.json` 锁定的 Pi 版本已通过全部契约测试、ambient 隔离测试和离线 MCP 验收；真实模型冒烟和 benchmark adapter 冒烟是 Pi `0.83.0` 时做的，升级后还没重做，之后每次升级也要看是否需要重跑（见 `docs/pi-upgrade-design.md` 第 3 节"模型可见内容快照"）。OMP `17.1.3` 仅作能力边界参考，不是运行依赖
+- Pi 升级：设计见 `docs/pi-upgrade-design.md`（版本锁死、升级自动化，已定，见 `docs/decisions.md`）
 - 交互界面：设计见 `docs/tui-design.md`，代码在 `src/tui/`，是 `mmp` 唯一的交互入口（不再启动 Pi 经典交互界面），进度见设计文档第 15 节
 - 最后更新：2026-09-29
 
 ## 1. 产品定义
 
-MMP 是一个基于 Pi SDK（当前锁定 0.87.1）的确定性 Agent Harness。它不是 Pi fork，也不是通过 shell 启动全局 `pi` 二进制的薄包装器。
+MMP 是一个基于 Pi SDK（当前锁定版本见 `package.json`）的确定性 Agent Harness。它不是 Pi fork，也不是通过 shell 启动全局 `pi` 二进制的薄包装器。
 
 > MMP 读取 `~/.mmp/mmp.json`，在可信边界内显式选择 Rules、Skills 和 Extensions，然后在当前 Node.js 进程中调用锁定版本的 Pi SDK。
 
@@ -91,7 +91,7 @@ exec(`pi ${args.join(" ")}`);
 - 不需要为同进程 SDK 调用复制 Pi 的 TUI、Session 或 Agent Loop；
 - 首批内置 Extension 可以通过 closure 接收已解析配置，不需要环境变量或临时 JSON 桥接。
 
-Pi 从 0.83 起支持完整关闭 ambient resources（0.87.1 上由 `test/ambient-isolation.test.mjs` 验证，包括 0.84 新增的 `AGENTS.override.md`）：
+Pi 从 0.83 起支持完整关闭 ambient resources（由 `test/ambient-isolation.test.mjs` 验证，包括 0.84 新增的 `AGENTS.override.md`）：
 
 ```text
 --no-extensions
@@ -229,7 +229,7 @@ dist/
     "mmp": "./dist/cli.js"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.87.1"
+    "@earendil-works/pi-coding-agent": "<exact version, see package.json>"
   }
 }
 ```
@@ -570,7 +570,7 @@ MMP 在内存中构造本次运行的有效装配：
 
 ```ts
 interface ResolvedAssembly {
-  piVersion: "0.87.1";
+  piVersion: string; // installed Pi's VERSION export; see package.json for the pin
   agentDir: string;
   globalManifest: string;
   projectManifest?: {
@@ -618,7 +618,7 @@ const extensionFactories: InlineExtension[] = [
 ```json
 {
   "mmpVersion": "0.1.4",
-  "piVersion": "0.87.1",
+  "piVersion": "<installed Pi version, see package.json>",
   "sdkEntry": "@earendil-works/pi-coding-agent/main",
   "agentDir": "/Users/byron/.mmp/pi",
   "globalManifest": "/Users/byron/.mmp/mmp.json",
@@ -761,7 +761,7 @@ export function createMmpMcpExtension(config: McpConfig): InlineExtension {
 }
 ```
 
-已核实 `pi-mcp-adapter@2.38.0` 提供 programmatic factory：
+已核实 `pi-mcp-adapter`（见 `package.json`）提供 programmatic factory：
 
 ```ts
 createMcpAdapter({
@@ -770,7 +770,7 @@ createMcpAdapter({
 })
 ```
 
-`pi-mcp-adapter@2.38.0` 已 exact pin。2.17.0 在 Pi 0.87 下无法加载（`pi-ai` 不再导出 `complete`），升级 Pi 时一起换成 2.x 最后一版。它在 Pi `0.87.1` 上通过离线验收：`test/mcp.test.mjs` 用 faux provider 按剧本驱动真实 stdio MCP `search -> call`，同时覆盖环境变量展开与 Session 退出回收。（2.17.0 当初在 Pi `0.83.0` 上是用真实模型验收的。）
+`pi-mcp-adapter` 已 exact pin（见 `package.json`）。2.17.0 在 Pi 0.87 下无法加载（`pi-ai` 不再导出 `complete`），升级 Pi 时一起换成 2.x 最后一版。它在当前锁定的 Pi 版本上通过离线验收：`test/mcp.test.mjs` 用 faux provider 按剧本驱动真实 stdio MCP `search -> call`，同时覆盖环境变量展开与 Session 退出回收。（2.17.0 当初在 Pi `0.83.0` 上是用真实模型验收的。）
 
 MMP 不拥有 transport、OAuth、connection lifecycle、tool discovery/call、renderer 和 metadata cache。
 
@@ -892,7 +892,7 @@ node --test test/hooks.test.mjs
 动作：
 
 - 建立 npm package 和 TypeScript build；
-- exact pin `@earendil-works/pi-coding-agent@0.87.1`；
+- exact pin `@earendil-works/pi-coding-agent`（见 `package.json`）；
 - 设置 Node.js `>=22.19.0`；
 - 实现 MMP 参数分流和保留 resource flags；
 - 设置独立 `PI_CODING_AGENT_DIR`；
@@ -916,7 +916,7 @@ MMP_OK
 另外必须证明：
 
 - 临时移除 PATH 中的全局 `pi` 后，`mmp --print` 仍成功；
-- `mmp --version` 同时输出 MMP `0.1.4` 和 Pi `0.87.1`；
+- `mmp --version` 同时输出 MMP 版本和 `package.json` 锁定的 Pi 版本；
 - 进程树中没有第二个 Pi 主进程。
 
 ### 阶段 B：Manifest 与 Project Trust
@@ -1034,7 +1034,7 @@ MMP SDK Host 启动
 
 ### 兼容性
 
-- exact pin Pi `0.87.1`；
+- exact pin Pi（见 `package.json`）；
 - Node.js 低于 `22.19.0` 时启动前 fail-fast；
 - `mmp --version` 同时显示 MMP 和 Pi 版本；
 - MMP 不依赖全局 `pi`；
@@ -1074,7 +1074,7 @@ cd ~/Desktop/Projects/Devs/mmp
 第一批代码的完成标准：
 
 ```text
-1. mmp CLI 通过 package dependency 启动固定 Pi 0.87.1；
+1. mmp CLI 通过 package dependency 启动固定版本的 Pi（见 package.json）；
 2. 不依赖 PATH 中的全局 pi；
 3. Pi model/session/tool 参数无损交给 piMain；
 4. Pi resource flags 被 MMP 保留并 fail-fast；
@@ -1090,12 +1090,14 @@ cd ~/Desktop/Projects/Devs/mmp
 
 版本固定资料：
 
-- Pi 0.87.1 package：<https://unpkg.com/@earendil-works/pi-coding-agent@0.87.1/package.json>
-- Pi 0.87.1 SDK：<https://unpkg.com/@earendil-works/pi-coding-agent@0.87.1/docs/sdk.md>
-- Pi 0.87.1 Extension API：<https://unpkg.com/@earendil-works/pi-coding-agent@0.87.1/docs/extensions.md>
-- Pi 0.87.1 CLI 与 Project Trust：<https://unpkg.com/@earendil-works/pi-coding-agent@0.87.1/README.md>
-- Pi 0.87.1 ResourceLoader types：<https://unpkg.com/@earendil-works/pi-coding-agent@0.87.1/dist/core/resource-loader.d.ts>
-- Pi 0.87.1 ProjectTrustStore types：<https://unpkg.com/@earendil-works/pi-coding-agent@0.87.1/dist/core/trust-manager.d.ts>
+以下链接里的版本号换成 `package.json` 里当前锁定的 `@earendil-works/pi-coding-agent` 版本：
+
+- Pi package：<https://unpkg.com/@earendil-works/pi-coding-agent@VERSION/package.json>
+- Pi SDK：<https://unpkg.com/@earendil-works/pi-coding-agent@VERSION/docs/sdk.md>
+- Pi Extension API：<https://unpkg.com/@earendil-works/pi-coding-agent@VERSION/docs/extensions.md>
+- Pi CLI 与 Project Trust：<https://unpkg.com/@earendil-works/pi-coding-agent@VERSION/README.md>
+- Pi ResourceLoader types：<https://unpkg.com/@earendil-works/pi-coding-agent@VERSION/dist/core/resource-loader.d.ts>
+- Pi ProjectTrustStore types：<https://unpkg.com/@earendil-works/pi-coding-agent@VERSION/dist/core/trust-manager.d.ts>
 - Pi 最小 Subagent 示例：<https://github.com/earendil-works/pi/tree/main/packages/coding-agent/examples/extensions/subagent>
 - pi-mcp-adapter：<https://github.com/nicobailon/pi-mcp-adapter>
 - OMP：<https://github.com/can1357/oh-my-pi>，仅用于比较已有能力和避免重复设计
@@ -1151,13 +1153,13 @@ token usage / cost（Pi event 可用时）
 至少保留四个可比较 variant：
 
 ```text
-pi-0.87-baseline
+pi-baseline
 mmp-core-empty
 mmp-rules-skills
 mmp-full
 ```
 
-- `pi-0.87-baseline`：同一 Pi package，不加载 MMP；
+- `pi-baseline`：同一 Pi package，不加载 MMP；
 - `mmp-core-empty`：只测 SDK Host 是否引入额外行为或失败；
 - `mmp-rules-skills`：测提示与知识装配的净增益；
 - `mmp-full`：测 Task、MCP、Hooks 的最终效果与成本。
@@ -1201,7 +1203,7 @@ mmp-full
 
 这些分数只用于标识用户指定的原始对照，不是 MMP 的验收目标，也不能当成 MMP 已复现结果。各 benchmark 的 dataset、grader、runner 和计分口径由外部 adapter 固定并记录；MMP Core 不实现任何 benchmark-specific 逻辑。
 
-外部 runner 必须记录 provider-qualified resolved model ID；MMP 只透传模型参数，不把模型写入 Manifest。每项先跑 `pi-0.87-baseline` 与 `mmp-core-empty`，证明 SDK Host 本身没有回归，再逐层启用 Rules、Skills、Task、MCP 和 Hooks。
+外部 runner 必须记录 provider-qualified resolved model ID；MMP 只透传模型参数，不把模型写入 Manifest。每项先跑 `pi-baseline` 与 `mmp-core-empty`，证明 SDK Host 本身没有回归，再逐层启用 Rules、Skills、Task、MCP 和 Hooks。
 
 ### 20.6 Benchmark-ready 验收
 
@@ -1212,7 +1214,7 @@ mmp-full
 3. 不同 trial 不共享 Session、trust 或 Extension state；
 4. runner timeout 后没有残留进程；
 5. PATH 中没有全局 `pi` 时 MMP adapter 仍工作；
-6. baseline 与 MMP variant 使用同一个 Pi `0.87.1` 和同一模型参数；
+6. baseline 与 MMP variant 使用同一个 Pi（`package.json` 锁定的版本）和同一模型参数；
 7. benchmark adapter 的失败能区分 infra、Harness、model 和 grader 四类。
 
 Benchmark 不是阶段 A/B 的实现内容，但阶段 A 的 JSON mode、stdout/stderr、exit code 和 signal contract 必须从第一天保持兼容，避免 Harness 完成后再为跑分重写入口。
@@ -1223,7 +1225,7 @@ Benchmark 不是阶段 A/B 的实现内容，但阶段 A 的 JSON mode、stdout/
 
 职责：
 
-- 支持 `pi-0.87-baseline`、`mmp-core-empty`、`mmp-rules-skills`、`mmp-full` 四个 variant；
+- 支持 `pi-baseline`、`mmp-core-empty`、`mmp-rules-skills`、`mmp-full` 四个 variant；
 - 直接启动固定依赖中的 Pi/MMP Node.js 入口，不依赖 PATH 的全局 `pi`；
 - 从只读 bundle 模板创建 trial 专属 `MMP_HOME`，排除 auth、trust、sessions、`.env*`、旧 capsule 和 artifacts；
 - measured run 固定注入 JSON mode、`--no-session`、`--no-approve`、`--offline`、provider-qualified model、thinking、tool allowlist 和 timeout；
@@ -1245,15 +1247,15 @@ Benchmark 不是阶段 A/B 的实现内容，但阶段 A 的 JSON mode、stdout/
 
 已完成：
 
-- 固定 `@earendil-works/pi-coding-agent@0.87.1`，并在启动时核验实际 package 版本；
+- 固定 `@earendil-works/pi-coding-agent`（版本见 `package.json`），并在启动时核验实际 package 版本；
 - SDK Host、Manifest、Project Trust、Rules、Skills、Task、MCP、Hooks、Pi CLI/TUI/Session/Auto Compact 全链路实现；
 - 阶段 A-E 的契约测试、真实模型 smoke、完整 Task/MCP/Hook E2E 与自动压缩验证；
 - 外部 benchmark adapter、四 variant 入口、可复现 metadata/digest、隔离/泄漏检查和四类失败映射；
-- 真实 `mmp-full` 与 `pi-0.83-baseline` adapter smoke（Pi 0.83.0 时完成；0.87.1 上的变体名已改为 `pi-0.87-baseline`，还没重跑）。
+- 真实 `mmp-full` 与 `pi-0.83-baseline` adapter smoke（Pi 0.83.0 时完成；升到 0.87.1 后变体名一度改为 `pi-0.87-baseline`，这次 Pi 升级自动化改造后统一去掉版本号，改为 `pi-baseline`，还没重跑）。
 
 尚未完成：
 
 - 尚未接入九项 benchmark 各自的 dataset、workspace image、provider-qualified `DeepSeek-V4-Flash-0731` 模型标识和官方 grader；
 - 尚未产出任何正式 benchmark 分数。
 
-下一入口：为九项 benchmark 分别固定外部 runner/grader 与可用的 provider-qualified model ID；先跑 `pi-0.87-baseline` 和 `mmp-core-empty`，再跑后两层 variant。
+下一入口：为九项 benchmark 分别固定外部 runner/grader 与可用的 provider-qualified model ID；先跑 `pi-baseline` 和 `mmp-core-empty`，再跑后两层 variant。

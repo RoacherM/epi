@@ -15,6 +15,8 @@ import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 
+import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
+
 const projectRoot = new URL("../", import.meta.url);
 const installerPath = new URL("../install.sh", import.meta.url).pathname;
 
@@ -38,7 +40,7 @@ printf '%s\\n' "$*" > "$NPM_LOG"
 mkdir -p "$MMP_PREFIX/bin"
 cat > "$MMP_PREFIX/bin/mmp" <<'EOF'
 #!/bin/sh
-printf 'mmp 0.1.4\\npi 0.87.1\\n'
+printf 'mmp 0.1.4\\npi ${PI_VERSION}\\n'
 EOF
 chmod +x "$MMP_PREFIX/bin/mmp"
 `,
@@ -78,7 +80,7 @@ test("curl installer verifies and installs the requested package", () => {
     assert.equal(result.stderr, "");
     assert.match(result.stdout, /Downloading MMP 0\.1\.4/);
     assert.match(result.stdout, /Installed MMP at .*\/bin\/mmp/);
-    assert.match(result.stdout, /mmp 0\.1\.4\npi 0\.87\.1/);
+    assert.match(result.stdout, new RegExp(`mmp 0\\.1\\.4\\npi ${PI_VERSION.replace(/\./g, "\\.")}`));
     assert.match(
       readFileSync(fixture.npmLog, "utf8"),
       new RegExp(

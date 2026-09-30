@@ -1,45 +1,98 @@
 // Plants marked ambient Pi resources everywhere Pi might discover them, for isolation tests.
+// The *names* of what to plant (which project-config resources require trust, which context-file
+// names Pi looks for) come from the installed Pi itself (pi-ambient-sources.mjs), not a hand-kept
+// list here -- a future Pi adding a new discovery source gets planted automatically, and one that
+// moves the source Pi reads them from fails loudly instead of silently going untested.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-// Every marker below sits where Pi would discover it without MMP's --no-* flags.
-export function plantPiResources(baseDir, tag, markDir) {
-  mkdirSync(join(baseDir, "extensions"), { recursive: true });
-  writeFileSync(
-    join(baseDir, "extensions", `ambient-${tag}.mjs`),
-    `import { writeFileSync } from "node:fs";
-export default function (pi) {
-  writeFileSync(${JSON.stringify(join(markDir, tag))}, "loaded");
-  pi.registerCommand("ambient-ext-${tag}", { handler: async () => {} });
-}
-`,
-  );
-  plantSkill(join(baseDir, "skills"), `ambient-skill-${tag}`);
-  mkdirSync(join(baseDir, "prompts"), { recursive: true });
-  writeFileSync(join(baseDir, "prompts", `ambient-prompt-${tag}.md`), `---\ndescription: x\n---\nAMBIENT-PROMPT-${tag}\n`);
-  mkdirSync(join(baseDir, "themes"), { recursive: true });
-  writeFileSync(join(baseDir, "themes", `ambient-theme-${tag}.json`), JSON.stringify({ name: `ambient-theme-${tag}`, colors: {} }));
-  writeFileSync(join(baseDir, "AGENTS.md"), `AMBIENT-CONTEXT-${tag}\n`);
-  writeFileSync(join(baseDir, "SYSTEM.md"), `AMBIENT-SYSTEM-${tag}\n`);
-  writeFileSync(join(baseDir, "APPEND_SYSTEM.md"), `AMBIENT-APPENDSYSTEM-${tag}\n`);
-}
+import { contextFileCandidateNames, trustRequiringProjectConfigResources } from "./pi-ambient-sources.mjs";
 
 export function plantSkill(skillsDir, name) {
   mkdirSync(join(skillsDir, name), { recursive: true });
   writeFileSync(join(skillsDir, name, "SKILL.md"), `---\nname: ${name}\ndescription: ${name}\n---\n${name}\n`);
 }
 
+/** Plants a marker for one entry of Pi's TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES (trust-manager.js)
+ * under `configDir` (a `.pi`-style directory: a project's `.pi`, `~/.pi/agent`, or `~/.mmp/pi`).
+ * Throws for a name this doesn't know how to plant -- a directory kind or a `.md` file are the only
+ * shapes Pi's list has ever held; anything else needs a new case here, not a silent no-op. */
+function plantTrustRequiringResource(configDir, name, tag, markDir) {
+  if (name === "extensions") {
+    mkdirSync(join(configDir, "extensions"), { recursive: true });
+    writeFileSync(
+      join(configDir, "extensions", `ambient-${tag}.mjs`),
+      `import { writeFileSync } from "node:fs";
+export default function (pi) {
+  writeFileSync(${JSON.stringify(join(markDir, tag))}, "loaded");
+  pi.registerCommand("ambient-ext-${tag}", { handler: async () => {} });
+}
+`,
+    );
+    return;
+  }
+  if (name === "skills") {
+    plantSkill(join(configDir, "skills"), `ambient-skill-${tag}`);
+    return;
+  }
+  if (name === "prompts") {
+    mkdirSync(join(configDir, "prompts"), { recursive: true });
+    writeFileSync(join(configDir, "prompts", `ambient-prompt-${tag}.md`), `---\ndescription: x\n---\nAMBIENT-PROMPT-${tag}\n`);
+    return;
+  }
+  if (name === "themes") {
+    mkdirSync(join(configDir, "themes"), { recursive: true });
+    writeFileSync(join(configDir, "themes", `ambient-theme-${tag}.json`), JSON.stringify({ name: `ambient-theme-${tag}`, colors: {} }));
+    return;
+  }
+  if (name === "settings.json") {
+    // Its ambient effect isn't marker text (it can pick a provider/model, not inject a string into
+    // the prompt), so it's covered by the separate "project .pi/settings.json does not apply at
+    // runtime" tests below, not by the AMBIENT_MARKER scan.
+    return;
+  }
+  if (name.endsWith(".md")) {
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, name), `AMBIENT-${name.replace(/\.md$/i, "").toUpperCase().replace(/[^A-Z0-9]+/g, "-")}-${tag}\n`);
+    return;
+  }
+  throw new Error(
+    `ambient-plant.mjs: don't know how to plant Pi's trust-requiring project resource ${JSON.stringify(name)} ` +
+    "(from trust-manager.js's TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES) -- add a case in plantTrustRequiringResource.",
+  );
+}
+
+/** Plants every resource in Pi's current TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES list under
+ * `configDir`. `configDir` is itself an agent dir root for a global call (`~/.pi/agent`,
+ * `~/.mmp/pi`) -- SYSTEM.md/APPEND_SYSTEM.md and the skills/prompts/themes/extensions dirs are
+ * ambient there regardless of project trust (resource-loader.js's discoverSystemPromptFile and
+ * getDefaultSourceInfoForPath). */
+export function plantPiResources(configDir, tag, markDir) {
+  for (const name of trustRequiringProjectConfigResources()) {
+    plantTrustRequiringResource(configDir, name, tag, markDir);
+  }
+}
+
+/** Plants every context-file name Pi's `loadContextFileFromDir` looks for (resource-loader.js)
+ * directly into `dir` -- the project root (checked at cwd and every ancestor) or an agent dir root,
+ * never a `.pi` subdirectory. */
+export function plantContextFiles(dir, tag) {
+  mkdirSync(dir, { recursive: true });
+  for (const name of contextFileCandidateNames()) {
+    writeFileSync(join(dir, name), `AMBIENT-CONTEXT-${tag}\n`);
+  }
+}
 
 /** Plants the full ambient set for a project and home; `marks` collects files written by ambient extensions. */
 export function plantAmbientWorld({ home, project, marks }) {
   plantPiResources(join(project, ".pi"), "project", marks);
   plantPiResources(join(home, ".pi", "agent"), "pi-agent", marks);
   plantPiResources(join(home, ".mmp", "pi"), "mmp-agent", marks);
+  plantContextFiles(join(home, ".pi", "agent"), "pi-agent-global");
+  plantContextFiles(join(home, ".mmp", "pi"), "mmp-agent-global");
+  plantContextFiles(project, "project-root");
   plantSkill(join(project, ".agents", "skills"), "ambient-skill-project-agents");
   plantSkill(join(home, ".agents", "skills"), "ambient-skill-home-agents");
-  writeFileSync(join(project, "AGENTS.md"), "AMBIENT-CONTEXT-agents-md\n");
-  writeFileSync(join(project, "CLAUDE.md"), "AMBIENT-CONTEXT-claude-md\n");
-  writeFileSync(join(project, "AGENTS.override.md"), "AMBIENT-CONTEXT-override\n");
 }
 
 export const AMBIENT_MARKER = /AMBIENT-[A-Z]+-[\w-]+|ambient-(?:ext|skill|prompt|theme)-[\w-]+/g;

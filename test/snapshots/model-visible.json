@@ -1,0 +1,358 @@
+{
+  "piVersion": "0.87.1",
+  "systemPrompt": "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n- task: Delegate bounded work to an isolated configured agent.\n- mcpScript: Batch multiple MCP tool calls in one JavaScript request (loop, filter, chain)\n- mcp: MCP gateway — install by URL, status, search, describe, auth, and single MCP tool calls\n- mcp__fixture: MCP namespace proxy for fixture\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for precise changes (edits[].oldText must match exactly)\n- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.\n- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: $PI_PACKAGE_DIR/README.md\n- Additional docs: $PI_PACKAGE_DIR/docs\n- Examples: $PI_PACKAGE_DIR/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)\n- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing\n- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)\n</docs>\n\n<skills>\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>mmp-acceptance</name>\n    <description>Use when the user asks for FULL_SKILL_CHECK during MMP end-to-end acceptance.</description>\n    <location>$TMP/home/.mmp/skills/mmp-acceptance/SKILL.md</location>\n  </skill>\n</available_skills>\n</skills>\n\n<cwd>\n$CWD\n</cwd>\n\n# MMP Rules\n\nWhen the user's message contains `FULL_RULE_CHECK`, the final response MUST include the exact marker `FULL_RULE_OK`.\n\n\n# MMP Runtime Contract\n\nYou are hosted by MMP (Make My Pi), an SDK harness embedding Pi. When asked which runtime or harness you are using, identify it as MMP on Pi, not as stock Pi alone.\n\nUpstream Pi documentation describes engine features and stock discovery paths. MMP overrides resource discovery: the inventory below is authoritative for this run.\n\nOnly `loadedSkills` are loaded skills. A file or skill found elsewhere on disk is not an MMP-loaded capability unless it appears in this inventory.\n\nWhen asked which skills, rules, or extensions are available, answer from this inventory. Do not scan ambient ~/.pi, ~/.agents, ~/.claude, ~/.codex, .pi, or .agents directories to infer loaded resources.\n\nIf the user explicitly asks to inspect an arbitrary directory, you may inspect it, but describe discovered files as files—not as loaded MMP resources.\n\nManifest-relative resource paths resolve from the directory containing the declaring mmp.json. The MMP agentDir stores Pi auth, settings, sessions, and model catalog state; it is not an ambient skills root.\n\nThe Manifest input schema is exactly `{ \"version\": 1, \"rules\": [], \"skills\": [], \"extensions\": [] }`. Inventory fields such as `skillRoots` and `declaredResources` are report-only and must not be written to mmp.json.\n\nAfter Manifest edits, `/reload` re-resolves Rules and Skills. Extension selection or configuration changes require restarting MMP.\n\n<mmp_runtime_inventory>\n\n{\n  \"runtime\": {\n    \"name\": \"MMP\",\n    \"version\": \"$MMP_VERSION\",\n    \"engine\": \"Pi\",\n    \"engineVersion\": \"$PI_VERSION\"\n  },\n  \"paths\": {\n    \"mmpHome\": \"$TMP/home/.mmp\",\n    \"agentDir\": \"$TMP/home/.mmp/pi\"\n  },\n  \"manifests\": {\n    \"global\": {\n      \"path\": \"$TMP/home/.mmp/mmp.json\",\n      \"loaded\": true\n    },\n    \"project\": {\n      \"discovery\": \"disabled\",\n      \"path\": null,\n      \"trusted\": null,\n      \"loaded\": false\n    }\n  },\n  \"resourcePolicy\": {\n    \"discovery\": \"manifest-only\",\n    \"relativePaths\": \"declaring-manifest-directory\",\n    \"ambientResourceDirectoriesLoaded\": false\n  },\n  \"declaredResources\": {\n    \"rules\": [\n      {\n        \"kind\": \"rule\",\n        \"value\": \"$TMP/home/.mmp/RULES.md\",\n        \"source\": \"global\",\n        \"declaredIn\": \"$TMP/home/.mmp/mmp.json\"\n      }\n    ],\n    \"skillRoots\": [\n      {\n        \"kind\": \"skill\",\n        \"value\": \"$TMP/home/.mmp/skills\",\n        \"source\": \"global\",\n        \"declaredIn\": \"$TMP/home/.mmp/mmp.json\"\n      }\n    ],\n    \"inlineExtensions\": [\n      {\n        \"name\": \"mmp:task\",\n        \"source\": \"global\",\n        \"declaredIn\": \"$TMP/home/.mmp/mmp.json\"\n      },\n      {\n        \"name\": \"mmp:mcp\",\n        \"source\": \"global\",\n        \"declaredIn\": \"$TMP/home/.mmp/mmp.json\"\n      },\n      {\n        \"name\": \"mmp:hooks\",\n        \"source\": \"global\",\n        \"declaredIn\": \"$TMP/home/.mmp/mmp.json\"\n      }\n    ],\n    \"externalExtensions\": [\n      {\n        \"kind\": \"extension\",\n        \"value\": \"$CWD/scripts/model-snapshot-driver.mjs\",\n        \"source\": \"global\",\n        \"declaredIn\": \"$TMP/home/.mmp/mmp.json\"\n      }\n    ]\n  },\n  \"loadedSkills\": [\n    {\n      \"name\": \"mmp-acceptance\",\n      \"description\": \"Use when the user asks for FULL_SKILL_CHECK during MMP end-to-end acceptance.\",\n      \"filePath\": \"$TMP/home/.mmp/skills/mmp-acceptance/SKILL.md\",\n      \"modelInvocable\": true\n    },\n    {\n      \"name\": \"mcp-scripting\",\n      \"description\": \"Write mcpScript JavaScript for discovering, inspecting, and calling MCP tools.\",\n      \"filePath\": \"$MCP_ADAPTER_PACKAGE_DIR/skills/mcp-scripting/SKILL.md\",\n      \"modelInvocable\": false\n    }\n  ]\n}\n\n</mmp_runtime_inventory>",
+  "tools": [
+    {
+      "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+      "name": "bash",
+      "parameters": {
+        "properties": {
+          "command": {
+            "description": "Shell command to execute",
+            "type": "string"
+          },
+          "timeout": {
+            "description": "Timeout in seconds (optional, no default timeout)",
+            "type": "number"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+      "name": "edit",
+      "parameters": {
+        "properties": {
+          "edits": {
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+            "items": {
+              "properties": {
+                "newText": {
+                  "description": "Replacement text for this targeted edit.",
+                  "type": "string"
+                },
+                "oldText": {
+                  "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "oldText",
+                "newText"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "path": {
+            "description": "Path to the file to edit (relative or absolute)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "edits"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "MCP gateway — URL installation, server status, tool search/describe, auth, and single MCP tool calls. When a user supplies an MCP endpoint URL, install it with the install action. When one request needs several MCP calls with logic between them, use mcpScript. Non-MCP Pi tools should be called directly, not through mcp.\n\nServers: fixture\n\nUsage:\n  mcp({ action: \"install\", url: \"https://example.com/mcp\" }) → Install, connect, and authenticate an MCP URL\n  mcp({ })                              → Show server status and tool counts\n  mcp({ server: \"name\" })               → List tools from server\n  mcp({ search: \"query\" })              → Search MCP tools by name/description\n  mcp({ describe: \"tool_name\" })        → Show tool details and parameters\n  mcp({ instructions: \"name\" })         → Show full server usage instructions\n  mcp({ connect: \"server-name\" })       → Connect to a server and refresh metadata\n  mcp({ tool: \"name\", args: { key: \"value\" } })         → Call a tool (object args; JSON string also accepted)\n  mcp({ action: \"ui-messages\" })        → Retrieve accumulated messages from completed UI sessions\n  mcp({ action: \"auth-start\", server: \"name\" })      → Open OAuth and watch for completion\n  mcp({ action: \"auth-complete\", server: \"name\", args: { redirectUrl: \"...\" } }) → Complete manual OAuth\n\nMode: action > tool (call) > connect > describe > instructions > search > server (list) > nothing (status)",
+      "name": "mcp",
+      "parameters": {
+        "properties": {
+          "action": {
+            "description": "Action: 'install', 'ui-messages', 'auth-start', or 'auth-complete'",
+            "type": "string"
+          },
+          "args": {
+            "anyOf": [
+              {
+                "description": "Arguments as a JSON string (e.g., '{\"key\": \"value\"}')",
+                "type": "string"
+              },
+              {
+                "additionalProperties": true,
+                "description": "Arguments as a JSON object (e.g., { \"key\": \"value\" })",
+                "properties": {},
+                "type": "object"
+              }
+            ],
+            "description": "Tool arguments as a JSON object, or as a JSON string encoding one"
+          },
+          "connect": {
+            "description": "Server name to connect (lazy connect + metadata refresh)",
+            "type": "string"
+          },
+          "describe": {
+            "description": "Tool name to describe (shows parameters)",
+            "type": "string"
+          },
+          "includeSchemas": {
+            "description": "Include parameter schemas in search results (default: true)",
+            "type": "boolean"
+          },
+          "instructions": {
+            "description": "Server name to show that server's usage instructions",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Maximum search results to return (default: 12)",
+            "minimum": 1,
+            "type": "number"
+          },
+          "offset": {
+            "description": "Search result offset (default: 0)",
+            "minimum": 0,
+            "type": "number"
+          },
+          "regex": {
+            "description": "Treat search as regex (default: substring match)",
+            "type": "boolean"
+          },
+          "search": {
+            "description": "Search tools by name/description",
+            "type": "string"
+          },
+          "searchMode": {
+            "description": "Search backend (default: lexical; semantic is available when a System One key is configured)",
+            "enum": [
+              "lexical",
+              "semantic"
+            ],
+            "type": "string"
+          },
+          "server": {
+            "description": "Server name: filters searches, disambiguates calls and describe operations, and optionally names an install",
+            "type": "string"
+          },
+          "target": {
+            "description": "Install target: 'global' (default) or 'project'",
+            "type": "string"
+          },
+          "tool": {
+            "description": "Tool name to call (e.g., 'xcodebuild_list_sims')",
+            "type": "string"
+          },
+          "url": {
+            "description": "MCP endpoint URL for action: 'install'",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "description": "Run trusted JavaScript that makes multiple MCP tool calls in one request — loop, filter, chain, or fan out between calls. For a single MCP call, search, describe, status check, or auth action, use the mcp tool instead. Discover with await tools.search({ query }) — resolves to { items: [{ path, name, server, description? }], total, hasMore, nextOffset }, not an { ok, data } envelope. Inspect with await tools.describe({ path }) — resolves to the tool descriptor with inputTypeScript, or { path, error: { code, message, suggestions } }. Then call tools.call(path, args) — resolves to { ok: true, data } or { ok: false, error: { code, message } } — or use direct flat calls when the name is already known; use emit(value) for user-visible output.",
+      "name": "mcpScript",
+      "parameters": {
+        "properties": {
+          "code": {
+            "description": "Trusted JavaScript MCP script. Use tools.<prefixedToolName>(args) and emit(value).",
+            "type": "string"
+          },
+          "timeoutMs": {
+            "description": "Execution timeout in milliseconds (default: 30000)",
+            "minimum": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Namespace-proxy for MCP server \"fixture\". Forwards `{tool, args}` through the adapter's executeCall, so it inherits the same auth / lifecycle / output-guard rules as the `mcp` proxy.",
+      "name": "mcp__fixture",
+      "parameters": {
+        "properties": {
+          "args": {
+            "additionalProperties": true,
+            "description": "Arguments for the underlying tool. When mcp is available, use mcp({ search: '...' }) to inspect schemas; for unique names use mcp({ describe: 'tool_name' }) with the exact tool name returned by search.",
+            "properties": {},
+            "type": "object"
+          },
+          "tool": {
+            "description": "Underlying MCP tool name to call on this server.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+      "name": "read",
+      "parameters": {
+        "properties": {
+          "limit": {
+            "description": "Maximum number of lines to read",
+            "type": "number"
+          },
+          "offset": {
+            "description": "Line number to start reading from (1-indexed)",
+            "type": "number"
+          },
+          "path": {
+            "description": "Path to the file to read (relative or absolute)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Run a bounded task in an isolated MMP worker. Available agents: worker (Deterministic full-runtime acceptance worker.).",
+      "name": "task",
+      "parameters": {
+        "properties": {
+          "agent": {
+            "description": "Configured agent name",
+            "type": "string"
+          },
+          "background": {
+            "default": false,
+            "type": "boolean"
+          },
+          "cwd": {
+            "description": "Absolute or session-relative working directory",
+            "type": "string"
+          },
+          "task": {
+            "description": "Bounded task to perform",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent",
+          "task"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Cancel a queued or running MMP task job and its process tree.",
+      "name": "task_cancel",
+      "parameters": {
+        "properties": {
+          "jobId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Return the current state of one MMP task job.",
+      "name": "task_status",
+      "parameters": {
+        "properties": {
+          "jobId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Wait for an MMP task job to finish or until timeoutSeconds elapses.",
+      "name": "task_wait",
+      "parameters": {
+        "properties": {
+          "jobId": {
+            "type": "string"
+          },
+          "timeoutSeconds": {
+            "minimum": 0.001,
+            "type": "number"
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Manage the current MMP session checklist.",
+      "name": "todo",
+      "parameters": {
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "const": "list",
+                "type": "string"
+              },
+              {
+                "const": "add",
+                "type": "string"
+              },
+              {
+                "const": "start",
+                "type": "string"
+              },
+              {
+                "const": "done",
+                "type": "string"
+              },
+              {
+                "const": "remove",
+                "type": "string"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+      "name": "write",
+      "parameters": {
+        "properties": {
+          "content": {
+            "description": "Content to write to the file",
+            "type": "string"
+          },
+          "path": {
+            "description": "Path to the file to write (relative or absolute)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object"
+      }
+    }
+  ]
+}

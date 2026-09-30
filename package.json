@@ -14,7 +14,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.mjs",
-    "benchmark": "node scripts/benchmark-adapter.mjs"
+    "benchmark": "node scripts/benchmark-adapter.mjs",
+    "model-snapshot": "node scripts/model-snapshot.mjs"
   },
   "engines": {
     "node": ">=22.19.0"

@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { createMmpRuntimeExtension } from "../dist/extensions/runtime.js";
 import { renderMmpStartupPage } from "../dist/startup-page.js";
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 const theme = {
   bold: (text) => text,
@@ -17,7 +22,7 @@ const identity = {
     name: "MMP",
     version: "0.1.4",
     engine: "Pi",
-    engineVersion: "0.87.1",
+    engineVersion: PI_VERSION,
   },
   paths: {
     mmpHome: "/fixture/.mmp",
@@ -83,7 +88,7 @@ test("wide startup page presents the Make My Pi brand and assembly controls", ()
   assert.match(output, /Make My Pi/);
   assert.match(output, /Compose Pi your way\./);
   assert.match(output, /MoonshotAI: Kimi K2\.5/);
-  assert.match(output, /openrouter · Pi 0\.87\.1/);
+  assert.match(output, new RegExp(`openrouter · Pi ${escapeRegExp(PI_VERSION)}`));
   assert.match(output, /ASSEMBLY/);
   assert.match(output, /COMPOSITION/);
   assert.match(output, /rules \+ skills \+ extensions/);

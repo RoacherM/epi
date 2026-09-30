@@ -103,7 +103,8 @@ export type ChipInfo =
 /** A content id into `textContents`, or null for a text-chip label with no content. */
 type TextChipSlot = number | null;
 
-/** The private `Editor.state` object (pi-tui 0.87.1 components/editor.js), plus the registry we
+/** The private `Editor.state` object (pi-tui's components/editor.js, see package.json for the
+ * pinned version), plus the registry we
  * store on it -- a string key, because structuredClone drops symbol-keyed properties. */
 interface EditorStateWithChips {
   lines: string[];
