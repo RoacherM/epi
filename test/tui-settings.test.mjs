@@ -236,6 +236,44 @@ test("extension autocomplete providers survive /settings and rebuilds, and are c
   assert.doesNotMatch(after(marks, "reloadStart", "reloadCmd"), /EXTCMD/, "/reload clears the command's, like Pi's resetExtensionUI");
 });
 
+// Review 2 N2: the wrapper list is cleared before a session switch (setBeforeSessionInvalidate), not
+// when session_before_switch cancels it.
+test("extension autocomplete providers across /new and a cancelled switch, like Pi's resetExtensionUI", (t) => {
+  const env = makeEnv(t, { extension: "settings-ext-autocomplete.mjs" });
+  const probe = (text, mark) => [["type", text], ["wait", 400], ["mark", mark], ["key", "esc"], ["key", "ctrl+c"], ["wait", 150]];
+  const { marks } = env.run([
+    ["waitReady"], ["type", "/acadd"], ["key", "enter"], ["wait", 300],
+    ["type", "/cancelnext"], ["key", "enter"], ["wait", 300],
+    ["type", "/new"], ["key", "enter"], ["wait", 800], ["mark", "cancelled"],
+    ...probe("/zy", "cancelledStart"), ...probe("/zz", "cancelledCmd"),
+    ["type", "/new"], ["key", "enter"], ["wait", 800], ["mark", "new"],
+    ...probe("/zy", "newStart"), ...probe("/zz", "newCmd"),
+    ...quit,
+  ]);
+  assert.match(after(marks, "cancelled", "cancelledStart"), /EXTSTART_L1/, "a cancelled switch keeps the session_start one");
+  assert.match(after(marks, "cancelledStart", "cancelledCmd"), /EXTCMD_L1/, "a cancelled switch keeps the command's");
+  const newStart = after(marks, "new", "newStart");
+  assert.match(newStart, /EXTSTART_L1/, "session_start adds it again after /new");
+  assert.doesNotMatch(newStart, /EXTSTART_L2/, "only once after /new");
+  assert.doesNotMatch(after(marks, "newStart", "newCmd"), /EXTCMD/, "/new clears the command's");
+});
+
+// Review 2 N1: Pi's resetExtensionUI rebuilds autocomplete right after clearing the wrappers, so the
+// old session's wrapper (and its soon-stale ctx) isn't asked for suggestions while /reload or a
+// switch runs. Before, it was, and its ctx.cwd threw "extension ctx is stale", crashing MMP.
+test("typing an extension's trigger during /reload doesn't call the old session's provider", (t) => {
+  const env = makeEnv(t, { extension: "settings-ext-autocomplete.mjs" });
+  const { marks } = env.run([
+    ["waitReady"], ["type", "/slow"], ["key", "enter"], ["wait", 300],
+    ["type", "/reload"], ["key", "enter"], ["wait", 500],
+    ["type", "/zy"], ["wait", 600], ["mark", "during"], ["wait", 2500], ["key", "esc"], ["key", "ctrl+c"], ["wait", 150],
+    ["type", "/zy"], ["wait", 400], ["mark", "after"], ["key", "esc"], ["key", "ctrl+c"], ["wait", 150],
+    ...quit,
+  ]);
+  assert.doesNotMatch(marks.during, /EXTSTART/, "no suggestion from the old session's wrapper");
+  assert.match(after(marks, "during", "after"), /EXTSTART_L1/, "still running, with the new session's wrapper");
+});
+
 test("Fullscreen scrollbar 'always' shows the bar at once, from settings.json at startup, and after /reload", (t) => {
   // "┃" is the scrollbar thumb; MMP draws it nowhere else, and in "auto" it only shows while scrolling.
   const live = makeEnv(t);

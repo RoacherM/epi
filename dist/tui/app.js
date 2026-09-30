@@ -658,6 +658,9 @@ export async function runTuiApp(options) {
         surface.setHeader(undefined);
         surface.setFooter(undefined);
         autocompleteWrappers = [];
+        // Pi's resetExtensionUI order: detach the old session's wrappers from the editor now, before
+        // their captured ctx goes stale, not only when bind()/reloadSession() finish.
+        resetAutocomplete();
     }
     runtime.setBeforeSessionInvalidate(clearExtensionUiState);
     runtime.setRebindSession(bind);
