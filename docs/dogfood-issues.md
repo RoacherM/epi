@@ -55,3 +55,4 @@
 | D49 | P3 | 不是标签的文字也会被画成未附图标签（暗色删除线）：被手动回车拆开的 `[Image⏎#7]`、换行正好落在两个空格之间的 `[Image  #7]`（D20 的绘制正则就有，B3 复审）；复制时"没有可复制的回复"用 warning 级，Pi 用 error | B3 的 review-1.md | 待修 |
 | D50 | P3 | 非交互路径出错后（例如 `auth.json` 损坏让 `--list-models`/`-p` 抛错），`cli.ts` 只设 `process.exitCode`，若有扩展占着定时器/句柄，进程不退出（D48 复审 F4，D48 之前就有）；`test/list-models.test.mjs` 缺两项：`~/.pi/agent`、项目 `.pi/` 的 models.json 不生效，以及扩展留着定时器时进程仍退出 | D48 的 review-1.md F4、F5 | 待修 |
 | D51 | P3 | 会话切换（`/new` 等）时，除扩展加载失败以外的运行时错误仍会让 TUI 退出：例如 `--model` 指定的模型来自一个在这次 `/new` 里加载失败的 provider 扩展（`services.ts` 对 CLI 模型错误、`--api-key` 无模型仍在任何 runtime 上抛错；B5 之前就有）（B5 复审第 2 轮 N2） | 带 `--model <扩展提供的模型>` 启动，让该扩展在 /new 时失败 | 待修 |
+| D52 | P3 | rpc 模式下 MCP 服务的问题行也会报两次：`before_agent_start` 对 `mode !== "tui"` 把 `mcpProblemLines` 写到 stderr，而 Pi 自己的 "MCP servers need attention" 也会发给 rpc 客户端（"still connecting" 行是 MMP 独有的，不能简单改成看 `hasUI`）（B6 worker 发现） | `--mode rpc` 配一个连不上的 MCP 服务 | 待修 |
