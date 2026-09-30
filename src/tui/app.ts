@@ -889,7 +889,10 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   // component (bug: Esc/Ctrl+D/Ctrl+C/Ctrl+L would hit the app instead of the open dialog).
   const keyActions = createKeyActions();
   tui.addInputListener((data) => {
-    if (tui.getFocusedComponent() !== editor) return undefined;
+    // Clicking the prompt (e.g. a chip) focuses PromptFrame, not the editor: pi-tui keeps keyboard
+    // focus on the delegating host that forwards keys (dispatchMouseEvent in pi-tui's tui.js).
+    const focused = tui.getFocusedComponent();
+    if (focused !== editor && focused !== prompt) return undefined;
     // Terminals speaking the kitty keyboard protocol (Ghostty, kitty, WezTerm) also send a release
     // event for every key; pi-tui drops those only after input listeners run, so without this each
     // shortcut fired twice (two image chips per Ctrl+V, toggles undoing themselves).

@@ -11,4 +11,4 @@
 | D5 | P2 | 用 magpie 的 sonnet-5.5、thinking `high` 时，界面显示 "Thought for 0.0s"，看起来并没有真的开思考（magpie 走 openai-completions，reasoning 参数可能没传到 Claude） | Herdr 里 `mmp --provider magpie --model claude/claude-sonnet-5-5 --thinking high`，随便问一个要推理的问题 | 待查：先确认请求里有没有 reasoning 参数 |
 | D6 | P3 | Pi 的 MCP 运行时本身加载失败时，`-p` / json 模式下 MMP 会把每个服务报成 "still connecting"，Pi 的 "MCP failed to load" 被吞掉（一个失败被报成另一个） | 需要让 Pi 的 MCP 模块加载失败，未复现 | 待修 |
 | D7 | P1 | 在 Ghostty（以及 kitty、WezTerm 这类支持 kitty 键盘协议的终端）里，每个快捷键都会触发两次：Ctrl+V 贴出两张图；Ctrl+T、Ctrl+O 这类开关按了等于没按；Shift+Tab 一次跳两档。原因：终端会额外发送"按键松开"事件，MMP 的快捷键处理没有把它过滤掉 | Herdr 里 `send-text $'\e[118;5u'` 再 `send-text $'\e[118;5:3u'` | 已修（18b8ad6，工具版已升级） |
-| D8 | P2 | 用户报告：发出带图片的消息后，下一条消息里就粘贴不了了。在 Herdr 里用测试剪贴板文件没能复现，模拟按下/松开事件也没有复现 | 待用户在 D7 修好的版本上重试，并说明当时按的键和剪贴板里的内容 | 待复现 |
+| D8 | P1 | 点一下输入框里的图片标签（看预览）之后，所有快捷键都失效：Ctrl+V 贴不了图、Shift+Tab、Esc、Ctrl+D 都没反应，只有打字还能用。原因：点击后 pi-tui 把焦点交给了包着输入框的 PromptFrame（它会把打字转给输入框），而 MMP 的快捷键只认输入框本身 | 贴一张图，鼠标点一下 `[Image #1]`，再按 Ctrl+V | 已修（见下一提交，工具版已升级） |

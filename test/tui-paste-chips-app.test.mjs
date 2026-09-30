@@ -383,6 +383,25 @@ test("double-click on the chip through the real mouse-dispatch path expands it (
   assert.match(marks.afterClick, /Ctrl\+t:thinking/); // footer back to normal: chip is gone
 });
 
+// Clicking a chip gives keyboard focus to PromptFrame (pi-tui keeps focus on the delegating host
+// that forwards keys, dispatchMouseEvent in pi-tui's tui.js), not to the editor itself. Typing
+// still reached the editor through PromptFrame.handleInput, but every global shortcut -- Ctrl+V,
+// Shift+Tab, Esc, Ctrl+D -- was dropped, because the shortcut listener only accepted the editor.
+test("shortcuts still work after clicking a chip (Ctrl+V pastes again)", (t) => {
+  const rows = 40;
+  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-click-then-paste-"));
+  t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
+  const clipboardFile = join(clipboardDir, "clipboard.png");
+  writeFileSync(clipboardFile, ONE_PIXEL_PNG);
+  const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
+    ["wait", 2500], paste, ["wait", 300],
+    ["mouse", { x: 2 + 4 + 2, y: rows - 4, clicks: 1 }], ["wait", 300],
+    ["key", "ctrl+v"], ["wait", 500], ["mark", "afterPaste"],
+    ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],
+  ], { rows, env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  assert.match(marks.afterPaste, /\[Image #1\]/);
+});
+
 // Item 3's press fix has a subtle regression risk: the press branch probes with a synthetic click
 // to decide whether to claim the gesture, which moves the caret and can leave a stale `before`
 // reference for the *real* click that follows -- landing the caret at the chip's `end` instead of
