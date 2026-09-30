@@ -44,12 +44,33 @@ function failureMessage(error: unknown): string {
  * the same message to stderr there is a fallback, not a duplicate: those modes' stdout is the
  * model's reply/JSON stream, so the failure has to go somewhere else to be seen without corrupting it.
  */
-function notifyFailure(context: ExtensionContext, error: unknown): void {
-  const message = failureMessage(error);
-  context.ui.notify(message, "error");
+function notifyVisibly(
+  context: ExtensionContext,
+  message: string,
+  type: "warning" | "error",
+): void {
+  context.ui.notify(message, type);
   if (context.mode === "print" || context.mode === "json") {
     process.stderr.write(`mmp: ${message}\n`);
   }
+}
+
+function notifyFailure(context: ExtensionContext, error: unknown): void {
+  notifyVisibly(context, failureMessage(error), "error");
+}
+
+/**
+ * Pi's `input` result has no reason field: `handled` just drops the prompt, and Pi expects the
+ * extension to show its own feedback (Pi's examples/extensions/input-transform.ts notifies, then
+ * returns `handled`). Without this the prompt vanished from the editor with nothing on screen.
+ */
+function notifyPromptBlocked(context: ExtensionContext, decision: HookDecision): void {
+  const verb = decision.action === "cancel" ? "cancelled" : "blocked";
+  notifyVisibly(
+    context,
+    `Prompt ${verb} by user_prompt hook: ${blockReason(decision)}`,
+    "warning",
+  );
 }
 
 function taskPayload(event: TaskHookEvent): HookPayload {
@@ -226,6 +247,7 @@ export function createHooksInlineExtension(
             return { action: "transform" as const, text: decision.text ?? "" };
           }
           if (decision.action === "block" || decision.action === "cancel") {
+            notifyPromptBlocked(context, decision);
             return { action: "handled" as const };
           }
           return { action: "continue" as const };

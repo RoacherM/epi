@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { createServer } from "node:http";
 import {
   mkdirSync,
@@ -522,6 +524,116 @@ for (const mode of ["print", "json"]) {
     await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
   });
 }
+
+// D26: a user_prompt hook that blocks (or cancels) maps to Pi's `{action: "handled"}`, which has no
+// reason field; Pi expects the extension to show its own feedback (Pi's
+// examples/extensions/input-transform.ts). Before the fix the prompt just vanished: nothing in the
+// TUI, nothing on stderr in -p, exit 0.
+for (const [action, verb, reason] of [
+  ["block", "blocked", "blocked:user_prompt"],
+  ["cancel", "cancelled", "cancelled-by-fixture"],
+]) {
+  for (const mode of ["print", "json", "tui"]) {
+    test(`a user_prompt hook ${action} shows its reason (${mode} mode)`, async (t) => {
+      const root = createFixture(t);
+      const handlers = new Map();
+      const inline = createHooksInlineExtension({
+        hooks: [hook("user_prompt", [command(action)])],
+        mmpHome: root,
+        agentDir: join(root, "pi"),
+        projectAgentsDir: undefined,
+        workerPath: fakeWorker,
+      });
+      await inline.factory(fakePiWithBus(handlers));
+      const notifications = [];
+      const context = createContext(root, {
+        mode,
+        ui: { notify(message, level) { notifications.push({ message, level }); } },
+      });
+
+      const { result, stderr } = await withCapturedStderr(() => handlers.get("input")(
+        { type: "input", text: "hello", images: [], source: "interactive" },
+        context,
+      ));
+
+      assert.deepEqual(result, { action: "handled" });
+      const expected = `Prompt ${verb} by user_prompt hook: ${reason}`;
+      assert.deepEqual(notifications, [{ message: expected, level: "warning" }]);
+      assert.equal(stderr(), mode === "tui" ? "" : `mmp: ${expected}\n`);
+      await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
+    });
+  }
+}
+
+// D26 end to end: the real CLI and the real TUI, with a global mmp:hooks user_prompt block hook
+// and a faux model that would echo the prompt if it ever got through.
+function blockingHookHome(t) {
+  const root = createFixture(t);
+  const home = join(root, "home");
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({
+    version: 1,
+    extensions: ["mmp:hooks", fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url))],
+  }));
+  writeFileSync(join(home, ".mmp", "hooks.json"), JSON.stringify({
+    version: 1,
+    hooks: [{ event: "user_prompt", handlers: [command("block", 5000)] }],
+  }));
+  return {
+    root,
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
+  };
+}
+
+async function runNode(args, { cwd, env }) {
+  const child = spawn(process.execPath, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const [code] = await once(child, "close");
+  return { code, stdout, stderr };
+}
+
+test("mmp -p shows a user_prompt hook's block reason on stderr and sends nothing", async (t) => {
+  const { root, env } = blockingHookHome(t);
+  const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+
+  const result = await runNode(
+    [cli, "--no-project", "--model", "mmp-faux/echo", "-p", "hello"],
+    { cwd: root, env },
+  );
+
+  assert.equal(result.stdout, "", "the blocked prompt must not reach the model");
+  assert.match(result.stderr, /mmp: Prompt blocked by user_prompt hook: blocked:user_prompt/);
+});
+
+test("the TUI shows a user_prompt hook's block reason as a notice and sends nothing", async (t) => {
+  const { root, env } = blockingHookHome(t);
+  const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
+  const steps = [
+    ["waitReady"],
+    ["type", "hello"],
+    ["key", "enter"],
+    ["waitFor", "Prompt blocked by user_prompt hook: blocked:user_prompt"],
+    ["wait", 300],
+    ["screen", "after"],
+    ["detach"],
+  ];
+
+  const result = await runNode([harness], {
+    cwd: root,
+    env: {
+      ...env,
+      MMP_TUI_HARNESS: JSON.stringify({ args: ["--no-project", "--model", "mmp-faux/echo"], steps }),
+    },
+  });
+
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  const screen = JSON.parse(result.stdout).screens.after.join("\n");
+  assert.match(screen, /Prompt blocked by user_prompt hook: blocked:user_prompt/);
+  assert.doesNotMatch(screen, /ECHO:/, "the blocked prompt must not reach the model");
+});
 
 test("a user_prompt hook spawn failure does not also spam stderr in tui mode (ui.notify already shows it there)", async (t) => {
   const root = createFixture(t);
