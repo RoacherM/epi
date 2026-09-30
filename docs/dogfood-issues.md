@@ -19,7 +19,7 @@
 | D13 | P3 | 测试辅助只能看"写到屏幕上的所有输出"，看不到"现在屏幕上显示的是什么"。所以"某行本该消失却一直留着"这类 bug（比如中止后队列提示不消失）没有测试能抓到（D2 复审发现，A4–A6、C1 四个改坏场景） | D2 的 review-2.md 第 2 条 | 已修（合并 D13：`["screen", name]`、`waitFor {screen:true}`、`waitGone`；A4–A6、C1 四个测试已改用当前屏幕） |
 | D14 | P3 | D2 的 worker（旧工具版 b0d88c4，跑了约 1.5 小时）空输入框按 Ctrl+D 等 15 秒没退出，输入 `/quit` 4 秒内退出。没有点过图片标签。同样旧版本的 reviewer 上 Ctrl+D 1 秒退出，没复现 | 长时间运行的会话里按 Ctrl+D | 待复现（在新版本上留意） |
 | D15 | P0 | 上下文超长的自动恢复失败后，界面永远停在 "Compacting…"（实测 76 分钟），Esc 也停不下来。原因：Pi 在回合结束后的收尾阶段做恢复压缩，`compaction_end` 到达时 `isStreaming` 仍为 true，MMP 不清状态；之后的 `agent_settled` 也不清 | D11 worker 会话（magpie，约 176K token 时报 "Prompt is too long"） | 已修（合并 D15；另外修了两个同根的变体：回合结束后压缩成功也会卡住，回合中途压缩结束后状态不更新） |
-| D16 | P1 | magpie 的上下文上限配错：MMP 的 magpie 扩展照抄了 magpie 给 Pi 的 100 万，实际约 20 万，所以 Pi 从不自动压缩，直接撞上 "Prompt is too long"；恢复时的摘要请求又被 magpie 以 `content_filter` 拒绝 | 长任务里看上下文用量 | 已修（`~/.mmp/extensions/magpie/index.mjs` 改为 200000）；`content_filter` 的原因待查 |
+| D16 | P1 | magpie 的上下文上限配错：MMP 的 magpie 扩展照抄了 magpie 给 Pi 的 100 万，实际约 20 万，所以 Pi 从不自动压缩，直接撞上 "Prompt is too long"；恢复时的摘要请求又被 magpie 以 `content_filter` 拒绝 | 长任务里看上下文用量 | 已修（`~/.mmp/extensions/magpie/index.mjs` 改为 200000）；`content_filter` 的原因待查。2026-10-01 又见 D21 worker 上下文显示 `240K / 200K` 后才开始压缩（阈值压缩没在 200K 之前触发，原因待查） |
 | D17 | P3 | D15 复审发现：自动重试的等待期间按 Esc，曾是另一个状态卡住的变体（已被 D15 的修复覆盖），但没有测试；D15 新增的两处清理（回合结束时、重试结束时）也没有单独的测试 | D15 的 review-1.md 第 1、2 条 | 待补测试 |
 | D18 | P2 | 用退格删掉一个图片标签后立刻按回车，弹出的是路径补全（如 `see foo home/`），消息没有发出去；先随便打一个字再回车就正常（D11 worker 发现，D11 之前就存在） | `see foo `，Ctrl+V，退格，回车 | 已修（合并 D18：删标签时残留的 `#` 补全请求会被取消；Ctrl+W、Alt+退格同样修了） |
 | D19 | P2 | 完整测试又变回约 5 分钟：D11 新增的 `test/tui-image-numbering.test.mjs` 里二十多个测试每个 17–24 秒，同一文件内串行执行，整个文件就要几分钟，抵消了 D2 的提速 | `node --test --test-reporter=tap test/*.test.mjs`，按耗时排序 | 已修（合并 D19：固定等待改成等画面、同文件并行；该文件 305 秒 → 约 9 秒，完整 `npm test` 约 64 秒） |
@@ -38,3 +38,4 @@
 | D32 | P3 | D10 复审的小问题：`test/pi-internals.test.mjs` 的 osc133 检查用固定 40ms 等待画面（机器忙时可能偶发失败）；测试辅助会去掉 OSC 序列，所以没有应用层测试能发现 OSC 133 标记漏到终端上（只靠跳转测试间接发现） | D10 的 review-1.md 第 1、2 条 | 待修 |
 | D33 | P3 | D13 复审的小问题：A6 测试（扩展 ctx.abort）改成只查最终屏幕后，丢了"恢复后排队提示不再出现"这项检查；`waitGone` 和 `waitFor {screen:true}` 的正则写法还没有测试用到 | D13 的 review-1.md 第 2、3 条 | 待修 |
 | D34 | P3 | Ctrl+X 只复制最后一条回答；Pi 会先复制当前选中的文字（interactive-mode.js ~5367），关掉"选中即复制"后就没有办法复制选区（D21 worker 发现） | `/settings` 关掉 Copy on select，拖选一段文字，按 Ctrl+X | 待修 |
+| D35 | P2 | 压缩进行中按 Ctrl+D：界面已经退出（终端回到普通模式，画面停在最后一帧，之后的按键被原样回显），但进程不退出，一直挂着一个到 magpie 的压缩请求（`lsof` 可见 ESTABLISHED 连接），只能 kill。可能就是 D14（Ctrl+D 不退出）和 D25（留下最后一帧）的原因 | D21 worker 写完报告后自动压缩（240K/200K），此时 Ctrl+D；进程 `S+` 状态、CPU≈0 | 待修：退出时应中止进行中的压缩/请求，或限时后强制退出并提示 |
