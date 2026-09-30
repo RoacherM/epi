@@ -7,4 +7,6 @@ export declare class MmpArgumentError extends MmpPreflightError {
 export declare class MmpConfigError extends MmpPreflightError {
     constructor(message: string);
 }
+/** Writes a failure that ended the run to stderr, as `mmp: <message>`, and returns its exit code. */
+export declare function reportRunFailure(error: unknown): number;
 //# sourceMappingURL=errors.d.ts.map

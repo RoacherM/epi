@@ -380,7 +380,9 @@ export async function runTuiApp(options) {
      * re-renders the whole document onto the normal screen, which left the last frame behind after
      * every quit (dogfood D25); docs/tui-design.md says v1 leaves no chat in the terminal. Pi's own
      * fullscreen stop passes the same option (interactive-mode.js stopInteractiveTui). */
+    let tuiStopped = false;
     function stopTui() {
+        tuiStopped = true;
         turnStatus.stop();
         tui.stop({ preserveScreen: true });
     }
@@ -687,7 +689,15 @@ export async function runTuiApp(options) {
                     transcript.markStopped();
                 void session.abort();
             },
-            onError: (error) => transcript.notice(`Extension error (${error.extensionPath}, ${error.event}): ${error.error}`, "error"),
+            // Once quitting has stopped the TUI (a session_shutdown handler throwing), a transcript notice
+            // would never be seen; Pi loses it the same way (dogfood D41).
+            onError: (error) => {
+                const text = `Extension error (${error.extensionPath}, ${error.event}): ${error.error}`;
+                if (tuiStopped)
+                    process.stderr.write(`mmp: ${text}\n`);
+                else
+                    transcript.notice(text, "error");
+            },
         });
         // bindExtensions re-registers extension providers, which starts an un-awaited auth refresh in Pi.
         await runtime.services.modelRuntime.refresh({ allowNetwork: false });
@@ -1020,28 +1030,6 @@ export async function runTuiApp(options) {
         tui.requestRender();
         return { consume: true };
     });
-    applyUiSettings();
-    tui.start();
-    tui.setFocus(editor);
-    try {
-        await bind(session);
-    }
-    catch (error) {
-        await exit(1);
-        throw error;
-    }
-    ready = true;
-    if (options.resumeOnStart === true) {
-        // Bug 8: Pi's own --resume exits with "No session selected" when nothing is picked (main.js
-        // ~327-336's selectSession/process.exit(0)); MMP used to just carry on in the fresh default
-        // session bind() already set up above. Ctrl+D ("exited") already quit the app itself inside
-        // runResume (host.exit(0)) -- nothing more to do here for that case.
-        const outcome = await runResume(commandHost);
-        if (outcome === "cancelled") {
-            await exit(0);
-            process.stdout.write("No session selected\n");
-        }
-    }
     // Only on the very first bind: /new, /resume and /reload also call bind() and must not replay it.
     // Pi's own interactive-mode.js (~855-864): sent directly through session.prompt(), not through
     // submit()'s full pipeline -- submit() clears the editor/history and runs MMP's built-ins (e.g.
@@ -1062,13 +1050,52 @@ export async function runTuiApp(options) {
             }
         }
     };
-    void sendInitialMessages();
+    let startupError;
+    let resumeCancelled = false;
+    const startup = async () => {
+        await bind(session);
+        if (exiting)
+            return;
+        ready = true;
+        if (options.resumeOnStart === true) {
+            // Bug 8: Pi's own --resume exits with "No session selected" when nothing is picked (main.js
+            // ~327-336's selectSession/process.exit(0)); MMP used to just carry on in the fresh default
+            // session bind() already set up above. Ctrl+D ("exited") already quit the app itself inside
+            // runResume (host.exit(0)) -- nothing more to do here for that case.
+            const outcome = await runResume(commandHost);
+            if (outcome === "cancelled") {
+                resumeCancelled = true;
+                await exit(0);
+            }
+            if (exiting)
+                return;
+        }
+        void sendInitialMessages();
+    };
+    applyUiSettings();
+    tui.start();
+    tui.setFocus(editor);
+    // Keys are live from here on, so the user can quit while startup is still awaiting (a
+    // session_start handler that never returns). Startup runs alongside `finished`, not before it,
+    // so quitting returns (and host.ts exits the process) wherever startup is, as Pi's shutdown()
+    // does with its own process.exit (dogfood D41).
+    void startup().catch(async (error) => {
+        // A step failing because quitting already disposed the session isn't a startup failure.
+        if (exiting)
+            return;
+        startupError = error;
+        await exit(1);
+    });
     const code = await finished;
     process.off("SIGTERM", onSignal);
     process.off("SIGHUP", onSignal);
     process.off("uncaughtException", onCrash);
     process.off("unhandledRejection", onCrash);
     unsubscribe?.();
+    if (startupError !== undefined)
+        throw startupError;
+    if (resumeCancelled)
+        process.stdout.write("No session selected\n");
     return code;
 }
 //# sourceMappingURL=app.js.map

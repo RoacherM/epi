@@ -22,7 +22,9 @@ export async function openExternalEditor(host) {
     // docs/tui-design.md 4.3's 发送 row), so any of them are already excluded from what $EDITOR sees.
     // Counted here, before the editor is replaced below, so there's something to compare against.
     const imageCount = host.getEditorImages().length;
-    host.tui.stop();
+    // Pi's plain stop() copies the whole frame onto the normal screen, where it stays after quitting
+    // (dogfood D41); the editor takes over the screen anyway, and start() redraws the TUI in full.
+    host.tui.stop({ preserveScreen: true });
     try {
         const result = await runExternalEditor(command, content);
         if (result.status === "complete") {
@@ -106,7 +108,8 @@ export function suspendToShell(host) {
         host.tui.requestRender(true);
     });
     try {
-        host.tui.stop();
+        // As in openExternalEditor: the shell sees its own screen, not a copy of the last frame.
+        host.tui.stop({ preserveScreen: true });
         process.kill(0, "SIGTSTP");
     }
     catch (error) {

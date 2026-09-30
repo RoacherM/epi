@@ -4,7 +4,8 @@
 // drain out of the event loop on its own while it is in flight. MMP_FAUX_ABORT_MARK names a file the
 // request writes "aborted" to when its signal fires. With MMP_FAUX_IGNORE_ABORT=1 the request ignores
 // its signal (a provider that never settles). With MMP_FAUX_HANG_SHUTDOWN=1 a session_shutdown
-// handler never returns.
+// handler never returns; with MMP_FAUX_THROW_SHUTDOWN=1 one throws. With MMP_FAUX_HANG_START=1 a
+// session_start handler never returns and holds a timer, so startup never finishes.
 import { writeFileSync } from "node:fs";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { registerFaux } from "./faux-register.mjs";
@@ -29,5 +30,7 @@ export default function (pi) {
     return fauxAssistantMessage("REPLY");
   };
   if (process.env.MMP_FAUX_HANG_SHUTDOWN === "1") pi.on("session_shutdown", () => new Promise(() => {}));
+  if (process.env.MMP_FAUX_THROW_SHUTDOWN === "1") pi.on("session_shutdown", () => { throw new Error("SHUTDOWN-BOOM"); });
+  if (process.env.MMP_FAUX_HANG_START === "1") pi.on("session_start", () => new Promise(() => { setInterval(() => {}, 1000); }));
   registerFaux(pi, { models: ["compactor"], responses: [fauxAssistantMessage("BEFORE-COMPACT"), route, route, route] });
 }
