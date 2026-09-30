@@ -46,8 +46,9 @@ waitreport() {
     if (( i % 30 == 0 )); then
       local screen; screen=$(herdr pane read "$P" --source visible 2>/dev/null)
       if ! mmp_running; then echo "(mmp is not running in $P)" >&2; return 2; fi
-      if grep -qE 'Compacting… ([0-9]{2,}|[1-9][0-9]*m)' <<<"$screen" && grep -qE 'Compacting… [0-9]+m' <<<"$screen" && [[ $(grep -oE 'Compacting… [0-9]+m' <<<"$screen" | grep -oE '[0-9]+' | tail -1) -ge 10 ]]; then
-        echo "(worker in $P has been compacting for 10+ minutes)" >&2; return 2
+      local compacting; compacting=$(grep -oE 'Compacting… [0-9]+m' <<<"$screen" | grep -oE '[0-9]+' | tail -1)
+      if [[ -n $compacting && $compacting -ge 10 ]]; then
+        echo "(worker in $P has been compacting for ${compacting} minutes)" >&2; return 2
       fi
       if tail -3 <<<"$screen" | grep -q 'Shift+Tab'; then idle=$((idle + 30)); else idle=0; fi
       if (( idle >= 120 )); then echo "(worker in $P is idle without a STATUS line)" >&2; return 2; fi
