@@ -14,8 +14,9 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { getSelectListTheme, initTheme } from "@earendil-works/pi-coding-agent";
 
+import { ChipEditor, labelStoredImages, unattachedImageLabels } from "../dist/tui/paste-chips.js";
 import { createMmpTheme } from "../dist/tui/theme.js";
 import { Transcript } from "../dist/tui/transcript.js";
 
@@ -166,7 +167,7 @@ test("--resume replays the numbers too, and the next paste is #3", (t) => {
   assert.match(since(marks.afterResume, marks.chip), /\[Image #3\]/);
 });
 
-test("/fork continues after the images the forked history contains", (t) => {
+test("/fork puts the message back with its image, and the next paste continues after it", (t) => {
   const run = setup(t, [ECHO_IMAGES]);
   const { marks } = run([
     ["wait", 2500],
@@ -179,8 +180,10 @@ test("/fork continues after the images the forked history contains", (t) => {
     ["key", "ctrl+d"],
   ]);
   assert.match(since(marks.beforeFork, marks.afterFork), /Forked to new session\./);
-  // Forked from the first message: its own image is not in the history, so the next paste is #1.
-  assert.match(since(marks.afterFork, marks.chip), /\[Image #1\]/);
+  // Forked from the first message: the history holds no image, but the editor holds `a1 [Image
+  // #1]` again (with its image), so the new chip is #2. The preview's title names the new chip.
+  assert.match(since(marks.afterFork, marks.chip), /a1 \[Image #1\] ?\[Image #2\]/);
+  assert.match(since(marks.afterFork, marks.chip), /Image #2 ─ PNG/);
 });
 
 test("/clone keeps the history's images: the next paste continues after them", (t) => {
@@ -354,6 +357,8 @@ test("the model receives the chip's label in the prompt text", (t) => {
   ]);
   assert.match(marks.sent, /ECHO:see \[Image #1\] and say\|IMAGES:1/);
   assert.match(marks.sent, /❯ see \[Image #1\] and say/);
+  // The label in the text is the image's; it is not drawn a second time as an unnumbered one.
+  assert.doesNotMatch(marks.sent, /\[Image\]/);
 });
 
 test("R1: a steer sent after a queued follow-up keeps its own chip number (#2 shows above #1)", (t) => {
@@ -486,3 +491,97 @@ function brokenPng() {
   checksum.writeUInt32BE(crc(body));
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), len, body, checksum, Buffer.from("garbage-not-idat")]);
 }
+
+// Round 4 (review-2.md): an `[Image #N]` in the editor without image data never looks or acts like
+// an attached image. Text that was sent comes back with its images, each under its own label.
+
+const UNATTACHED = "\x1b[2;9m";
+
+function bareEditor() {
+  return new ChipEditor({ requestRender() {}, terminal: { rows: 40, columns: 120 } }, { borderColor: (text) => text, selectList: getSelectListTheme() }, { getCwd: () => process.cwd() });
+}
+
+test("finding 1: Alt+Up gives the image back to its own label, not to a typed one before it", (t) => {
+  const run = setup(t, [fixture("faux-queue-echo.mjs")]);
+  const { marks } = run([
+    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 500],
+    ["type", "see [Image #1] "], ["key", "ctrl+v"], ["wait", 300], ["type", " end"],
+    ["key", "enter"], ["wait", 300], ["key", "alt+up"], ["wait", 300], ["mark", "restored"],
+    // ` end` then the pasted chip `[Image #2]` (one unit): only the typed `[Image #1]` is left.
+    // (Typing after deleting a chip: Enter straight after a chip's Backspace deletion opens a path
+    // completion instead of sending, an older quirk unrelated to image numbering.)
+    ...Array.from({ length: 5 }, () => ["key", "backspace"]), ["wait", 200], ["type", " x"], ["mark", "edited"],
+    ["wait", 12000], ["key", "enter"], ["wait", 1500], ["mark", "delivered"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.restored, /see \[Image #1\] \[Image #2\] end/);
+  const delivered = since(marks.edited, marks.delivered);
+  assert.match(delivered, /ECHO:see \[Image #1\] +x\|IMAGES:0/);
+  assert.match(delivered, /No image attached for \[Image #1\]; sent as text\./);
+});
+
+test("finding 2: a prompt that fails puts its image back with the text", (t) => {
+  const run = setup(t, []); // no model: session.prompt throws
+  const { marks } = run([
+    ["wait", 2500], ["type", "look "], ["key", "ctrl+v"], ["wait", 300], ["key", "enter"], ["wait", 800], ["mark", "failed"],
+    ["type", "Z"], ["wait", 300], ["mark", "typed"], ["key", "backspace"], ["wait", 300], ["mark", "back"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.failed, /No (API key|model)/);
+  // The caret is back at the chip's end: the image preview shows only if the chip has its data.
+  assert.match(since(marks.typed, marks.back), /Image #1 ─ PNG/);
+});
+
+test("finding 3: /fork resends the chosen message's image under its label", (t) => {
+  const run = setup(t, [ECHO_IMAGES]);
+  const { marks } = run([
+    ["wait", 2500], ["type", "a1 "], ["key", "ctrl+v"], ["wait", 300], ["key", "enter"], ["wait", 800],
+    ["type", "a2"], ["key", "enter"], ["wait", 800], ["mark", "before"],
+    ["type", "/fork"], ["key", "enter"], ["wait", 500], ["key", "up"], ["wait", 100], ["key", "enter"], ["wait", 500], ["mark", "forked"],
+    ["key", "enter"], ["wait", 800], ["mark", "sent"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(since(marks.before, marks.forked), /a1 \[Image #1\]/);
+  const sent = since(marks.forked, marks.sent);
+  assert.match(sent, /ECHO:a1 \[Image #1\]\|IMAGES:1/);
+  assert.doesNotMatch(sent, /No image attached/);
+});
+
+test("finding 3: a stored message's images pair with its labels only when every label had one", () => {
+  const image = () => ({ type: "image", data: "AAAA", mimeType: "image/png" });
+  const paired = labelStoredImages("a [Image #3] b [Image #5]", [image(), image()]);
+  assert.deepEqual(unattachedImageLabels("a [Image #3] b [Image #5]", paired), []);
+  // A typed label, or an image Pi omitted: which label had which image is unknown, so none is restored.
+  assert.deepEqual(labelStoredImages("see [Image #1] [Image #2]", [image()]), []);
+  assert.deepEqual(unattachedImageLabels("see [Image #1] [Image #2]", []), [1, 2]);
+});
+
+test("finding 4: after an idle Alt+Enter, a typed label doesn't pick up the sent image", (t) => {
+  const run = setup(t, [ECHO_IMAGES]);
+  const { marks } = run([
+    ["wait", 2500], ["type", "first "], ["key", "ctrl+v"], ["wait", 300], ["key", "alt+enter"], ["wait", 800], ["mark", "first"],
+    ["type", "about [Image #1]"], ["wait", 200], ["mark", "typed"],
+    ["key", "enter"], ["wait", 800], ["mark", "sent"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.first, /ECHO:first \[Image #1\]\|IMAGES:1/);
+  assert.doesNotMatch(since(marks.first, marks.typed), /Image #1 ─ PNG/);
+  const sent = since(marks.typed, marks.sent);
+  assert.match(sent, /ECHO:about \[Image #1\]\|IMAGES:0/);
+  assert.match(sent, /No image attached for \[Image #1\]; sent as text\./);
+});
+
+test("a label without image data is drawn unattached and is not deleted as a unit", () => {
+  const editor = bareEditor();
+  editor.insertImageChip(ONE_PIXEL_PNG, "image/png"); // [Image #1], with data
+  editor.insertTextAtCursor(" [Image #7]"); // typed: no data
+  const rendered = editor.render(60).join("\n");
+  assert.ok(rendered.includes(`${UNATTACHED}[Image #7]`), "the typed label is drawn unattached");
+  assert.ok(!rendered.includes(`${UNATTACHED}[Image #1]`), "the chip is drawn as usual");
+  editor.handleInput("\x7f");
+  assert.equal(editor.getText(), "[Image #1] [Image #7");
+  for (let i = 0; i < 10; i += 1) editor.handleInput("\x7f"); // `[Image #7` and the space, one at a time
+  assert.equal(editor.getText(), "[Image #1]");
+  editor.handleInput("\x7f");
+  assert.equal(editor.getText(), "", "a chip with data still goes as one unit");
+});

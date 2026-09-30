@@ -6,6 +6,17 @@ export declare const MAX_PASTE_BYTES: number;
 export declare const IMAGE_LABEL_G: RegExp;
 /** The numbers of the `[Image #N]` labels in `text`, in order. */
 export declare function imageLabelNumbers(text: string): number[];
+/** The `[Image #N]` number `image` was sent under, if it came from the editor. */
+export declare function sentImageLabel(image: ImageContent): number | undefined;
+/** Images from a stored user message (/fork, /tree), tagged with the labels they were sent under,
+ * or none when that can't be known. The editor takes an image out of the text only for a label
+ * that had data, in order, and Pi keeps that order; so when the text has exactly as many labels
+ * as the message has images, no label went out without data and no image was dropped, and the
+ * i-th label is the i-th image's own. Otherwise (a label typed without an image, an image Pi
+ * omitted) the pairing is unknown and the labels stay without data. */
+export declare function labelStoredImages(text: string, images: readonly ImageContent[]): ImageContent[];
+/** The labels in `text` that none of `images` was sent under: they go out as text only. */
+export declare function unattachedImageLabels(text: string, images: readonly ImageContent[]): number[];
 export interface ImageChipMeta {
     id: number;
     mimeType: string;
@@ -103,6 +114,15 @@ export declare class ChipEditor {
      * session-tree-commands.ts) or the /fork editor-slot restore prepends to the raw, unexpanded text
      * (`getText`, not `getExpandedText`), so every chip already in it survives. Pi's `setText` pushes
      * an undo snapshot, so Ctrl+- after /new or Ctrl+G brings back the old draft with its chips. */
+    /** Empties the editor for a message that was just sent some way other than Enter (Alt+Enter,
+     * a submit from app.ts): like Enter, the new draft starts without the old chips' data. */
+    clearDraft(): void;
+    /** Text that was sent, back into a draft (a prompt that failed, Esc/Alt+Up queue restore, /fork,
+     * /tree): each image comes back under the label it was sent under (`sentImageLabel`), whatever
+     * the position of that label in the text. An image with no label in the text (an extension's
+     * queued message) is added as a new chip at the end. Labels left without an image stay as
+     * text, drawn as unattached. Returns the text to put in the editor. */
+    restoreDraftImages(text: string, images: readonly ImageContent[]): string;
     setText(text: string): void;
     insertTextAtCursor(text: string): void;
     /** Ctrl+V with text on the clipboard: goes through the same fold-or-not decision as a terminal
@@ -116,10 +136,9 @@ export declare class ChipEditor {
     getExpandedText(): string;
     getImageAttachments(): ImageContent[];
     /** Registers an image's data without inserting anything -- for a caller building the marker into
-     * arbitrary text itself (Esc/Alt+Up queue restore, app.ts's restoreQueuedMessagesToEditor) ahead
-     * of one `setText()` call, rather than at the current cursor. Returns the `[Image #N]` label to
-     * place in that text. `preferredId` (queue restore: the number the image had when it was sent)
-     * is used unless the draft holds a different image under that id. */
+     * arbitrary text itself (restoreDraftImages) ahead of one `setText()` call, rather than at the
+     * current cursor. Returns the `[Image #N]` label to place in that text. `preferredId` (the
+     * number the image was sent under) is used unless the draft holds a different image under it. */
     registerImage(bytes: Uint8Array, mimeType: string, preferredId?: number): string;
     /** Ctrl+V with an image on the clipboard, or an `@image`-equivalent drop: adds an `[Image #N]`
      * chip at the cursor. `bytes` are kept as-is; AgentSession resizes for the model at send time
@@ -182,6 +201,9 @@ export declare class ChipEditor {
     /** Matches against `line`'s own text only; `contains` is fed `(start, end)` columns within that
      * line, matching `inner.getCursor().col`/`moveCursorToColumn`'s coordinate space. */
     private findChip;
+    /** The chip labels in `text` that act as one unit: every text chip, and image labels that have
+     * data. A label without an image is plain text: the caret can enter it and a delete cuts it. */
+    private atomicChips;
     private chipInfo;
     /** The content pasted under `label`, or undefined for a contentless slot. Checking the label
      * again here is a last safety net: a slot never resolves to content pasted under another label. */

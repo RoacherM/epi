@@ -28,8 +28,11 @@ export interface CommandHost {
   addBlock(component: Component): void;
   getEditorText(): string;
   setEditorText(text: string): void;
-  /** Editor text with paste chips (`[Pasted: N lines]`) expanded to their full content and image
-   * chips (`[Image #N]`) removed; use this, not `getEditorText`, for anything actually sent
+  /** Sent text back into the editor with its images, each under the `[Image #N]` label it was
+   * sent under (ChipEditor.restoreDraftImages); labels left without an image show as unattached. */
+  restoreEditorDraft(text: string, images: readonly ImageContent[]): void;
+  /** Editor text with paste chips (`[Pasted: N lines]`) expanded to their full content; image
+   * chips (`[Image #N]`) keep their label in the text (D11); use this, not `getEditorText`, for anything actually sent
    * (submit, steer, external editor). Pair with `getEditorImages()` to also carry attachments. */
   getExpandedEditorText(): string;
   /** Image attachments currently represented by `[Image #N]` chips in the editor (docs/tui-design.md
@@ -48,8 +51,9 @@ export interface CommandHost {
   addToHistory(text: string): void;
   /** Run the submit pipeline (built-ins, `!`, `session.prompt`) as if Enter were pressed. */
   submit(text: string, images?: ImageContent[]): Promise<void>;
-  /** Alt+Enter while a turn runs: send text and images into the running turn (`session.prompt`
-   * with `streamingBehavior: "steer"`); its `[Image #N]` labels count as used (D11). */
+  /** Alt+Enter while a turn runs: clear the draft and send text and images into the running turn
+   * (`session.prompt` with `streamingBehavior: "steer"`); its `[Image #N]` labels count as used
+   * (D11). On failure it says why and puts the text and its images back. */
   steer(text: string, images: ImageContent[]): Promise<void>;
   /** Pi's restoreQueuedMessagesToEditor/clearAllQueues (interactive-mode.js ~3729, ~3761): clears
    * both the session's own steering/follow-up queue and app.ts's compaction queue, puts their text
