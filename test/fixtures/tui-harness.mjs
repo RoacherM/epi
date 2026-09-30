@@ -1,6 +1,14 @@
 // Runs the real MMP TUI v2 app against an in-memory terminal, driven by a script of inputs.
 // Usage: MMP_TUI_HARNESS='{"args":[],"steps":[["wait",3000],["type","hi"],["key","enter"],...]}' node tui-harness.mjs
 // ["mark", name] records what had been drawn at that moment, to assert timing without further input.
+// ["waitReady"] waits until the app finished startup (extension binding) and accepts submissions.
+// ["waitFor", pattern, opts?] waits until `pattern` (a string, or {regex, flags?}) is drawn, then
+// continues at once; only a failure waits out the timeout (opts.timeoutMs, default 15000), and then
+// the harness exits non-zero with the screen tail. By default it looks only at what was drawn
+// since the last input step began, so an earlier identical text can't satisfy it; opts.all looks at
+// everything drawn so far (for text that was drawn before the step was reached).
+// ["detach"], as the last step, ends the run without waiting for the app to quit (Ctrl+D does not
+// quit while the editor has text, so a test that doesn't check the exit code would wait 5s for it).
 // Prints the exit code, the marks, and everything the app wrote (ANSI stripped) as JSON.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -36,10 +44,26 @@ const terminal = {
   setTitle() {}, setProgress() {},
 };
 
+let appReady = false;
 const prepared = prepareMmpRun(args);
 const theme = installMmpTheme(prepared.agentDir, detectAppearance(process.env));
 const runtime = await createRuntimeFromPrepared(prepared, process.cwd());
 const { initialMessages, initialImages, resumeOnStart } = await startupOptionsFromPiArgs(prepared.args.passthrough, process.cwd());
+// The app's startup gate (`ready` in app.ts) opens right after bind(), whose last await is the
+// first modelRuntime.refresh() the app makes; the app has no on-screen signal for it.
+const modelRuntime = runtime.services.modelRuntime;
+const refreshModels = modelRuntime.refresh.bind(modelRuntime);
+let firstRefresh = true;
+modelRuntime.refresh = async (...refreshArgs) => {
+  try {
+    return await refreshModels(...refreshArgs);
+  } finally {
+    if (firstRefresh) {
+      firstRefresh = false;
+      setImmediate(() => { appReady = true; });
+    }
+  }
+};
 const running = runTuiApp({
   runtime,
   theme,
@@ -53,12 +77,36 @@ const running = runTuiApp({
   terminal,
 });
 
+function fail(reason) {
+  process.stderr.write(`tui-harness.mjs: ${reason}. Screen tail:\n${strip(output).slice(-1500)}\n`);
+  process.exit(2);
+}
 const strip = (text) => text.replace(/\x1b\[[0-9;?<>=:]*[a-zA-Z~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[=>]/g, "");
 const marks = {};
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-for (const [kind, value] of steps) {
+let inputStart = 0;
+const INPUT_STEPS = new Set(["type", "paste", "key", "mouse"]);
+let detached = false;
+for (const [kind, value, opts = {}] of steps) {
+  if (INPUT_STEPS.has(kind)) inputStart = output.length;
   if (kind === "mark") marks[value] = strip(output);
   else if (kind === "wait") await sleep(value);
+  else if (kind === "detach") detached = true;
+  else if (kind === "waitReady") {
+    const deadline = Date.now() + (value ?? 15000);
+    while (!appReady) {
+      if (Date.now() > deadline) fail("the app did not finish startup");
+      await sleep(5);
+    }
+  }
+  else if (kind === "waitFor") {
+    const matches = typeof value === "string" ? (text) => text.includes(value) : (text) => new RegExp(value.regex, value.flags).test(text);
+    const deadline = Date.now() + (opts.timeoutMs ?? 15000);
+    while (!matches(strip(opts.all === true ? output : output.slice(inputStart)))) {
+      if (Date.now() > deadline) fail(`never drew ${JSON.stringify(value)}`);
+      await sleep(5);
+    }
+  }
   else if (kind === "type") for (const char of value) { onInput(char); await sleep(10); }
   // A real terminal delivers a paste as one bracketed chunk, not keystroke by keystroke.
   else if (kind === "paste") onInput(`\x1b[200~${value}\x1b[201~`);
@@ -110,6 +158,6 @@ for (const [kind, value] of steps) {
     }
   }
 }
-const code = await Promise.race([running, sleep(5000).then(() => "did not exit")]);
+const code = detached ? "detached" : await Promise.race([running, sleep(5000).then(() => "did not exit")]);
 // Writes to a pipe are asynchronous; exiting before the callback truncates large outputs.
 process.stdout.write(JSON.stringify({ exit: code, marks, output: strip(output) }), () => process.exit(0));

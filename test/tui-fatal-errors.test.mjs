@@ -40,7 +40,7 @@ test("/new failing after teardown is fatal: the alt screen is left cleanly and t
       MMP_TUI_HARNESS: JSON.stringify({
         args: ["--no-project"],
         steps: [
-          ["wait", 2500],
+          ["waitReady"],
           ["type", "/new"], ["key", "enter"],
           ["wait", 1500],
         ],
@@ -90,7 +90,7 @@ test("/import failing after teardown is fatal: the alt screen is left cleanly an
       MMP_TUI_HARNESS: JSON.stringify({
         args: ["--no-project"],
         steps: [
-          ["wait", 2500],
+          ["waitReady"],
           ["type", `/import ${sessionFile}`], ["key", "enter"], ["wait", 400],
           // The confirm dialog opens with "Yes" highlighted; Enter accepts it, triggering the
           // teardown/rebuild that the second-session marker fails.
@@ -130,7 +130,7 @@ test("/switchto a session whose cwd no longer exists offers to continue in the c
       MMP_TUI_HARNESS: JSON.stringify({
         args: ["--no-project"],
         steps: [
-          ["wait", 2500],
+          ["waitReady"],
           ["type", `/switchto ${sessionFile}`], ["key", "enter"], ["wait", 500],
           // The confirm dialog opens in the editor slot with "Yes" highlighted; Enter accepts it.
           ["key", "enter"], ["wait", 800], ["mark", "afterConfirm"],
@@ -173,7 +173,7 @@ test("/switchto a session whose cwd no longer exists, cancelled, leaves the curr
       MMP_TUI_HARNESS: JSON.stringify({
         args: ["--no-project"],
         steps: [
-          ["wait", 2500],
+          ["waitReady"],
           ["type", "hello A"], ["key", "enter"], ["wait", 800], ["mark", "aReply"],
           ["type", `/switchto ${sessionFile}`], ["key", "enter"], ["wait", 500],
           // Down, then Enter, picks "No" in the Yes/No confirm dialog.

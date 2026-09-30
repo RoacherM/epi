@@ -41,7 +41,7 @@ function runApp(t, extensions, steps, { settings, inspect, env: extraEnv = {} } 
 
 test("/thinking sets the level directly, rejects an unknown level, and offers a selector", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-reasoning-model.mjs")], [
-    ["wait", 2500], ["mark", "initial"],
+    ["waitReady"], ["mark", "initial"],
     ["type", "/thinking bogus"], ["key", "enter"], ["wait", 300], ["mark", "invalid"],
     ["type", "/thinking high"], ["key", "enter"], ["wait", 300], ["mark", "afterArg"],
     ["type", "/thinking"], ["key", "enter"], ["wait", 400], ["mark", "selectorOpen"],
@@ -67,7 +67,7 @@ test("/copy and Ctrl+X copy the last assistant reply, and refuse when there is n
   const clipboardFile = join(mkdtempSync(join(tmpdir(), "mmp-clipboard-test-")), "clipboard.txt");
   t.after(() => rmSync(clipboardFile, { force: true }));
   const { text: out, marks } = runApp(t, [fixture("faux-two-replies.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "/copy"], ["key", "enter"], ["wait", 300], ["mark", "beforeAnyReply"],
     ["type", "hi"], ["key", "enter"], ["wait", 800], ["mark", "afterReply"],
     ["type", "/copy"], ["key", "enter"], ["wait", 300], ["mark", "afterCopy"],
@@ -87,7 +87,7 @@ test("/resume lists sessions from MMP's own agent dir and replays a previous one
   // `/new` rebuilds AgentSessionServices from scratch, re-invoking the extension factory and
   // resetting the faux provider's response queue; the echo model keeps replies distinguishable.
   const { text: out, marks } = runApp(t, [fixture("faux-echo.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "first message"], ["key", "enter"], ["wait", 800], ["mark", "firstReply"],
     ["type", "/new"], ["key", "enter"], ["wait", 500],
     ["type", "second message"], ["key", "enter"], ["wait", 800], ["mark", "secondReply"],
@@ -138,7 +138,7 @@ test("mmp --resume opens the same selector at startup, without typing /resume, a
   // until something is appended), so relaunching below finds exactly this one session, not also an
   // empty one from the relaunch itself.
   run([
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "first message"], ["key", "enter"], ["wait", 800],
     ["key", "ctrl+d"],
   ]);
@@ -181,7 +181,7 @@ test("mmp --resume, given Esc at the selector, prints \"No session selected\" an
   // Seed one session so the selector has something to show (and Esc, not "no sessions at all", is
   // what's actually being exercised).
   run([
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "first message"], ["key", "enter"], ["wait", 800],
     ["key", "ctrl+d"],
   ]);
@@ -197,7 +197,7 @@ test("mmp --resume, given Esc at the selector, prints \"No session selected\" an
 
 test("/compact compacts the session, shows the notice, and reports a second compact without doubling the prefix", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-compact.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "hi"], ["key", "enter"], ["wait", 800], ["mark", "afterReply"],
     ["type", "/compact"], ["key", "enter"], ["wait", 1500], ["mark", "afterCompact"],
     ["type", "/compact"], ["key", "enter"], ["wait", 500], ["mark", "secondCompact"],
@@ -213,7 +213,7 @@ test("/compact compacts the session, shows the notice, and reports a second comp
 
 test("/reload re-runs extension factories, refreshes the command list, and keeps the model working", (t) => {
   const { text: out, marks } = runApp(t, [fixture("reload-marker-extension.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "before reload"], ["key", "enter"], ["wait", 800], ["mark", "beforeReloadReply"],
     ["type", "/marker"], ["key", "enter"], ["wait", 400], ["mark", "call1"],
     ["type", "/late"], ["wait", 300], ["mark", "dropdownBefore"],

@@ -33,9 +33,14 @@ function runApp(t, extensions, steps, inspect) {
   return { ...parsed, text: `EXIT=${parsed.exit}\n${parsed.output}` };
 }
 
+// The editor row drawn empty again ("❯", then only padding up to the border).
+const editorCleared = ["waitFor", { regex: "❯ {2,}[│┃]" }];
+// A finished turn: its reply drawn, then the "Worked for" line that closes the turn.
+const turnDone = (reply) => ["waitFor", { regex: `${reply}[\\s\\S]*Worked for` }];
+
 test("TUI v2 shows the welcome page, answers a prompt, and exits on Ctrl+D", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["type", "hi"], ["key", "enter"], ["wait", 1500], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "hi"], ["key", "enter"], turnDone("PICKED=model-a"), ["key", "ctrl+d"],
   ]);
   assert.match(out, /EXIT=0/);
   assert.match(out, /Make My Pi/);
@@ -44,8 +49,8 @@ test("TUI v2 shows the welcome page, answers a prompt, and exits on Ctrl+D", (t)
 
 test("TUI v2 aborts a streaming reply on Esc and keeps working", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-slow.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 1000], ["key", "esc"], ["wait", 800],
-    ["type", "again"], ["key", "enter"], ["wait", 1500], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "go"], ["key", "enter"], ["waitFor", "SLOW-START"], ["key", "esc"], ["waitFor", "Operation aborted"],
+    ["type", "again"], ["key", "enter"], turnDone("SECOND-REPLY"), ["key", "ctrl+d"],
   ]);
   assert.match(out, /EXIT=0/);
   assert.match(out, /SLOW-START/);
@@ -56,7 +61,7 @@ test("TUI v2 aborts a streaming reply on Esc and keeps working", (t) => {
 
 test("TUI v2 runs a built-in tool call", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-bash-tool.mjs")], [
-    ["wait", 2500], ["type", "run"], ["key", "enter"], ["wait", 2500], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "run"], ["key", "enter"], turnDone("TOOL-DONE saw TOOL-RAN-42"), ["key", "ctrl+d"],
   ]);
   // The shell really ran ($((40+2)) evaluated), and the card is MMP's collapsed bash renderer.
   assert.match(out, /TOOL-DONE saw TOOL-RAN-42/);
@@ -66,9 +71,10 @@ test("TUI v2 runs a built-in tool call", (t) => {
 
 test("TUI v2 hosts extension custom() and select() dialogs", (t) => {
   const { text: out, marks } = runApp(t, [fixture("ui-probe-extension.mjs")], [
-    ["wait", 2500], ["type", "/pick"], ["key", "enter"], ["wait", 800], ["key", "enter"], ["wait", 800],
-    ["type", "/choose"], ["key", "enter"], ["wait", 800], ["key", "down"], ["wait", 200], ["key", "enter"],
-    ["wait", 1000], ["mark", "afterSelect"], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "/pick"], ["key", "enter"], ["waitFor", "CUSTOM-PANEL-OPEN"], ["key", "enter"],
+    ["waitFor", "custom result: PICKED-VIA-CUSTOM"],
+    ["type", "/choose"], ["key", "enter"], ["waitFor", "CHOOSE-ONE"], ["key", "down"], ["wait", 200], ["key", "enter"],
+    ["waitFor", "select result: beta"], ["mark", "afterSelect"], ["key", "ctrl+d"],
   ]);
   // The notice must be on screen without any further input (it once waited for the next keypress).
   assert.match(marks.afterSelect, /select result: beta/);
@@ -80,7 +86,7 @@ test("TUI v2 hosts extension custom() and select() dialogs", (t) => {
 
 test("TUI v2 refuses Pi built-in commands it does not implement yet, keeping the text", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["type", "/settings"], ["key", "enter"], ["wait", 800], ["key", "ctrl+c"], ["wait", 200],
+    ["waitReady"], ["type", "/settings"], ["key", "enter"], ["waitFor", "/settings is not available in MMP yet"], ["key", "ctrl+c"], editorCleared,
     ["key", "ctrl+d"],
   ]);
   assert.match(out, /\/settings is not available in MMP yet/);
@@ -89,8 +95,8 @@ test("TUI v2 refuses Pi built-in commands it does not implement yet, keeping the
 
 test("TUI v2 keeps the editor when custom() finishes before mounting", (t) => {
   const { text: out, marks } = runApp(t, [fixture("ui-probe-extension.mjs")], [
-    ["wait", 2500], ["type", "/instant"], ["key", "enter"], ["wait", 800], ["mark", "afterInstant"],
-    ["type", "/choose"], ["key", "enter"], ["wait", 800], ["key", "enter"], ["wait", 800], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "/instant"], ["key", "enter"], ["waitFor", "instant result: INSTANT-DONE"], ["mark", "afterInstant"],
+    ["type", "/choose"], ["key", "enter"], ["waitFor", "CHOOSE-ONE"], ["key", "enter"], ["waitFor", "select result: alpha"], ["key", "ctrl+d"],
   ]);
   assert.match(marks.afterInstant, /instant result: INSTANT-DONE/);
   // The editor still works afterwards: a second command runs and its dialog resolves.
@@ -101,13 +107,13 @@ test("TUI v2 keeps the editor when custom() finishes before mounting", (t) => {
 test("TUI v2 logs in with an API key, then asks for a model and uses it", (t) => {
   let auth;
   const { marks } = runApp(t, [], [
-    ["wait", 2500], ["type", "/login"], ["key", "enter"], ["wait", 800], ["mark", "method"],
-    ["key", "down"], ["wait", 200], ["key", "enter"], ["wait", 800], ["mark", "providers"],
-    ["type", "openai"], ["wait", 500], ["key", "enter"], ["wait", 800], ["mark", "keyPrompt"],
-    ["type", "sk-test-123"], ["key", "enter"], ["wait", 2500], ["mark", "modelPicker"],
-    ["key", "enter"], ["wait", 1500], ["mark", "done"],
-    ["type", "/model gpt-4o-mini"], ["key", "enter"], ["wait", 1000], ["mark", "switched"],
-    ["type", "/logout"], ["key", "enter"], ["wait", 800], ["key", "enter"], ["wait", 1000], ["mark", "loggedOut"],
+    ["waitReady"], ["type", "/login"], ["key", "enter"], ["waitFor", "Sign in with an API key"], ["mark", "method"],
+    ["key", "down"], ["wait", 200], ["key", "enter"], ["waitFor", "Select provider to configure"], ["mark", "providers"],
+    ["type", "openai"], ["waitFor", "openai"], ["key", "enter"], ["waitFor", "Enter OpenAI API key"], ["mark", "keyPrompt"],
+    ["type", "sk-test-123"], ["key", "enter"], ["waitFor", "Saved API key for OpenAI. Pick a model:"], ["mark", "modelPicker"],
+    ["key", "enter"], ["waitFor", "Default model: openai/"], ["mark", "done"],
+    ["type", "/model gpt-4o-mini"], ["key", "enter"], ["waitFor", "Model: openai/gpt-4o-mini"], ["mark", "switched"],
+    ["type", "/logout"], ["key", "enter"], ["waitFor", "Select provider to logout"], ["key", "enter"], ["waitFor", "Removed stored API key for OpenAI"], ["mark", "loggedOut"],
     ["key", "ctrl+d"],
   ], (home) => {
     auth = JSON.parse(readFileSync(join(home, ".mmp", "pi", "auth.json"), "utf8"));
@@ -129,7 +135,7 @@ test("TUI v2 logs in with an API key, then asks for a model and uses it", (t) =>
 
 test("TUI v2 draws built-in tools with MMP's grok renderers instead of Pi's own", (t) => {
   const { marks } = runApp(t, [fixture("faux-read-tool.mjs")], [
-    ["wait", 2500], ["type", "read it"], ["key", "enter"], ["wait", 2500], ["mark", "after"], ["key", "ctrl+d"],
+    ["waitReady"], ["type", "read it"], ["key", "enter"], turnDone("READ-DONE"), ["mark", "after"], ["key", "ctrl+d"],
   ]);
   assert.match(marks.after, /READ-DONE/);
   assert.match(marks.after, /read read-me\.txt/);
@@ -141,7 +147,7 @@ test("TUI v2 draws built-in tools with MMP's grok renderers instead of Pi's own"
 // message, not just tool output, so the idle shortcuts bar reads "Ctrl+o:expand" instead of "tools".
 test("the idle shortcuts bar reads Ctrl+o:expand, not Ctrl+o:tools", (t) => {
   const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
-    ["wait", 2500], ["mark", "idle"], ["key", "ctrl+d"],
+    ["waitReady"], ["waitFor", "Ctrl+o:expand", { all: true }], ["mark", "idle"], ["key", "ctrl+d"],
   ]);
   assert.match(marks.idle, /Ctrl\+o:expand/);
   assert.doesNotMatch(marks.idle, /Ctrl\+o:tools/);

@@ -47,9 +47,9 @@ function skillDropdown(f, args) {
       MMP_TUI_HARNESS: JSON.stringify({
         args,
         steps: [
-          ["wait", 2500],
+          ["waitReady"],
           ["type", "/skill:"], ["wait", 300], ["mark", "dropdown"],
-          ["key", "ctrl+d"],
+          ["detach"], // Ctrl+D would not quit: the editor holds "/skill:"
         ],
       }),
     },
@@ -183,13 +183,13 @@ test("/reload picks up a skill created after startup", (t) => {
       PI_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({
         steps: [
-          ["wait", 2500],
+          ["waitReady"],
           ["type", "/skill:"], ["wait", 300], ["mark", "dropdownBefore"],
           ["type", "\x7f\x7f\x7f\x7f\x7f\x7f\x7f"],
           ["plantSkill", { skillsDir, name: "reload-discovered-skill" }],
-          ["type", "/reload"], ["key", "enter"], ["wait", 600], ["mark", "reloaded"],
-          ["type", "/skill:"], ["wait", 300], ["mark", "dropdownAfter"],
-          ["key", "ctrl+d"],
+          ["type", "/reload"], ["key", "enter"], ["waitFor", "Reloaded keybindings, extensions, skills, prompts, themes, and context files."], ["mark", "reloaded"],
+          ["type", "/skill:"], ["waitFor", "reload-discovered-skill"], ["mark", "dropdownAfter"],
+          ["detach"],
         ],
       }),
     },

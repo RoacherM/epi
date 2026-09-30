@@ -48,12 +48,16 @@ function runApp(t, extensions, steps, { settings, env: extraEnv } = {}) {
 
 const KEEP_NO_RECENT = { settings: { compaction: { keepRecentTokens: 0 } } };
 
+// The first turn is over once its reply is drawn and the idle footer is back (the footer is the
+// last row to change; while a turn runs the idle-only "Ctrl+t:thinking" hint is absent).
+const firstTurn = [["type", "go"], ["key", "enter"], ["waitFor", { regex: "BEFORE-COMPACT[\\s\\S]*Ctrl\\+t:thinking" }]];
+const startCompact = [["type", "/compact"], ["key", "enter"], ["waitFor", "Compacting…"]];
+
 test("the turn status row shows Compacting… with a timer and [stop] while /compact runs", (t) => {
   const { marks } = runApp(t, [fixture("faux-slow-compact.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 1500],
-    ["type", "/compact"], ["key", "enter"],
-    ["wait", 400], ["mark", "compacting"],
-    ["key", "esc"], ["wait", 300],
+    ["waitReady"], ...firstTurn, ...startCompact,
+    ["mark", "compacting"],
+    ["key", "esc"], ["waitFor", "Compaction cancelled"],
     ["key", "ctrl+d"],
   ], KEEP_NO_RECENT);
   assert.match(marks.compacting, /Compacting…/);
@@ -63,13 +67,12 @@ test("the turn status row shows Compacting… with a timer and [stop] while /com
 
 test("Esc stops a running compaction instead of being ignored", (t) => {
   const { marks, text: out } = runApp(t, [fixture("faux-slow-compact.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 1500],
-    ["type", "/compact"], ["key", "enter"],
-    ["wait", 400], ["mark", "compacting"],
-    ["key", "esc"],
-    // Long enough for the compaction to have finished on its own if Esc had not stopped it, and
-    // for the turn status row to settle back to idle if it did.
-    ["wait", 6000], ["mark", "settled"],
+    ["waitReady"], ...firstTurn, ...startCompact,
+    ["mark", "compacting"],
+    ["key", "esc"], ["waitFor", "Compaction cancelled"],
+    // Still long enough (the faux summary streams for ~3s) for the compaction to have finished on
+    // its own if Esc had not stopped it, and for the status row to settle back to idle if it did.
+    ["wait", 4500], ["mark", "settled"],
     ["key", "ctrl+d"],
   ], KEEP_NO_RECENT);
   assert.match(marks.compacting, /Compacting…/);
@@ -88,11 +91,10 @@ test("Esc stops a running compaction instead of being ignored", (t) => {
 
 test("a message submitted during compaction is queued and sent once compaction ends", (t) => {
   const { marks, text: out } = runApp(t, [fixture("faux-slow-compact.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 1500],
-    ["type", "/compact"], ["key", "enter"], ["wait", 400],
+    ["waitReady"], ...firstTurn, ...startCompact,
     ["type", "during compaction"], ["key", "enter"],
-    ["wait", 300], ["mark", "queuedDuringCompaction"],
-    ["wait", 7000], ["mark", "afterCompaction"],
+    ["waitFor", "Follow-up: during compaction"], ["mark", "queuedDuringCompaction"],
+    ["waitFor", "AFTER-COMPACT-REPLY"], ["mark", "afterCompaction"],
     ["key", "ctrl+d"],
   ], KEEP_NO_RECENT);
   // Queued locally (not thrown as an error) and shown in the queue display, like Pi's
@@ -114,12 +116,11 @@ test("a message submitted during compaction is queued and sent once compaction e
 // wired to CommandHost and used by keys.ts; passes after.
 test("Alt+Up restores a message queued during compaction, not just the session's own queue", (t) => {
   const { marks, text: out } = runApp(t, [fixture("faux-slow-compact.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 1500],
-    ["type", "/compact"], ["key", "enter"], ["wait", 400],
+    ["waitReady"], ...firstTurn, ...startCompact,
     ["type", "during compaction"], ["key", "enter"],
-    ["wait", 300], ["mark", "queuedDuringCompaction"],
-    ["key", "alt+up"], ["wait", 300], ["mark", "afterAltUp"],
-    ["key", "ctrl+d"],
+    ["waitFor", "Follow-up: during compaction"], ["mark", "queuedDuringCompaction"],
+    ["key", "alt+up"], ["waitFor", "Restored 1 queued message to editor."], ["waitFor", "❯ during compaction"], ["mark", "afterAltUp"],
+    ["detach"],
   ], KEEP_NO_RECENT);
   assert.match(marks.queuedDuringCompaction, /Follow-up: during compaction/);
   const afterAltUp = marks.afterAltUp.slice(marks.queuedDuringCompaction.length);
@@ -146,12 +147,11 @@ test("Alt+Up restores an image queued during compaction, not just the text", (t)
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
   const { marks } = runApp(t, [fixture("faux-slow-compact.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 1500],
-    ["type", "/compact"], ["key", "enter"], ["wait", 400],
-    ["key", "ctrl+v"], ["wait", 300], // pastes [Image #1] into the draft
-    ["key", "enter"], ["wait", 300], ["mark", "queuedDuringCompaction"], // queued into compactionQueue
-    ["key", "alt+up"], ["wait", 300], ["mark", "afterAltUp"],
-    ["key", "ctrl+d"],
+    ["waitReady"], ...firstTurn, ...startCompact,
+    ["key", "ctrl+v"], ["waitFor", "[Image #1]"], // pastes [Image #1] into the draft
+    ["key", "enter"], ["waitFor", "Queued message for after compaction."], ["mark", "queuedDuringCompaction"], // queued into compactionQueue
+    ["key", "alt+up"], ["waitFor", { regex: "❯ .*\\[Image #\\d+\\]" }], ["mark", "afterAltUp"],
+    ["detach"],
   ], { ...KEEP_NO_RECENT, env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.queuedDuringCompaction, /Queued message for after compaction\./);
   const afterAltUp = marks.afterAltUp.slice(marks.queuedDuringCompaction.length);
@@ -167,12 +167,11 @@ test("Alt+Up restores an image queued during compaction, not just the text", (t)
 // together with the abort.
 test("Esc during compaction cancels it and still sends the message queued during it", (t) => {
   const { marks, text: out } = runApp(t, [fixture("faux-slow-compact.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 1500],
-    ["type", "/compact"], ["key", "enter"], ["wait", 400],
+    ["waitReady"], ...firstTurn, ...startCompact,
     ["type", "queued-msg"], ["key", "enter"],
-    ["wait", 300], ["mark", "queuedDuringCompaction"],
+    ["waitFor", "Follow-up: queued-msg"], ["mark", "queuedDuringCompaction"],
     ["key", "esc"],
-    ["wait", 2000], ["mark", "afterEsc"],
+    ["waitFor", "AFTER-COMPACT-REPLY"], ["mark", "afterEsc"],
     ["key", "ctrl+d"],
   ], KEEP_NO_RECENT);
   assert.match(marks.queuedDuringCompaction, /Follow-up: queued-msg/);
@@ -197,13 +196,12 @@ test("/new during compaction drops the queued message instead of flushing it int
   const logPath = join(logDir, "log.txt");
   t.after(() => rmSync(logDir, { recursive: true, force: true }));
   const { marks, text: out } = runApp(t, [fixture("faux-compact-marker.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 1500],
-    ["type", "/compact"], ["key", "enter"], ["wait", 400],
+    ["waitReady"], ...firstTurn, ...startCompact,
     ["type", "queued-msg"], ["key", "enter"],
-    ["wait", 300], ["mark", "queuedDuringCompaction"],
+    ["waitFor", "Follow-up: queued-msg"], ["mark", "queuedDuringCompaction"],
     ["type", "/new"], ["key", "enter"],
-    ["wait", 1000], ["mark", "afterNew"],
-    ["type", "still alive"], ["key", "enter"], ["wait", 1500], ["mark", "afterStillAlive"],
+    ["waitFor", "Welcome back"], ["mark", "afterNew"],
+    ["type", "still alive"], ["key", "enter"], ["waitFor", "BEFORE-COMPACT"], ["mark", "afterStillAlive"],
     ["key", "ctrl+d"],
   ], { ...KEEP_NO_RECENT, env: { MMP_TEST_COMPACT_LOG: logPath } });
   assert.match(marks.queuedDuringCompaction, /Follow-up: queued-msg/);
@@ -257,15 +255,14 @@ test("/import during compaction does not send the queued message into the outgoi
       MMP_TUI_HARNESS: JSON.stringify({
         args: ["--no-project"],
         steps: [
-          ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 1500],
-          ["type", "/compact"], ["key", "enter"], ["wait", 400],
+          ["waitReady"], ...firstTurn, ...startCompact,
           ["type", "queued-msg"], ["key", "enter"],
-          ["wait", 300], ["mark", "queuedDuringCompaction"],
-          ["type", `/import ${sessionFile}`], ["key", "enter"], ["wait", 400],
+          ["waitFor", "Follow-up: queued-msg"], ["mark", "queuedDuringCompaction"],
+          ["type", `/import ${sessionFile}`], ["key", "enter"], ["waitFor", "Replace current session with"],
           // The confirm dialog opens with "Yes" highlighted; Enter accepts it.
           ["key", "enter"],
-          ["wait", 1000], ["mark", "afterImport"],
-          ["type", "still alive"], ["key", "enter"], ["wait", 1500], ["mark", "afterStillAlive"],
+          ["waitFor", "Session imported from:"], ["mark", "afterImport"],
+          ["type", "still alive"], ["key", "enter"], ["waitFor", "BEFORE-COMPACT"], ["mark", "afterStillAlive"],
           ["key", "ctrl+d"],
         ],
       }),

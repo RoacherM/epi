@@ -116,11 +116,11 @@ test("the switchSession extension action (same one /resume uses) refuses a diffe
   assert.ok(bSession && subSession, JSON.stringify(files));
 
   const { marks, text: out } = runHarness(t, f.projectA, f.env, ["--approve"], [
-    ["wait", 2500],
-    ["type", "hello A"], ["key", "enter"], ["wait", 800], ["mark", "aReply"],
-    ["type", `/switchto ${bSession.path}`], ["key", "enter"], ["wait", 500], ["mark", "afterCrossProject"],
-    ["type", "still A?"], ["key", "enter"], ["wait", 800], ["mark", "stillA"],
-    ["type", `/switchto ${subSession.path}`], ["key", "enter"], ["wait", 800], ["mark", "afterSameProject"],
+    ["waitReady"],
+    ["type", "hello A"], ["key", "enter"], ["waitFor", "ECHO:hello A"], ["mark", "aReply"],
+    ["type", `/switchto ${bSession.path}`], ["key", "enter"], ["waitFor", "SWITCH-CANCELLED"], ["mark", "afterCrossProject"],
+    ["type", "still A?"], ["key", "enter"], ["waitFor", "ECHO:still A?"], ["mark", "stillA"],
+    ["type", `/switchto ${subSession.path}`], ["key", "enter"], ["waitFor", "ECHO:seed-sub"], ["mark", "afterSameProject"],
     ["key", "ctrl+d"],
   // A taller terminal than the 40-row default: with M4's per-turn "Worked for Ns" footer, this
   // transcript (2 turns plus the refusal notice) is now tall enough that typing the second
@@ -166,15 +166,15 @@ test("/resume itself refuses a session picked from another project, and leaves t
   seedSession(f.env, f.projectB);
 
   const { marks, text: out } = runHarness(t, f.projectA, f.env, ["--approve"], [
-    ["wait", 2500],
-    ["type", "hello A"], ["key", "enter"], ["wait", 800], ["mark", "aReply"],
+    ["waitReady"],
+    ["type", "hello A"], ["key", "enter"], ["waitFor", "ECHO:hello A"], ["mark", "aReply"],
     // "/resume" opens on "Current Folder" (only this session); Tab switches to "All" projects,
     // where B's seeded session also appears. "down" moves off the current (highlighted) entry.
-    ["type", "/resume"], ["key", "enter"], ["wait", 500],
-    ["key", "tab"], ["wait", 500],
+    ["type", "/resume"], ["key", "enter"], ["waitFor", "Resume Session (Current Folder)"],
+    ["key", "tab"], ["waitFor", "Resume Session (All)"], ["waitFor", "projectB"],
     ["key", "down"], ["wait", 200],
-    ["key", "enter"], ["wait", 800], ["mark", "afterResumeAttempt"],
-    ["type", "still A?"], ["key", "enter"], ["wait", 800], ["mark", "stillA"],
+    ["key", "enter"], ["waitFor", { regex: "cd .*mmp --session" }], ["mark", "afterResumeAttempt"],
+    ["type", "still A?"], ["key", "enter"], ["waitFor", "ECHO:still A?"], ["mark", "stillA"],
     ["key", "ctrl+d"],
   ]);
 
@@ -218,9 +218,9 @@ test("--no-project still allows resuming a session from the launch folder itself
   assert.ok(aSession, "no A session seeded");
 
   const { marks, text: out } = runHarness(t, f.projectA, f.env, ["--no-project"], [
-    ["wait", 2500],
-    ["type", "hello A"], ["key", "enter"], ["wait", 800], ["mark", "aReply"],
-    ["type", `/switchto ${aSession.path}`], ["key", "enter"], ["wait", 800], ["mark", "afterSwitch"],
+    ["waitReady"],
+    ["type", "hello A"], ["key", "enter"], ["waitFor", "ECHO:hello A"], ["mark", "aReply"],
+    ["type", `/switchto ${aSession.path}`], ["key", "enter"], ["waitFor", "ECHO:hi"], ["mark", "afterSwitch"],
     ["key", "ctrl+d"],
   ]);
   assert.match(marks.aReply, /ECHO:hello A/);

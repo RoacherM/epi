@@ -41,14 +41,14 @@ function runApp(t, extensions, steps) {
 
 test("Esc puts a queued follow-up back in the editor and aborts, instead of sending it later unasked", (t) => {
   const { marks, text: out } = runApp(t, [fixture("faux-queue.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"],
-    ["wait", 1000], ["type", "later"], ["key", "enter"],
-    ["wait", 300], ["mark", "queued"],
-    ["key", "esc"], ["wait", 300], ["mark", "afterEsc"],
-    // Long enough for the (now aborted) turn's model call to have finished if it were still
-    // running, and for a stray delivery of "later" to show up as SECOND-REPLY if the bug is present.
-    ["wait", 4000], ["mark", "settled"],
-    ["key", "ctrl+d"],
+    ["waitReady"], ["type", "go"], ["key", "enter"],
+    ["waitFor", "FIRST-START"], ["type", "later"], ["key", "enter"],
+    ["waitFor", "Follow-up: later"], ["mark", "queued"],
+    ["key", "esc"], ["waitFor", { regex: "❯ later\\s" }], ["mark", "afterEsc"],
+    // A stray delivery of "later" would start the second turn right as the aborted one ends, and
+    // its one-word SECOND-REPLY finishes well inside this window.
+    ["wait", 1500], ["mark", "settled"],
+    ["detach"], // Ctrl+D would not quit: "later" is back in the editor
   ]);
   assert.match(marks.queued, /Follow-up: later/);
   const afterAbort = marks.afterEsc.slice(marks.queued.length);
@@ -62,12 +62,12 @@ test("Esc puts a queued follow-up back in the editor and aborts, instead of send
 
 test("Ctrl+C on a running turn also restores the queue instead of dropping it", (t) => {
   const { marks, text: out } = runApp(t, [fixture("faux-queue.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"],
-    ["wait", 1000], ["type", "later"], ["key", "enter"],
-    ["wait", 300], ["mark", "queued"],
-    ["key", "ctrl+c"], ["wait", 300], ["mark", "afterCtrlC"],
-    ["wait", 4000],
-    ["key", "ctrl+d"],
+    ["waitReady"], ["type", "go"], ["key", "enter"],
+    ["waitFor", "FIRST-START"], ["type", "later"], ["key", "enter"],
+    ["waitFor", "Follow-up: later"], ["mark", "queued"],
+    ["key", "ctrl+c"], ["waitFor", { regex: "❯ later\\s" }], ["mark", "afterCtrlC"],
+    ["wait", 1500], // same window as the Esc test above
+    ["detach"],
   ]);
   assert.match(marks.queued, /Follow-up: later/);
   const afterAbort = marks.afterCtrlC.slice(marks.queued.length);
@@ -84,12 +84,12 @@ test("Ctrl+C on a running turn also restores the queue instead of dropping it", 
 // abortHandler, and passes after.
 test("an extension's ctx.abort() restores the queue too, not just Esc/Ctrl+C", (t) => {
   const { marks, text: out } = runApp(t, [fixture("faux-queue.mjs"), fixture("abort-command-extension.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"],
-    ["wait", 1000], ["type", "later"], ["key", "enter"],
-    ["wait", 300], ["mark", "queued"],
+    ["waitReady"], ["type", "go"], ["key", "enter"],
+    ["waitFor", "FIRST-START"], ["type", "later"], ["key", "enter"],
+    ["waitFor", "Follow-up: later"], ["mark", "queued"],
     ["type", "/doabort"], ["key", "enter"],
-    ["wait", 600],
-    ["key", "ctrl+d"],
+    ["waitFor", { regex: "❯ later\\s" }], ["wait", 300],
+    ["detach"],
   ]);
   assert.match(marks.queued, /Follow-up: later/);
   // Typing "/doabort" itself re-renders the (still-queued) "Follow-up: later" line on every
@@ -98,7 +98,11 @@ test("an extension's ctx.abort() restores the queue too, not just Esc/Ctrl+C", (
   // now-stale frames either way). Ctrl+D only quits with an empty editor -- "later" ends up back in
   // it -- so, like the other tests in this file's sibling (tui-pi-args.test.mjs's initial-message
   // test), this run needs the timeout; there is nothing to assert about EXIT.
-  const settled = out.slice(-2000);
+  // The restore frame starts at the spinner redraw just before the final "❯ later"; nothing from
+  // that frame on may show the queue line again.
+  const restoredAt = out.lastIndexOf("❯ later");
+  assert.ok(restoredAt > 0, "the restored text never reached the editor");
+  const settled = out.slice(out.lastIndexOf("Responding", restoredAt));
   assert.match(settled, /❯ later\s/);
   assert.doesNotMatch(settled, /Follow-up:/);
   assert.doesNotMatch(out, /SECOND-REPLY/);

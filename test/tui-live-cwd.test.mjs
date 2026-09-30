@@ -51,7 +51,7 @@ test("header, /trust's cwd, and !pwd all agree after switching to a session in a
       MMP_TEST_SWITCH_SESSION_PATH: otherSessionFile,
       MMP_TUI_HARNESS: JSON.stringify({
         steps: [
-          ["wait", 2500], ["mark", "before"],
+          ["waitReady"], ["mark", "before"],
           ["type", "/gotoSubdir"], ["key", "enter"], ["wait", 800], ["mark", "afterSwitch"],
           ["type", "!pwd"], ["key", "enter"], ["wait", 600], ["mark", "afterPwd"],
           ["key", "ctrl+d"],

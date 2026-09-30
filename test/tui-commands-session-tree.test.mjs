@@ -29,7 +29,7 @@ function runApp(t, extensions, steps) {
 
 test("/tree navigates to an earlier branch point, replays the transcript, and a new message lands on the new branch", (t) => {
   const { text: out, marks } = runApp(t, [fixture("switchto-extension.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "first message"], ["key", "enter"], ["wait", 800], ["mark", "afterFirst"],
     ["type", "second message"], ["key", "enter"], ["wait", 800], ["mark", "afterSecond"],
     ["type", "/tree"], ["key", "enter"], ["wait", 500], ["mark", "treeOpen"],
@@ -59,7 +59,7 @@ test("/tree navigates to an earlier branch point, replays the transcript, and a 
 
 test("/fork forks from an earlier user message, refills the editor, and /resume can switch back to the original session", (t) => {
   const { text: out, marks } = runApp(t, [fixture("switchto-extension.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "first message"], ["key", "enter"], ["wait", 800], ["mark", "afterFirst"],
     ["type", "second message"], ["key", "enter"], ["wait", 800], ["mark", "afterSecond"],
     ["type", "/fork"], ["key", "enter"], ["wait", 500], ["mark", "forkOpen"],
@@ -87,7 +87,7 @@ test("/fork forks from an earlier user message, refills the editor, and /resume 
 
 test("/clone duplicates the session at the current point, leaving the original transcript intact", (t) => {
   const { text: out, marks } = runApp(t, [fixture("switchto-extension.mjs")], [
-    ["wait", 2500],
+    ["waitReady"],
     ["type", "hi"], ["key", "enter"], ["wait", 800], ["mark", "afterReply"],
     ["type", "/clone"], ["key", "enter"], ["wait", 500], ["mark", "afterClone"],
     ["key", "ctrl+d"],

@@ -78,7 +78,7 @@ function runAppMarks(t, extensions, steps) {
 // re-collapsed"; marks (cumulative output at a point in time) and their deltas can.
 test("real app: three reads in one turn group into ◈ Read 3 files, Ctrl+O expands and re-collapses", (t) => {
   const parsed = runAppMarks(t, [fixture("faux-read-group.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 2500],
+    ["waitReady"], ["type", "go"], ["key", "enter"], ["wait", 2500],
     ["mark", "settled"],
     ["key", "ctrl+o"], ["wait", 300], ["mark", "expanded"],
     ["key", "ctrl+o"], ["wait", 300], ["mark", "collapsedAgain"],
@@ -101,7 +101,7 @@ test("real app: three reads in one turn group into ◈ Read 3 files, Ctrl+O expa
 
 test("real app: clicking the group line unfolds to collapsed blocks, not full output", (t) => {
   const parsed = runAppMarks(t, [fixture("faux-read-group.mjs")], [
-    ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 2500],
+    ["waitReady"], ["type", "go"], ["key", "enter"], ["wait", 2500],
     ["mark", "settled"],
     // Screen row of the group line under the header/chrome, at the default 120x40 harness size.
     ["mouse", { x: 6, y: 6 }], ["wait", 300], ["mark", "clicked"],

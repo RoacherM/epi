@@ -46,10 +46,10 @@ test("typing and pressing Enter immediately, before startup finishes, keeps the 
   const { marks, text: out } = runApp(t, [fixture("faux-two-models.mjs"), fixture("slow-session-start-extension.mjs")], [
     // No initial wait: types the moment the harness hands input to the (not yet started up) app.
     ["type", "hi"], ["key", "enter"],
-    ["wait", 200], ["mark", "duringStartup"],
-    // The extension's session_start artificially runs for 300ms; well past it, bind() has resolved.
-    ["wait", 600], ["mark", "afterStartup"],
-    ["key", "ctrl+d"],
+    ["waitFor", "Startup is still in progress", { all: true }], ["mark", "duringStartup"],
+    // The extension's session_start artificially runs for 300ms; once ready, bind() has resolved.
+    ["waitReady"], ["mark", "afterStartup"],
+    ["detach"], // Ctrl+D would not quit: "hi" is still in the editor
   ]);
   assert.match(marks.duringStartup, /Startup is still in progress/);
   // The text was put back, not dropped: it is still there, and can still be seen at the end.
@@ -63,9 +63,9 @@ test("typing and pressing Enter immediately, before startup finishes, keeps the 
 test("resubmitting after startup finishes sends the kept text", (t) => {
   const { text: out } = runApp(t, [fixture("faux-two-models.mjs"), fixture("slow-session-start-extension.mjs")], [
     ["type", "hi"], ["key", "enter"],
-    ["wait", 500],
+    ["waitReady"],
     ["key", "enter"],
-    ["wait", 1500],
+    ["waitFor", "PICKED=model-a"],
     ["key", "ctrl+d"],
   ]);
   assert.match(out, /PICKED=model-a/);
