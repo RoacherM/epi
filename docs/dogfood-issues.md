@@ -21,7 +21,7 @@
 | D15 | P0 | 上下文超长的自动恢复失败后，界面永远停在 "Compacting…"（实测 76 分钟），Esc 也停不下来。原因：Pi 在回合结束后的收尾阶段做恢复压缩，`compaction_end` 到达时 `isStreaming` 仍为 true，MMP 不清状态；之后的 `agent_settled` 也不清 | D11 worker 会话（magpie，约 176K token 时报 "Prompt is too long"） | 已修（合并 D15；另外修了两个同根的变体：回合结束后压缩成功也会卡住，回合中途压缩结束后状态不更新） |
 | D16 | P1 | magpie 的上下文上限配错：MMP 的 magpie 扩展照抄了 magpie 给 Pi 的 100 万，实际约 20 万，所以 Pi 从不自动压缩，直接撞上 "Prompt is too long"；恢复时的摘要请求又被 magpie 以 `content_filter` 拒绝 | 长任务里看上下文用量 | 已修（`~/.mmp/extensions/magpie/index.mjs` 改为 200000）；`content_filter` 的原因待查 |
 | D17 | P3 | D15 复审发现：自动重试的等待期间按 Esc，曾是另一个状态卡住的变体（已被 D15 的修复覆盖），但没有测试；D15 新增的两处清理（回合结束时、重试结束时）也没有单独的测试 | D15 的 review-1.md 第 1、2 条 | 待补测试 |
-| D18 | P2 | 用退格删掉一个图片标签后立刻按回车，弹出的是路径补全（如 `see foo home/`），消息没有发出去；先随便打一个字再回车就正常（D11 worker 发现，D11 之前就存在） | `see foo `，Ctrl+V，退格，回车 | 待修 |
+| D18 | P2 | 用退格删掉一个图片标签后立刻按回车，弹出的是路径补全（如 `see foo home/`），消息没有发出去；先随便打一个字再回车就正常（D11 worker 发现，D11 之前就存在） | `see foo `，Ctrl+V，退格，回车 | 已修（合并 D18：删标签时残留的 `#` 补全请求会被取消；Ctrl+W、Alt+退格同样修了） |
 | D19 | P2 | 完整测试又变回约 5 分钟：D11 新增的 `test/tui-image-numbering.test.mjs` 里二十多个测试每个 17–24 秒，同一文件内串行执行，整个文件就要几分钟，抵消了 D2 的提速 | `node --test --test-reporter=tap test/*.test.mjs`，按耗时排序 | 待修：拆成多个文件，或加快假模型的输出速度 |
 | D20 | P3 | D11 复审提出的小问题：同一条草稿里出现两次同一个标签会把图片发两次；`/fork` 一条没有标签的图片消息会丢图（D11 之前就有）；`/tree` 恢复图片没有测试 | D11 的 review-3.md | 待排期 |
 | D21 | P2 | `/settings` 还没做（tui-design 第 7 节 P2 唯一剩下的命令）。Pi 的设置项里有些只对 Pi 自己的界面有意义，要先挑出适用于 MMP 的 | 输入 `/settings` | 待做（从旧待办迁来） |
@@ -30,3 +30,5 @@
 | D24 | P3 | 思考结束时没有闪烁提示（grok 有；M4 Fable 审查） | 看一次思考结束 | 待修（从旧待办迁来） |
 | D25 | P3 | 在 Herdr 里退出 mmp 后，pane 里留着退出前的最后一帧画面（Ghostty 里是否也有未确认） | Herdr pane 里启动再 Ctrl+D | 待查（从旧待办迁来；可能是 Herdr 对备用屏幕的处理） |
 | D26 | P3 | `mmp:hooks` 的 `user_prompt` 钩子拦下一轮时，界面上可能看不到拦截原因（旧待办的简记，细节没留下；钩子启动失败的情况已按"失败要可见"修过） | 写一个返回 block 的 `user_prompt` 钩子，发一句话 | 待复现 |
+| D27 | P3 | 用退格删掉图片标签后按 Ctrl+-（撤销），标签一个字符一个字符地回来（约 10 次才恢复完整）：删标签时的每次模拟退格各是 Pi 的一个撤销快照（D18 worker 发现，D18 之前就有） | `see foo `，Ctrl+V，退格，Ctrl+- | 待修 |
+| D28 | P3 | kitty 协议下 Shift+退格（`\x1b[127;2u`）只删掉标签的 `]`，不会整个删掉：`shift+backspace` 不在 `DELETE_ACTIONS` 里（D18 worker 发现，初审未复现，真实终端未确认） | Ghostty 里贴图后按 Shift+退格 | 待确认 |
