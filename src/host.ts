@@ -7,6 +7,7 @@ import {
   SettingsManager,
   VERSION as PI_VERSION,
   main as piMain,
+  parseArgs,
   type ExtensionFlag,
 } from "@earendil-works/pi-coding-agent";
 
@@ -377,8 +378,11 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
   }
   rewritePiStderr();
   // Before piMain: Pi's output guard binds process.stdout.write when it takes stdout over (D54).
-  const closedStdout = guardClosedStdout();
-  await piMain(prepared.piArgs, { extensionFactories: [...extensionFactories, closedStdout] });
+  // Print/json only: an rpc client that stops reading is left to Pi as before, since the guard
+  // would keep the process running with its prompts dropped and nothing on stderr.
+  const piExtensions =
+    parseArgs([...prepared.piArgs]).mode === "rpc" ? extensionFactories : [...extensionFactories, guardClosedStdout()];
+  await piMain(prepared.piArgs, { extensionFactories: piExtensions });
   // Deviation from Pi (dogfood D50): after print/json mode, Pi's main.js only sets process.exitCode
   // and returns, so a loaded extension holding a timer or handle keeps the process alive, on success
   // and on failure. Every other piMain path (rpc, --export, errors) already calls process.exit and

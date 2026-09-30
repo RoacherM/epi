@@ -75,7 +75,36 @@ test("--mode json into a reader that closes early stops the run: the next prompt
 test("control: with a reader that reads everything, both prompts run and shutdown finishes", async (t) => {
   const result = await run(t, ["--mode", "json", "-p", "first", "second"], "all");
   assertQuietEnd(result);
-  assert.equal(result.second, true);
+  assert.equal(result.second, true, "the second prompt never reached the model");
+  // The long reply makes Pi auto-compact after the first turn; the mark must not come from that.
+  const single = await run(t, ["--mode", "json", "-p", "first"], "all");
+  assertQuietEnd(single);
+  assert.equal(single.second, false, "the second mark was written without a second prompt");
+});
+
+// rpc is left to Pi (src/host.ts installs the guard for print/json only): an rpc client that stops
+// reading still gets Pi's own behaviour, Node's EPIPE crash with exit 1, not a process that keeps
+// running and silently drops its prompts.
+test("--mode rpc with a closed stdout behaves as Pi does: EPIPE on stderr, exit 1, no prompt dropped silently", async (t) => {
+  const { root, env, marks } = makeHome(t);
+  const child = spawn(process.execPath, [cli, "--no-project", "--no-session", "--provider", "mmp-faux", "--model", "long", "--mode", "rpc"], {
+    cwd: root,
+    env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  t.after(() => child.kill("SIGKILL"));
+  let stderr = "";
+  child.stderr.on("data", (data) => { stderr += data; });
+  child.stdin.on("error", () => {});
+  child.stdout.destroy();
+  const exited = new Promise((resolve) => child.on("exit", (code, signal) => resolve(signal ?? code)));
+  child.stdin.write(`${JSON.stringify({ id: "1", type: "prompt", message: "first" })}\n`);
+  let timer;
+  const status = await Promise.race([exited, new Promise((resolve) => { timer = setTimeout(() => resolve("still running"), 20_000); })]);
+  clearTimeout(timer);
+  assert.equal(status, 1, stderr);
+  assert.match(stderr, /Error: write EPIPE/);
+  assert.equal(existsSync(marks.second), false);
 });
 
 // stdout and stderr on the same pipe: MMP's own final stderr flush used to raise a second EPIPE.
