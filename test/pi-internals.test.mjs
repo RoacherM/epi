@@ -164,12 +164,9 @@ const registry = [
     async check() {
       const pasteChipsPath = join(root, "src", "tui", "paste-chips.ts");
       const text = readFileSync(pasteChipsPath, "utf8");
-      const extractIds = (declaration) => {
-        const match = new RegExp(`const ${declaration} = \\[([^\\]]*)\\]`).exec(text);
-        assert.ok(match, `${pasteChipsPath} no longer declares ${declaration}`);
-        return [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-      };
-      const ids = [...extractIds("HISTORY_ACTIONS"), ...extractIds("DELETE_ACTIONS")];
+      // Every keybinding id the file names, not just the declared lists (e.g. "tui.input.submit").
+      const ids = [...new Set([...text.matchAll(/"((?:tui|app)\.[A-Za-z.]+)"/g)].map((m) => m[1]))];
+      assert.ok(ids.includes("tui.input.submit"), `${pasteChipsPath}: no keybinding ids found; the extraction is broken`);
       const { KEYBINDINGS } = await importDeep("core", "keybindings.js");
       const missing = ids.filter((id) => !(id in KEYBINDINGS));
       assert.deepEqual(missing, [], `paste-chips.ts action ids no longer in Pi's KEYBINDINGS catalog: ${missing.join(", ")}`);
