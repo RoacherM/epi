@@ -16,6 +16,8 @@ import {
 } from "../dist/tui/tools/mutating.js";
 
 const theme = createMmpTheme("dark");
+// The theme picks truecolor or 256-color codes from the terminal, so compare against its own codes.
+const fg = (color) => theme.getFgAnsi(color);
 
 function assertWidths(component, widths = [40, 80, 120]) {
   for (const width of widths) {
@@ -157,7 +159,7 @@ test("bash: call line formats $ <command> with bashMode and first line only", ()
   assert.match(lines[0], /^\$ /);
   assert.ok(lines[0].includes("npm test -- --watch"));
   assert.ok(!lines[0].includes("second line"));
-  assert.ok(lines[0].includes("\x1b[38;2;224;175;104m"));
+  assert.ok(lines[0].includes(fg("bashMode")));
 });
 
 test("bash: collapsed result shows exit status only", () => {
@@ -170,7 +172,7 @@ test("bash: collapsed result shows exit status only", () => {
   const lines0 = res0.render(80);
   assert.equal(lines0.length, 1);
   assert.ok(lines0[0].includes("exit 0"));
-  assert.ok(lines0[0].includes("\x1b[38;2;108;108;108m"));
+  assert.ok(lines0[0].includes(fg("muted")));
   assert.ok(!lines0[0].includes("stdout"));
 
   const resFail = bashRenderers.renderResult(
@@ -182,7 +184,7 @@ test("bash: collapsed result shows exit status only", () => {
   const linesFail = resFail.render(80);
   assert.equal(linesFail.length, 1);
   assert.ok(linesFail[0].includes("exit 127"));
-  assert.ok(linesFail[0].includes("\x1b[38;2;247;118;142m"));
+  assert.ok(linesFail[0].includes(fg("error")));
   assert.ok(!linesFail[0].includes("some error"));
 });
 
@@ -300,8 +302,8 @@ test("edit: collapsed result shows summary +N −M without +/- symbol columns", 
   assert.equal(lines.length, 1);
   assert.ok(lines[0].includes("+12"));
   assert.ok(lines[0].includes("−3"));
-  assert.ok(lines[0].includes("\x1b[38;2;158;206;106m"));
-  assert.ok(lines[0].includes("\x1b[38;2;247;118;142m"));
+  assert.ok(lines[0].includes(fg("toolDiffAdded")));
+  assert.ok(lines[0].includes(fg("toolDiffRemoved")));
 });
 
 test("edit: expanded result has no +/- column, line-number gutter, 3 context lines, and collapsed runs", () => {
@@ -342,9 +344,9 @@ test("edit: expanded result has no +/- column, line-number gutter, 3 context lin
   assert.ok(lines[8].includes(" 8 line 8"));
   assert.ok(lines[9].includes("… 2 unchanged lines"));
 
-  assert.ok(lines[4].includes("\x1b[38;2;247;118;142m"));
-  assert.ok(lines[5].includes("\x1b[38;2;158;206;106m"));
-  assert.ok(lines[1].includes("\x1b[38;2;108;108;108m"));
+  assert.ok(lines[4].includes(fg("toolDiffRemoved")));
+  assert.ok(lines[5].includes(fg("toolDiffAdded")));
+  assert.ok(lines[1].includes(fg("toolDiffContext")));
 });
 
 test("write: call line shows verb and cwd-relative path", () => {
@@ -371,7 +373,7 @@ test("write: new file collapsed shows line count, expanded shows first 10 lines"
   const linesCollapsed = resCollapsed.render(80);
   assert.equal(linesCollapsed.length, 1);
   assert.ok(linesCollapsed[0].includes("25 lines"));
-  assert.ok(linesCollapsed[0].includes("\x1b[38;2;108;108;108m"));
+  assert.ok(linesCollapsed[0].includes(fg("muted")));
 
   const resExpanded = writeRenderers.renderResult(
     { content: [{ type: "text", text: "Successfully wrote to new-file.ts" }] },
@@ -383,7 +385,7 @@ test("write: new file collapsed shows line count, expanded shows first 10 lines"
   assert.equal(linesExpanded.length, 10);
   assert.ok(linesExpanded[0].includes(" 1 export const val1 = 1;"));
   assert.ok(linesExpanded[9].includes("10 export const val10 = 10;"));
-  assert.ok(linesExpanded[0].includes("\x1b[38;2;158;206;106m"));
+  assert.ok(linesExpanded[0].includes(fg("toolDiffAdded")));
 });
 
 test("real tools execution against temporary files fed to mutating renderers", async (t) => {
