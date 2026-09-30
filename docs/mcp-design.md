@@ -1,6 +1,6 @@
 # MMP 的 MCP 设计（Pi 0.99 原生 MCP）
 
-状态：2026-09-30 草案，等用户确认。方向已定（决策 MCP1）；本文细化接法，和 MCP1 不同的地方见决策 MCP2。实施随 Pi 0.99 升级一起做（决策 P1）。
+状态：2026-09-30 用户确认。方向已定（决策 MCP1）；本文细化接法，和 MCP1 不同的地方见决策 MCP2。实施随 Pi 0.99 升级一起做（决策 P1）。
 
 Pi 的引用都指 `@earendil-works/pi-coding-agent` 0.99.1 的 `dist/`，主控逐条读过源码。agy 的调研报告（scratchpad `agy/pi099-mcp/pi-0.99-native-mcp.md`）引用基本属实，但漏了 `createMcpExtension` 的 `loadConfig` 选项（它推荐走 `registerMcpServer`），本文以源码为准。
 

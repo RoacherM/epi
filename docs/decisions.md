@@ -34,12 +34,12 @@
 | 2026-09-30 | P1 | Pi 内核升级到 0.99（本地试跑是从 0.87.1 升到 0.99.1）；门禁失败的地方全部修好再合并 | 用户决定：0.99 内置 MCP 是优势 | 停在 0.87 | 已定 | pi-upgrade-design 第 9 节 |
 | 2026-09-30 | MCP1 | 改用 Pi 0.99 的原生 MCP，去掉 pi-mcp-adapter；配置仍是 `~/.mmp/mcp.json` 和被信任项目的 `.mmp/mcp.json`，由 MMP 用 `pi.registerMcpServer()` 交给 Pi，不读 Pi 自己的 `mcp.json`；管理功能对齐 Pi：`mmp mcp …` 子命令和界面里的 `/mcp` | 用户同意推荐方案 | 继续用 pi-mcp-adapter；直接读 Pi 的 mcp.json | 已定（具体接法等调研结果再细化） | — |
 | 2026-09-30 | S1 | skills 自动发现只读两处：全局 `~/.agents/skills`，和 MMP 自己的 `~/.mmp/skills` 及被信任项目的 `.mmp/skills`；Pi 路径下的一律不读（`~/.pi/agent/skills`、`~/.mmp/pi/skills`、项目 `.pi/skills`）；Manifest 里显式声明的 skills 照旧加载。项目各级的 `.agents/skills` 暂不读 | 用户决定 | 只认 Manifest；照搬 Pi 的全部发现路径 | 已定 | — |
+| 2026-09-30 | MCP2 | MCP 的具体接法（细化 MCP1）：用 `createMcpExtension` 的 `loadConfig` 选项交配置，不用 `registerMcpServer`（`/mcp` 里的启用/停用、曝光方式才能写回 MMP 的 `mcp.json`）；配置格式改成 Pi 的（不再支持 SSE、socket 和 pi-mcp-adapter 独有字段）；默认曝光沿用 Pi 的 `codemode`；仍由 Manifest 的 `mmp:mcp` 开关；`/mcp` 没有服务时的提示由 MMP 改写 | 用户确认（"mcp/skills 的改造你的意思是对的"） | `registerMcpServer` 交配置；保留 pi-mcp-adapter 的格式 | 已定 | [mcp-design.md](mcp-design.md) |
 
 ## 待定
 
 | 编号 | 问题 | 我的推荐 | 依据 |
 |---|---|---|---|
-| MCP2 | MCP 的具体接法（细化 MCP1）：用 `createMcpExtension` 的 `loadConfig` 选项交配置，不用 `registerMcpServer`（`/mcp` 里的启用/停用、曝光方式才能写回 MMP 的 `mcp.json`）；配置格式改成 Pi 的（不再支持 SSE、socket 和 pi-mcp-adapter 独有字段）；默认曝光沿用 Pi 的 `codemode`；仍由 Manifest 的 `mmp:mcp` 开关；`/mcp` 没有服务时的提示由 MMP 改写 | 按 [mcp-design.md](mcp-design.md) 推进 | [mcp-design.md](mcp-design.md) |
 | — | 配色里标"我定"的几个颜色 | 看截图时确认 | [tui-theme.md](tui-theme.md) |
 | — | 重跑 benchmark 基线和真实模型冒烟（会花钱） | Pi 0.87 改了 system prompt 格式，旧基线不能直接比，建议重跑 | DEVELOPMENT.md 第 20 节 |
 
