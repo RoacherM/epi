@@ -430,3 +430,33 @@ test("an extension cancelling a post-run overflow compaction leaves the footer a
   assert.match(afterCancel, /Worked for \d/);
   assert.doesNotMatch(afterCancel, /Stopped after/);
 });
+
+// Dogfood D37: /compact runs at once even mid-run, and session.compact() aborts the run first, so
+// typing it during a post-run overflow compaction is the user stopping the run.
+test("/compact during a post-run overflow compaction reads Stopped after", (t) => {
+  const { marks } = runApp(t, [fixture("faux-overflow.mjs")], [
+    ...overflowTurn,
+    ["type", "/compact"], ["key", "enter"],
+    ["waitFor", { regex: "Auto-compaction cancelled[\\s\\S]*(Worked for|Stopped after)" }],
+    ["mark", "settled"],
+    ["key", "ctrl+d"],
+  ], KEEP_NO_RECENT);
+  const afterCancel = marks.settled.slice(marks.settled.lastIndexOf("Auto-compaction cancelled"));
+  assert.match(afterCancel, /Stopped after \d/);
+  assert.doesNotMatch(afterCancel, /Worked for/);
+});
+
+// Dogfood D37: an extension's ctx.abort() from its own agent_settled handler runs after the run is
+// over but before the footer is drawn. Nothing was stopped, so the footer stays "Worked for".
+test("an extension calling ctx.abort() from agent_settled leaves the footer at Worked for", (t) => {
+  const { marks } = runApp(t, [fixture("faux-overflow.mjs"), fixture("abort-on-settled-extension.mjs")], [
+    ["waitReady"],
+    ["type", "go"], ["key", "enter"],
+    ["waitFor", { regex: "BEFORE-OVERFLOW[\\s\\S]*(Worked for|Stopped after) \\d" }],
+    ["mark", "settled"],
+    ["key", "ctrl+d"],
+  ], KEEP_NO_RECENT);
+  const afterReply = marks.settled.slice(marks.settled.lastIndexOf("BEFORE-OVERFLOW"));
+  assert.match(afterReply, /Worked for \d/);
+  assert.doesNotMatch(afterReply, /Stopped after/);
+});

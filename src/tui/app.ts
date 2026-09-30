@@ -640,10 +640,12 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       },
       shutdownHandler: () => void exit(0),
       // Pi's own abortHandler (interactive-mode.js ~1437-1439): an extension calling ctx.abort()
-      // must not drop whatever is queued, and must abort even when nothing was queued.
+      // must not drop whatever is queued, and must abort even when nothing was queued. Only a
+      // running prompt is marked stopped: from an extension's agent_settled handler the run is
+      // already over, though the footer isn't drawn yet (dogfood D37).
       abortHandler: () => {
         restoreQueuedMessagesToEditor();
-        transcript.markStopped();
+        if (session.isStreaming) transcript.markStopped();
         void session.abort();
       },
       onError: (error) => transcript.notice(`Extension error (${error.extensionPath}, ${error.event}): ${error.error}`, "error"),

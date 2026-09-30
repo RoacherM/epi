@@ -68,8 +68,10 @@ export async function confirmMissingSessionCwd(host: CommandHost, issue: Missing
 
 /** Pi's handleCompactCommand ignores the throw: compact() already emitted a `compaction_end`
  * event with the failure reason, which transcript.ts turns into a notice. Pi does not refuse
- * this command while a turn is running either; `session.compact` aborts it first. */
+ * this command while a turn is running either; `session.compact` aborts it first, so a running
+ * prompt (including its post-run overflow compaction) was stopped by the user (dogfood D37). */
 export async function runCompact(host: CommandHost, customInstructions: string): Promise<void> {
+  if (host.session().isStreaming) host.markRunStopped();
   const trimmed = customInstructions.trim();
   try {
     await host.session().compact(trimmed === "" ? undefined : trimmed);

@@ -21,7 +21,8 @@ export declare function missingSessionCwdIssue(error: unknown): MissingSessionCw
 export declare function confirmMissingSessionCwd(host: CommandHost, issue: MissingSessionCwdIssue): Promise<string | undefined>;
 /** Pi's handleCompactCommand ignores the throw: compact() already emitted a `compaction_end`
  * event with the failure reason, which transcript.ts turns into a notice. Pi does not refuse
- * this command while a turn is running either; `session.compact` aborts it first. */
+ * this command while a turn is running either; `session.compact` aborts it first, so a running
+ * prompt (including its post-run overflow compaction) was stopped by the user (dogfood D37). */
 export declare function runCompact(host: CommandHost, customInstructions: string): Promise<void>;
 /** What the session selector actually did: `"resumed"` picked a session (whether or not it went on
  * to actually switch -- resumeSession reports its own refusals via a notice); `"cancelled"` is Esc,
