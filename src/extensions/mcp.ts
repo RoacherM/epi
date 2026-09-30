@@ -164,23 +164,21 @@ export function createMmpMcpExtension(source: McpConfigSource): InlineExtension 
       });
       await piFactory(wrappedPi as ExtensionAPI);
 
-      pi.on("session_start", (_event, ctx) => {
+      pi.on("session_start", () => {
         if (hasDuplicateMcpCommand(pi)) {
-          // Verified empirically (not just from source), across both modes MMP tests directly:
-          // - print (`-p`) mode: ctx.ui.notify is a no-op (modes/print-mode.js's bindExtensions call
-          //   passes no uiContext), so only a thrown error is visible there -- caught by Pi's own
-          //   per-handler try/catch (core/extensions/runner.js's emit()) and routed to onError,
-          //   which print mode wires to console.error.
-          // - MMP's own TUI (src/tui/app.ts): ctx.ui.notify *does* work (mapped straight to
-          //   transcript.notice, the same sink app.ts's onError uses) and renders a persistent
-          //   banner. ctx.shutdown() calls app.ts's shutdownHandler, `() => void exit(0)` --
-          //   deliberately NOT called here: calling it before the throw would race the transcript
-          //   render against process exit, and a running-but-visibly-warned session is a better
-          //   outcome than a session that may exit before anyone reads why.
-          // Neither channel alone covers every mode MMP runs Pi in (print, TUI, RPC, json, SDK), so
-          // both fire; this does not by itself change the exit code in print mode (documented in
-          // docs/mcp-design.md §4, not silently assumed).
-          ctx.ui.notify(DUPLICATE_MCP_COMMAND_MESSAGE, "error");
+          // Verified empirically (not just from source): throwing here is the one channel that
+          // posts exactly once in every mode MMP runs Pi in. Every mode's bindExtensions wires an
+          // onError, and Pi's own per-handler try/catch (core/extensions/runner.js's emit()) routes
+          // a thrown session_start error there -- print mode's onError does console.error (visible
+          // on stderr; print mode passes no uiContext, so ctx.ui.notify would be a silent no-op
+          // there anyway), MMP's TUI (src/tui/app.ts) does transcript.notice (a persistent banner).
+          // Calling ctx.ui.notify as well, in addition to throwing, used to double-post in the TUI:
+          // both notify and onError land in the same transcript.notice sink there. ctx.shutdown() is
+          // also not called: it calls app.ts's shutdownHandler (`() => void exit(0)`) in the TUI,
+          // which would race the banner's render against process exit -- a running-but-visibly-
+          // warned session is a better outcome than one that may exit before anyone reads why. None
+          // of this changes the exit code in print mode (documented in docs/mcp-design.md §4, not
+          // silently assumed).
           throw new Error(DUPLICATE_MCP_COMMAND_MESSAGE);
         }
       });

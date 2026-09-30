@@ -369,7 +369,7 @@ test("/new and /reload leave exactly one MCP child process running, never zero o
   assert.equal(leftovers, "", `MCP stdio server outlived the whole app\n${context}`);
 });
 
-test("the duplicate-/mcp error is also visible in MMP's own TUI, not just print mode's stderr", (t) => {
+test("the duplicate-/mcp error is visible in MMP's own TUI exactly once, not just print mode's stderr", (t) => {
   const rogue = fileURLToPath(new URL("./fixtures/mcp-duplicate-rogue.mjs", import.meta.url));
   const driver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
   const { marks, output } = runTuiApp(
@@ -378,8 +378,10 @@ test("the duplicate-/mcp error is also visible in MMP's own TUI, not just print 
     [["wait", 2500], ["mark", "startup"], ["key", "ctrl+d"]],
     { mcpServers: {} },
   );
-  // ctx.ui.notify maps straight to transcript.notice in MMP's TUI (src/tui/app.ts), unlike print
-  // mode's no-op -- this is the channel a person actually reading the TUI would see, distinct from
-  // (and in addition to) the thrown error's onError-routed notice.
-  assert.match(marks.startup, /also registers "\/mcp"/, `output:\n${output}`);
+  // The thrown error is caught by Pi's own per-handler try/catch (core/extensions/runner.js's
+  // emit()) and routed to onError, which src/tui/app.ts wires to transcript.notice -- a persistent
+  // banner a person reading the TUI would see. Exactly one occurrence: an earlier version also
+  // called ctx.ui.notify directly, which landed in the same sink and posted the message twice.
+  const occurrences = (marks.startup.match(/also registers "\/mcp"/g) ?? []).length;
+  assert.equal(occurrences, 1, `expected the message exactly once, found ${occurrences}\noutput:\n${output}`);
 });
