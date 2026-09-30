@@ -22,7 +22,7 @@ startmmp() {
   esac
   if mmp_running; then echo "(mmp already running in $P; not starting another)" >&2; return 1; fi
   herdr pane run "$P" "cd '$dir' && clear && node '$MMP_TOOL/dist/cli.js' --approve --provider magpie --model $model --thinking high $*" >/dev/null
-  herdr pane wait-output "$P" --match "commands" --source visible --timeout 30000 >/dev/null
+  herdr pane wait-output "$P" --match "Shift+Tab" --source visible --timeout 30000 >/dev/null
 }
 
 # Quit mmp only while it is in the foreground: a stray Ctrl+D at the shell prompt closes the pane.
