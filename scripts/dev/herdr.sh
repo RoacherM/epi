@@ -40,13 +40,13 @@ quitmmp() {
 # - "Compacting…" has been on screen for 10 minutes or more;
 # - mmp is no longer running in the pane.
 waitreport() {
-  local report=$1 limit=${2:-3600} idle=0 i
+  local report=$1 limit=${2:-3600} idle=0 i screen compacting
   for i in $(seq 1 "$limit"); do
     if grep -qE '^STATUS: (done|blocked)' "$report" 2>/dev/null; then grep -E '^STATUS:' "$report" | tail -1; return 0; fi
     if (( i % 30 == 0 )); then
-      local screen; screen=$(herdr pane read "$P" --source visible 2>/dev/null)
+      screen=$(herdr pane read "$P" --source visible 2>/dev/null)
       if ! mmp_running; then echo "(mmp is not running in $P)" >&2; return 2; fi
-      local compacting; compacting=$(grep -oE 'Compacting… [0-9]+m' <<<"$screen" | grep -oE '[0-9]+' | tail -1)
+      compacting=$(grep -oE 'Compacting… [0-9]+m' <<<"$screen" | grep -oE '[0-9]+' | tail -1)
       if [[ -n $compacting && $compacting -ge 10 ]]; then
         echo "(worker in $P has been compacting for ${compacting} minutes)" >&2; return 2
       fi
