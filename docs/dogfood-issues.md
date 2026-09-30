@@ -4,12 +4,12 @@
 
 | 编号 | 级别 | 现象 | 复现 | 状态 |
 |---|---|---|---|---|
-| D1 | P3 | 扩展用 `pi.registerProvider` 注册模型时漏写 `cost`，发请求时只报 `Cannot read properties of undefined (reading 'tiers')`，看不出是哪个扩展、哪个模型、缺哪个字段 | 在 `~/.mmp/extensions/` 写一个不带 `cost` 的 provider 扩展，`mmp --provider <它> -p hi </dev/null` | 待修（可在注册时校验并指出扩展和字段；需要先看 Pi 0.99 是否已改） |
+| D1 | P3 | 扩展用 `pi.registerProvider` 注册模型时漏写 `cost`，发请求时只报 `Cannot read properties of undefined (reading 'tiers')`，看不出是哪个扩展、哪个模型、缺哪个字段 | 在 `~/.mmp/extensions/` 写一个不带 `cost` 的 provider 扩展，`mmp --provider <它> -p hi </dev/null` | 已修（合并 B1：注册时指出扩展、provider/模型和缺的字段；比 Pi 严格，见 pi-internals） |
 | D2 | P2 | 完整测试要约 3 分钟，拖慢每个开发任务。最慢的是界面测试（每个 10–14 秒，例如 Esc 放回排队消息 14.3 秒、`/login` 流程 13.9 秒），推测大多在等固定延时或超时，而不是等界面状态出现 | `node --test --test-reporter=tap test/*.test.mjs`，按每个测试的 `duration_ms` 排序 | 已修（合并 D2：完整测试 3 分钟 → 约 44 秒） |
 | D3 | P2 | `-p` 时有一个 MCP 服务卡在连接（不回 `initialize`），第一条消息 10 秒后照常发出，但进程要等到那个服务的请求超时（默认 60 秒）才退出；等进程退出的 benchmark 会多等这么久。Pi 自己也一样（连接中的请求 `close()` 取消不了） | 测试夹具 `MMP_FIXTURE_HANG_INITIALIZE=1`，`mmp -p hi </dev/null` 计时 | 已修（合并 D3：会话关闭时关掉还在连接的 MCP 传输；`-p` 61 秒 → 11 秒，json 60 → 10 秒，TUI 退出 31 → 5 秒） |
-| D4 | P3 | `mmp mcp list` 不支持 `--approve`（`mmp install -l` 支持），不信任的项目只能先 `/trust`；空配置提示 "Add them to … then run `mmp mcp add`" 语序别扭 | 在不信任的项目里 `mmp mcp list --approve` → Unknown option | 待修 |
+| D4 | P3 | `mmp mcp list` 不支持 `--approve`（`mmp install -l` 支持），不信任的项目只能先 `/trust`；空配置提示 "Add them to … then run `mmp mcp add`" 语序别扭 | 在不信任的项目里 `mmp mcp list --approve` → Unknown option | 已修（合并 B1：`mmp mcp list/login/logout --approve`，空配置提示改写） |
 | D5 | P2 | 用 magpie 的 sonnet-5.5、thinking `high` 时，大多数回答没有思考块，有的显示 "Thought for 0.0s"，内容只有一行摘要。直接调 magpie 接口（`reasoning_effort: "high"`）返回的 `reasoning_tokens` 也是 0，所以更可能是 magpie 没把思考设置传给 Claude，不是 MMP 的问题。连带影响：Ctrl+T 没有可切换的内容，看起来像失灵 | `curl` magpie 的 `/v1/chat/completions` 带 `reasoning_effort`，看 `usage.completion_tokens_details.reasoning_tokens` | 待查（magpie 侧）；Ctrl+T 已加提示（D12） |
-| D6 | P3 | Pi 的 MCP 运行时本身加载失败时，`-p` / json 模式下 MMP 会把每个服务报成 "still connecting"，Pi 的 "MCP failed to load" 被吞掉（一个失败被报成另一个） | 需要让 Pi 的 MCP 模块加载失败，未复现 | 待修 |
+| D6 | P3 | Pi 的 MCP 运行时本身加载失败时，`-p` / json 模式下 MMP 会把每个服务报成 "still connecting"，Pi 的 "MCP failed to load" 被吞掉（一个失败被报成另一个） | 需要让 Pi 的 MCP 模块加载失败，未复现 | 已修（合并 B1：print/json 下把 Pi 的 "MCP failed to load" 写到 stderr，不再报 still connecting） |
 | D7 | P1 | 在 Ghostty（以及 kitty、WezTerm 这类支持 kitty 键盘协议的终端）里，每个快捷键都会触发两次：Ctrl+V 贴出两张图；Ctrl+T、Ctrl+O 这类开关按了等于没按；Shift+Tab 一次跳两档。原因：终端会额外发送"按键松开"事件，MMP 的快捷键处理没有把它过滤掉 | Herdr 里 `send-text $'\e[118;5u'` 再 `send-text $'\e[118;5:3u'` | 已修（18b8ad6，工具版已升级） |
 | D8 | P1 | 点一下输入框里的图片标签（看预览）之后，所有快捷键都失效：Ctrl+V 贴不了图、Shift+Tab、Esc、Ctrl+D 都没反应，只有打字还能用。原因：点击后 pi-tui 把焦点交给了包着输入框的 PromptFrame（它会把打字转给输入框），而 MMP 的快捷键只认输入框本身 | 贴一张图，鼠标点一下 `[Image #1]`，再按 Ctrl+V | 已修（见下一提交，工具版已升级） |
 | D9 | P2 | Pi 0.99 会把图片缩放说明（`[Image: original WxH, displayed at …]`）追加到发给模型的文字里，MMP 的用户消息块把它原样显示出来；用户用"选中即复制"拖选这行后，Ctrl+V 贴出的是这段文字而不是图（用户会话里第二条消息实际没有图片，只有这行字） | 贴一张大于 2000px 的图并发送，看用户消息块 | 已修（合并 e1d545c，决策 T4） |
@@ -50,3 +50,5 @@
 | D44 | P3 | 复制的小差异：最后一条回复为空时 MMP 复制空串并提示成功，Pi 提示 "No agent messages to copy yet."（`session-commands.ts` 用 `=== undefined`，Pi 用 `!text`）；`/copy` 提示末尾多一个句号；D34 的 "on" 测试里 Ctrl+X 后的 `Copied!` 可能匹配到松开鼠标时的那次闪烁（有剪贴板文件断言兜底）（D34 复审） | 空回复后按 Ctrl+X | 待修 |
 | D45 | P3 | Pi 在扩展加载失败时的报错末尾带着 `Hint: Start without extensions using "pi -ne".`（Pi `main.js` 的原文），经 MMP 原样输出，违反硬规则 4（只暴露 mmp 自己的命令和参数；MMP 也不提供 `-ne`）（B1 worker 发现） | 让一个 Manifest 扩展加载失败，`mmp -p hi </dev/null` | 待修 |
 | D46 | P3 | B2 复审的小问题：钩子 cancel 且没给原因时提示写成 "Prompt cancelled by user_prompt hook: Blocked by MMP hook"（自相矛盾）；`notifyPromptBlocked` 在 try 内，notify 抛错会多报一次；钩子原因里的换行/ANSI 原样输出（和已有的失败信息同类）；粘贴再次展开后的撤销、无原因的提示文字没有测试 | B2 的 review-1.md | 待修 |
+| D47 | P3 | B1 复审的小问题：不信任的项目里 `mmp mcp add -l --approve` 之后提示 "Check it with: mmp mcp list"（应带 `--approve`）；空配置提示在没有项目时也说 `-l`；`mcp-load-failure-notify` 的登记检查抓不到 Pi 新增的其他 error 级通知；rpc 模式下加载失败报两次；`loadFailed` 会盖掉与之无关的服务失败行 | B1 的 review-1.md F2、F3、F4、F6、F7 | 待修 |
+| D48 | P2 | `mmp --list-models` 在扩展注册失败时悄悄丢掉那个 provider，退出码 0、stderr 为空；列表为空时输出 Pi 的原文（建议 `/login`、链接 Pi 文档），违反硬规则 3 和 4（Pi 自己也这样，B1 让它更容易碰到） | 声明一个缺 cost 的扩展，`mmp --no-project --list-models` | 待修 |
