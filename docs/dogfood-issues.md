@@ -37,7 +37,7 @@
 | D31 | P3 | 没有终端标签栏进度提示（Pi 的 terminal-progress，OSC 9;4），D21 里隐藏了这个设置项 | 在支持 OSC 9;4 的终端里跑一个长回合 | 待排期 |
 | D32 | P3 | D10 复审的小问题：`test/pi-internals.test.mjs` 的 osc133 检查用固定 40ms 等待画面（机器忙时可能偶发失败）；测试辅助会去掉 OSC 序列，所以没有应用层测试能发现 OSC 133 标记漏到终端上（只靠跳转测试间接发现） | D10 的 review-1.md 第 1、2 条 | 待修 |
 | D33 | P3 | D13 复审的小问题：A6 测试（扩展 ctx.abort）改成只查最终屏幕后，丢了"恢复后排队提示不再出现"这项检查；`waitGone` 和 `waitFor {screen:true}` 的正则写法还没有测试用到 | D13 的 review-1.md 第 2、3 条 | 待修 |
-| D34 | P3 | Ctrl+X 只复制最后一条回答；Pi 会先复制当前选中的文字（interactive-mode.js ~5367），关掉"选中即复制"后就没有办法复制选区（D21 worker 发现） | `/settings` 关掉 Copy on select，拖选一段文字，按 Ctrl+X | 待修 |
+| D34 | P3 | Ctrl+X 只复制最后一条回答；Pi 会先复制当前选中的文字（interactive-mode.js ~5367），关掉"选中即复制"后就没有办法复制选区（D21 worker 发现） | `/settings` 关掉 Copy on select，拖选一段文字，按 Ctrl+X | 已修（合并 D34：照 Pi 的 `handleCopyCommand`，"选中即复制"关掉时 Ctrl+X 复制选区） |
 | D35 | P2 | 压缩进行中按 Ctrl+D：界面已经退出（终端回到普通模式，画面停在最后一帧，之后的按键被原样回显），但进程不退出，一直挂着一个到 magpie 的压缩请求（`lsof` 可见 ESTABLISHED 连接），只能 kill。可能就是 D14（Ctrl+D 不退出）和 D25（留下最后一帧）的原因 | D21 worker 写完报告后自动压缩（240K/200K），此时 Ctrl+D；进程 `S+` 状态、CPU≈0 | 已修（合并 D35：退出时像 Pi 一样 `process.exit`；会话关闭最多等 3 秒并在 stderr 说明；Herdr 实测运行中 Ctrl+D 1 秒内退出） |
 | D36 | P3 | D20 复审的小问题：光标正好在把未附图标签拆到两行的那个空格上时，标签不画成暗色删除线；`chrome.ts` 的 `displayText` 按标签出现次数（而不是不同标签数）计算要显示几个 `[Image]`，与 `labelStoredImages` 不一致（只有扩展构造的消息会碰到） | D20 的 review-1.md | 待修 |
 | D37 | P3 | D17 复审第 2 轮的小缺口：压缩进行中输入 `/compact` 会中止这一轮，但结尾写 `Worked for`（`runCompact` 没调用 `markRunStopped()`）；扩展在自己的 `agent_settled` 里调用 `ctx.abort()` 会把正常结束的一轮写成 `Stopped after`（`abortHandler` 缺 `isStreaming` 判断）。修法见 D17 的 review-2.md | D17 的 review-2.md 第 1、2 条 | 已修（合并 D37） |
@@ -47,3 +47,4 @@
 | D41 | P3 | D35 复审的后续：① 启动时 `bind()` 还在等（扩展的 `session_start` 没返回）时按 Ctrl+D，界面退了但进程不退出（`process.exit` 只在 `runTuiApp` 返回后调用），启动失败路径同理；② 用过 Ctrl+G 外部编辑器或 Ctrl+Z 挂起后再退出，普通屏幕上留一帧旧画面（`key-handlers.ts` 的 `tui.stop()` 没带 `preserveScreen`；Pi 也这样）；③ 退出过程中 `session_shutdown` 处理抛的错被送到已关闭的对话区，看不见（应改走 stderr） | D35 的 review-1.md 第 1、2、3、6 条 | 已修（合并 D41；Ctrl+G/Ctrl+Z 用 `preserveScreen` 是有意和 Pi 不同，为了"退出后终端里不留对话"） |
 | D42 | P3 | 声明了 `mmp:mcp` 但没有配置任何服务时，D3 之后也会加载 Pi 的 `extensions/mcp/runtime.js`（约 12 ms）；Pi 自己特意推迟到有服务时才加载（`index.js:726`）（D3 复审 F1） | 只声明 `mmp:mcp`、不配服务，测启动时间 | 待排期 |
 | D43 | P3 | 扩展工具全部返回 `terminate: true` 后，Pi 会停下并投递排队的追问，但这条追问和上一轮共用一行 `Worked for`（G1 只以"不带工具调用的回复结束"为轮次边界）（G1 复审第 2 条） | 带 terminate 工具的扩展 + 运行中排队一句 | 待修 |
+| D44 | P3 | 复制的小差异：最后一条回复为空时 MMP 复制空串并提示成功，Pi 提示 "No agent messages to copy yet."（`session-commands.ts` 用 `=== undefined`，Pi 用 `!text`）；`/copy` 提示末尾多一个句号；D34 的 "on" 测试里 Ctrl+X 后的 `Copied!` 可能匹配到松开鼠标时的那次闪烁（有剪贴板文件断言兜底）（D34 复审） | 空回复后按 Ctrl+X | 待修 |
