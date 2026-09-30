@@ -3,7 +3,7 @@
 // rule 4) -- and MMP passed it through in -p/json. MMP's own TUI dropped the failure entirely and
 // started as if nothing happened (hard rule 3). Now every mode shows the real error and MMP's hint.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -55,4 +55,53 @@ test("a Manifest extension that fails to load stops the TUI with the error and M
   });
   assertReported(result);
   assert.match(result.stderr, /^mmp: Failed to load extension/);
+});
+
+// Extensions re-run on every session replacement. Pi exits on a load error only at startup; on
+// /new it shows the error in the transcript and keeps running, and so does MMP (review F1 of B5).
+test("an extension that fails to load on /new is shown in the transcript and the TUI keeps running", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "mmp-ext-load-failure-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  const flag = join(root, "BREAK");
+  const flaky = join(root, "flaky.mjs");
+  writeFileSync(flaky, `import { existsSync } from "node:fs";
+export default function () { if (existsSync(${JSON.stringify(flag)})) throw new Error("flakymarker"); }
+`);
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho, flaky] }));
+  const child = spawn(process.execPath, ["--import", fakeTty, cli, "--no-project"], {
+    cwd: root,
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  t.after(() => child.kill("SIGKILL"));
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (data) => { stdout += data; });
+  child.stderr.on("data", (data) => { stderr += data; });
+  let exitCode;
+  const exited = new Promise((resolve) => child.on("exit", (code) => { exitCode = code; resolve(code); }));
+  const waitFor = async (text) => {
+    const deadline = Date.now() + 15_000;
+    while (!stdout.includes(text)) {
+      if (exitCode !== undefined) throw new Error(`exited ${exitCode} before drawing ${JSON.stringify(text)}; stderr: ${stderr}`);
+      if (Date.now() > deadline) throw new Error(`never drew ${JSON.stringify(text)}; stderr: ${stderr}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  };
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  await waitFor("ASSEMBLY");
+  writeFileSync(flag, "");
+  child.stdin.write("/new");
+  await sleep(300);
+  child.stdin.write("\r");
+  await waitFor("flakymarker");
+  const afterNew = await Promise.race([exited, sleep(500).then(() => "running")]);
+  assert.equal(afterNew, "running", stderr);
+  child.stdin.write("\x04");
+  assert.equal(await Promise.race([exited, sleep(8000).then(() => "did not exit")]), 0, stderr);
+  assert.doesNotMatch(stderr, /flakymarker|Failed to create session/);
+  assert.doesNotMatch(stdout, /-ne\b|pi -|"pi /);
 });

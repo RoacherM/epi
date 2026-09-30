@@ -634,17 +634,57 @@ test("a failing hook's stderr tail is shown as one line without control characte
 });
 
 // D46: the block notice used to be sent inside the try around the hook run, so a notify that threw
-// was caught as a hook failure and reported a second time.
-test("a notify that throws on a user_prompt block is not reported again as a hook failure", async (t) => {
+// was caught as a hook failure and reported a second time. B5 review F2: the handler then rejected,
+// and Pi's emitInput treats a rejected input handler as "continue" -- the blocked prompt went to the
+// model. Now it stays blocked and the notify error is reported once on stderr.
+test("a notify that throws on a user_prompt block keeps the prompt blocked and is reported once", async (t) => {
   const notifications = [];
-  await assert.rejects(
-    runUserPromptHook(t, command("block"), "tui", (message) => {
-      notifications.push(message);
-      throw new Error("notify broke");
-    }),
-    /notify broke/,
-  );
+  const { result, stderr } = await runUserPromptHook(t, command("block"), "tui", (message) => {
+    notifications.push(message);
+    throw new Error("notify broke");
+  });
+  assert.deepEqual(result, { action: "handled" });
   assert.deepEqual(notifications, ["Prompt blocked by user_prompt hook: blocked:user_prompt"]);
+  assert.equal(
+    stderr(),
+    "mmp: Prompt blocked by user_prompt hook: blocked:user_prompt (could not show the notice: notify broke)\n",
+  );
+});
+
+test("a notify that throws on a user_prompt hook failure keeps the prompt blocked", async (t) => {
+  const notifications = [];
+  const { result, stderr } = await runUserPromptHook(t, command("malformed"), "tui", (message) => {
+    notifications.push(message);
+    throw new Error("notify broke");
+  });
+  assert.deepEqual(result, { action: "handled" });
+  assert.equal(notifications.length, 1);
+  assert.equal(stderr(), `mmp: ${notifications[0]} (could not show the notice: notify broke)\n`);
+});
+
+// B5 review F3/F4: an unterminated OSC used to swallow the rest of the text, and runs of the text's
+// own spaces were squeezed to one.
+async function failingTailNotice(t, stderrText) {
+  const failingScript = join(tmpdir(), `mmp-hooks-tail-${process.pid}.mjs`);
+  writeFileSync(failingScript, `process.stderr.write(${JSON.stringify(stderrText)}); process.exit(3);\n`);
+  t.after(() => rmSync(failingScript, { force: true }));
+  const notifications = [];
+  await runUserPromptHook(
+    t,
+    { type: "command", command: process.execPath, args: [failingScript], timeoutMs: 1000 },
+    "tui",
+    (message) => { notifications.push(message); },
+  );
+  assert.equal(notifications.length, 1);
+  return notifications[0];
+}
+
+test("a hook's stderr tail keeps the text after an unterminated OSC", async (t) => {
+  assert.match(await failingTailNotice(t, "before \x1b]rest of text\n"), /: before rest of text$/);
+});
+
+test("a hook's stderr tail keeps its own spacing", async (t) => {
+  assert.match(await failingTailNotice(t, "col1   col2\ncol3\n"), /: col1   col2 \| col3$/);
 });
 
 // D26 end to end: the real CLI and the real TUI, with a global mmp:hooks user_prompt block hook

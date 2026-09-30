@@ -60,16 +60,17 @@ function notifyVisibly(
  * Hook reasons and a failing command's stderr tail are text from user-configured programs. Shown
  * raw, a newline breaks the one-line TUI notice and the `mmp: ...` stderr line, and an escape
  * sequence restyles or moves the terminal. Drops ANSI escape sequences and other control
- * characters and joins the lines with " | ".
+ * characters and joins the lines with " | ". The text's own spacing is kept.
  */
 function displayLine(text: string): string {
   return text
-    // CSI (ESC [ ... final byte) and OSC (ESC ] ... BEL or ESC \) sequences, then any other ESC pair.
+    // CSI (ESC [ ... final byte) and terminated OSC (ESC ] ... BEL or ESC \) sequences, then any
+    // other ESC pair. An unterminated OSC loses only its ESC ], not the rest of the text.
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "")
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
     .replace(/\x1b[@-_]?/g, "")
     .split(/\r\n|\r|\n/)
-    .map((line) => line.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/ {2,}/g, " ").trim())
+    .map((line) => line.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim())
     .filter((line) => line.length > 0)
     .join(" | ");
 }
@@ -83,16 +84,26 @@ function notifyFailure(context: ExtensionContext, error: unknown): void {
  * extension to show its own feedback (Pi's examples/extensions/input-transform.ts notifies, then
  * returns `handled`). Without this the prompt vanished from the editor with nothing on screen.
  */
-function notifyPromptBlocked(context: ExtensionContext, decision: HookDecision): void {
+function promptBlockedMessage(decision: HookDecision): string {
   const verb = decision.action === "cancel" ? "cancelled" : "blocked";
   // No reason: just say what happened. blockReason()'s "Blocked by MMP hook" fallback would read
   // "Prompt cancelled by user_prompt hook: Blocked by MMP hook".
   const reason = displayLine(decision.reason ?? "");
-  notifyVisibly(
-    context,
-    `Prompt ${verb} by user_prompt hook${reason.length > 0 ? `: ${reason}` : ""}`,
-    "warning",
-  );
+  return `Prompt ${verb} by user_prompt hook${reason.length > 0 ? `: ${reason}` : ""}`;
+}
+
+/**
+ * The user_prompt handler must return `handled` even when the notice can't be shown: Pi's
+ * `emitInput` treats a rejected handler as `continue`, which would send a blocked prompt to the
+ * model. A notify that throws is reported once on stderr instead.
+ */
+function notifyPromptFailClosed(context: ExtensionContext, text: string, type: "warning" | "error"): void {
+  try {
+    notifyVisibly(context, text, type);
+  } catch (error) {
+    const detail = displayLine(error instanceof Error ? error.message : String(error));
+    process.stderr.write(`mmp: ${displayLine(text)} (could not show the notice: ${detail})\n`);
+  }
 }
 
 function taskPayload(event: TaskHookEvent): HookPayload {
@@ -267,7 +278,7 @@ export function createHooksInlineExtension(
         try {
           decision = await runtime.run(inputPayload(event, context), context);
         } catch (error) {
-          notifyFailure(context, error);
+          notifyPromptFailClosed(context, failureMessage(error), "error");
           return { action: "handled" as const };
         }
         if (decision.action === "transform") {
@@ -276,7 +287,7 @@ export function createHooksInlineExtension(
         if (decision.action === "block" || decision.action === "cancel") {
           // Outside the try: a notify that throws is not a hook failure, and must not be reported
           // a second time as one.
-          notifyPromptBlocked(context, decision);
+          notifyPromptFailClosed(context, promptBlockedMessage(decision), "warning");
           return { action: "handled" as const };
         }
         return { action: "continue" as const };
