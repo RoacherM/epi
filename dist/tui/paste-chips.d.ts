@@ -9,11 +9,13 @@ export declare function imageLabelNumbers(text: string): number[];
 /** The `[Image #N]` number `image` was sent under, if it came from the editor. */
 export declare function sentImageLabel(image: ImageContent): number | undefined;
 /** Images from a stored user message (/fork, /tree), tagged with the labels they were sent under,
- * or none when that can't be known. The editor takes an image out of the text only for a label
- * that had data, in order, and Pi keeps that order; so when the text has exactly as many labels
- * as the message has images, no label went out without data and no image was dropped, and the
- * i-th label is the i-th image's own. Otherwise (a label typed without an image, an image Pi
- * omitted) the pairing is unknown and the labels stay without data. */
+ * or none when that can't be known. The editor attaches an image once per label that had data, in
+ * the order the labels first appear, and Pi keeps that order; so when the text has exactly as many
+ * distinct labels as the message has images, no label went out without data and no image was
+ * dropped, and the i-th label is the i-th image's own. With no labels at all (the `@image` startup
+ * message, an extension's image) nothing can be mislabelled: the images come back untagged, as new
+ * chips. Otherwise (a label typed without an image, an image Pi omitted) the pairing is unknown and
+ * the labels stay without data. */
 export declare function labelStoredImages(text: string, images: readonly ImageContent[]): ImageContent[];
 /** The labels in `text` that none of `images` was sent under: they go out as text only. */
 export declare function unattachedImageLabels(text: string, images: readonly ImageContent[]): number[];
@@ -221,6 +223,8 @@ export declare class ChipEditor {
     /** The content pasted under `label`, or undefined for a contentless slot. Checking the label
      * again here is a last safety net: a slot never resolves to content pasted under another label. */
     private textContent;
+    /** The text to send and its images: one per distinct label with data, in the order the labels
+     * first appear, however often the text names it ("[Image #1] … the corner of [Image #1]"). */
     private resolveForSubmit;
     /** Called from inside Pi's submitValue, before `innerInput` gets to sync(): `this.synced.slots`
      * still describes the text being sent (Pi only trims it, which never removes a label). */

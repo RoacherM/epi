@@ -48,6 +48,7 @@ function makeEditor() {
 function checkResolution(doc, expanded, images, pastes, imageBytes) {
   const used = [];
   const attached = [];
+  const attachedIds = new Set();
   let at = 0;
   let last = 0;
   const expect = (literal, what) => {
@@ -60,10 +61,12 @@ function checkResolution(doc, expanded, images, pastes, imageBytes) {
     expect(doc.slice(last, match.index), "plain text");
     last = match.index + match[0].length;
     if (match[1] !== undefined) {
-      // The label stays in the text either way (D11); only a known one attaches its image.
+      // The label stays in the text either way (D11); only a known one attaches its image, once
+      // however often the text names it (D20).
       expect(match[0], "image label stays in the text");
       const bytes = imageBytes.get(Number(match[1]));
-      if (bytes !== undefined) attached.push(bytes);
+      if (bytes !== undefined && !attachedIds.has(match[1])) attached.push(bytes);
+      attachedIds.add(match[1]);
       continue;
     }
     const paste = pastes.find((candidate) => candidate.label === match[0] && expanded.startsWith(candidate.content, at));
@@ -77,7 +80,7 @@ function checkResolution(doc, expanded, images, pastes, imageBytes) {
   }
   expect(doc.slice(last), "plain text");
   if (at !== expanded.length) throw new Error(`expansion has extra text ${JSON.stringify(expanded.slice(at))}`);
-  assert.deepEqual(images.map((image) => image.data), attached, "image attachments are the document's images, in order");
+  assert.deepEqual(images.map((image) => image.data), attached, "image attachments are the document's images, each once, in order");
   return used;
 }
 
