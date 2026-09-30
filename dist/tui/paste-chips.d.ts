@@ -192,6 +192,11 @@ export declare class ChipEditor {
      * word and line deletes get none, as in Pi. With a dropdown open, Pi's updateAutocomplete
      * already re-requests on the final text. */
     private removeChipFragments;
+    /** pi-tui's private `Editor.undoStack` (docs/pi-internals.md `editor-undo-stack`). Pi groups
+     * undo steps only for typed words, and has no public way to make several keystrokes one step. */
+    private undoStack;
+    /** Makes everything pushed since the stack was `depth` deep part of the step below it. */
+    private dropUndoSnapshotsAbove;
     /** Pi's Editor has no public cancel; setAutocompleteProvider() starts with cancelAutocomplete()
      * (docs/pi-internals.md `editor-autocomplete-cancel`). */
     private cancelAutocompleteRequests;

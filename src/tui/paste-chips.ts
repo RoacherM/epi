@@ -39,7 +39,9 @@
 //   replaces the draft, so every label in it is contentless.
 // - A delete key that removes only part of a label (Backspace at a chip's end, Ctrl+W after
 //   "[A] ", Alt+D before " [A]") would leave a fragment like "[Pasted: 4 lines";
-//   `removeChipFragments()` deletes the rest, so a partially covered chip is fully deleted.
+//   `removeChipFragments()` deletes the rest, so a partially covered chip is fully deleted. The
+//   snapshots its synthetic keystrokes push are dropped from Pi's undo stack, so one Ctrl+-
+//   restores the whole chip (the same for expanding a chip).
 //
 // Pi's own per-grapheme atomicity lives in the private `segment()` override, unreachable from
 // here, so arrow keys, word/Home/End jumps and a single click all move the caret with no idea a
@@ -698,11 +700,31 @@ export class ChipEditor {
     if (cutAtStart) for (let i = cutAtStart.start; i < prefix; i += 1) keys.push(BACKSPACE);
     if (cutAtEnd) for (let i = deletedEnd; i < cutAtEnd.end; i += 1) keys.push(FORWARD_DELETE);
     const settle = keys.length > 0 && !this.inner.isShowingAutocomplete();
+    // The user's own key already pushed the snapshot with the whole chip; the synthetic ones would
+    // make Ctrl+- bring the label back one character at a time (dogfood D27).
+    const undoDepth = this.undoStack().length;
     keys.forEach((key, i) => {
       if (settle && checksAutocomplete && i === keys.length - 1) this.cancelAutocompleteRequests();
       this.innerInput(key);
     });
+    this.dropUndoSnapshotsAbove(undoDepth);
     if (settle && !checksAutocomplete) this.cancelAutocompleteRequests();
+  }
+
+  /** pi-tui's private `Editor.undoStack` (docs/pi-internals.md `editor-undo-stack`). Pi groups
+   * undo steps only for typed words, and has no public way to make several keystrokes one step. */
+  private undoStack(): { length: number; pop(): unknown } {
+    const stack = (this.inner as unknown as { undoStack?: { length: number; pop(): unknown } }).undoStack;
+    if (!stack || typeof stack.length !== "number" || typeof stack.pop !== "function") {
+      throw new Error("ChipEditor: pi-tui's Editor no longer has a private `undoStack` {length, pop}; chip deletion depends on it (see src/tui/paste-chips.ts)");
+    }
+    return stack;
+  }
+
+  /** Makes everything pushed since the stack was `depth` deep part of the step below it. */
+  private dropUndoSnapshotsAbove(depth: number): void {
+    const stack = this.undoStack();
+    while (stack.length > depth) stack.pop();
   }
 
   /** Pi's Editor has no public cancel; setAutocompleteProvider() starts with cancelAutocomplete()
@@ -714,8 +736,11 @@ export class ChipEditor {
   private expandTextChip(chip: Extract<ChipInfo, { kind: "text" }>): void {
     const cursor = this.inner.getCursor();
     this.moveCursorToColumn(cursor.line, chip.end);
+    // One undo step, like a paste: keep only the first Backspace's snapshot (the chip still whole).
+    const undoDepth = this.undoStack().length + 1;
     for (let i = chip.start; i < chip.end; i += 1) this.innerInput(BACKSPACE);
     this.insertTextAtCursor(chip.content);
+    this.dropUndoSnapshotsAbove(undoDepth);
     this.lastPastedChip = undefined;
   }
 

@@ -478,6 +478,23 @@ test("Alt+Backspace deleting an image chip, then Enter, sends the message", (t) 
   chipRemovalSends(t, ["raw", "\x1b\x7f"]);
 });
 
+// Dogfood D27: the synthetic keystrokes that finish a half-deleted label were each their own Pi
+// undo snapshot, so Ctrl+- brought the label back one character at a time.
+test("one Ctrl+- after Backspace deleted an image chip brings the whole chip back, attached", (t) => {
+  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-chip-undo-"));
+  t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
+  const clipboardFile = join(clipboardDir, "clipboard.png");
+  writeFileSync(clipboardFile, ONE_PIXEL_PNG);
+  const { marks } = runApp(t, [fixture("faux-echo-images.mjs")], [
+    ["waitReady"], ["type", "see foo "], ["key", "ctrl+v"], ["waitFor", "[Image #1]"],
+    ["key", "backspace"], ["waitGone", "[Image #1]"],
+    ["raw", "\x1f"], ["waitFor", "❯ see foo [Image #1]"], ["wait", 150], ["mark", "undone"],
+    ["key", "enter"], ["waitFor", "ECHO:see foo [Image #1]|IMAGES:image/png"], ["mark", "sent"], ["key", "ctrl+d"],
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  assert.match(marks.undone, /❯ see foo \[Image #1\]/);
+  assert.match(marks.sent, /ECHO:see foo \[Image #1\]\|IMAGES:image\/png/);
+});
+
 test("Tab still completes a path right after an image chip was deleted", (t) => {
   const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-chip-tab-"));
   t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));

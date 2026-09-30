@@ -361,7 +361,7 @@ test("undo after deleting a chip brings back both chips' content exactly", () =>
   paste(editor, B);
   editor.handleInput(BACKSPACE); // deletes chip B
   assert.equal(editor.getExpandedText(), `${A} `);
-  for (let i = 0; i < 17; i += 1) editor.handleInput(UNDO);
+  editor.handleInput(UNDO); // one chip deletion is one undo step (D27)
   assert.equal(editor.getText(), "[Pasted: 4 lines] [Pasted: 5 lines]");
   assert.equal(editor.getExpandedText(), `${A} ${B}`);
 });
@@ -372,7 +372,7 @@ test("after undo brings a chip back, deleting the other chip keeps the right con
   editor.handleInput(" ");
   paste(editor, B);
   editor.handleInput(BACKSPACE);
-  for (let i = 0; i < 17; i += 1) editor.handleInput(UNDO);
+  editor.handleInput(UNDO);
   editor.handleInput(HOME);
   editor.handleInput(RIGHT); // snaps to A's end
   editor.handleInput(BACKSPACE); // deletes chip A
@@ -495,14 +495,47 @@ test("undo after setText brings back the old draft with its chips", () => {
   assert.equal(editor.getExpandedText(), A);
 });
 
-test("a deleted image chip brought back by undo is attached again", () => {
+// D27: removeChipFragments finishes a half-deleted label with synthetic keystrokes, and Pi pushes
+// an undo snapshot for each; one Ctrl+- used to bring back a single character of the label.
+test("one undo brings back a whole image chip deleted with Backspace, attached again", () => {
   const editor = makeEditor();
+  editor.handleInput("see foo ");
   editor.insertImageChip(ONE_PIXEL_PNG, "image/png");
   editor.handleInput(BACKSPACE);
-  assert.equal(editor.getText(), "");
-  for (let i = 0; i < 10 && editor.getText() !== "[Image #1]"; i += 1) editor.handleInput(UNDO);
-  assert.equal(editor.getText(), "[Image #1]");
+  assert.equal(editor.getText(), "see foo ");
+  editor.handleInput(UNDO);
+  assert.equal(editor.getText(), "see foo [Image #1]");
   assert.equal(editor.getImageAttachments().length, 1);
+  editor.handleInput(UNDO); // the next undo takes back the paste itself
+  assert.equal(editor.getText(), "see foo ");
+});
+
+for (const [name, key, setup] of [
+  ["Delete", "\x1b[3~", (editor) => editor.handleInput(HOME)],
+  ["Ctrl+W", "\x17", () => {}],
+  ["Alt+D", "\x1bd", (editor) => editor.handleInput(HOME)],
+]) {
+  test(`one undo brings back a whole text chip deleted with ${name}`, () => {
+    const editor = makeEditor();
+    paste(editor, A);
+    setup(editor);
+    editor.handleInput(key);
+    assert.equal(editor.getText(), "");
+    editor.handleInput(UNDO);
+    assert.equal(editor.getText(), "[Pasted: 4 lines]");
+    assert.equal(editor.getExpandedText(), A);
+  });
+}
+
+test("one undo takes back a chip expansion, with the chip's content", () => {
+  const editor = makeEditor();
+  paste(editor, A);
+  editor.handleInput(LEFT); // onto the chip
+  editor.handleInput(ENTER); // expand
+  assert.equal(editor.getText(), A);
+  editor.handleInput(UNDO);
+  assert.equal(editor.getText(), "[Pasted: 4 lines]");
+  assert.equal(editor.getExpandedText(), A);
 });
 
 test("text pasted inside an expanded chip that looks like a label stays literal", () => {
