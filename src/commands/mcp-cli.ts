@@ -187,6 +187,23 @@ function localConfigPath(ctx: McpCliContext): string {
   return join(ctx.cwd, ".mmp", "mcp.json");
 }
 
+/** `-l` changes the `.mmp/mcp.json` right here (like `mmp install -l`), which only counts in a trusted
+ * project. Where there is no project Manifest and nothing overrides the trust check, the refusal
+ * says there's no project rather than that it isn't trusted (dogfood D47). */
+function assertLocalAllowed(ctx: McpCliContext, approveOverride: boolean | undefined): void {
+  if (
+    approveOverride === undefined &&
+    !existsSync(join(ctx.cwd, ".mmp", "mmp.json")) &&
+    readProjectTrustDecision(resolveMmpPaths(process.env).agentDir, ctx.cwd) !== true
+  ) {
+    throw new MmpArgumentError(
+      `${ctx.cwd} has no .mmp/mmp.json, so it is not an MMP project -- -l has nothing to change here. ` +
+        `Create the project with \`mmp config -l --approve\`, or leave out -l to use ${globalConfigPath(ctx)}.`,
+    );
+  }
+  assertProjectTrustedFor(ctx.cwd, approveOverride);
+}
+
 /** The merged view a real session would see: global always, project only when trusted -- built the
  * same way src/extensions/mcp.ts does, but walking up to the nearest project Manifest (like
  * `mmp list`) rather than "only exactly cwd" (like `add -l`/`remove -l`, which always write "here",
@@ -287,7 +304,7 @@ function addCommand(args: readonly string[], ctx: McpCliContext): number {
   }
   const local = values.has("local");
   if (local) {
-    assertProjectTrustedFor(ctx.cwd, approveOverride);
+    assertLocalAllowed(ctx, approveOverride);
   }
   const path = local ? localConfigPath(ctx) : globalConfigPath(ctx);
   let replaced: boolean;
@@ -297,6 +314,7 @@ function addCommand(args: readonly string[], ctx: McpCliContext): number {
     throw new MmpArgumentError(`Could not update ${path}: ${errorMessage(addError)}`);
   }
   console.log(`${replaced ? "Replaced" : "Added"} ${local ? "project" : "global"} MCP server "${name}" in ${path}.`);
+  let approveHint = "";
   if (local) {
     // assertProjectTrustedFor above only gates *this write* (an --approve override is this-run-only,
     // never persisted) -- without one of these two hints, a plain future `mmp` or `mmp mcp list`
@@ -307,11 +325,13 @@ function addCommand(args: readonly string[], ctx: McpCliContext): number {
       console.log(`${ctx.cwd} has no .mmp/mmp.json yet, so it is not an MMP project -- ${path} is ignored until you run \`mmp install -l\` (or \`mmp config -l\`) here.`);
     } else if (readProjectTrustDecision(resolveMmpPaths(process.env).agentDir, ctx.cwd) !== true) {
       console.log(`The project is not trusted, so ${path} is ignored until you start mmp in the project and trust it (mmp --approve or /trust).`);
+      // list and login read the file only with the same this-run override (dogfood D47).
+      approveHint = " --approve";
     }
   }
   const mayNeedSignIn =
     "url" in validated && !Object.keys(validated.headers ?? {}).some((header) => header.toLowerCase() === "authorization");
-  console.log(`Check it with: mmp mcp list${mayNeedSignIn ? `. If it requires sign-in: mmp mcp login ${name}` : ""}`);
+  console.log(`Check it with: mmp mcp list${approveHint}${mayNeedSignIn ? `. If it requires sign-in: mmp mcp login ${name}${approveHint}` : ""}`);
   return 0;
 }
 
@@ -324,7 +344,7 @@ function removeCommand(args: readonly string[], ctx: McpCliContext): number {
   const approveOverride = approveOverrideOf(parsed.values);
   const local = parsed.values.has("local");
   if (local) {
-    assertProjectTrustedFor(ctx.cwd, approveOverride);
+    assertLocalAllowed(ctx, approveOverride);
   }
   const path = local ? localConfigPath(ctx) : globalConfigPath(ctx);
   let removed: boolean;
@@ -469,7 +489,7 @@ async function listCommand(args: readonly string[], ctx: McpCliContext): Promise
     return failed ? 1 : 0;
   }
   if (reports.length === 0 && loaded.errors.length === 0) {
-    console.log(emptyStateMessage(ctx.mmpHome));
+    console.log(emptyStateMessage(ctx.mmpHome, ctx.cwd));
   }
   for (const report of reports) {
     const state =

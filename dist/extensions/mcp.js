@@ -98,10 +98,12 @@ export function loadNativeMcpConfig(source, cwd) {
         errors: [...global.errors, ...project.errors],
     };
 }
-/** Shared by `/mcp` and `mmp mcp list` (src/commands/mcp-cli.ts): what to run, in one sentence. */
-export function emptyStateMessage(mmpHome) {
+/** Shared by `/mcp` and `mmp mcp list` (src/commands/mcp-cli.ts): what to run, in one sentence. `-l`
+ * writes `<cwd>/.mmp/mcp.json`, so it's offered only where `cwd` has a project Manifest (dogfood D47). */
+export function emptyStateMessage(mmpHome, cwd) {
+    const local = existsSync(join(cwd, ".mmp", "mmp.json")) ? ", or with -l to this project's .mmp/mcp.json" : "";
     return (`No MCP servers configured -- add one to ${join(mmpHome, "mcp.json")} with ` +
-        `\`mmp mcp add <server> (--url <url> | -- <command> [args...])\`, or with -l to this project's .mmp/mcp.json.`);
+        `\`mmp mcp add <server> (--url <url> | -- <command> [args...])\`${local}.`);
 }
 /**
  * One stderr line per enabled MCP server that needs attention, read from Pi's own per-server state
@@ -180,8 +182,9 @@ export function createMmpMcpExtension(source) {
             // ctx.ui.notify("MCP failed to load: ...", "error") -- a no-op in print/json mode -- and no
             // server ever gets a connection, so before_agent_start below would call each one "still
             // connecting". Every handler Pi's MCP extension registers gets a ctx whose ui.notify also
-            // writes error-level messages to stderr outside the TUI (the TUI already shows them), once per
-            // message and session; `loadFailed` then replaces the per-server lines. Only error-level
+            // writes error-level messages to stderr when there's no UI to show them (print/json: the TUI
+            // shows them, and rpc sends them to the client as an extension_ui_request), once per message
+            // and session; outside the TUI, `loadFailed` then replaces the per-server lines. Only error-level
             // notifies are taken: in Pi 0.99.1 the only ones raised from event handlers (not /mcp command
             // handlers, which get their own ctx) are the two "MCP failed to load" calls in
             // extensions/mcp/index.js; its warnings (servers needing attention) are covered by
@@ -202,7 +205,7 @@ export function createMmpMcpExtension(source) {
                             return (message, type) => {
                                 if (type === "error" && target.mode !== "tui") {
                                     loadFailed = true;
-                                    if (!reportedFailures.has(message)) {
+                                    if (!target.hasUI && !reportedFailures.has(message)) {
                                         reportedFailures.add(message);
                                         process.stderr.write(`${message}\n`);
                                     }
@@ -244,7 +247,7 @@ export function createMmpMcpExtension(source) {
                                         const configuredCount = loadConfig(ctx).servers.length;
                                         const registeredCount = pi.getMcpServers().length;
                                         if (configuredCount === 0 && registeredCount === 0) {
-                                            ctx.ui.notify(emptyStateMessage(mmpHome), "info");
+                                            ctx.ui.notify(emptyStateMessage(mmpHome, ctx.cwd), "info");
                                             return;
                                         }
                                     }

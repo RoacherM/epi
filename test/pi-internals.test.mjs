@@ -506,6 +506,14 @@ const registry = [
         /\.then\(\(\) => loadMcpRuntime\(\)\)[\s\S]{0,800}\.catch\(\(error\) => \{[\s\S]{0,200}MCP failed to load/,
         `${indexPath}'s startup chain no longer ends in a catch that notifies "MCP failed to load" -- ${why}`,
       );
+      // Dogfood D47 (B1 review F4): any other error-level notify from an event handler would be
+      // printed too, and would hide the per-server lines. Pin how many there are (7 in 0.99.1, the
+      // two above in the pi.on handlers), so a new one anywhere in the file forces a re-review.
+      const review = `review whether it is raised from a pi.on handler, then update this count and docs/pi-internals.md -- ${why}`;
+      assert.equal((indexText.match(/"error"/g) ?? []).length, 7, `${indexPath}'s number of error-level notifies changed: ${review}`);
+      const handlers = indexText.slice(indexText.indexOf("pi.on("), indexText.indexOf('pi.registerCommand("mcp"'));
+      assert.ok(handlers.length > 0, `${indexPath} no longer registers its pi.on handlers before the "/mcp" command -- ${why}`);
+      assert.equal((handlers.match(/"error"/g) ?? []).length, 2, `${indexPath}'s pi.on handlers raise a different number of error-level notifies: ${review}`);
     },
   },
   {

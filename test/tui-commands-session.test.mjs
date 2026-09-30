@@ -85,7 +85,7 @@ test("/copy and Ctrl+X copy the last assistant reply, and refuse when there is n
   assert.match(out, /EXIT=0/);
 });
 
-test("/copy and Ctrl+X refuse an empty last reply, as Pi's `!text` check does", async (t) => {
+test("/copy and Ctrl+X refuse an empty last reply, as Pi's `!text` check does, at Pi's error level", async (t) => {
   const { runCopy } = await import("../dist/tui/session-commands.js");
   // Should a regression reach the clipboard, it writes this file, never the real clipboard.
   const dir = mkdtempSync(join(tmpdir(), "mmp-clipboard-test-"));
@@ -106,7 +106,8 @@ test("/copy and Ctrl+X refuse an empty last reply, as Pi's `!text` check does", 
   };
   await runCopy(host);
   await runCopy(host, { fromKey: true });
-  assert.deepEqual(shown, [["No agent messages to copy yet.", "warning"], ["No agent messages to copy yet.", "warning"]]);
+  // Pi refuses with showError (interactive-mode.js handleCopyCommand).
+  assert.deepEqual(shown, [["No agent messages to copy yet.", "error"], ["No agent messages to copy yet.", "error"]]);
   assert.equal(existsSync(clipboardFile), false);
 });
 

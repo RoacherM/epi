@@ -87,9 +87,23 @@ test("mmp mcp add rejects an invalid exposure before writing anything", (t) => {
 
 test("mmp mcp add -l refuses an untrusted project without --approve, like mmp install -l", (t) => {
   const f = fixture(t);
+  mkdirSync(join(f.project, ".mmp"), { recursive: true });
+  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
   const result = run(f, ["add", "fixture", "-l", "--", "node", fixtureServerPath]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /not trusted -- not read \(mmp --approve or \/trust\)/);
+  assert.equal(existsSync(projectMcpPath(f)), false);
+});
+
+// Dogfood D47 (B1 review F3): there is no project to trust, so "not trusted" was the wrong reason.
+test("mmp mcp add/remove -l outside a project say there is no project, not that it isn't trusted", (t) => {
+  const f = fixture(t);
+  for (const args of [["add", "fixture", "-l", "--", "node", fixtureServerPath], ["remove", "fixture", "-l"]]) {
+    const result = run(f, args);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /has no \.mmp[\\/]mmp\.json, so it is not an MMP project -- -l has nothing to change here/);
+    assert.doesNotMatch(result.stderr, /not trusted/);
+  }
   assert.equal(existsSync(projectMcpPath(f)), false);
 });
 
@@ -121,6 +135,11 @@ test("mmp mcp add -l --approve with a Manifest present but trust not persisted w
   const result = run(f, ["add", "fixture", "-l", "--approve", "--", "node", fixtureServerPath]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /project is not trusted, so .*\.mmp[\\/]mcp\.json is ignored until you start mmp in the project and trust it/);
+  // Dogfood D47 (B1 review F2): a plain `mmp mcp list` would ignore the file too.
+  assert.match(result.stdout, /^Check it with: mmp mcp list --approve$/m);
+  const remote = run(f, ["add", "remote", "-l", "--approve", "--url", "http://127.0.0.1:1/mcp"]);
+  assert.equal(remote.status, 0, remote.stderr);
+  assert.match(remote.stdout, /^Check it with: mmp mcp list --approve\. If it requires sign-in: mmp mcp login remote --approve$/m);
 });
 
 test("mmp mcp add -l with the project already trusted (no --approve needed) shows no ignored-file warning", async (t) => {
@@ -135,6 +154,7 @@ test("mmp mcp add -l with the project already trusted (no --approve needed) show
   const result = run(f, ["add", "fixture", "-l", "--", "node", fixtureServerPath]);
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stdout, /is ignored/);
+  assert.match(result.stdout, /^Check it with: mmp mcp list$/m);
   const config = JSON.parse(readFileSync(projectMcpPath(f), "utf8"));
   assert.deepEqual(config.mcpServers.fixture, { command: "node", args: [fixtureServerPath] });
 });
@@ -224,6 +244,15 @@ test("mmp mcp list shows MMP's own empty-state message and an untrusted-project 
   assert.match(result.stdout, /^No MCP servers configured -- add one to .*mcp\.json with `mmp mcp add <server> .*`, or with -l to this project's \.mmp[\\/]mcp\.json\.$/m);
   assert.doesNotMatch(result.stdout, /then run/);
   assert.match(result.stdout, /is ignored because the project is not trusted\. Add --approve to read it this once \(mmp mcp list --approve\)/);
+});
+
+// Dogfood D47 (B1 review F3): following the -l half outside a project only fails.
+test("mmp mcp list outside a project offers only the global mcp.json", (t) => {
+  const f = fixture(t);
+  const result = run(f, ["list"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^No MCP servers configured -- add one to .*mcp\.json with `mmp mcp add <server> \(--url <url> \| -- <command> \[args\.\.\.\]\)`\.$/m);
+  assert.doesNotMatch(result.stdout, /-l/);
 });
 
 // Dogfood D4: list/login/logout read the project's .mmp/mcp.json, so they take the same
