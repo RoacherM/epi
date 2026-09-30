@@ -1,7 +1,8 @@
 // Runs the real MMP TUI v2 app against an in-memory terminal, driven by a script of inputs.
 // Usage: MMP_TUI_HARNESS='{"args":[],"steps":[["wait",3000],["type","hi"],["key","enter"],...]}' node tui-harness.mjs
 // ["mark", name] records what had been drawn at that moment, to assert timing without further input.
-// ["waitReady"] waits until the app finished startup (extension binding) and accepts submissions.
+// ["waitReady"] waits until the app finished startup (extension binding) and accepts submissions,
+// and until the frame drawn at the end of startup has landed.
 // ["waitFor", pattern, opts?] waits until `pattern` (a string, or {regex, flags?}) is drawn, then
 // continues at once; only a failure waits out the timeout (opts.timeoutMs, default 15000), and then
 // the harness exits non-zero with the screen tail. By default it looks only at what was drawn
@@ -98,6 +99,8 @@ for (const [kind, value, opts = {}] of steps) {
       if (Date.now() > deadline) fail("the app did not finish startup");
       await sleep(5);
     }
+    // pi-tui defers a requested frame by up to 16ms; let bind()'s last one land before the next step.
+    await sleep(25);
   }
   else if (kind === "waitFor") {
     const matches = typeof value === "string" ? (text) => text.includes(value) : (text) => new RegExp(value.regex, value.flags).test(text);

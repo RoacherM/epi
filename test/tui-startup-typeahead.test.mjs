@@ -49,6 +49,8 @@ test("typing and pressing Enter immediately, before startup finishes, keeps the 
     ["waitFor", "Startup is still in progress", { all: true }], ["mark", "duringStartup"],
     // The extension's session_start artificially runs for 300ms; once ready, bind() has resolved.
     ["waitReady"], ["mark", "afterStartup"],
+    // A send of the kept text once startup ends would draw its one-word reply well inside this window.
+    ["wait", 1000],
     ["detach"], // Ctrl+D would not quit: "hi" is still in the editor
   ]);
   assert.match(marks.duringStartup, /Startup is still in progress/);

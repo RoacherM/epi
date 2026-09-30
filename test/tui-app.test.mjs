@@ -109,7 +109,7 @@ test("TUI v2 logs in with an API key, then asks for a model and uses it", (t) =>
   const { marks } = runApp(t, [], [
     ["waitReady"], ["type", "/login"], ["key", "enter"], ["waitFor", "Sign in with an API key"], ["mark", "method"],
     ["key", "down"], ["wait", 200], ["key", "enter"], ["waitFor", "Select provider to configure"], ["mark", "providers"],
-    ["type", "openai"], ["waitFor", "openai"], ["key", "enter"], ["waitFor", "Enter OpenAI API key"], ["mark", "keyPrompt"],
+    ["type", "openai"], ["waitFor", { regex: "> openai[\\s\\S]*\\(1/\\d+\\)" }], ["key", "enter"], ["waitFor", "Enter OpenAI API key"], ["mark", "keyPrompt"],
     ["type", "sk-test-123"], ["key", "enter"], ["waitFor", "Saved API key for OpenAI. Pick a model:"], ["mark", "modelPicker"],
     ["key", "enter"], ["waitFor", "Default model: openai/"], ["mark", "done"],
     ["type", "/model gpt-4o-mini"], ["key", "enter"], ["waitFor", "Model: openai/gpt-4o-mini"], ["mark", "switched"],

@@ -120,6 +120,9 @@ test("Alt+Up restores a message queued during compaction, not just the session's
     ["type", "during compaction"], ["key", "enter"],
     ["waitFor", "Follow-up: during compaction"], ["mark", "queuedDuringCompaction"],
     ["key", "alt+up"], ["waitFor", "Restored 1 queued message to editor."], ["waitFor", "❯ during compaction"], ["mark", "afterAltUp"],
+    // A message wrongly kept in the compaction queue is only flushed once the compaction ends (the
+    // faux summary streams for ~3s), so outlast that, then give a stray reply time to draw.
+    ["waitFor", "Context compacted."], ["wait", 1000],
     ["detach"],
   ], KEEP_NO_RECENT);
   assert.match(marks.queuedDuringCompaction, /Follow-up: during compaction/);

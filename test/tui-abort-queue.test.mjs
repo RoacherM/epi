@@ -88,7 +88,8 @@ test("an extension's ctx.abort() restores the queue too, not just Esc/Ctrl+C", (
     ["waitFor", "FIRST-START"], ["type", "later"], ["key", "enter"],
     ["waitFor", "Follow-up: later"], ["mark", "queued"],
     ["type", "/doabort"], ["key", "enter"],
-    ["waitFor", { regex: "❯ later\\s" }], ["wait", 300],
+    ["waitFor", { regex: "❯ later\\s" }],
+    ["wait", 1500], // same window as the Esc test: the restore is drawn ~0.4s before the aborted turn ends
     ["detach"],
   ]);
   assert.match(marks.queued, /Follow-up: later/);
@@ -96,8 +97,7 @@ test("an extension's ctx.abort() restores the queue too, not just Esc/Ctrl+C", (
   // autocomplete keystroke, so the meaningful check is the settled tail once the command has
   // actually run, not the whole cumulative output since "queued" (which would still contain those
   // now-stale frames either way). Ctrl+D only quits with an empty editor -- "later" ends up back in
-  // it -- so, like the other tests in this file's sibling (tui-pi-args.test.mjs's initial-message
-  // test), this run needs the timeout; there is nothing to assert about EXIT.
+  // it -- so the run detaches; there is nothing to assert about EXIT.
   // The restore frame starts at the spinner redraw just before the final "❯ later"; nothing from
   // that frame on may show the queue line again.
   const restoredAt = out.lastIndexOf("❯ later");

@@ -123,7 +123,9 @@ test("Enter on the chip expands it in place instead of submitting, once the care
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
     ["waitReady"], paste, chipDrawn,
     ["key", "left"], ["waitFor", "Enter:expand"], ["mark", "onChip"],
-    ["key", "enter"], ["waitFor", "line4"], ["mark", "expanded"], ["detach"],
+    // The expanded text is drawn as editor rows ("│ ❯ line1 … │", "│   line4 … │"), which a submitted
+    // message in the transcript never is; then a short window for a stray submit's reply.
+    ["key", "enter"], ["waitFor", { regex: "│ ❯ line1\\s+│[\\s\\S]*│   line4\\s+│" }], ["wait", 300], ["mark", "expanded"], ["detach"],
   ]);
   const redrawn = since(marks.onChip, marks.expanded);
   assert.doesNotMatch(redrawn, /\[Pasted: 4 lines\]/);
