@@ -90,6 +90,12 @@ export class Transcript {
     for (const message of session.messages) {
       this.addFinishedMessage(message);
     }
+    // After a compaction, session.messages start at the summary; the compacted-away user messages
+    // are still on the branch, and the summary may still name their labels, so those stay used
+    // (D11). Test stand-ins without getBranch have no compaction to account for.
+    for (const entry of session.sessionManager.getBranch?.() ?? []) {
+      if (entry.type === "message" && entry.message.role === "user") this.noteImageLabels(messageText(entry.message.content));
+    }
   }
 
   /** The highest `[Image #N]` label in this session's user messages: those shown, and those

@@ -585,3 +585,40 @@ test("a label without image data is drawn unattached and is not deleted as a uni
   editor.handleInput("\x7f");
   assert.equal(editor.getText(), "", "a chip with data still goes as one unit");
 });
+
+// Finding 6 (review-2.md): after a compaction, Pi's `session.messages` start at the summary, but the
+// compacted-away messages' labels may still be named in it, so they stay used.
+
+test("finding 6: after /compact and --resume, the next paste continues after the compacted-away labels", (t) => {
+  const run = setup(t, [fixture("faux-compact.mjs")], { compaction: { keepRecentTokens: 0 } });
+  const first = run([
+    ["wait", 2500], ["type", "look "], ["key", "ctrl+v"], ["wait", 300], ["key", "enter"], ["wait", 800],
+    ["type", "/compact"], ["key", "enter"], ["wait", 1500], ["mark", "compacted"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(first.marks.compacted, /Context compacted\./);
+  const { marks } = run([
+    ["wait", 1500], ["key", "enter"], ["wait", 800], ["mark", "afterResume"],
+    ["key", "ctrl+v"], ["wait", 300], ["mark", "chip"],
+    ["key", "ctrl+d"],
+  ], ["--no-project", "--resume"]);
+  // The resumed context holds only the summary, not `look [Image #1]`.
+  assert.doesNotMatch(marks.afterResume, sentMessage(1));
+  assert.match(since(marks.afterResume, marks.chip), /\[Image #2\]/);
+});
+
+test("Transcript: labels on the session's branch count even when session.messages no longer hold them", () => {
+  initTheme("dark");
+  const user = (text) => ({ role: "user", timestamp: 0, content: [{ type: "text", text }] });
+  const branch = [
+    { type: "message", message: user("a [Image #3]") },
+    { type: "message", message: { role: "assistant", timestamp: 0, content: [{ type: "text", text: "[Image #9]" }] } },
+    { type: "compaction", summary: "the user sent [Image #3]" },
+  ];
+  const session = (sessionManager) => ({ messages: [], sessionManager, extensionRunner: { getMarkdownTransformers: () => [] } });
+  const transcript = new Transcript({ requestRender() {} }, createMmpTheme("dark"), session({ getCwd: () => "/tmp" }));
+  transcript.reset(session({ getCwd: () => "/tmp", getBranch: () => branch }));
+  assert.equal(transcript.highestImageNumber, 3, "user entries only");
+  transcript.reset(session({ getCwd: () => "/tmp" })); // a stub without getBranch
+  assert.equal(transcript.highestImageNumber, 0);
+});
