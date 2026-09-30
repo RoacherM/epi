@@ -225,7 +225,7 @@ test("setThinkingExpanded expands every thinking block; a click on one header to
   assert.match(rendered, /reason B/);
 
   const lines = transcript.root.render(80);
-  const headerA = lines.findIndex((line) => stripAnsi(line).includes("Thought for"));
+  const headerA = lines.findIndex((line) => stripAnsi(line).includes("Thought"));
   assert.ok(headerA >= 0, "expected an expanded 'Thought for' header line");
   const click = {
     type: "click", button: "left", clickCount: 1,
@@ -241,11 +241,17 @@ test("setThinkingExpanded expands every thinking block; a click on one header to
 });
 
 // M4 item 2 (docs/tui-design.md 4.2): "Worked for Ns" below the last block of a settled turn.
-test("a settled turn prints 'Worked for Ns' after agent_end", async () => {
+// The footer prints on `agent_settled`, not `agent_end` -- `agent_settled` is emitted exactly once
+// per session.prompt()/steer()/followUp() call, after every retry, compaction recovery and queued
+// continuation has run its course (agent-session.js's _runAgentPrompt finally block), which is the
+// one point that's both "the run is really over" and "print exactly once".
+test("a settled turn prints 'Worked for Ns' after agent_settled, not before", async () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   transcript.handle({ type: "agent_start" });
   await new Promise((resolve) => setTimeout(resolve, 30));
   transcript.handle({ type: "agent_end", messages: [assistantMessage([{ type: "text", text: "done" }])], willRetry: false });
+  assert.doesNotMatch(transcript.root.render(80).join("\n"), /Worked for|Stopped after/, "not yet -- agent_settled hasn't fired");
+  transcript.handle({ type: "agent_settled" });
   const rendered = transcript.root.render(80).join("\n");
   assert.match(rendered, /Worked for \d+\.\ds/);
   assert.doesNotMatch(rendered, /Stopped after/);
@@ -261,28 +267,73 @@ test("an aborted turn prints 'Stopped after Ns' instead", () => {
     messages: [assistantMessage([{ type: "text", text: "partial" }], { stopReason: "aborted" })],
     willRetry: false,
   });
+  transcript.handle({ type: "agent_settled" });
   const rendered = transcript.root.render(80).join("\n");
   assert.match(rendered, /Stopped after \d+\.\ds/);
   assert.doesNotMatch(rendered, /Worked for/);
 });
 
-// A run that's about to auto-retry isn't over yet from the user's point of view; the footer waits
-// for the retry's own agent_end (or auto_retry_end, if the retry gives up).
-test("agent_end with willRetry doesn't print a footer until the retry actually settles", () => {
+// A run that's about to auto-retry isn't over yet from the user's point of view, and `agent.
+// continue()` re-emits `agent_start` for that same run -- it must not reset the clock (the bug: a
+// fast final leg after a slow first attempt would otherwise show a near-zero duration for the whole
+// thing). `??=`, not `=`, on agent_start is what this exercises.
+test("agent_start re-emitted for a retry/continuation doesn't reset the 'Worked for' clock", async () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   transcript.handle({ type: "agent_start" });
+  await new Promise((resolve) => setTimeout(resolve, 150));
   transcript.handle({ type: "agent_end", messages: [], willRetry: true });
-  assert.doesNotMatch(transcript.root.render(80).join("\n"), /Worked for|Stopped after/);
+  transcript.handle({ type: "agent_start" }); // agent.continue()'s own agent_start for the same run
   transcript.handle({ type: "agent_end", messages: [assistantMessage([{ type: "text", text: "done" }])], willRetry: false });
-  assert.match(transcript.root.render(80).join("\n"), /Worked for \d+\.\ds/);
+  transcript.handle({ type: "agent_settled" });
+  const rendered = transcript.root.render(80).join("\n");
+  const [, seconds] = /Worked for (\d+\.\d)s/.exec(rendered) ?? [];
+  assert.ok(seconds !== undefined, `expected a 'Worked for Ns' line, got: ${rendered}`);
+  assert.ok(Number(seconds) >= 0.1, `expected the clock to span the 150ms wait before the reset bug's fix, got ${seconds}s`);
 });
 
-test("a retry that gives up prints the footer from auto_retry_end", () => {
+// A retry that exhausts its attempts (not cancelled by the user) still settles normally.
+test("a retry that gives up (not cancelled) prints 'Worked for Ns' once agent_settled fires", () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   transcript.handle({ type: "agent_start" });
   transcript.handle({ type: "agent_end", messages: [], willRetry: true });
-  transcript.handle({ type: "auto_retry_end", success: false, attempt: 3 });
-  assert.match(transcript.root.render(80).join("\n"), /Worked for \d+\.\ds/);
+  transcript.handle({ type: "auto_retry_end", success: false, attempt: 3, finalError: "model error" });
+  assert.doesNotMatch(transcript.root.render(80).join("\n"), /Worked for|Stopped after/, "not yet -- agent_settled hasn't fired");
+  transcript.handle({ type: "agent_settled" });
+  const rendered = transcript.root.render(80).join("\n");
+  assert.match(rendered, /Worked for \d+\.\ds/);
+  assert.doesNotMatch(rendered, /Stopped after/);
+  assert.match(rendered, /Retry failed: model error/, "the notice must still render (the duplicate-case regression)");
+});
+
+// Esc during a retry's backoff sleep (AgentSession.abortRetry) never reaches another agent_end at
+// all -- it only ever shows up as auto_retry_end's "Retry cancelled" -- so the footer must read that
+// signal too, not just agent_end's stopReason, or it wrongly prints "Worked for" for a run the user
+// stopped.
+test("Esc during a retry's backoff sleep prints 'Stopped after Ns', not 'Worked for'", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  transcript.handle({ type: "agent_start" });
+  transcript.handle({ type: "agent_end", messages: [], willRetry: true });
+  transcript.handle({ type: "auto_retry_end", success: false, attempt: 1, finalError: "Retry cancelled" });
+  transcript.handle({ type: "agent_settled" });
+  const rendered = transcript.root.render(80).join("\n");
+  assert.match(rendered, /Stopped after \d+\.\ds/);
+  assert.doesNotMatch(rendered, /Worked for/);
+});
+
+// An overflow-compaction recovery (_checkCompaction inside _handlePostAgentRun) drives another
+// agent_start/agent_end pair for the *same* prompt run before agent_settled -- the bug: printing on
+// every agent_end would show two "Worked for" lines for one user-visible turn.
+test("a compaction continuation (two agent_end pairs, one agent_settled) prints exactly one footer", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  transcript.handle({ type: "agent_start" });
+  transcript.handle({ type: "agent_end", messages: [assistantMessage([{ type: "text", text: "reply1" }], { stopReason: "error" })], willRetry: false });
+  transcript.handle({ type: "compaction_end", reason: "overflow", result: { summary: "s" }, aborted: false, willRetry: true });
+  transcript.handle({ type: "agent_start" }); // agent.continue()'s own agent_start for the recovery leg
+  transcript.handle({ type: "agent_end", messages: [assistantMessage([{ type: "text", text: "reply2" }])], willRetry: false });
+  transcript.handle({ type: "agent_settled" });
+  const rendered = transcript.root.render(80).join("\n");
+  const matches = [...rendered.matchAll(/Worked for \d+\.\ds/g)];
+  assert.equal(matches.length, 1, `expected exactly one footer line, got: ${rendered}`);
 });
 
 // Every new block this change adds (timestamp, thinking streaming/collapsed/expanded, the turn
@@ -310,16 +361,18 @@ test("assistant messages with thinking fit widths 40, 80, and 120", () => {
 });
 
 // Regression: a replayed message (reset() -> addFinishedMessage(), never streamed live in this
-// process) ending in thinking must render as finished ("Thought for"), not stuck showing the live
+// process) ending in thinking must render as finished ("Thought"), not stuck showing the live
 // "Thinking…" tail forever -- AssistantBlock's `streaming` flag has to actually reach it, not
-// default to true regardless of what Transcript.assistant() was called with.
+// default to true regardless of what Transcript.assistant() was called with. It shows bare "Thought"
+// (no "for Ns"), not a misleading "Thought for 0.0s": no thinking_start/delta/end ever reached this
+// process for a replayed message, so there's no real duration to report.
 test("a replayed message ending in thinking renders as finished, not stuck streaming", () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   const message = assistantMessage([{ type: "thinking", thinking: "reasoning only, no reply text" }]);
   transcript.reset({ ...stubSession(), messages: [message] });
   const rendered = stripAnsi(transcript.root.render(80).join("\n"));
   assert.doesNotMatch(rendered, /Thinking…/, "a replayed, already-finished message must not show the live streaming view");
-  assert.match(rendered, /Thought for \d+\.\ds/);
+  assert.match(rendered, /◆ Thought(?! for)/, "bare 'Thought', no duration -- none was ever recorded");
 });
 
 // Regression: a plain text-only reply (the common case, no thinking at all) must show exactly the
@@ -345,8 +398,94 @@ test("thinking followed by text has no blank row between the header and the text
   transcript.handle({ type: "message_start", message });
   transcript.handle({ type: "message_end", message });
   const lines = transcript.root.render(80).map(stripAnsi);
-  const headerIndex = lines.findIndex((line) => line.includes("Thought for"));
+  const headerIndex = lines.findIndex((line) => line.includes("Thought"));
   const answerIndex = lines.findIndex((line) => line.includes("the answer"));
   assert.ok(headerIndex >= 0 && answerIndex > headerIndex);
   assert.equal(answerIndex, headerIndex + 1, "expected the text to sit directly under the thinking header");
+});
+
+// Regression: a logical thinking line longer than the available width must wrap onto more screen
+// rows, not get cut off with "…" (fit()/truncateToWidth on every logical line, the prior bug) -- a
+// paragraph that keeps going past the first row must still show its own end.
+test("a long thinking paragraph wraps across rows instead of being truncated, both streaming and expanded", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  const paragraph = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen END-OF-PARAGRAPH";
+  const message = assistantMessage([{ type: "thinking", thinking: paragraph }]);
+  transcript.handle({ type: "message_start", message });
+  transcript.handle({
+    type: "message_update",
+    message,
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "x", partial: message },
+  });
+  // "Thinking…"/label text legitimately contains its own "…"; only the wrapped *content* rows
+  // (everything but that label line) would show a truncation ellipsis if the old fit()-per-line bug
+  // were still there.
+  const streamingLines = transcript.root.render(60).map(stripAnsi).filter((line) => !line.includes("Thinking…"));
+  assert.ok(streamingLines.every((line) => !line.includes("…")), `wrapped, not truncated with an ellipsis: ${JSON.stringify(streamingLines)}`);
+  assert.match(streamingLines.join("\n"), /END-OF-PARAGRAPH/, "the wrapped tail must still reach the end of a long paragraph");
+
+  transcript.handle({ type: "message_end", message });
+  transcript.setThinkingExpanded(true);
+  const expanded = stripAnsi(transcript.root.render(60).join("\n"));
+  assert.doesNotMatch(expanded, /…/);
+  assert.match(expanded, /one two three/);
+  assert.match(expanded, /END-OF-PARAGRAPH/, "the expanded body must show the whole paragraph, not just its first row");
+});
+
+// Regression: `applyTransformers` was defined but never called -- an extension's markdown
+// transformer must see thinking text too (Pi's own `messageType: "assistant-thinking"`), the same as
+// it sees ordinary assistant text.
+test("an extension's markdown transformer is applied to thinking text", () => {
+  const calls = [];
+  const transformer = (markdown, context) => {
+    calls.push(context.messageType);
+    return markdown.replace("reasoning", "TRANSFORMED-REASONING");
+  };
+  // stubSession()'s extensionRunner returns this transformer, the way getMarkdownTransformers()
+  // would for a real extension registered via ctx.registerMarkdownTransformer().
+  const session = { ...stubSession(), extensionRunner: { getMarkdownTransformers: () => [transformer] } };
+  const transcript = new Transcript(stubTui(), theme, session);
+  const message = assistantMessage([{ type: "thinking", thinking: "some reasoning here" }]);
+  transcript.handle({ type: "message_start", message });
+  transcript.handle({
+    type: "message_update",
+    message,
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "x", partial: message },
+  });
+  transcript.setThinkingExpanded(true);
+  const rendered = stripAnsi(transcript.root.render(80).join("\n"));
+  assert.ok(calls.includes("assistant-thinking"), `expected a call with messageType "assistant-thinking", got: ${JSON.stringify(calls)}`);
+  assert.match(rendered, /TRANSFORMED-REASONING/, "the transformer's output must actually be what's shown");
+});
+
+// Regression: AssistantBlock.render() draws its inner container at a narrower `innerWidth` (room for
+// the clock) but handleMouse() forwarded the click's original, wider `event.width` unchanged --
+// pi-tui's Container only reuses its cached row heights when the width matches exactly, so it
+// recomputed them at the wrong width and mapped the click to the wrong segment whenever an earlier
+// one wraps differently at the two widths.
+test("clicking the 'Thought' row still works when an earlier text segment wraps differently at the two widths", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  const width = 60;
+  // Long enough to wrap to a different number of rows at `width` (60) than at the narrower
+  // `innerWidth` AssistantBlock actually renders its container at (60 - clock - 2).
+  const wrappingText = Array.from({ length: 11 }, () => "word").join(" ");
+  const message = assistantMessage([
+    { type: "text", text: wrappingText },
+    { type: "thinking", thinking: "deep reason" },
+    { type: "text", text: "final" },
+  ]);
+  transcript.handle({ type: "message_start", message });
+  transcript.handle({ type: "message_end", message });
+  const lines = transcript.root.render(width).map(stripAnsi);
+  const y = lines.findIndex((line) => line.includes("Thought"));
+  assert.ok(y >= 0, "expected a 'Thought' header row");
+  const click = {
+    type: "click", button: "left", clickCount: 1,
+    x: 5, y, screenX: 5, screenY: y, width, height: lines.length,
+    shift: false, alt: false, ctrl: false,
+  };
+  const result = transcript.root.handleMouse(click);
+  assert.ok(result?.handled, "expected the click on the header row to be handled");
+  const after = stripAnsi(transcript.root.render(width).join("\n"));
+  assert.match(after, /deep reason/, "expected the click to expand this run, not miss it");
 });

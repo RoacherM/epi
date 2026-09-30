@@ -218,12 +218,20 @@ function isBorderRule(text: string): boolean {
 /** Item 4 (docs/tui-design.md 4.1/4.2): at ≤12 rows, crop the editor's content down to the row
  * holding the cursor (its reverse-video marker, same as the Editor itself emits it) instead of an
  * arbitrary window -- the point of the cap is to keep editing visible, not just short. Falls back to
- * the last row (unfocused editors don't mark a cursor at all) so this never returns nothing. */
-function cropToCursor(lines: readonly string[], maxRows: number): string[] {
-  if (lines.length <= maxRows) return [...lines];
+ * the last row (unfocused editors don't mark a cursor at all) so this never returns nothing. Returns
+ * the window's bounds, not just the cropped slice, so `handleMouse()` can shift a click's `y` by the
+ * same `start` offset `render()` cropped by -- otherwise a click lands on the row it would be at
+ * without the crop, not the one actually drawn on screen. */
+function cropWindow(lines: readonly string[], maxRows: number): { start: number; end: number } {
+  if (lines.length <= maxRows) return { start: 0, end: lines.length };
   const cursorIndex = lines.findIndex((line) => line.includes("\x1b[7m"));
   const end = Math.min(lines.length, Math.max(maxRows, (cursorIndex === -1 ? lines.length - 1 : cursorIndex) + 1));
-  return lines.slice(end - maxRows, end);
+  return { start: end - maxRows, end };
+}
+
+function cropToCursor(lines: readonly string[], maxRows: number): string[] {
+  const { start, end } = cropWindow(lines, maxRows);
+  return lines.slice(start, end);
 }
 
 export class PromptFrame implements Component {
@@ -299,20 +307,23 @@ export class PromptFrame implements Component {
 
   /** Forwards a click/double-click inside the content rows to the editor, translated into its own
    * coordinate space (docs/tui-design.md 4.3: double-click on a chip expands it). Clicks on the
-   * border or the autocomplete dropdown below it are left unhandled, matching prior behavior.
-   * Known gap: at the ≤12-row cap (`maxContentRows`), this still maps against the *uncropped*
-   * content height, so a click lands on the row it would be on without the cap, not the row drawn on
-   * screen. Not fixed here -- a terminal that short makes precise mouse targeting essentially moot,
-   * and the editor stays fully usable from the keyboard either way. */
+   * border or the autocomplete dropdown below it are left unhandled, matching prior behavior. At the
+   * ≤12-row cap (`maxContentRows`), a click's `y` is shifted by the same crop-window offset
+   * `render()` used, so a double-click on a chip on a row *within the drawn window* still lands on
+   * the right line of the editor's own (uncropped) content -- a click on a screen position outside
+   * the drawn window can't occur in practice (nothing else is drawn there) but is also harmless: it
+   * maps past the editor's real content and simply falls through unhandled below. */
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     const inner = Math.max(1, event.width - 6);
-    const { top, bottom } = this.contentBounds(inner);
+    const { lines, top, bottom } = this.contentBounds(inner);
     if (top === -1 || bottom === -1) return undefined;
     const contentHeight = bottom - top - 1;
     if (event.y < 1 || event.y > contentHeight) return undefined;
     const x = event.x - PROMPT_COLUMNS;
     if (x < 0 || x >= inner) return undefined;
-    return this.editor.handleMouse?.({ ...event, x, width: inner, height: contentHeight });
+    const maxRows = this.maxContentRows();
+    const offset = maxRows === undefined ? 0 : cropWindow(lines.slice(top + 1, bottom), maxRows).start;
+    return this.editor.handleMouse?.({ ...event, x, y: event.y + offset, width: inner, height: contentHeight });
   }
 
   invalidate(): void {

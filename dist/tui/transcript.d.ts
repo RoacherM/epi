@@ -16,10 +16,20 @@ export declare class Transcript {
     private streaming;
     private toolsExpanded;
     private thinkingExpanded;
-    /** Set on `agent_start`, read (and cleared) on `agent_end`/`auto_retry_end` for the `Worked
-     * for Ns` footer (item 2) -- this process's own clock, not anything from the event stream, since
-     * neither event carries a timestamp. */
+    /** Set on the *first* `agent_start` of a prompt run (item 2's `Worked for Ns` footer), read and
+     * cleared on `agent_settled` -- this process's own clock, not anything from the event stream,
+     * since none of these events carry a timestamp. Not reset on a later `agent_start`: `agent.
+     * continue()` (a retry, a compaction recovery, a queued continuation) re-emits it for the *same*
+     * run, and the footer times the whole run from when the user asked for it, not its last leg. */
     private turnStartedAt;
+    /** The most recent `agent_end`'s own messages, read back on `agent_settled` (the point that's
+     * actually "this run is over") to find the last assistant reply's `stopReason`. */
+    private lastTurnMessages;
+    /** Set only by `auto_retry_end`'s "Retry cancelled" (Esc during a retry's backoff sleep never
+     * reaches another `agent_end`, so it has no `stopReason` of its own to read back from
+     * `lastTurnMessages` -- this is the only signal it leaves behind). `turnFooter()` ORs this with
+     * `lastTurnMessages`'s own aborted check, the ordinary case (Esc during a normal response). */
+    private turnAborted;
     constructor(tui: TUI, theme: Theme, session: AgentSession);
     /** New session after /new, /resume, /reload: clear and replay its history. */
     reset(session: AgentSession): void;
@@ -46,10 +56,11 @@ export declare class Transcript {
     private add;
     private assistant;
     /** Item 2 (docs/tui-design.md 4.2): `Worked for Ns` below the last block of a settled turn,
-     * `Stopped after Ns` for one that ended aborted. `messages` is `agent_end`'s own payload (this
-     * run's messages, not the whole session) so the scan for the last assistant reply's `stopReason`
-     * only ever looks at this turn -- an empty array (auto_retry_end giving up with no final
-     * assistant message at all) just falls back to "Worked for". */
+     * `Stopped after Ns` for one that ended aborted. Called once, from `agent_settled` -- the whole
+     * prompt run (every retry, compaction recovery and queued continuation) is over by then, so
+     * `lastTurnMessages` holds the *last* `agent_end`'s payload, the one whose stopReason actually
+     * decides the label; an empty array (a cancelled retry with no final assistant message at all)
+     * just falls back to `turnAborted` alone. */
     private turnFooter;
     private addFinishedMessage;
     private syncToolCalls;

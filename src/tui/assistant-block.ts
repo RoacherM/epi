@@ -73,23 +73,40 @@ class ThinkingBlock implements Component {
     private readonly timing: ThinkingTiming,
     private readonly expanded: boolean,
     private readonly onToggle: () => void,
+    private readonly transformers: readonly MarkdownTransformer[],
   ) {}
 
   private renderLines(width: number): string[] {
     const bullet = this.theme.fg("dim", "◆");
     const pad = " ".repeat(CONTENT_PAD - 2);
+    // Available width for wrapped content, matching `fit()`'s single-line budget elsewhere in this
+    // file: the same `pad` prefix, minus a column of slack `wrapTextWithAnsi` doesn't need but
+    // `fit()`'s `truncateToWidth` did.
+    const contentWidth = Math.max(1, width - pad.length);
     if (this.active) {
       const label = `${bullet} ${this.theme.fg("muted", "Thinking…")}`;
-      const tail = this.text.split("\n").filter((line) => line.trim() !== "").slice(-STREAMING_TAIL_LINES);
+      const transformed = applyTransformers(this.text, "assistant-thinking", true, contentWidth, this.transformers);
+      // Wrap first, *then* take the last 3 rows: a `fit()`/`truncateToWidth` per logical line (the
+      // prior bug here) throws away everything past the terminal's width instead of carrying it to
+      // the next screen row, so a paragraph wider than the terminal never showed its own end.
+      const wrapped = piTui.wrapTextWithAnsi(transformed, contentWidth).filter((line) => line.trim() !== "");
+      const tail = wrapped.slice(-STREAMING_TAIL_LINES);
       return [
         `${pad}${label}`,
-        ...tail.map((line) => fit(`${pad}${this.theme.fg("thinkingText", line)}`, width)),
+        ...tail.map((line) => `${pad}${this.theme.fg("dim", line)}`),
       ];
     }
-    const duration = formatDuration((this.timing.lastAt ?? this.timing.startedAt ?? 0) - (this.timing.startedAt ?? this.timing.lastAt ?? 0));
-    const header = `${pad}${bullet} ${this.theme.bold(this.theme.fg("muted", "Thought"))}${this.theme.fg("muted", ` for ${duration}`)}`;
+    const hasTiming = this.timing.startedAt !== undefined || this.timing.lastAt !== undefined;
+    const suffix = hasTiming
+      ? this.theme.fg("muted", ` for ${formatDuration((this.timing.lastAt ?? this.timing.startedAt ?? 0) - (this.timing.startedAt ?? this.timing.lastAt ?? 0))}`)
+      // Replayed history (docs/tui-design.md 4.2): no live thinking_start/delta/end ever reached
+      // this block, so there's no real duration to show -- a bare "◆ Thought" rather than a
+      // misleadingly precise (and always-zero) "Thought for 0.0s".
+      : "";
+    const header = `${pad}${bullet} ${this.theme.bold(this.theme.fg("muted", "Thought"))}${suffix}`;
     if (!this.expanded) return [fit(header, width)];
-    const body = this.text.split("\n").map((line) => fit(`${pad}${this.theme.fg("thinkingText", line)}`, width));
+    const transformed = applyTransformers(this.text, "assistant-thinking", false, contentWidth, this.transformers);
+    const body = piTui.wrapTextWithAnsi(transformed, contentWidth).map((line) => `${pad}${this.theme.fg("thinkingText", line)}`);
     return [fit(header, width), ...body];
   }
 
@@ -122,10 +139,16 @@ export class AssistantBlock implements Component {
     message: AssistantMessage,
     private readonly transformers: readonly MarkdownTransformer[],
     streaming: boolean,
+    // The transcript's current Ctrl+T state (Transcript.thinkingExpanded), applied *before* the
+    // first rebuild instead of via a `setGlobalExpanded()` call right after construction -- that
+    // call would trigger a second full rebuild of every segment on every single replayed message,
+    // for no visible difference the vast majority of the time (Ctrl+T defaults to off).
+    globalExpanded = false,
   ) {
     // Captured once, like UserMessageBlock's `time`: the component is reused across every
     // streaming update for this message, so this must not drift as content arrives.
     this.clock = theme.fg("muted", new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
+    this.globalExpanded = globalExpanded;
     this.updateContent(message, streaming);
   }
 
@@ -187,7 +210,7 @@ export class AssistantBlock implements Component {
           this.expandedOverride.set(segment.startIndex, !(this.expandedOverride.get(segment.startIndex) ?? this.globalExpanded));
           if (this.lastMessage !== undefined) this.rebuild(splitSegments(this.lastMessage.content));
         };
-        this.container.addChild(new ThinkingBlock(this.theme, text, active, timing, expanded, toggle));
+        this.container.addChild(new ThinkingBlock(this.theme, text, active, timing, expanded, toggle, this.transformers));
         return;
       }
       // A text/tool-call run: Pi's own component, fed only this run's `content` and a neutral
@@ -232,14 +255,20 @@ export class AssistantBlock implements Component {
     }
   }
 
+  /** The width the inner container is actually rendered at -- narrower than the component's own,
+   * to leave room for the clock (chrome.ts's `UserMessageBlock` does the same). Shared by `render()`
+   * and `handleMouse()` so a click is dispatched against the same row heights it was drawn with. */
+  private innerWidth(width: number): number {
+    return Math.max(1, width - piTui.visibleWidth(this.clock) - 2);
+  }
+
   /** Item 1 (docs/tui-design.md 4.2): the time sits on the first *visible* line, like a user
    * message -- not literally render()'s line 0, which is usually the blank spacer Pi's component
    * always opens with. Reused, `spread`'s narrowing (chrome.ts's UserMessageBlock does the same)
    * costs a little wrap width throughout rather than only on that one line, which pi-tui's Markdown
    * has no hook to do more precisely. */
   render(width: number): string[] {
-    const innerWidth = Math.max(1, width - piTui.visibleWidth(this.clock) - 2);
-    const lines = this.container.render(innerWidth);
+    const lines = this.container.render(this.innerWidth(width));
     // `visibleWidth`, not a string-emptiness check: the leading blank row is often not literally ""
     // -- Pi's AssistantMessageComponent prepends a zero-width OSC133 marker to it -- so a plain
     // `.trim() !== ""` would treat that row as "visible" and put the clock on the blank line.
@@ -248,8 +277,12 @@ export class AssistantBlock implements Component {
     return lines.map((line, lineIndex) => (lineIndex === index ? spread(line, this.clock, width) : line));
   }
 
+  /** `event.width` must match what `render()` last drew the container at, or pi-tui's `Container.
+   * handleMouse` recomputes row heights at the wrong (full, not narrowed) width and a click lands on
+   * the wrong segment whenever an earlier one wraps differently at the two widths -- `Container`
+   * only reuses its cached per-child heights when the width matches exactly. */
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    return this.container.handleMouse(event);
+    return this.container.handleMouse({ ...event, width: this.innerWidth(event.width) });
   }
 
   invalidate(): void {

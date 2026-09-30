@@ -57,18 +57,26 @@ test("thinking streams 'Thinking…' while running, then settles as 'Thought for
   assert.match(stripAnsi(output), /THINK-DONE/);
 });
 
-// The precise expand/collapse/click-one semantics are covered by the direct Transcript unit tests
-// (clean render() snapshots, not this harness's cumulative log -- see the note above). What only the
-// real app can prove is that `Ctrl+T` really is bound end to end -- Pi's `app.thinking.toggle`
-// keybinding through to `CommandHost.toggleThinkingExpanded` -- without erroring or hanging the app
-// (runApp's own assert on exit code 0 is what actually proves that).
-test("Ctrl+T is wired to a live key press without erroring or hanging the app", (t) => {
+// The precise expand/collapse/click-one semantics (that collapsed genuinely shows nothing past the
+// header, that a second Ctrl+T genuinely collapses it back) are the direct Transcript unit tests'
+// job: clean render() snapshots, not this harness's cumulative, differentially-rendered log, where
+// neither a "the text is present" nor a "the text is not present *anymore*" check is reliable (see
+// the note above -- and differential rendering means even a mark's own *trailing* bytes aren't
+// reliably "the current screen": an idle frame's last redraw can be the footer or cursor blink,
+// nowhere near the reasoning text, even though that text is still on screen unchanged). What this
+// test can and does check: Ctrl+T is really wired to a live key press (Pi's `app.thinking.toggle`
+// through to `CommandHost.toggleThinkingExpanded`) and, once it runs, the resulting expanded render
+// actually contains real reasoning text (not an error, not empty output) -- i.e. the code path
+// behind the key executes successfully end to end, which a bare exit-code check does not prove.
+test("Ctrl+T is wired to a live key press and its expanded render shows real reasoning text", (t) => {
   const { marks } = runApp(t, [fixture("faux-thinking.mjs")], [
     ["wait", 2500], ["type", "go"], ["key", "enter"], ["wait", 3000],
     ["key", "ctrl+t"], ["wait", 100], ["mark", "after"],
     ["key", "ctrl+d"],
   ]);
-  assert.match(stripAnsi(marks.after), /THINK-DONE/);
+  const after = stripAnsi(marks.after);
+  assert.match(after, /THINK-DONE/);
+  assert.match(after, /reasoning step \d/, "the expanded thinking block should show its own reasoning text");
 });
 
 test("Esc during a run prints 'Stopped after Ns', not 'Worked for'", (t) => {

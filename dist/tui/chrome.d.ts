@@ -75,11 +75,12 @@ export declare class PromptFrame implements Component {
     handleInput(data: string): void;
     /** Forwards a click/double-click inside the content rows to the editor, translated into its own
      * coordinate space (docs/tui-design.md 4.3: double-click on a chip expands it). Clicks on the
-     * border or the autocomplete dropdown below it are left unhandled, matching prior behavior.
-     * Known gap: at the ≤12-row cap (`maxContentRows`), this still maps against the *uncropped*
-     * content height, so a click lands on the row it would be on without the cap, not the row drawn on
-     * screen. Not fixed here -- a terminal that short makes precise mouse targeting essentially moot,
-     * and the editor stays fully usable from the keyboard either way. */
+     * border or the autocomplete dropdown below it are left unhandled, matching prior behavior. At the
+     * ≤12-row cap (`maxContentRows`), a click's `y` is shifted by the same crop-window offset
+     * `render()` used, so a double-click on a chip on a row *within the drawn window* still lands on
+     * the right line of the editor's own (uncropped) content -- a click on a screen position outside
+     * the drawn window can't occur in practice (nothing else is drawn there) but is also harmless: it
+     * maps past the editor's real content and simply falls through unhandled below. */
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
     invalidate(): void;
 }
