@@ -3,9 +3,13 @@ import { type ProjectDiscovery, type ProjectManifestState } from "./project.js";
 export interface ResolveAssemblyOptions {
     agentDir: string;
     globalManifestPath: string;
+    /** MMP's own home (parent of `pi/` and `mmp.json`); `<mmpHome>/skills` is one of the three fixed
+     * auto-discovery roots (docs/decisions.md S1). */
+    mmpHome: string;
     cwd: string;
     noProject: boolean;
     projectTrustOverride: boolean | undefined;
+    environment: NodeJS.ProcessEnv;
 }
 export interface ResolvedAssembly {
     agentDir: string;

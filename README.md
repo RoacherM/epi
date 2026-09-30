@@ -127,7 +127,7 @@ mmp auth print-api-key|print-bearer-token|check                # 打印或检查
 ~/.mmp/
 ├── mmp.json             # 全局 Manifest
 ├── RULES.md             # 示例 Rule，由 Manifest 显式声明
-├── skills/              # 示例 Skill 目录，由 Manifest 显式声明
+├── skills/              # 自动发现（也可额外被 Manifest 显式声明）
 ├── agents/*.md          # mmp:task 与 agent Hook 使用的 Agent profile
 ├── mcp.json             # mmp:mcp 配置
 ├── hooks.json           # mmp:hooks 配置
@@ -139,6 +139,7 @@ mmp auth print-api-key|print-bearer-token|check                # 打印或检查
 ```text
 <repo>/.mmp/
 ├── mmp.json
+├── skills/              # 自动发现，仅在项目可信时读取
 ├── agents/*.md
 ├── mcp.json
 └── hooks.json
@@ -175,6 +176,14 @@ mmp auth print-api-key|print-bearer-token|check                # 打印或检查
 - 外部 Extension 可使用本地路径、`npm:` 或 `git:` source；MMP 仍关闭 Pi 的 ambient discovery。
 
 Rules 按装配顺序拼接到 Pi system prompt。Skills 使用 Pi 的 `SKILL.md` 格式，并通过绝对路径显式加载。
+
+Skills 的资源只由 Manifest 声明这一条承诺有三个固定例外：除 Manifest 声明的 Skill 路径外，MMP 还会自动发现三个目录（缺失时跳过，不报错）：
+
+- 全局 `~/.agents/skills`（跨 Agent 通用约定目录）；
+- MMP 自己的全局 `<MMP_HOME>/skills`（默认 `~/.mmp/skills`，和 `mmp.json` 同级）；
+- 被信任项目的 `.mmp/skills`（信任规则与 `.mmp/mmp.json` 一致——项目如果没有 `.mmp/mmp.json`，就不算 MMP 项目，其 `.mmp/skills` 也不会被发现，`--approve` 也不例外）。
+
+永远不会读取 Pi 自己的 Skill 目录（`~/.pi/agent/skills`、MMP 的 Pi 数据目录 `<MMP_HOME>/pi/skills`、项目 `.pi/skills`），也不读取项目的 `.agents/skills`（不是用户为 MMP 选定的目录）。自动发现的目录和 Manifest 声明的目录一样，以显式绝对路径传给 Pi；canonical path 与已声明的 Skill 相同时去重，声明的一方保留其 source/declaredIn。`mmp --dry-run`、`/mmp`、启动页和 `mmp list` 都会标注每个自动发现 skill root 的来源（`discovered: agents` / `discovered: mmp` / `discovered: project`）。
 
 Manifest 修改后：
 
@@ -316,7 +325,7 @@ Handler 类型：
 - `prompt`：字段为 `prompt`、可选 `model`/`timeoutMs`。缺省 model 使用当前 Parent 模型。
 - `agent`：字段为 `agent`、`prompt`、可选 `timeoutMs`。`agent` 必须引用已加载的 Task Agent profile；未知名称在 Pi 启动前失败。Agent Child 同样不能递归派生 Task。
 
-`timeoutMs` 默认 `10000`，最大 `300000`。超时、非零 command exit、非 2xx HTTP、超限输出、malformed JSON 和非法决策都视为 Hook 失败。阻断型 Pi 事件会 fail-closed；Session shutdown 会取消仍在运行的 handlers 并回收进程。
+`timeoutMs` 默认 `10000`，最大 `300000`。超时、非零 command exit（错误信息包含退出码和一段 stderr 尾部）、spawn 失败（如 command 找不到）、非 2xx HTTP、超限输出、malformed JSON 和非法决策都视为 Hook 失败，错误信息会指出具体是哪个 Hook（event + 声明它的文件）和哪个 handler。阻断型 Pi 事件会 fail-closed；Session shutdown 会取消仍在运行的 handlers 并回收进程。`tool_call`/`tool_result` 失败通过对应 tool result 显示；没有 tool result 可用的事件（`session_start`、`user_prompt`、`session_before_compact`、`session_shutdown`）失败时会调用 Pi UI 通知，在 MMP 自己的界面和 Pi 的 `rpc` 模式下可见；Pi 的 `print`/`json` 模式没有可用 UI（Pi 的 `noOpUIContext`），这两种模式下同一条消息还会写到 stderr，确保失败不会安静地留下一个空回复。
 
 HTTP `body`、`url`、`headers` 与 command `env` 支持 `${ENV_NAME}`。HTTP body 还支持事件模板：
 

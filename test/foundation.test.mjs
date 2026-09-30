@@ -257,15 +257,19 @@ test("the benchmark entry's flags all parse and forward byte-for-byte (DEVELOPME
   ]);
 });
 
-test("dry-run is JSON-only and does not create MMP_HOME", () => {
+test("dry-run is JSON-only and does not create MMP_HOME", (t) => {
   const mmpHome = join(tmpdir(), `mmp-dry-${randomUUID()}`);
+  // Isolated HOME: skills[] below asserts no auto-discovered skill roots (docs/decisions.md S1),
+  // which the real ~/.agents/skills would otherwise leak in as.
+  const home = mkdtempSync(join(tmpdir(), "mmp-dry-home-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
   const result = spawnSync(
     process.execPath,
     [cliPath.pathname, "--dry-run", "--no-project"],
     {
     cwd: projectRoot,
     encoding: "utf8",
-    env: { ...process.env, MMP_HOME: mmpHome },
+    env: { ...process.env, HOME: home, MMP_HOME: mmpHome },
   });
 
   assert.equal(result.status, 0, result.stderr);

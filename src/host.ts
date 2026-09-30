@@ -127,9 +127,11 @@ function prepareParsedMmpRun(
   const resolveCurrentAssembly = () => resolveAssembly({
     agentDir: paths.agentDir,
     globalManifestPath: paths.globalManifest,
+    mmpHome: paths.mmpHome,
     cwd,
     noProject: args.noProject,
     projectTrustOverride: args.projectTrustOverride,
+    environment,
   });
   const assembly = resolveCurrentAssembly();
   const runtimeIdentity = createMmpRuntimeIdentity({

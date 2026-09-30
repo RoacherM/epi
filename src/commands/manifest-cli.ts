@@ -10,6 +10,7 @@ import { MmpArgumentError, MmpConfigError } from "../errors.js";
 import { resolveManifest, type ResolvedManifest, type ResourceSource } from "../manifest.js";
 import { resolveMmpPaths } from "../paths.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "../project.js";
+import { discoverSkillRoots } from "../skill-discovery.js";
 
 interface ManifestTarget {
   path: string;
@@ -533,22 +534,35 @@ export function runListCommand(argv: readonly string[]): number {
   if (argv.length > 0) {
     throw new MmpArgumentError("mmp list takes no arguments");
   }
+  const mmpPaths = resolveMmpPaths(process.env);
   const global = globalTarget();
   const lines: string[] = [];
   describeManifest("Global", resolveManifest(global.path, "global"), lines);
   const projectCandidate = findNearestProjectManifest(process.cwd(), global.path);
+  let trustedProjectRoot: string | undefined;
   if (projectCandidate === undefined) {
     lines.push("Project: (none found)");
   } else {
     // Same rule as every real run (DEVELOPMENT.md §8.2 rule 1): before a trust decision, at most
     // check the Manifest exists -- never read its declared Rules/Skills/Extensions.
-    const agentDir = resolveMmpPaths(process.env).agentDir;
-    const trusted = readProjectTrustDecision(agentDir, process.cwd()) === true;
+    const trusted = readProjectTrustDecision(mmpPaths.agentDir, process.cwd()) === true;
     if (!trusted) {
       lines.push(`Project (${projectCandidate.manifestPath}): not trusted -- not read (mmp --approve or /trust)`);
     } else {
+      trustedProjectRoot = projectCandidate.root;
       describeManifest("Project", resolveManifest(projectCandidate.manifestPath, "project"), lines);
     }
+  }
+  const discovered = discoverSkillRoots({
+    environment: process.env,
+    mmpHome: mmpPaths.mmpHome,
+    trustedProjectRoot,
+  });
+  lines.push("Discovered skill roots:");
+  if (discovered.length === 0) {
+    lines.push("  (none)");
+  } else {
+    for (const root of discovered) lines.push(`  skill     ${root.value} (discovered: ${root.discovered})`);
   }
   process.stdout.write(`${lines.join("\n")}\n`);
   return 0;

@@ -11,13 +11,18 @@ import {
   type ProjectDiscovery,
   type ProjectManifestState,
 } from "./project.js";
+import { discoverSkillRoots } from "./skill-discovery.js";
 
 export interface ResolveAssemblyOptions {
   agentDir: string;
   globalManifestPath: string;
+  /** MMP's own home (parent of `pi/` and `mmp.json`); `<mmpHome>/skills` is one of the three fixed
+   * auto-discovery roots (docs/decisions.md S1). */
+  mmpHome: string;
   cwd: string;
   noProject: boolean;
   projectTrustOverride: boolean | undefined;
+  environment: NodeJS.ProcessEnv;
 }
 
 export interface ResolvedAssembly {
@@ -86,8 +91,15 @@ export function resolveAssembly(
     [globalManifest.rules, projectRules],
     (resource) => resource.value,
   );
+  const discoveredSkills = discoverSkillRoots({
+    environment: options.environment,
+    mmpHome: options.mmpHome,
+    trustedProjectRoot: project.discovery === "loaded" ? project.state?.root : undefined,
+  });
+  // Declared groups come first: a discovered root that canonicalizes to the same path as a
+  // declared skill is dropped here, so the Manifest entry's own source/declaredIn wins.
   const skills = mergeUnique(
-    [globalManifest.skills, projectSkills],
+    [globalManifest.skills, projectSkills, discoveredSkills],
     (resource) => resource.value,
   );
   const inlineExtensions = mergeUnique(

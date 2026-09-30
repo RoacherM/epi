@@ -83,7 +83,11 @@ export function plantContextFiles(dir, tag) {
   }
 }
 
-/** Plants the full ambient set for a project and home; `marks` collects files written by ambient extensions. */
+/** Plants the full ambient set for a project and home; `marks` collects files written by ambient extensions.
+ * Global `~/.agents/skills` is deliberately NOT planted here: since docs/decisions.md S1, MMP itself
+ * auto-discovers skills there (test/skill-discovery.test.mjs covers that as a positive case), so it
+ * is no longer an "ambient resource that must never load" -- unlike a project's own `.agents/skills`
+ * below, which stays forbidden (not a location the user chose for MMP). */
 export function plantAmbientWorld({ home, project, marks }) {
   plantPiResources(join(project, ".pi"), "project", marks);
   plantPiResources(join(home, ".pi", "agent"), "pi-agent", marks);
@@ -92,7 +96,6 @@ export function plantAmbientWorld({ home, project, marks }) {
   plantContextFiles(join(home, ".mmp", "pi"), "mmp-agent-global");
   plantContextFiles(project, "project-root");
   plantSkill(join(project, ".agents", "skills"), "ambient-skill-project-agents");
-  plantSkill(join(home, ".agents", "skills"), "ambient-skill-home-agents");
 }
 
 export const AMBIENT_MARKER = /AMBIENT-[A-Z]+-[\w-]+|ambient-(?:ext|skill|prompt|theme)-[\w-]+/g;

@@ -1,0 +1,204 @@
+// Skill auto-discovery (docs/decisions.md S1): beyond the Manifest, MMP loads skills from exactly
+// three fixed directories -- global ~/.agents/skills, MMP's own <MMP_HOME>/skills, and a trusted
+// project's .mmp/skills -- and never from any Pi skill location or a project's .agents/skills
+// (test/ambient-isolation.test.mjs and test/tui-services.test.mjs already cover those as forbidden;
+// removing the one now-legitimate ~/.agents/skills plant from that shared fixture is this change's
+// only edit there). Every run here uses a temp HOME/MMP_HOME -- never the real user's home.
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+import { plantSkill } from "./fixtures/ambient-plant.mjs";
+
+const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
+
+function fixture(t) {
+  const root = mkdtempSync(join(tmpdir(), "mmp-skill-discovery-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  const mmpHome = join(home, ".mmp");
+  mkdirSync(mmpHome, { recursive: true });
+  mkdirSync(project, { recursive: true });
+  return { root, home, project, mmpHome };
+}
+
+function writeGlobalManifest(f, manifest = { version: 1 }) {
+  writeFileSync(join(f.mmpHome, "mmp.json"), JSON.stringify(manifest));
+}
+
+/** Runs the real TUI against a temp HOME/MMP_HOME and opens the `/skill:` completion dropdown --
+ * one of the model-visible signals the task names (alongside the system prompt's skill list) for
+ * proving a skill is actually loaded, not just present on disk. `args` is threaded to
+ * `prepareMmpRun` (e.g. `["--approve"]` to trust the fixture's project for this run). */
+function skillDropdown(f, args) {
+  const result = spawnSync(process.execPath, [harness], {
+    cwd: f.project,
+    env: {
+      PATH: process.env.PATH,
+      HOME: f.home,
+      MMP_HOME: f.mmpHome,
+      PI_OFFLINE: "1",
+      MMP_TUI_HARNESS: JSON.stringify({
+        args,
+        steps: [
+          ["wait", 2500],
+          ["type", "/skill:"], ["wait", 300], ["mark", "dropdown"],
+          ["key", "ctrl+d"],
+        ],
+      }),
+    },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout).marks.dropdown;
+}
+
+function dryRun(f, args) {
+  const result = spawnSync(process.execPath, [cliPath, ...args, "--dry-run"], {
+    cwd: f.project,
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_OFFLINE: "1" },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+test("auto-discovers skills from ~/.agents/skills, MMP's own skills dir, and a trusted project's .mmp/skills", (t) => {
+  const f = fixture(t);
+  plantSkill(join(f.home, ".agents", "skills"), "discovered-agents-skill");
+  plantSkill(join(f.mmpHome, "skills"), "discovered-mmp-skill");
+  mkdirSync(join(f.project, ".mmp"), { recursive: true });
+  plantSkill(join(f.project, ".mmp", "skills"), "discovered-project-skill");
+  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
+  writeGlobalManifest(f);
+
+  const dropdown = skillDropdown(f, ["--approve"]);
+  for (const name of ["discovered-agents-skill", "discovered-mmp-skill", "discovered-project-skill"]) {
+    assert.match(dropdown, new RegExp(name), `${name} not offered by /skill: completion`);
+  }
+});
+
+test("a project's .mmp/skills is ignored without a .mmp/mmp.json (not an MMP project at all)", (t) => {
+  const f = fixture(t);
+  writeGlobalManifest(f);
+  // .mmp/skills exists, but there is no .mmp/mmp.json anywhere above cwd -- findNearestProjectManifest
+  // never finds this project, so no trust decision is ever made and its skills stay unread, "--approve"
+  // notwithstanding.
+  plantSkill(join(f.project, ".mmp", "skills"), "no-manifest-project-skill");
+
+  const dropdown = skillDropdown(f, ["--approve"]);
+  assert.doesNotMatch(dropdown, /no-manifest-project-skill/);
+});
+
+test("a project's .mmp/skills is ignored when the project is not trusted", (t) => {
+  const f = fixture(t);
+  writeGlobalManifest(f);
+  mkdirSync(join(f.project, ".mmp"), { recursive: true });
+  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
+  plantSkill(join(f.project, ".mmp", "skills"), "untrusted-project-skill");
+
+  // No --approve, no trust.json: DEVELOPMENT.md §8.2 rule 1 -- undecided projects are not trusted.
+  const dropdown = skillDropdown(f, []);
+  assert.doesNotMatch(dropdown, /untrusted-project-skill/);
+});
+
+test("a declared skill root dedupes with the matching auto-discovered MMP skills root (declared wins)", (t) => {
+  const f = fixture(t);
+  plantSkill(join(f.mmpHome, "skills"), "declared-and-discovered-skill");
+  writeGlobalManifest(f, { version: 1, skills: ["./skills"] });
+
+  const output = dryRun(f, ["--no-project"]);
+  assert.equal(output.skills.length, 1, JSON.stringify(output.skills));
+  assert.equal(output.skills[0].discovered, undefined, "a declared root must not be tagged as discovered");
+  assert.equal(output.skills[0].source, "global");
+  assert.equal(output.skills[0].value, realpathSync(join(f.mmpHome, "skills")));
+});
+
+test("--dry-run reports provenance for each auto-discovered skill root", (t) => {
+  const f = fixture(t);
+  plantSkill(join(f.home, ".agents", "skills"), "agents-provenance-skill");
+  plantSkill(join(f.mmpHome, "skills"), "mmp-provenance-skill");
+  writeGlobalManifest(f);
+
+  const output = dryRun(f, ["--no-project"]);
+  const byProvenance = Object.fromEntries(output.skills.map((skill) => [skill.discovered, skill.value]));
+  assert.equal(byProvenance.agents, realpathSync(join(f.home, ".agents", "skills")));
+  assert.equal(byProvenance.mmp, realpathSync(join(f.mmpHome, "skills")));
+});
+
+test("mmp list reports discovered skill roots with provenance", (t) => {
+  const f = fixture(t);
+  plantSkill(join(f.home, ".agents", "skills"), "list-agents-skill");
+  writeGlobalManifest(f);
+
+  const result = spawnSync(process.execPath, [cliPath, "list"], {
+    cwd: f.project,
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_OFFLINE: "1" },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Discovered skill roots:/);
+  const escapedPath = realpathSync(join(f.home, ".agents", "skills")).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.match(result.stdout, new RegExp(`${escapedPath} \\(discovered: agents\\)`));
+});
+
+test("mmp list reports no discovered skill roots when none exist", (t) => {
+  const f = fixture(t);
+  writeGlobalManifest(f);
+
+  const result = spawnSync(process.execPath, [cliPath, "list"], {
+    cwd: f.project,
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_OFFLINE: "1" },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Discovered skill roots:\n {2}\(none\)/);
+});
+
+test("/reload picks up a skill created after startup", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "mmp-skill-reload-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  const mmpHome = join(home, ".mmp");
+  mkdirSync(mmpHome, { recursive: true });
+  writeFileSync(join(mmpHome, "mmp.json"), JSON.stringify({ version: 1 }));
+  const skillsDir = join(mmpHome, "skills");
+
+  const result = spawnSync(process.execPath, [harness], {
+    cwd: root,
+    env: {
+      PATH: process.env.PATH,
+      HOME: home,
+      MMP_HOME: mmpHome,
+      PI_OFFLINE: "1",
+      MMP_TUI_HARNESS: JSON.stringify({
+        steps: [
+          ["wait", 2500],
+          ["type", "/skill:"], ["wait", 300], ["mark", "dropdownBefore"],
+          ["type", "\x7f\x7f\x7f\x7f\x7f\x7f\x7f"],
+          ["plantSkill", { skillsDir, name: "reload-discovered-skill" }],
+          ["type", "/reload"], ["key", "enter"], ["wait", 600], ["mark", "reloaded"],
+          ["type", "/skill:"], ["wait", 300], ["mark", "dropdownAfter"],
+          ["key", "ctrl+d"],
+        ],
+      }),
+    },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const { marks } = JSON.parse(result.stdout);
+  assert.doesNotMatch(marks.dropdownBefore, /reload-discovered-skill/);
+  assert.match(marks.reloaded.slice(marks.dropdownBefore.length), /Reloaded keybindings, extensions, skills, prompts, themes, and context files\./);
+  assert.match(marks.dropdownAfter.slice(marks.reloaded.length), /reload-discovered-skill/);
+});

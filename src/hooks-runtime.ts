@@ -20,6 +20,7 @@ import { TaskRuntime } from "./task-runtime.js";
 
 const MAX_HOOK_PAYLOAD_BYTES = 64 * 1024;
 const MAX_HOOK_OUTPUT_BYTES = 64 * 1024;
+const MAX_HOOK_ERROR_TAIL_BYTES = 4 * 1024;
 const KILL_GRACE_MS = 500;
 
 const hookDecisionSchema = z.discriminatedUnion("action", [
@@ -113,6 +114,25 @@ function parseDecision(output: string): HookDecision {
     throw new Error("hook handler returned an invalid decision object");
   }
   return parsed.data;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Names which handler failed, for the wrapped error `run()` throws (naming the hook is the point
+ * of "failures must show" -- a bare "hook command could not be started" doesn't say which hook). */
+function handlerLabel(handler: HookHandler): string {
+  switch (handler.type) {
+    case "command":
+      return `command ${handler.command}`;
+    case "http":
+      return `http ${handler.method} ${handler.url}`;
+    case "prompt":
+      return `prompt${handler.model === undefined ? "" : ` (${handler.model})`}`;
+    case "agent":
+      return `agent ${handler.agent}`;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -310,12 +330,22 @@ export class HooksRuntime {
         continue;
       }
       for (const handler of hook.handlers) {
-        const decision = await this.runHandler(
-          handler,
-          currentPayload,
-          context,
-          options.ignoreSessionAbort === true,
-        );
+        let decision: HookDecision;
+        try {
+          decision = await this.runHandler(
+            handler,
+            currentPayload,
+            context,
+            options.ignoreSessionAbort === true,
+          );
+        } catch (error) {
+          // Names the hook (its event + declaring file) and the handler that failed, so a spawn
+          // error (e.g. a relative command that doesn't resolve against the session cwd) is
+          // identifiable wherever this propagates to (`hooks.ts`'s per-event mapping).
+          throw new Error(
+            `${hook.event} hook (${hook.declaredIn}, ${handlerLabel(handler)}) failed: ${errorMessage(error)}`,
+          );
+        }
         assertDecisionAllowed(payload.type, decision);
         if (decision.action === "block" || decision.action === "cancel") {
           return decision;
@@ -434,7 +464,15 @@ export class HooksRuntime {
       }
       output.push(chunk);
     });
-    child.stderr.resume();
+    // Bounded tail only, for a non-zero exit's error message -- not the decision channel (stdout is).
+    let stderrBytes = 0;
+    const stderrTail: Buffer[] = [];
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrBytes += chunk.byteLength;
+      if (stderrBytes <= MAX_HOOK_ERROR_TAIL_BYTES) {
+        stderrTail.push(chunk);
+      }
+    });
     child.once("error", (error) => {
       spawnError = error;
     });
@@ -453,10 +491,17 @@ export class HooksRuntime {
         throw new Error(`hook command output exceeds ${MAX_HOOK_OUTPUT_BYTES} bytes`);
       }
       if (result.error !== undefined) {
-        throw new Error("hook command could not be started");
+        throw new Error(
+          `hook command could not be started: ${handler.command} (cwd ${handler.cwd ?? cwd}): ${result.error.message}`,
+        );
       }
       if (result.code !== 0) {
-        throw new Error(`hook command exited with code ${result.code}`);
+        const tail = Buffer.concat(stderrTail).toString("utf8").trim();
+        throw new Error(
+          tail.length > 0
+            ? `hook command exited with code ${result.code}: ${handler.command}: ${tail}`
+            : `hook command exited with code ${result.code}: ${handler.command}`,
+        );
       }
       return Buffer.concat(output, outputBytes).toString("utf8");
     } finally {

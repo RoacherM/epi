@@ -4,6 +4,7 @@ function copyResource(resource) {
         value: resource.value,
         source: resource.source,
         declaredIn: resource.declaredIn,
+        ...(resource.discovered === undefined ? {} : { discovered: resource.discovered }),
     };
 }
 export function createMmpRuntimeIdentity(options) {

@@ -1,5 +1,6 @@
 import type { ResolvedAssembly } from "./assembly.js";
 import type {
+  DiscoveredSkillProvenance,
   ResolvedInlineExtension,
   ResolvedResource,
 } from "./manifest.js";
@@ -9,6 +10,8 @@ export interface MmpRuntimeResource {
   value: string;
   source: ResolvedResource["source"];
   declaredIn: string;
+  /** Set only for an auto-discovered skill root; absent for anything declared in a Manifest. */
+  discovered?: DiscoveredSkillProvenance;
 }
 
 export interface MmpRuntimeExtension {
@@ -73,6 +76,7 @@ function copyResource(resource: ResolvedResource): MmpRuntimeResource {
     value: resource.value,
     source: resource.source,
     declaredIn: resource.declaredIn,
+    ...(resource.discovered === undefined ? {} : { discovered: resource.discovered }),
   };
 }
 

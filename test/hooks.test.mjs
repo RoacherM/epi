@@ -454,6 +454,161 @@ test("Pi maps prompt transforms, result replacements, and compaction cancellatio
   );
 });
 
+function fakePiWithBus(handlers) {
+  const busHandlers = new Map();
+  return {
+    events: {
+      emit(channel, value) { busHandlers.get(channel)?.(value); },
+      on(channel, handler) { busHandlers.set(channel, handler); return () => busHandlers.delete(channel); },
+    },
+    on(event, handler) { handlers.set(event, handler); },
+  };
+}
+
+async function withCapturedStderr(fn) {
+  const original = process.stderr.write.bind(process.stderr);
+  const chunks = [];
+  process.stderr.write = (chunk) => { chunks.push(String(chunk)); return true; };
+  try {
+    return { result: await fn(), stderr: () => chunks.join("") };
+  } finally {
+    process.stderr.write = original;
+  }
+}
+
+// Reported bug: a user_prompt hook whose command can't be spawned (e.g. a relative path that
+// doesn't resolve against the session cwd) used to block the turn with `{action: "handled"}` and
+// an `ui.notify` call that Pi's own print/json modes silently drop (noOpUIContext.notify in Pi's
+// core/extensions/runner.js) -- an empty reply with no visible reason anywhere. The fix keeps the
+// same fail-closed "handled" result (README "Hooks": user_prompt maps fail-closed) but also writes
+// to stderr outside the TUI, and names the failing hook + the underlying spawn error in the message.
+for (const mode of ["print", "json"]) {
+  test(`a user_prompt hook spawn failure shows on stderr in ${mode} mode and still blocks the turn`, async (t) => {
+    const root = createFixture(t);
+    const handlers = new Map();
+    const inline = createHooksInlineExtension({
+      hooks: [hook("user_prompt", [
+        { type: "command", command: "./does-not-exist.mjs", args: [], timeoutMs: 1000 },
+      ])],
+      mmpHome: root,
+      agentDir: join(root, "pi"),
+      projectAgentsDir: undefined,
+      workerPath: fakeWorker,
+    });
+    await inline.factory(fakePiWithBus(handlers));
+    const notifications = [];
+    const context = createContext(root, {
+      mode,
+      ui: { notify(message, level) { notifications.push({ message, level }); } },
+    });
+
+    const { result, stderr } = await withCapturedStderr(() => handlers.get("input")(
+      { type: "input", text: "hello", images: [], source: "interactive" },
+      context,
+    ));
+
+    assert.deepEqual(result, { action: "handled" }, "a failing hook must still fail closed");
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].level, "error");
+    assert.match(notifications[0].message, /user_prompt hook/);
+    assert.match(notifications[0].message, /does-not-exist\.mjs/);
+    assert.match(notifications[0].message, /ENOENT/);
+    // The point of the fix: the same message also reaches stderr, since ui.notify alone is a no-op here.
+    assert.match(stderr(), /user_prompt hook/);
+    assert.match(stderr(), /does-not-exist\.mjs/);
+    assert.match(stderr(), /ENOENT/);
+
+    await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
+  });
+}
+
+test("a user_prompt hook spawn failure does not also spam stderr in tui mode (ui.notify already shows it there)", async (t) => {
+  const root = createFixture(t);
+  const handlers = new Map();
+  const inline = createHooksInlineExtension({
+    hooks: [hook("user_prompt", [
+      { type: "command", command: "./does-not-exist.mjs", args: [], timeoutMs: 1000 },
+    ])],
+    mmpHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: undefined,
+    workerPath: fakeWorker,
+  });
+  await inline.factory(fakePiWithBus(handlers));
+  const notifications = [];
+  const context = createContext(root, {
+    mode: "tui",
+    ui: { notify(message, level) { notifications.push({ message, level }); } },
+  });
+
+  const { result, stderr } = await withCapturedStderr(() => handlers.get("input")(
+    { type: "input", text: "hello", images: [], source: "interactive" },
+    context,
+  ));
+
+  assert.deepEqual(result, { action: "handled" });
+  assert.equal(notifications.length, 1);
+  assert.equal(stderr(), "");
+  await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
+});
+
+test("a non-zero exit's stderr tail is included in the hook failure message", async (t) => {
+  const root = createFixture(t);
+  const handlers = new Map();
+  const failingScript = join(root, "fail-with-stderr.mjs");
+  writeFileSync(
+    failingScript,
+    "process.stderr.write('boom: policy denied\\n'); process.exit(3);\n",
+  );
+  const inline = createHooksInlineExtension({
+    hooks: [hook("tool_call", [
+      { type: "command", command: process.execPath, args: [failingScript], timeoutMs: 1000 },
+    ], { toolName: "bash" })],
+    mmpHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: undefined,
+    workerPath: fakeWorker,
+  });
+  await inline.factory(fakePiWithBus(handlers));
+  const context = createContext(root);
+
+  const result = await handlers.get("tool_call")(
+    { type: "tool_call", toolCallId: "call-1", toolName: "bash", input: {} },
+    context,
+  );
+  assert.equal(result.block, true);
+  assert.match(result.reason, /exited with code 3/);
+  assert.match(result.reason, /boom: policy denied/);
+  await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
+});
+
+// session_start, session_before_compact, and session_shutdown share notifyFailure with user_prompt
+// (hooks.ts) -- one fixed function, one test proving the stderr fallback covers all of them.
+test("a session_start hook failure also falls back to stderr outside the TUI", async (t) => {
+  const root = createFixture(t);
+  const handlers = new Map();
+  const inline = createHooksInlineExtension({
+    hooks: [hook("session_start", [
+      { type: "command", command: "./does-not-exist.mjs", args: [], timeoutMs: 1000 },
+    ])],
+    mmpHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: undefined,
+    workerPath: fakeWorker,
+  });
+  await inline.factory(fakePiWithBus(handlers));
+  const context = createContext(root, { mode: "print" });
+
+  const { stderr } = await withCapturedStderr(() => handlers.get("session_start")(
+    { type: "session_start", reason: "startup" },
+    context,
+  ));
+
+  assert.match(stderr(), /session_start hook/);
+  assert.match(stderr(), /does-not-exist\.mjs/);
+  await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
+});
+
 test("hook extension rejects unknown agent handlers before Pi starts", (t) => {
   const root = createFixture(t);
 

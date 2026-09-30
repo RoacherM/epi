@@ -358,7 +358,7 @@ Harness Core 只理解资源装配，不理解各 Extension 的内部配置。
 
 ```text
 rules       = global + trusted project
-skills      = global + trusted project
+skills      = global + trusted project + discovered
 extensions  = global + trusted project
 ```
 
@@ -379,10 +379,27 @@ interface ResolvedResource {
   value: string;
   source: "global" | "project";
   declaredIn: string;
+  discovered?: "agents" | "mmp" | "project"; // 只有自动发现的 skill root 才有
 }
 ```
 
 Extension 自己负责其配置文件的 schema 和 global/project 合并语义。Harness 只向已启用的内置 Extension 传递可信配置根；未启用的 Extension 不读取对应配置文件。
+
+### 7.1 Skill 自动发现（docs/decisions.md S1）
+
+除 Manifest 声明的 skill 路径外，`resolveAssembly`（`src/assembly.ts` 调用 `src/skill-discovery.ts` 的 `discoverSkillRoots`）还固定发现三个目录，缺失时跳过：
+
+- 全局 `~/.agents/skills`（`HOME` 通过与其它地方一致的方式解析——`environment.HOME`，缺省时才用真实 `os.homedir()`；测试通过 `environment.HOME`/进程 `HOME` 注入临时目录，绝不触碰真实 home）；
+- MMP 自己的全局 `<mmpHome>/skills`；
+- 被信任项目的 `<project.root>/.mmp/skills`——`trustedProjectRoot` 只在 `project.discovery === "loaded"` 时给出，即项目必须先有 `.mmp/mmp.json` 才算 MMP 项目；只有 `.mmp/skills`、没有 `.mmp/mmp.json` 的目录不会被当成项目，其 skills 也不会被发现。
+
+永远不读取 Pi 自己的 skill 位置（`~/.pi/agent/skills`、MMP 的 Pi 数据目录 `<mmpHome>/pi/skills`、项目 `.pi/skills`），也不读取项目 `.agents/skills`（不是用户为 MMP 选定的目录，`test/ambient-isolation.test.mjs`/`test/tui-services.test.mjs` 持续验证这四处保持不可见）。
+
+合并顺序：`mergeUnique([globalManifest.skills, projectSkills, discoveredSkills], ...)`——声明的两组在前，发现的一组在后，按 canonical path 去重时声明的一方保留（其 `source`/`declaredIn` 不变，也没有 `discovered` 字段）。发现到的 skill root 和声明的一样，以显式绝对路径传给 Pi（`mmp:runtime` 的 `resources_discover` handler，`src/extensions/runtime.ts`）。
+
+`/reload` 复用同一个 `resolveAssembly` 闭包，因此会重新扫描这三个目录；Pi 的 `AgentSession.reload()`（`core/agent-session.js`）在 `resources_discover` 之前先 emit 完 `session_start(reason:"reload")`，`mmp:runtime` 的 `session_start` handler 在这一步刷新 `activeAssembly`，所以新增的 skill 在同一次 `/reload` 就可见，不用等下一次。
+
+Provenance 通过 `mmp --dry-run`（`skills[].discovered`）、`/mmp`（`declaredResources.skillRoots[].discovered`）、启动页（"resources" 行的 "(N discovered)"）和 `mmp list`（"Discovered skill roots:" 段）暴露。
 
 ## 8. Project Trust
 
@@ -864,6 +881,8 @@ Handler 必须只返回一个严格 JSON decision：
 - tool call、user prompt 与 before compact 映射 fail-closed；
 - Session shutdown 先取消在途 handler，再执行 shutdown hooks，最后回收 command/agent Child。
 
+失败必须可见（不静默 fallback）。`tool_call`/`tool_result` 失败通过它们本来就有的 tool result 渠道显示，任何模式下都可见。`session_start`/`user_prompt`/`session_before_compact`/`session_shutdown` 没有 tool result 可用，只能靠 Pi UI 通知（`context.ui.notify`）——但 Pi 的 `print`/`json` 模式用的是 `noOpUIContext`（`core/extensions/runner.js`），`notify` 是空实现；这两种模式下 `notifyFailure`（`src/extensions/hooks.ts`）额外把同一条消息写到 stderr（`context.mode !== "tui"` 时才写，MMP 自己的 TUI 和 Pi 的 `rpc` 模式已经有可用的 notify，不重复）。`HooksRuntime.run()`（`src/hooks-runtime.ts`）把每个 handler 的失败包一层 `${event} hook (${declaredIn}, ${handlerLabel}) failed: ...`，命令 spawn 失败会带上 Node 的原始错误（如 `spawn ./x.mjs ENOENT`），非零退出会带上一段 stderr 尾部（`MAX_HOOK_ERROR_TAIL_BYTES = 4KiB`）。
+
 完整用户配置说明与可复制示例位于根目录 `README.md`。
 
 ### 14.3 验证
@@ -874,7 +893,7 @@ Handler 必须只返回一个严格 JSON decision：
 node --test test/hooks.test.mjs
 ```
 
-覆盖配置合并、严格 schema、环境变量、matcher、handler 顺序、command/HTTP/prompt/agent decision、Pi event 映射、timeout、malformed output、unknown agent 和 shutdown cancellation。
+覆盖配置合并、严格 schema、环境变量、matcher、handler 顺序、command/HTTP/prompt/agent decision、Pi event 映射、timeout、malformed output、unknown agent、shutdown cancellation，以及 spawn 失败在 `print`/`json`/`tui` 三种 mode 下的可见性（stderr fallback 只在非 tui 触发）和非零退出的 stderr 尾部。
 
 真实 Pi 路径已验证：
 
