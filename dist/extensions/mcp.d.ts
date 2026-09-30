@@ -24,12 +24,14 @@ export interface McpConfigSource {
 export declare function loadNativeMcpConfig(source: McpConfigSource, cwd: string): LoadedMcpConfig;
 /**
  * `mmp:mcp`: `createMcpExtension` (connections, OAuth, tool registration, `/mcp`) wired to MMP's own
- * config source, plus two MMP-only behaviors Pi has no hook for:
+ * config source, plus three MMP-only behaviors:
  *   - `/mcp` with zero configured servers shows MMP's own message instead of Pi's (which names
  *     `.pi/mcp.json`, a path MMP never reads) -- done by wrapping the `pi` passed into Pi's factory
  *     so only the "mcp" registration is intercepted; every other call passes through untouched.
  *   - a Manifest that (mis)declares a second extension also registering "/mcp" fails visibly at
  *     `session_start` instead of silently producing "/mcp:1"/"/mcp:2".
+ *   - a server still connecting when the session shuts down is closed instead of holding the
+ *     process open until its request timeout (dogfood D3, `trackingTransportFactory`).
  *
  * `credentials` is intentionally left to Pi's default rather than passed explicitly: its type is
  * `McpOAuthCredentialStore` (a class instance with a private `AuthStorageBackend`, not a path --

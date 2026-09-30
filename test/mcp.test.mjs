@@ -332,29 +332,41 @@ test("zero configured MCP servers: -p writes nothing to stderr and does not wait
 });
 
 // A server that never answers "initialize" must not hold up the first prompt past Pi's own startup
-// bound (createMcpExtension's startupWaitMs, 10 s by default; MMP passes none). The server's own
-// request timeout is set to 14 s so the process can exit soon after the prompt: Pi's
-// McpServerConnection.close() does not abort a connect still in flight, so the pending "initialize"
-// request keeps the process alive until that timeout (Pi's default is 60 s; same in plain Pi).
-// Before the fix the prompt waited for the 14 s timeout and reported "failed ... timed out" instead.
-test("print mode: a server that never answers initialize is reported as still connecting and does not hold up the prompt", (t) => {
-  const { args: fixtureArgs, marker } = fixtureServerArgs();
-  const result = runNonTuiMcp(t, "print", {
-    mcpServers: {
-      hung: { command: process.execPath, args: fixtureArgs, env: { MMP_FIXTURE_HANG_INITIALIZE: "1" }, timeout: 14 },
-    },
+// bound (createMcpExtension's startupWaitMs, 10 s by default; MMP passes none), and must not hold
+// up the exit either (dogfood D3): Pi's McpServerConnection.close() does not reach a connect still
+// in flight, so the pending "initialize" request used to keep the process alive until the server's
+// request timeout (Pi's default 60 s; same in plain Pi). mmp:mcp now closes that transport at
+// session_shutdown. The timeout here is 30 s so "exits in < 15 s" can only pass with the fix.
+for (const mode of ["print", "json"]) {
+  test(`${mode} mode: a server that never answers initialize is reported as still connecting and holds up neither the prompt nor the exit`, (t) => {
+    const { args: fixtureArgs, marker } = fixtureServerArgs();
+    const started = Date.now();
+    const result = runNonTuiMcp(t, mode, {
+      mcpServers: {
+        hung: { command: process.execPath, args: fixtureArgs, env: { MMP_FIXTURE_HANG_INITIALIZE: "1" }, timeout: 30 },
+      },
+    });
+    const elapsed = Date.now() - started;
+    const context = `marker=${marker}\nelapsed=${elapsed} ms\nstatus=${result.status} signal=${result.signal}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+    assert.equal(result.status, 0, context);
+    if (mode === "print") {
+      assert.equal(result.stdout, "ECHO:hi\n", context);
+    } else {
+      const events = result.stdout.trim().split("\n").map((line) => JSON.parse(line));
+      assert.ok(events.some((event) => event.type === "agent_end"), context);
+      assert.match(result.stdout, /ECHO:hi/, context);
+    }
+    assert.equal(
+      result.stderr,
+      "mcp: hung is still connecting; its tools become available once connected\n",
+      context,
+    );
+    // ~10 s startup bound + ~0.5 s stdin-close grace; before the fix this was the 30 s timeout.
+    assert.ok(elapsed < 15_000, `process waited for the hung server's request timeout\n${context}`);
+    const leftover = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" });
+    assert.equal(leftover.stdout.trim(), "", `hung fixture server still running after exit\n${context}`);
   });
-  const context = `marker=${marker}\nstatus=${result.status} signal=${result.signal}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
-  assert.equal(result.status, 0, context);
-  assert.equal(result.stdout, "ECHO:hi\n", context);
-  assert.equal(
-    result.stderr,
-    "mcp: hung is still connecting; its tools become available once connected\n",
-    context,
-  );
-  const leftover = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" });
-  assert.equal(leftover.stdout.trim(), "", `hung fixture server still running after exit\n${context}`);
-});
+}
 
 // ── Offline end-to-end: real stdio fixture server, codemode + direct calls, cleanup ────────────
 

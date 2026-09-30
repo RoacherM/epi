@@ -10,10 +10,48 @@ import { createMcpExtension, } from "@earendil-works/pi-coding-agent";
 // pi-coding-agent's package "exports" map (design §2), so it is imported by file path, like
 // src/tui/keybindings.ts imports core/keybindings.js. Top-level await: this runs once, when
 // src/extensions/index.ts's static import of this module is first evaluated, mirroring
-// keybindings.ts (config.js only touches node:fs/node:path plus two other Pi core modules -- no
-// heavier than that, unlike runtime.js, which Pi itself keeps lazy for exactly this reason).
+// keybindings.ts (config.js only touches node:fs/node:path plus two other Pi core modules).
 const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
 const { loadMcpConfig: piLoadMcpConfig } = (await import(pathToFileURL(join(piDist, "extensions", "mcp", "config.js")).href));
+// pi-internals row `mcp-default-transport`: runtime.js's createDefaultTransport (not in the package
+// "exports" map; only the McpTransportFactory type is) is what createMcpExtension uses when no
+// createTransport option is given. Not a top-level import: src/commands/mcp-cli.ts imports this
+// module too, and `mmp mcp add/remove` must not load the MCP client (row `mcp-native-runtime`).
+// Loaded by the mmp:mcp factory instead, which always runs before Pi's first connect.
+let piCreateDefaultTransport;
+async function loadDefaultTransport() {
+    piCreateDefaultTransport ??= (await import(pathToFileURL(join(piDist, "extensions", "mcp", "runtime.js")).href)).createDefaultTransport;
+}
+/**
+ * Pi's default transport factory, plus a record of every transport it made that has not closed yet.
+ * Dogfood D3: Pi's `McpServerConnection.close()` (extensions/mcp/runtime.js) only closes a client
+ * that finished `initialize`; a connect still in flight keeps its client and transport in
+ * `connectOnce()`'s locals, so a server that never answers keeps the child process, its pipes and
+ * the request timer alive until the request timeout (60 s by default) -- `mmp -p` printed its
+ * answer and then sat there. Closing the transport rejects the pending `initialize`
+ * (pi-mcp client.js `handleTransportClose` -> `markClosed`), and Pi's connection, already marked
+ * closed by then, settles as "closed". Same upstream as of Pi 0.99.2.
+ */
+function trackingTransportFactory() {
+    const open = new Set();
+    return {
+        createTransport: (entry, cwd, authProvider) => {
+            if (piCreateDefaultTransport === undefined) {
+                throw new Error("mmp:mcp: MCP transport requested before the mmp:mcp extension finished loading");
+            }
+            const transport = piCreateDefaultTransport(entry, cwd, authProvider);
+            open.add(transport);
+            transport.onClose(() => open.delete(transport));
+            return transport;
+        },
+        async closeAll() {
+            const closing = [...open];
+            open.clear();
+            // Transport close() is idempotent; ones Pi already closed return at once.
+            await Promise.all(closing.map((transport) => transport.close().catch(() => undefined)));
+        },
+    };
+}
 /**
  * Reads `~/.mmp/mcp.json`, and, only when MMP trusts the current project
  * (`assembly.projectManifest?.loaded === true` -- MMP's own trust judgment, never
@@ -86,12 +124,14 @@ function hasDuplicateMcpCommand(pi) {
 }
 /**
  * `mmp:mcp`: `createMcpExtension` (connections, OAuth, tool registration, `/mcp`) wired to MMP's own
- * config source, plus two MMP-only behaviors Pi has no hook for:
+ * config source, plus three MMP-only behaviors:
  *   - `/mcp` with zero configured servers shows MMP's own message instead of Pi's (which names
  *     `.pi/mcp.json`, a path MMP never reads) -- done by wrapping the `pi` passed into Pi's factory
  *     so only the "mcp" registration is intercepted; every other call passes through untouched.
  *   - a Manifest that (mis)declares a second extension also registering "/mcp" fails visibly at
  *     `session_start` instead of silently producing "/mcp:1"/"/mcp:2".
+ *   - a server still connecting when the session shuts down is closed instead of holding the
+ *     process open until its request timeout (dogfood D3, `trackingTransportFactory`).
  *
  * `credentials` is intentionally left to Pi's default rather than passed explicitly: its type is
  * `McpOAuthCredentialStore` (a class instance with a private `AuthStorageBackend`, not a path --
@@ -107,7 +147,8 @@ export function createMmpMcpExtension(source) {
     const { mmpHome, resolveAssembly } = source;
     const loadConfig = (ctx) => loadNativeMcpConfig(source, ctx.cwd);
     const logPath = join(mmpHome, "pi", "mcp.log");
-    const piFactory = createMcpExtension({ loadConfig, logPath });
+    const transports = trackingTransportFactory();
+    const piFactory = createMcpExtension({ loadConfig, logPath, createTransport: transports.createTransport });
     return {
         name: "mmp:mcp",
         factory: async (pi) => {
@@ -151,7 +192,12 @@ export function createMmpMcpExtension(source) {
                     return Reflect.get(target, prop, target);
                 },
             });
+            await loadDefaultTransport();
             await piFactory(wrappedPi);
+            // Registered after piFactory, so it runs after Pi's own session_shutdown handler has marked
+            // every connection closed and closed the connected ones: what is left is a connect still in
+            // flight (D3). Also covers /new and /reload, which shut the old session down the same way.
+            pi.on("session_shutdown", () => transports.closeAll());
             pi.on("session_start", () => {
                 if (hasDuplicateMcpCommand(pi)) {
                     // Verified empirically (not just from source): throwing here is the one channel that

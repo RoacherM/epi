@@ -368,6 +368,34 @@ const registry = [
     },
   },
   {
+    id: "mcp-default-transport",
+    async check() {
+      const { createDefaultTransport } = await importDeep("extensions", "mcp", "runtime.js");
+      assertFunction(createDefaultTransport, "createDefaultTransport");
+      const why = "src/extensions/mcp.ts's trackingTransportFactory wraps it to close connects still in flight at shutdown (dogfood D3)";
+      const indexPath = join(piDist, "extensions", "mcp", "index.js");
+      assert.match(
+        readFileSync(indexPath, "utf8"),
+        /createTransport: options\.createTransport \?\? runtime\.createDefaultTransport/,
+        `${indexPath} no longer uses createMcpExtension's createTransport option in place of createDefaultTransport -- ${why}`,
+      );
+      // Not started, so nothing is spawned: close() on an unstarted stdio transport just emits close.
+      const transport = createDefaultTransport(
+        { name: "probe", config: { command: process.execPath } },
+        process.cwd(),
+        undefined,
+      );
+      assertFunction(transport.close, "createDefaultTransport(...).close");
+      assertFunction(transport.onClose, "createDefaultTransport(...).onClose");
+      let closed = false;
+      transport.onClose(() => {
+        closed = true;
+      });
+      await transport.close();
+      assert.equal(closed, true, `a transport's close() no longer fires its onClose listeners -- ${why}`);
+    },
+  },
+  {
     id: "mcp-reconnect-completion-states",
     check() {
       const indexPath = join(piDist, "extensions", "mcp", "index.js");
