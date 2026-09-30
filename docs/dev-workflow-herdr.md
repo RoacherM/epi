@@ -28,7 +28,7 @@
                  只用来跑测试和 Herdr 验收，不用来干活
 ```
 
-- **升级工具版**：每次合并并通过 Herdr 验收后，主控把工具版切到新的提交（`git -C mmp-tool checkout --detach <commit>` 再 `npm run build`）。这样新功能马上进入日常使用，问题尽早暴露。
+- **升级工具版**：每次合并、通过 Herdr 验收、并跑完 [e2e-acceptance.md](e2e-acceptance.md) 里标 ★ 的冒烟条目后，主控把工具版切到新的提交（`git -C mmp-tool checkout --detach <commit>` 再 `npm run build`）。这样新功能马上进入日常使用，问题尽早暴露。
 - **回退**：工具版出了阻塞问题（第 6 节 P0），先把工具版切回上一个提交继续干活，同时开任务修。实在修不动时，这个任务退回到现在的做法（Claude Code 的 Sonnet/Opus subagent），修好后再切回来。
 - 两份共用用户真实的 `~/.mmp`（凭证、会话、magpie 配置）。自动测试照旧用临时 `HOME`/`MMP_HOME`，不受影响。
 
