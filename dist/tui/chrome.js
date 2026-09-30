@@ -89,12 +89,13 @@ export function messageText(content) {
  * affects what's drawn in the transcript (item 5, docs/tui-design.md 4.3's 发送 row). An image
  * sent from the editor already has its `[Image #N]` label in the text, which the model sees too
  * (D11). Image parts beyond the text's labels (an extension's `sendUserMessage`, the `@pic.png`
- * startup message, sessions from before D11) show as `[Image]`, unnumbered. */
+ * startup message, sessions from before D11) show as `[Image]`, unnumbered; a label written twice
+ * counts once, as in paste-chips.ts's labelStoredImages (D36). */
 function displayText(content) {
     const text = messageText(content);
     const imageCount = Array.isArray(content) ? content.filter((part) => part?.type === "image").length : 0;
     const withFileChips = (imageCount > 0 ? withoutImageHints(text) : text).replace(FILE_BLOCK_RE, (_match, name) => `[File: ${basename(name)}]\n`).trim();
-    const unlabelled = Math.max(0, imageCount - imageLabelNumbers(withFileChips).length);
+    const unlabelled = Math.max(0, imageCount - new Set(imageLabelNumbers(withFileChips)).size);
     const images = Array.from({ length: unlabelled }, () => "[Image]").join(" ");
     return [withFileChips, images].filter((part) => part !== "").join("\n");
 }

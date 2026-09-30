@@ -126,10 +126,11 @@ const DRAWN_ESCAPES = `${DRAWN_ESCAPE}*`;
 const DRAWN_ESCAPE_G = new RegExp(DRAWN_ESCAPE, "g");
 /** An `[Image #N]` label as drawn in the rendered lines joined with "\n": the caret's escapes can sit
  * between any two characters, and a soft wrap can break it at its space (padding spaces, then the
- * next line). Group 1 is N, possibly with escapes in it. */
+ * next line; with the caret on that space, its reset before the padding). Group 1 is N, possibly
+ * with escapes in it. */
 const DRAWN_IMAGE_LABEL_G = new RegExp(
   [..."[Image"].map((char) => char.replace("[", "\\[")).join(DRAWN_ESCAPES) +
-    `${DRAWN_ESCAPES}(?: | *\\n *)${DRAWN_ESCAPES}#${DRAWN_ESCAPES}((?:\\d|${DRAWN_ESCAPE})+)\\]`,
+    `${DRAWN_ESCAPES}(?: |(?: |${DRAWN_ESCAPE})*\\n *)${DRAWN_ESCAPES}#${DRAWN_ESCAPES}((?:\\d|${DRAWN_ESCAPE})+)\\]`,
   "g",
 );
 

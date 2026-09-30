@@ -756,4 +756,15 @@ describe("image numbering", { concurrency: Math.min(8, Math.max(2, availablePara
     chip.insertImageChip(ONE_PIXEL_PNG, "image/png");
     assert.doesNotMatch(chip.render(20).join("\n"), /\x1b\[2;9m/);
   });
+
+  test("D36: an unattached label keeps its look with the caret on the space a soft wrap splits it at", () => {
+    const editor = bareEditor();
+    editor.focused = true;
+    editor.insertTextAtCursor("abcdefghij [Image #7] tail");
+    for (let i = 0; i < 9; i += 1) editor.handleInput("\x1b[D"); // onto the wrapping space
+    const text = editor.render(20).join("\n").replace(/\x1b_[^\x07]*\x07/g, "");
+    assert.match(text.replace(/\x1b\[(?:2;9|22;29)m/g, ""), /\[Image\x1b\[7m \x1b\[0m {2}\n#7\]/, "the caret is on the wrapping space");
+    // Dim and struck through on both lines, not over the padding.
+    assert.match(text, /\x1b\[2;9m\[Image(?:\x1b\[[0-9;]*m)* \x1b\[0m(?:\x1b\[2;9m)?\x1b\[22;29m {2}\n\x1b\[2;9m#7\]\x1b\[22;29m tail/);
+  });
 });

@@ -152,7 +152,7 @@ export async function runCopy(host, options = {}) {
         return;
     }
     const text = host.session().getLastAssistantText();
-    if (text === undefined) {
+    if (!text) {
         host.notice("No agent messages to copy yet.", "warning");
         return;
     }
@@ -161,7 +161,7 @@ export async function runCopy(host, options = {}) {
         if (options.fromKey)
             host.flash("Copied!");
         else
-            host.notice("Copied last agent message to clipboard.");
+            host.notice("Copied last agent message to clipboard");
     }
     catch (error) {
         host.notice(errorText(error), "error");

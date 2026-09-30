@@ -33,12 +33,16 @@ export declare class Transcript {
      * leaves behind). `turnFooter()` ORs this with `lastTurnMessages`'s own
      * aborted check, the ordinary case (Esc during a normal response). */
     private turnAborted;
-    /** The timed turn's last assistant reply, once it ended with no tool calls: the agent would have
-     * stopped there, so a user message arriving after it (a queued follow-up, or a steer the loop
-     * picked up at that point) starts a new turn with its own footer (dogfood D23). Cleared as soon
-     * as another assistant message starts. A steer delivered between tool calls finds this unset
-     * and stays part of the running turn. */
+    /** The timed turn's last assistant reply, once it ended with no tool calls or its tool batch
+     * ended with every tool returning `terminate: true`: the agent would have stopped there, so a
+     * user message arriving after it (a queued follow-up, or a steer the loop picked up at that
+     * point) starts a new turn with its own footer (dogfood D23, D43). Cleared as soon as another
+     * assistant message starts. A steer delivered between tool calls finds this unset and stays part
+     * of the running turn. */
     private finishedReply;
+    /** The last reply with tool calls, and whether every tool of its batch that has ended so far
+     * returned `terminate: true` (undefined before the first one ends). */
+    private toolBatch;
     constructor(tui: TUI, theme: Theme, session: AgentSession);
     /** New session after /new, /resume, /reload: clear and replay its history. */
     reset(session: AgentSession): void;

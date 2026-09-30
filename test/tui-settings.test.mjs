@@ -376,7 +376,12 @@ test("Ctrl+X copies the active selection when copy-on-select is off, otherwise t
   // On (unset, T3): releasing the mouse already copied the selection, so Ctrl+X copies the last reply.
   const on = makeEnv(t);
   const onClip = clipboard(on);
-  const both = on.run([["waitReady"], ...reply, ...drag(5), ["rawMark", "dragged"], ...ctrlX, ["rawMark", "copied"], ...quit], { env: onClip.env });
+  // The drag's own `Copied!` flash (1s) must be gone before Ctrl+X, so waiting for `Copied!` can only
+  // match the key's flash, not a repaint of the drag's.
+  const both = on.run([
+    ["waitReady"], ...reply, ...drag(5), ["waitFor", "Copied!", { screen: true }], ["waitGone", "Copied!"], ["rawMark", "dragged"],
+    ...ctrlX, ["rawMark", "copied"], ...quit,
+  ], { env: onClip.env });
   assert.equal(copied(both.marks.dragged).length, 1, "copy-on-select on: releasing the mouse copies");
   assert.deepEqual(copied(after(both.marks, "dragged", "copied")), []);
   assert.equal(readFileSync(onClip.file, "utf8"), "ECHO:hi");
