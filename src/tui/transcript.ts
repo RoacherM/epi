@@ -7,11 +7,13 @@ import {
   getMarkdownTheme,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type { Component, Container, TUI } from "@earendil-works/pi-tui";
 
 import { AssistantBlock } from "./assistant-block.js";
 import { UserBashBlock } from "./bash-block.js";
-import { countImages, formatDuration, UserMessageBlock } from "./chrome.js";
+import { formatDuration, imageParts, messageText, UserMessageBlock } from "./chrome.js";
+import { imageChipNumber } from "./paste-chips.js";
 import { piTui } from "./pi-tui.js";
 import { toolBlock } from "./tools/block.js";
 import { asGroupKind, GroupedMessages, ToolEntry } from "./tools/group.js";
@@ -22,6 +24,16 @@ type AgentMessage = AgentSession["messages"][number];
 // grok block layout: a 1-column rail plus 2 columns of padding before block content.
 const CONTENT_PAD = 3;
 
+/** Images handed to the session in a message that isn't shown yet, and the numbers their chips had. */
+export interface ImageReservation {
+  numbers: number[];
+  data: string[];
+  text: string;
+  /** direct: `session.prompt` on an idle session (Pi may resize or drop the images);
+   * steer / followUp: queued while a turn runs; compaction: held by MMP until compaction ends. */
+  mode: "direct" | "steer" | "followUp" | "compaction";
+}
+
 export class Transcript {
   /** Scrolled content: the welcome page (extension header) until the first message, then messages. */
   readonly root: Container = new piTui.Container();
@@ -29,8 +41,8 @@ export class Transcript {
   private readonly messages: Container = new piTui.Container();
   private readonly groupedMessages: GroupedMessages;
   private messageCount = 0;
-  private imageCount = 0;
-  private pendingImages = 0;
+  private highestImage = 0;
+  private reservations: ImageReservation[] = [];
   private readonly tools = new Map<string, ToolEntry>();
   private readonly userMessages: UserMessageBlock[] = [];
   private readonly assistantBlocks: AssistantBlock[] = [];
@@ -70,7 +82,7 @@ export class Transcript {
   /** New session after /new, /resume, /reload: clear and replay its history. */
   reset(session: AgentSession): void {
     // Queued messages belong to their session; a reload or /tree keeps the same one.
-    if (session !== this.session) this.pendingImages = 0;
+    if (session !== this.session) this.reservations = [];
     this.session = session;
     // Drop pending completion-flash timers (tools/flash.ts) before the entries they belong to go
     // away, and the same for any group line mid-flash.
@@ -78,7 +90,7 @@ export class Transcript {
     this.groupedMessages.dispose();
     this.messages.clear();
     this.messageCount = 0;
-    this.imageCount = 0;
+    this.highestImage = 0;
     this.tools.clear();
     this.userMessages.length = 0;
     this.assistantBlocks.length = 0;
@@ -94,22 +106,89 @@ export class Transcript {
     }
   }
 
-  /** The session's `[Image #N]` numbering (D11): images in the user messages shown so far, counted
-   * in the order they're rendered and recounted by `reset()` from the replayed history, plus the
-   * ones already accepted for sending but not shown yet (queued while streaming or compacting).
-   * The editor numbers its next chip after this. */
-  get sentImageCount(): number {
-    return this.imageCount + this.pendingImages;
+  /** The highest `[Image #N]` number in use: shown in a user message, or held by a reservation.
+   * The editor numbers its next chip above it (D11). */
+  get highestImageNumber(): number {
+    return Math.max(this.highestImage, ...this.reservations.flatMap((reservation) => reservation.numbers));
   }
 
-  /** `count` images were handed to the session and will show up as a user message later. */
-  reserveImages(count: number): void {
-    this.pendingImages += count;
+  /** Records that `images` (with the numbers their chips had) were handed over for sending in a
+   * message that isn't shown yet, so the transcript shows them under those numbers once it is.
+   * Returns undefined when there is nothing to keep. */
+  reserveImages(images: readonly ImageContent[], text: string, mode: ImageReservation["mode"]): ImageReservation | undefined {
+    if (images.length === 0) return undefined;
+    const chips = images.map((image) => imageChipNumber(image));
+    // A chip number is only usable if nothing else took it since the chip was made (an image
+    // sent by an extension, say); otherwise the message gets fresh numbers.
+    const taken = new Set(this.reservations.flatMap((reservation) => reservation.numbers));
+    const usable = chips.every((number, index) => number !== undefined && number > this.highestImage && !taken.has(number) && chips.indexOf(number) === index);
+    let next = this.highestImageNumber;
+    const reservation: ImageReservation = {
+      numbers: usable ? (chips as number[]) : images.map(() => (next += 1)),
+      data: images.map((image) => image.data),
+      text,
+      mode,
+    };
+    this.reservations.push(reservation);
+    return reservation;
   }
 
-  /** The message carrying `count` reserved images was rejected or taken back out of the queue. */
-  releaseImages(count: number): void {
-    this.pendingImages = Math.max(0, this.pendingImages - count);
+  /** The reservation's message was rejected, never shown (an extension handled it), or taken back. */
+  releaseImages(reservation: ImageReservation | undefined): void {
+    if (reservation !== undefined) this.reservations = this.reservations.filter((candidate) => candidate !== reservation);
+  }
+
+  /** Takes back the queued message that carried exactly these images (Esc / Alt+Up restore): its
+   * reservation is dropped and its numbers returned, so a restored chip keeps its number. */
+  claimImages(images: readonly { data: string }[], text: string): readonly number[] | undefined {
+    const reservation = this.bestReservation(images.map((image) => image.data), text);
+    this.releaseImages(reservation);
+    return reservation?.numbers;
+  }
+
+  /** The reservation for a message Pi delivers: the exact same images, preferring the same text,
+   * then steering before follow-ups (Pi delivers them in that order), then the oldest. */
+  private bestReservation(data: readonly string[], text: string): ImageReservation | undefined {
+    const rank = { steer: 0, followUp: 1, direct: 2, compaction: 3 } as const;
+    const textMatches = (reservation: ImageReservation): boolean => text === reservation.text || text.startsWith(`${reservation.text}\n\n`);
+    return this.reservations
+      .filter((reservation) => reservation.data.length === data.length && reservation.data.every((item, index) => item === data[index]))
+      .map((reservation, order) => ({ reservation, order }))
+      .sort((a, b) =>
+        Number(textMatches(b.reservation)) - Number(textMatches(a.reservation)) ||
+        rank[a.reservation.mode] - rank[b.reservation.mode] || a.order - b.order)[0]?.reservation;
+  }
+
+  /** The numbers a live user message's images are shown under. A queued or steered message is
+   * found by its images; the one direct prompt in flight can have been resized or lost images on
+   * the way (Pi's `[Image omitted]`), so its survivors are matched to its originals one by one
+   * and a dropped image's number is simply not used. Anything else gets fresh numbers. */
+  private liveImageNumbers(data: readonly string[], text: string): number[] {
+    if (data.length === 0) return [];
+    let reservation = this.bestReservation(data, text);
+    let numbers: (number | undefined)[] = data.map(() => undefined);
+    if (reservation !== undefined) {
+      numbers = [...reservation.numbers];
+    } else if ((reservation = this.reservations.find((candidate) => candidate.mode === "direct")) !== undefined) {
+      const used = reservation.data.map(() => false);
+      numbers = data.map((item) => {
+        const index = reservation!.data.findIndex((original, at) => !used[at] && original === item);
+        if (index === -1) return undefined;
+        used[index] = true;
+        return reservation!.numbers[index];
+      });
+      const leftover = reservation.numbers.filter((_, index) => !used[index]);
+      numbers = numbers.map((number) => number ?? leftover.shift());
+    }
+    this.releaseImages(reservation);
+    let next = Math.max(this.highestImageNumber, ...numbers.filter((number): number is number => number !== undefined));
+    return numbers.map((number) => number ?? (next += 1));
+  }
+
+  /** A run ended and the session holds nothing queued: whatever is still reserved for a message
+   * that never showed up (an extension's input handler took it) will not show up. */
+  private dropStaleReservations(): void {
+    if (this.session.pendingMessageCount === 0) this.reservations = this.reservations.filter((reservation) => reservation.mode === "compaction");
   }
 
   /** Ctrl+O (docs/tui-design.md 4.3, item 5): the same toggle that expands tool output also
@@ -186,6 +265,7 @@ export class Transcript {
         this.lastTurnMessages = event.messages;
         break;
       case "agent_settled":
+        this.dropStaleReservations();
         // Fired exactly once per session.prompt()/steer()/followUp() call, after every retry,
         // compaction recovery and queued continuation has run its course (agent-session.js
         // _runAgentPrompt's finally block) -- the one point that's both "the turn is really over"
@@ -282,10 +362,12 @@ export class Transcript {
   private addFinishedMessage(message: AgentMessage, live = false): void {
     switch (message.role) {
       case "user": {
-        const block = new UserMessageBlock(this.theme, message.content, new Date(message.timestamp ?? Date.now()), this.imageCount + 1);
-        const images = countImages(message.content);
-        this.imageCount += images;
-        if (live) this.releaseImages(images);
+        const data = imageParts(message.content).map((part) => part.data);
+        const numbers = live
+          ? this.liveImageNumbers(data, messageText(message.content))
+          : data.map((_, index) => this.highestImage + index + 1);
+        this.highestImage = Math.max(this.highestImage, ...numbers);
+        const block = new UserMessageBlock(this.theme, message.content, new Date(message.timestamp ?? Date.now()), numbers);
         block.setExpanded(this.toolsExpanded);
         this.userMessages.push(block);
         this.add(block);

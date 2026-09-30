@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
@@ -334,3 +334,120 @@ test("D9: Pi's resize note stays out of the user block, while the model still ge
   assert.match(marks.sent, /ECHO:look at this/);
   assert.match(marks.sent, /original 2100x2/);
 });
+
+// Round 2 (review-1.md): numbers belong to messages, not to a running count.
+
+test("R1: a steer sent after a queued follow-up keeps its own chip number (#2 shows above #1)", (t) => {
+  const run = setup(t, [fixture("faux-queue.mjs")]);
+  const { marks } = run([
+    ["wait", 2500], ["type", "go"], ["key", "enter"],
+    ["wait", 500], ["type", "AAA "], ["key", "ctrl+v"], ["wait", 300],
+    ["key", "enter"], ["wait", 300],
+    ["type", "BBB "], ["key", "ctrl+v"], ["wait", 300], ["mark", "chipB"],
+    ["key", "alt+enter"], ["wait", 14000], ["mark", "delivered"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.chipB, /BBB \[Image #2\]/);
+  const delivered = since(marks.chipB, marks.delivered);
+  assert.match(delivered, /❯ BBB[^❯]{0,300}\[Image #2\][^❯]*❯ AAA[^❯]{0,300}\[Image #1\]/);
+});
+
+test("R2: an image Pi omits gives its number back", (t) => {
+  const run = setup(t, [ECHO_IMAGES], undefined, brokenPng());
+  const { marks } = run([
+    ["wait", 2500], ["key", "ctrl+v"], ["wait", 300], ["mark", "chip1"], ["key", "enter"], ["wait", 1500], ["mark", "sent1"],
+    ["key", "ctrl+v"], ["wait", 300], ["mark", "chip2"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.chip1, /\[Image #1\]/);
+  assert.match(since(marks.chip1, marks.sent1), /\[Image omitted: /);
+  assert.match(since(marks.sent1, marks.chip2), /\[Image #1\]/);
+});
+
+test("R3: a message an input handler took gives its numbers back", (t) => {
+  const run = setup(t, [ECHO_IMAGES, fixture("input-drop.mjs")]);
+  const { marks } = run([
+    ["wait", 2500], ["type", "drop "], ["key", "ctrl+v"], ["wait", 300], ["key", "enter"], ["wait", 800], ["mark", "dropped"],
+    ["key", "ctrl+v"], ["wait", 300], ["mark", "chip"],
+    ["key", "enter"], ["wait", 800], ["mark", "sent"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(since(marks.dropped, marks.chip), /\[Image #1\]/);
+  assert.match(since(marks.chip, marks.sent), sentMessage(1));
+});
+
+test("R3b: a queued message an input handler took gives its numbers back when the run ends", (t) => {
+  const run = setup(t, [fixture("faux-queue.mjs"), fixture("input-drop.mjs")]);
+  const { marks } = run([
+    ["wait", 2500], ["type", "go"], ["key", "enter"],
+    ["wait", 500], ["type", "drop "], ["key", "ctrl+v"], ["wait", 300], ["key", "enter"], ["wait", 300],
+    ["wait", 14000], ["mark", "settled"],
+    ["key", "ctrl+v"], ["wait", 300], ["mark", "chip"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(since(marks.settled, marks.chip), /\[Image #1\]/);
+});
+
+test("R4: an image an extension sent takes a fresh number, not one a queued chip already holds", (t) => {
+  const run = setup(t, [fixture("faux-queue.mjs"), fixture("inject-image-message.mjs")]);
+  const { marks } = run([
+    ["wait", 2500], ["type", "go"], ["key", "enter"],
+    ["wait", 500], ["type", "AAA "], ["key", "ctrl+v"], ["wait", 300],
+    ["key", "enter"], ["wait", 300],
+    ["type", "/ext"], ["key", "enter"], ["wait", 14000], ["mark", "delivered"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.delivered, /❯ EXTMSG[^❯]{0,300}\[Image #2\]/);
+  assert.match(marks.delivered, /❯ AAA[^❯]{0,300}\[Image #1\]/);
+});
+
+test("R5: Alt+Up restores a steer and a follow-up under the numbers they had", (t) => {
+  const run = setup(t, [fixture("faux-queue.mjs")]);
+  const { marks } = run([
+    ["wait", 2500], ["type", "go"], ["key", "enter"],
+    ["wait", 500], ["type", "AAA "], ["key", "ctrl+v"], ["wait", 300],
+    ["key", "enter"], ["wait", 300],
+    ["type", "BBB "], ["key", "ctrl+v"], ["wait", 300],
+    ["key", "alt+enter"], ["wait", 500], ["mark", "queued"],
+    ["key", "alt+up"], ["wait", 400], ["mark", "restored"],
+    ["key", "ctrl+d"],
+  ]);
+  const restored = since(marks.queued, marks.restored);
+  assert.match(restored, /BBB\s+\[Image #2\]/);
+  assert.match(restored, /AAA\s+\[Image #1\]/);
+});
+
+test("R6: every Pi resize/convert note at the end of the text is hidden, even before an omitted note", async () => {
+  const { withoutImageHints } = await import(pathToFileURL(join(fileURLToPath(new URL("..", import.meta.url)), "dist", "tui", "chrome.js")).href);
+  const resize = "[Image: original 4000x3000, displayed at 2000x1500. Multiply coordinates by 2.00 to map to original image.]";
+  const omitted = "[Image omitted: could not be converted to a supported inline image format.]";
+  const convert = "[Image converted from image/bmp to image/png.]";
+  assert.equal(withoutImageHints(`hi\n\n${resize}\n${omitted}`), `hi\n\n${omitted}`);
+  assert.equal(withoutImageHints(`hi\n\n${omitted}\n${convert}\n${resize}`), `hi\n\n${omitted}`);
+  assert.equal(withoutImageHints(`hi\n\n${convert}\n${resize}`), "hi");
+  assert.equal(withoutImageHints(`hi\n\n${omitted}`), `hi\n\n${omitted}`);
+});
+
+// PNG signature + IHDR (4000x4000) with no image data: the editor takes it, Pi can't decode or resize it.
+function brokenPng() {
+  const crc = (buf) => {
+    let crcv = 0xffffffff;
+    for (const b of buf) {
+      let c = (crcv ^ b) & 0xff;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      crcv = (crcv >>> 8) ^ c;
+    }
+    return (crcv ^ 0xffffffff) >>> 0;
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(4000, 0);
+  ihdr.writeUInt32BE(4000, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  const body = Buffer.concat([Buffer.from("IHDR"), ihdr]);
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(13);
+  const checksum = Buffer.alloc(4);
+  checksum.writeUInt32BE(crc(body));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), len, body, checksum, Buffer.from("garbage-not-idat")]);
+}

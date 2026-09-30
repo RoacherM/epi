@@ -1,5 +1,15 @@
 import { type AgentSession, type AgentSessionEvent, type Theme } from "@earendil-works/pi-coding-agent";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type { Component, Container, TUI } from "@earendil-works/pi-tui";
+/** Images handed to the session in a message that isn't shown yet, and the numbers their chips had. */
+export interface ImageReservation {
+    numbers: number[];
+    data: string[];
+    text: string;
+    /** direct: `session.prompt` on an idle session (Pi may resize or drop the images);
+     * steer / followUp: queued while a turn runs; compaction: held by MMP until compaction ends. */
+    mode: "direct" | "steer" | "followUp" | "compaction";
+}
 export declare class Transcript {
     private readonly tui;
     private readonly theme;
@@ -10,8 +20,8 @@ export declare class Transcript {
     private readonly messages;
     private readonly groupedMessages;
     private messageCount;
-    private imageCount;
-    private pendingImages;
+    private highestImage;
+    private reservations;
     private readonly tools;
     private readonly userMessages;
     private readonly assistantBlocks;
@@ -35,15 +45,31 @@ export declare class Transcript {
     constructor(tui: TUI, theme: Theme, session: AgentSession);
     /** New session after /new, /resume, /reload: clear and replay its history. */
     reset(session: AgentSession): void;
-    /** The session's `[Image #N]` numbering (D11): images in the user messages shown so far, counted
-     * in the order they're rendered and recounted by `reset()` from the replayed history, plus the
-     * ones already accepted for sending but not shown yet (queued while streaming or compacting).
-     * The editor numbers its next chip after this. */
-    get sentImageCount(): number;
-    /** `count` images were handed to the session and will show up as a user message later. */
-    reserveImages(count: number): void;
-    /** The message carrying `count` reserved images was rejected or taken back out of the queue. */
-    releaseImages(count: number): void;
+    /** The highest `[Image #N]` number in use: shown in a user message, or held by a reservation.
+     * The editor numbers its next chip above it (D11). */
+    get highestImageNumber(): number;
+    /** Records that `images` (with the numbers their chips had) were handed over for sending in a
+     * message that isn't shown yet, so the transcript shows them under those numbers once it is.
+     * Returns undefined when there is nothing to keep. */
+    reserveImages(images: readonly ImageContent[], text: string, mode: ImageReservation["mode"]): ImageReservation | undefined;
+    /** The reservation's message was rejected, never shown (an extension handled it), or taken back. */
+    releaseImages(reservation: ImageReservation | undefined): void;
+    /** Takes back the queued message that carried exactly these images (Esc / Alt+Up restore): its
+     * reservation is dropped and its numbers returned, so a restored chip keeps its number. */
+    claimImages(images: readonly {
+        data: string;
+    }[], text: string): readonly number[] | undefined;
+    /** The reservation for a message Pi delivers: the exact same images, preferring the same text,
+     * then steering before follow-ups (Pi delivers them in that order), then the oldest. */
+    private bestReservation;
+    /** The numbers a live user message's images are shown under. A queued or steered message is
+     * found by its images; the one direct prompt in flight can have been resized or lost images on
+     * the way (Pi's `[Image omitted]`), so its survivors are matched to its originals one by one
+     * and a dropped image's number is simply not used. Anything else gets fresh numbers. */
+    private liveImageNumbers;
+    /** A run ended and the session holds nothing queued: whatever is still reserved for a message
+     * that never showed up (an extension's input handler took it) will not show up. */
+    private dropStaleReservations;
     /** Ctrl+O (docs/tui-design.md 4.3, item 5): the same toggle that expands tool output also
      * expands a user message collapsed past 3 lines, instead of a second toggle. */
     setToolsExpanded(expanded: boolean): void;

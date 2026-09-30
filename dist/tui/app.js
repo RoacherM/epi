@@ -93,7 +93,7 @@ export async function runTuiApp(options) {
     const editor = new ChipEditor(tui, {
         borderColor: (text) => theme.fg("border", text),
         selectList: getSelectListTheme(),
-    }, { getCwd: () => session.sessionManager.getCwd(), getSentImageCount: () => transcript.sentImageCount });
+    }, { getCwd: () => session.sessionManager.getCwd(), getHighestImageNumber: () => transcript.highestImageNumber });
     const prompt = new PromptFrame(theme, editor, () => {
         const model = session.model;
         const hasModel = model !== undefined && runtime.services.modelRuntime.getAvailableSnapshot().length > 0;
@@ -730,13 +730,14 @@ export async function runTuiApp(options) {
         const queued = [...steering, ...followUp];
         if (queued.length === 0)
             return 0;
-        transcript.releaseImages(queued.reduce((sum, message) => sum + message.images.length, 0));
-        // They go ahead of the draft, so they take the numbers right after the sent images, below any chip already in the draft.
-        let nextImage = transcript.sentImageCount + 1;
+        // Each image comes back under the number its chip had; one nobody reserved (an extension's
+        // queued message) takes the next free number.
+        const claimed = queued.map((message) => transcript.claimImages(message.images, message.text));
+        let nextImage = Math.max(transcript.highestImageNumber, ...claimed.flatMap((numbers) => numbers ?? [])) + 1;
         const queuedText = queued
-            .map((message) => [
+            .map((message, messageIndex) => [
             message.text,
-            ...message.images.map((image) => editor.registerImage(Buffer.from(image.data, "base64"), image.mimeType, nextImage++)),
+            ...message.images.map((image, imageIndex) => editor.registerImage(Buffer.from(image.data, "base64"), image.mimeType, claimed[messageIndex]?.[imageIndex] ?? nextImage++)),
         ].filter((part) => part !== "").join(" "))
             .join("\n\n");
         const current = editor.getText();
@@ -771,6 +772,12 @@ export async function runTuiApp(options) {
             const preCommands = messages.slice(0, firstPromptIndex);
             const firstPrompt = messages[firstPromptIndex];
             const rest = messages.slice(firstPromptIndex + 1);
+            // Out of MMP's queue now: the first goes straight in (Pi may resize it), the rest queue in the session.
+            for (const message of messages)
+                if (message.reservation !== undefined)
+                    message.reservation.mode = message.mode;
+            if (firstPrompt.reservation !== undefined && !session.isStreaming)
+                firstPrompt.reservation.mode = "direct";
             for (const message of preCommands)
                 await session.prompt(message.text);
             const promptPromise = session
@@ -840,34 +847,38 @@ export async function runTuiApp(options) {
                 }
                 return;
             }
-            transcript.reserveImages(images.length);
-            compactionQueue.push({ text, images, mode: "followUp" });
+            compactionQueue.push({ text, images, mode: "followUp", reservation: transcript.reserveImages(images, text, "compaction") });
             transcript.notice("Queued message for after compaction.");
             tui.requestRender();
             return;
         }
         // An extension command consumes its arguments; no user message (and no image) ever shows up.
-        const reserved = isExtensionCommand ? 0 : images.length;
-        transcript.reserveImages(reserved);
+        const reservation = isExtensionCommand ? undefined : transcript.reserveImages(images, text, session.isStreaming ? "followUp" : "direct");
         try {
             await session.prompt(text, { images, ...(session.isStreaming ? { streamingBehavior: "followUp" } : {}) });
         }
         catch (error) {
-            transcript.releaseImages(reserved);
+            transcript.releaseImages(reservation);
             // No model, no auth: say why and keep the text.
             transcript.notice(errorText(error), "error");
             if (editor.getText() === "")
                 editor.setText(text);
         }
+        finally {
+            // A prompt that ran has shown its message by now; if it didn't (an extension's input handler
+            // took it) the numbers are free again. A queued one settles when the run ends (Transcript).
+            if (reservation?.mode === "direct")
+                transcript.releaseImages(reservation);
+        }
     }
     /** Alt+Enter while streaming: into the running turn. */
     async function steer(text, images) {
-        transcript.reserveImages(images.length);
+        const reservation = transcript.reserveImages(images, text, "steer");
         try {
             await session.prompt(text, { images, streamingBehavior: "steer" });
         }
         catch (error) {
-            transcript.releaseImages(images.length);
+            transcript.releaseImages(reservation);
             throw error;
         }
     }

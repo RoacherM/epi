@@ -61,33 +61,42 @@ export function headerBar(theme, state) {
 // docs/pi-internals.md `image-hint-wording`). The model still gets them; the transcript hides them
 // (D9). `[Image omitted: ...]` failure notes are not listed here on purpose: failures stay visible.
 const IMAGE_HINT_LINE = /^\[(?:Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+(?:\.\d+)? to map to original image\.|Image converted from [^\s\]]+ to [^\s\]]+\.)\]$/;
-/** Drops Pi's image notes from the end of `text`, where it puts them (one per line, after a blank line). */
+const IMAGE_OMITTED_LINE = /^\[Image omitted: [^\]]*\]$/;
+/** Drops Pi's resize/convert notes from the block of note lines at the end of `text` (Pi appends
+ * them per image, in order, after a blank line); `[Image omitted: ...]` lines in that block stay. */
 export function withoutImageHints(text) {
     const lines = text.trimEnd().split("\n");
-    while (lines.length > 0 && IMAGE_HINT_LINE.test(lines[lines.length - 1] ?? ""))
-        lines.pop();
-    return lines.join("\n").trimEnd();
+    let start = lines.length;
+    while (start > 0 && (IMAGE_HINT_LINE.test(lines[start - 1] ?? "") || IMAGE_OMITTED_LINE.test(lines[start - 1] ?? "")))
+        start -= 1;
+    const tail = lines.slice(start);
+    if (!tail.some((line) => IMAGE_HINT_LINE.test(line)))
+        return text;
+    return [...lines.slice(0, start), ...tail.filter((line) => !IMAGE_HINT_LINE.test(line))].join("\n").trimEnd();
 }
 const FILE_BLOCK_RE = /<file name="([^"]*)">[\s\S]*?<\/file>\n?/g;
-/** How many image content parts a user message carries; the transcript numbers images across the
- * whole session with this (Transcript.imageCount). */
-export function countImages(content) {
-    return Array.isArray(content) ? content.filter((part) => part?.type === "image").length : 0;
+/** The image content parts of a user message, in order (the transcript numbers them). */
+export function imageParts(content) {
+    return Array.isArray(content) ? content.filter((part) => part?.type === "image") : [];
 }
-/** A user message's own display text: `<file name="...">...</file>` blocks (file-arguments.ts's
- * `@file` inlining) collapse to `[File: name]`, and image content parts (never inlined as text)
- * show as `[Image #N]`, numbered from `firstImageNumber` -- the model still gets the full `content`
- * array unchanged; this only affects what's drawn in the transcript (item 5, docs/tui-design.md
- * 4.3's 发送 row). */
-function displayText(content, firstImageNumber) {
-    const text = typeof content === "string"
+/** The text parts of a user message's content, joined. */
+export function messageText(content) {
+    return typeof content === "string"
         ? content
         : Array.isArray(content)
             ? content.filter((part) => part?.type === "text").map((part) => part.text).join("")
             : "";
-    const imageCount = countImages(content);
+}
+/** A user message's own display text: `<file name="...">...</file>` blocks (file-arguments.ts's
+ * `@file` inlining) collapse to `[File: name]`, and image content parts (never inlined as text)
+ * show as `[Image #N]`, numbered with `imageNumbers` -- the model still gets the full `content`
+ * array unchanged; this only affects what's drawn in the transcript (item 5, docs/tui-design.md
+ * 4.3's 发送 row). */
+function displayText(content, imageNumbers) {
+    const text = messageText(content);
+    const imageCount = imageParts(content).length;
     const withFileChips = (imageCount > 0 ? withoutImageHints(text) : text).replace(FILE_BLOCK_RE, (_match, name) => `[File: ${basename(name)}]\n`).trim();
-    const images = Array.from({ length: imageCount }, (_, index) => `[Image #${firstImageNumber + index}]`).join(" ");
+    const images = Array.from({ length: imageCount }, (_, index) => `[Image #${imageNumbers[index] ?? index + 1}]`).join(" ");
     return [withFileChips, images].filter((part) => part !== "").join("\n");
 }
 const COLLAPSED_LINES = 3;
@@ -120,10 +129,10 @@ export class UserMessageBlock {
     time;
     text;
     expanded = false;
-    constructor(theme, content, time, firstImageNumber = 1) {
+    constructor(theme, content, time, imageNumbers = []) {
         this.theme = theme;
         this.time = time;
-        this.text = displayText(content, firstImageNumber);
+        this.text = displayText(content, imageNumbers);
     }
     setExpanded(expanded) {
         this.expanded = expanded;

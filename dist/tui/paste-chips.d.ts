@@ -46,13 +46,17 @@ export declare function sniffImageFile(path: string): {
     bytes: Buffer;
     mimeType: string;
 } | undefined;
+/** The `[Image #N]` number the chip had that an attachment from `getImageAttachments()` (or a
+ * submit) came from; undefined for any other image. */
+export declare function imageChipNumber(image: ImageContent): number | undefined;
 interface ChipEditorOptions extends EditorOptions {
     /** Read live so an image path pasted after /resume resolves against the new session's cwd. */
     getCwd: () => string;
-    /** Images already sent in the session (including queued ones): a new chip is numbered after
-     * them, so the label in the editor is the one the transcript shows once the message is sent.
-     * Read live; without it the editor keeps counting up from its own last chip. */
-    getSentImageCount?: () => number;
+    /** The highest `[Image #N]` number in use in the session (shown in the transcript or reserved by
+     * a queued message): a new chip is numbered above it, so the label in the editor is the one the
+     * transcript shows once the message is sent. Read live; without it the editor keeps counting up
+     * from its own last chip. */
+    getHighestImageNumber?: () => number;
 }
 /**
  * Wraps pi-tui's `Editor`, adding atomic paste/image chips on top of its public API. See the
@@ -61,7 +65,7 @@ interface ChipEditorOptions extends EditorOptions {
 export declare class ChipEditor {
     private readonly inner;
     private readonly getCwd;
-    private readonly getSentImageCount;
+    private readonly getHighestImageNumber;
     private lastImageId;
     /** Content of every text chip pasted into this draft, by content id; see the module comment. */
     private textContents;
@@ -114,7 +118,7 @@ export declare class ChipEditor {
      * arbitrary text itself (Esc/Alt+Up queue restore, app.ts's restoreQueuedMessagesToEditor) ahead
      * of one `setText()` call, rather than at the current cursor. Returns the `[Image #N]` label to
      * place in that text. `preferredId` (queue restore: the number the image had when it was sent)
-     * is used when the draft hasn't seen that id. */
+     * is used unless the draft holds a different image under that id. */
     registerImage(bytes: Uint8Array, mimeType: string, preferredId?: number): string;
     /** Ctrl+V with an image on the clipboard, or an `@image`-equivalent drop: adds an `[Image #N]`
      * chip at the cursor. `bytes` are kept as-is; AgentSession resizes for the model at send time

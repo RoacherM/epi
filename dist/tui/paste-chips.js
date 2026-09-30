@@ -147,6 +147,12 @@ function alignEdit(before, beforeCursor, after, afterCursor) {
     const prefix = Math.max(shorter - maxSuffix, Math.min(maxPrefix, beforeCursor, afterCursor));
     return { prefix, suffix: shorter - prefix };
 }
+const chipNumbers = new WeakMap();
+/** The `[Image #N]` number the chip had that an attachment from `getImageAttachments()` (or a
+ * submit) came from; undefined for any other image. */
+export function imageChipNumber(image) {
+    return chipNumbers.get(image);
+}
 /**
  * Wraps pi-tui's `Editor`, adding atomic paste/image chips on top of its public API. See the
  * module comment for why this wraps instead of extending `Editor`, and how the chip registry works.
@@ -154,7 +160,7 @@ function alignEdit(before, beforeCursor, after, afterCursor) {
 export class ChipEditor {
     inner;
     getCwd;
-    getSentImageCount;
+    getHighestImageNumber;
     lastImageId = 0;
     /** Content of every text chip pasted into this draft, by content id; see the module comment. */
     textContents = new Map();
@@ -173,7 +179,7 @@ export class ChipEditor {
     onSubmitImages;
     constructor(tui, theme, options) {
         this.getCwd = options.getCwd;
-        this.getSentImageCount = options.getSentImageCount ?? (() => this.lastImageId);
+        this.getHighestImageNumber = options.getHighestImageNumber ?? (() => this.lastImageId);
         this.inner = new piTui.Editor(tui, theme, options);
         this.inner.onChange = (text) => this.onChange?.(text);
         this.inner.onSubmit = (text) => this.deliverSubmit(text);
@@ -248,13 +254,14 @@ export class ChipEditor {
      * arbitrary text itself (Esc/Alt+Up queue restore, app.ts's restoreQueuedMessagesToEditor) ahead
      * of one `setText()` call, rather than at the current cursor. Returns the `[Image #N]` label to
      * place in that text. `preferredId` (queue restore: the number the image had when it was sent)
-     * is used when the draft hasn't seen that id. */
+     * is used unless the draft holds a different image under that id. */
     registerImage(bytes, mimeType, preferredId) {
-        const id = preferredId !== undefined && !this.imageChips.has(preferredId)
-            ? preferredId
-            : Math.max(this.getSentImageCount(), ...this.imageChips.keys()) + 1;
-        this.lastImageId = id;
         const base64 = Buffer.from(bytes).toString("base64");
+        // A steered draft is cleared without resetting the registry, so its stale chip may still hold
+        // the id; the same image under the same id is not a conflict.
+        const usable = preferredId !== undefined && (this.imageChips.get(preferredId) === undefined || this.imageChips.get(preferredId)?.base64 === base64);
+        const id = usable ? preferredId : Math.max(this.getHighestImageNumber(), ...this.imageChips.keys()) + 1;
+        this.lastImageId = id;
         const dimensions = piTui.getImageDimensions(base64, mimeType);
         this.imageChips.set(id, {
             id,
@@ -642,7 +649,9 @@ export class ChipEditor {
                 const meta = this.imageChips.get(Number(imageId));
                 if (!meta)
                     return match;
-                images.push({ type: "image", data: meta.base64, mimeType: meta.mimeType });
+                const image = { type: "image", data: meta.base64, mimeType: meta.mimeType };
+                chipNumbers.set(image, Number(imageId));
+                images.push(image);
                 return "";
             }
             const content = this.textContent(slots[textIndex], match);
