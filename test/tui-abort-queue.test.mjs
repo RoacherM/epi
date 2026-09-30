@@ -39,15 +39,23 @@ function runApp(t, extensions, steps) {
   return { ...parsed, text: `EXIT=${parsed.exit}\n${parsed.output}` };
 }
 
+// The alt screen only redraws rows that changed, so a queue bar that should have cleared but didn't
+// is never drawn again and can't be seen in `output`/marks; only the current screen shows it.
+function assertQueueRestoredOnScreen(screen, text) {
+  const shown = screen.join("\n");
+  assert.match(shown, new RegExp(`│ ❯ ${text}\\s`), shown);
+  assert.doesNotMatch(shown, /Follow-up:|Alt\+Up to edit/, shown);
+}
+
 test("Esc puts a queued follow-up back in the editor and aborts, instead of sending it later unasked", (t) => {
-  const { marks, text: out } = runApp(t, [fixture("faux-queue.mjs")], [
+  const { marks, screens, text: out } = runApp(t, [fixture("faux-queue.mjs")], [
     ["waitReady"], ["type", "go"], ["key", "enter"],
     ["waitFor", "FIRST-START"], ["type", "later"], ["key", "enter"],
     ["waitFor", "Follow-up: later"], ["mark", "queued"],
     ["key", "esc"], ["waitFor", { regex: "❯ later\\s" }], ["mark", "afterEsc"],
     // A stray delivery of "later" would start the second turn right as the aborted one ends, and
     // its one-word SECOND-REPLY finishes well inside this window.
-    ["wait", 1500], ["mark", "settled"],
+    ["wait", 1500], ["mark", "settled"], ["screen", "settled"],
     ["detach"], // Ctrl+D would not quit: "later" is back in the editor
   ]);
   assert.match(marks.queued, /Follow-up: later/);
@@ -55,24 +63,27 @@ test("Esc puts a queued follow-up back in the editor and aborts, instead of send
   // Restored into the editor, and no longer shown as queued.
   assert.match(afterAbort, /later/);
   assert.doesNotMatch(afterAbort, /Follow-up:/);
+  // And the queue bar is actually gone from the screen once things settle, not just not redrawn.
+  assertQueueRestoredOnScreen(screens.settled, "later");
   // Never sent on its own: nothing reaches the model for it, so the second canned reply never
   // fires purely from the abort (the user has not pressed Enter again).
   assert.doesNotMatch(out, /SECOND-REPLY/);
 });
 
 test("Ctrl+C on a running turn also restores the queue instead of dropping it", (t) => {
-  const { marks, text: out } = runApp(t, [fixture("faux-queue.mjs")], [
+  const { marks, screens, text: out } = runApp(t, [fixture("faux-queue.mjs")], [
     ["waitReady"], ["type", "go"], ["key", "enter"],
     ["waitFor", "FIRST-START"], ["type", "later"], ["key", "enter"],
     ["waitFor", "Follow-up: later"], ["mark", "queued"],
     ["key", "ctrl+c"], ["waitFor", { regex: "❯ later\\s" }], ["mark", "afterCtrlC"],
-    ["wait", 1500], // same window as the Esc test above
+    ["wait", 1500], ["screen", "settled"], // same window as the Esc test above
     ["detach"],
   ]);
   assert.match(marks.queued, /Follow-up: later/);
   const afterAbort = marks.afterCtrlC.slice(marks.queued.length);
   assert.match(afterAbort, /later/);
   assert.doesNotMatch(afterAbort, /Follow-up:/);
+  assertQueueRestoredOnScreen(screens.settled, "later");
   assert.doesNotMatch(out, /SECOND-REPLY/);
 });
 
@@ -83,27 +94,21 @@ test("Ctrl+C on a running turn also restores the queue instead of dropping it", 
 // (interactive-mode.js ~1437-1439); this fails before app.ts's bindExtensions() call gets the same
 // abortHandler, and passes after.
 test("an extension's ctx.abort() restores the queue too, not just Esc/Ctrl+C", (t) => {
-  const { marks, text: out } = runApp(t, [fixture("faux-queue.mjs"), fixture("abort-command-extension.mjs")], [
+  const { marks, screens, text: out } = runApp(t, [fixture("faux-queue.mjs"), fixture("abort-command-extension.mjs")], [
     ["waitReady"], ["type", "go"], ["key", "enter"],
     ["waitFor", "FIRST-START"], ["type", "later"], ["key", "enter"],
     ["waitFor", "Follow-up: later"], ["mark", "queued"],
     ["type", "/doabort"], ["key", "enter"],
     ["waitFor", { regex: "❯ later\\s" }],
     ["wait", 1500], // same window as the Esc test: the restore is drawn ~0.4s before the aborted turn ends
+    ["screen", "settled"],
     ["detach"],
   ]);
   assert.match(marks.queued, /Follow-up: later/);
   // Typing "/doabort" itself re-renders the (still-queued) "Follow-up: later" line on every
-  // autocomplete keystroke, so the meaningful check is the settled tail once the command has
-  // actually run, not the whole cumulative output since "queued" (which would still contain those
-  // now-stale frames either way). Ctrl+D only quits with an empty editor -- "later" ends up back in
-  // it -- so the run detaches; there is nothing to assert about EXIT.
-  // The restore frame starts at the spinner redraw just before the final "❯ later"; nothing from
-  // that frame on may show the queue line again.
-  const restoredAt = out.lastIndexOf("❯ later");
-  assert.ok(restoredAt > 0, "the restored text never reached the editor");
-  const settled = out.slice(out.lastIndexOf("Responding", restoredAt));
-  assert.match(settled, /❯ later\s/);
-  assert.doesNotMatch(settled, /Follow-up:/);
+  // autocomplete keystroke, so the drawn output since "queued" contains it either way; the check
+  // is the screen once the command has run. Ctrl+D only quits with an empty editor -- "later" ends
+  // up back in it -- so the run detaches; there is nothing to assert about EXIT.
+  assertQueueRestoredOnScreen(screens.settled, "later");
   assert.doesNotMatch(out, /SECOND-REPLY/);
 });
