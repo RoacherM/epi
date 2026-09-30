@@ -1,6 +1,8 @@
-// D11 (docs/dogfood-issues.md): one `[Image #N]` numbering for the whole session. The chip in the
-// editor and the user message in the transcript show the same number, across messages, /new,
-// /resume, --resume, /fork, queued and steered messages, and images attached on the command line.
+// D11 (docs/dogfood-issues.md): one `[Image #N]` numbering for the whole session. The chip's label
+// stays in the sent text (the model sees it too), so the transcript shows the chip's own number;
+// the next chip is numbered above every label in the session's user messages and the draft, across
+// messages, /new, /resume, --resume, /fork, /clone, queued and steered messages. Images without a
+// label in the text (an extension's message, `@pic.png` on the command line) show as `[Image]`.
 // Driven through the real app via the harness; the harness's marks are cumulative, so a mark's
 // own contribution is sliced out with since().
 import assert from "node:assert/strict";
@@ -12,6 +14,11 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
+import { initTheme } from "@earendil-works/pi-coding-agent";
+
+import { createMmpTheme } from "../dist/tui/theme.js";
+import { Transcript } from "../dist/tui/transcript.js";
+
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 const ONE_PIXEL_PNG = Buffer.from(
@@ -19,9 +26,9 @@ const ONE_PIXEL_PNG = Buffer.from(
   "base64",
 );
 const since = (earlierMark, laterMark) => laterMark.slice(earlierMark.length);
-// An image-only message in the transcript: `❯ ` then its chips (joined by spaces) and the clock at
-// the row's right end. The editor's own row for the same chips has neither the spaces nor the clock.
-const sentMessage = (...numbers) => new RegExp(`❯ ${numbers.map((n) => `\\[Image #${n}\\]`).join(" ")}\\s+\\d+:\\d\\d [AP]M`);
+// An image-only message in the transcript: `❯ ` then its labels as typed and the clock at the row's
+// right end. The editor's own row for the same chips has no clock.
+const sentMessage = (...numbers) => new RegExp(`❯ ${numbers.map((n) => `\\[Image #${n}\\]`).join(" ?")}\\s+\\d+:\\d\\d [AP]M`);
 
 function setup(t, extensions, settings, clipboardBytes = ONE_PIXEL_PNG) {
   const root = mkdtempSync(join(tmpdir(), "mmp-tui-image-numbering-"));
@@ -274,7 +281,7 @@ test("a compaction-queued image message shows the number its chip had once it is
   assert.match(since(marks.afterCompaction, marks.chip3), /\[Image #3\]/);
 });
 
-test("an @image argument counts: the first pasted image is #2", (t) => {
+test("an @image argument shows as [Image] without a number: the first pasted image is #1", (t) => {
   const run = setup(t, [ECHO_IMAGES]);
   const { marks } = run([
     ["wait", 3000], ["mark", "started"],
@@ -282,9 +289,10 @@ test("an @image argument counts: the first pasted image is #2", (t) => {
     ["key", "enter"], ["wait", 800], ["mark", "sent"],
     ["key", "ctrl+d"],
   ], ["--no-project", "@pic.png", "describe it"]);
-  assert.match(marks.started, /describe it\s+\[Image #1\]/);
-  assert.match(since(marks.started, marks.chip), /\[Image #2\]/);
-  assert.match(since(marks.chip, marks.sent), sentMessage(2));
+  assert.match(marks.started, /describe it\s+\[Image\]/);
+  assert.doesNotMatch(marks.started, /\[Image #/);
+  assert.match(since(marks.started, marks.chip), /\[Image #1\]/);
+  assert.match(since(marks.chip, marks.sent), sentMessage(1));
 });
 
 // A valid 8-bit grayscale PNG, `width` x 2, all black: wider than Pi's 2000 px inline-image limit,
@@ -335,7 +343,18 @@ test("D9: Pi's resize note stays out of the user block, while the model still ge
   assert.match(marks.sent, /original 2100x2/);
 });
 
-// Round 2 (review-1.md): numbers belong to messages, not to a running count.
+// Round 3: the label stays in the text; no reservations.
+
+test("the model receives the chip's label in the prompt text", (t) => {
+  const run = setup(t, [ECHO_IMAGES]);
+  const { marks } = run([
+    ["wait", 2500], ["type", "see "], ["key", "ctrl+v"], ["wait", 300], ["type", " and say"],
+    ["key", "enter"], ["wait", 800], ["mark", "sent"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.sent, /ECHO:see \[Image #1\] and say\|IMAGES:1/);
+  assert.match(marks.sent, /❯ see \[Image #1\] and say/);
+});
 
 test("R1: a steer sent after a queued follow-up keeps its own chip number (#2 shows above #1)", (t) => {
   const run = setup(t, [fixture("faux-queue.mjs")]);
@@ -349,10 +368,10 @@ test("R1: a steer sent after a queued follow-up keeps its own chip number (#2 sh
   ]);
   assert.match(marks.chipB, /BBB \[Image #2\]/);
   const delivered = since(marks.chipB, marks.delivered);
-  assert.match(delivered, /❯ BBB[^❯]{0,300}\[Image #2\][^❯]*❯ AAA[^❯]{0,300}\[Image #1\]/);
+  assert.match(delivered, /❯ BBB \[Image #2\][^❯]*❯ AAA \[Image #1\]/);
 });
 
-test("R2: an image Pi omits gives its number back", (t) => {
+test("R2: an image Pi omits keeps its number in the transcript, and the next chip is #2", (t) => {
   const run = setup(t, [ECHO_IMAGES], undefined, brokenPng());
   const { marks } = run([
     ["wait", 2500], ["key", "ctrl+v"], ["wait", 300], ["mark", "chip1"], ["key", "enter"], ["wait", 1500], ["mark", "sent1"],
@@ -360,11 +379,13 @@ test("R2: an image Pi omits gives its number back", (t) => {
     ["key", "ctrl+d"],
   ]);
   assert.match(marks.chip1, /\[Image #1\]/);
-  assert.match(since(marks.chip1, marks.sent1), /\[Image omitted: /);
-  assert.match(since(marks.sent1, marks.chip2), /\[Image #1\]/);
+  const sent = since(marks.chip1, marks.sent1);
+  assert.match(sent, /❯ \[Image #1\][^❯]*\[Image omitted: /);
+  assert.match(sent, /IMAGES:0/);
+  assert.match(since(marks.sent1, marks.chip2), /\[Image #2\]/);
 });
 
-test("R3: a message an input handler took gives its numbers back", (t) => {
+test("R3: a message an input handler took is never shown; its number goes unused", (t) => {
   const run = setup(t, [ECHO_IMAGES, fixture("input-drop.mjs")]);
   const { marks } = run([
     ["wait", 2500], ["type", "drop "], ["key", "ctrl+v"], ["wait", 300], ["key", "enter"], ["wait", 800], ["mark", "dropped"],
@@ -372,33 +393,27 @@ test("R3: a message an input handler took gives its numbers back", (t) => {
     ["key", "enter"], ["wait", 800], ["mark", "sent"],
     ["key", "ctrl+d"],
   ]);
-  assert.match(since(marks.dropped, marks.chip), /\[Image #1\]/);
-  assert.match(since(marks.chip, marks.sent), sentMessage(1));
+  // The editor's row reads `❯ drop [Image #1]` too; only a transcript block has the clock.
+  assert.doesNotMatch(marks.sent, /❯ drop \[Image #1\]\s+\d+:\d\d [AP]M/);
+  assert.match(since(marks.dropped, marks.chip), /\[Image #2\]/);
+  assert.match(since(marks.chip, marks.sent), sentMessage(2));
+  assert.doesNotMatch(marks.sent, sentMessage(1));
 });
 
-test("R3b: a queued message an input handler took gives its numbers back when the run ends", (t) => {
-  const run = setup(t, [fixture("faux-queue.mjs"), fixture("input-drop.mjs")]);
-  const { marks } = run([
-    ["wait", 2500], ["type", "go"], ["key", "enter"],
-    ["wait", 500], ["type", "drop "], ["key", "ctrl+v"], ["wait", 300], ["key", "enter"], ["wait", 300],
-    ["wait", 14000], ["mark", "settled"],
-    ["key", "ctrl+v"], ["wait", 300], ["mark", "chip"],
-    ["key", "ctrl+d"],
-  ]);
-  assert.match(since(marks.settled, marks.chip), /\[Image #1\]/);
-});
-
-test("R4: an image an extension sent takes a fresh number, not one a queued chip already holds", (t) => {
+test("R4: an extension's image with no label shows as [Image]; a queued chip keeps #1", (t) => {
   const run = setup(t, [fixture("faux-queue.mjs"), fixture("inject-image-message.mjs")]);
   const { marks } = run([
     ["wait", 2500], ["type", "go"], ["key", "enter"],
     ["wait", 500], ["type", "AAA "], ["key", "ctrl+v"], ["wait", 300],
     ["key", "enter"], ["wait", 300],
     ["type", "/ext"], ["key", "enter"], ["wait", 14000], ["mark", "delivered"],
+    ["key", "ctrl+v"], ["wait", 300], ["mark", "chip"],
     ["key", "ctrl+d"],
   ]);
-  assert.match(marks.delivered, /❯ EXTMSG[^❯]{0,300}\[Image #2\]/);
-  assert.match(marks.delivered, /❯ AAA[^❯]{0,300}\[Image #1\]/);
+  assert.match(marks.delivered, /❯ EXTMSG[^❯]{0,300}\[Image\]/);
+  assert.doesNotMatch(marks.delivered, /❯ EXTMSG[^❯]{0,300}\[Image #/);
+  assert.match(marks.delivered, /❯ AAA \[Image #1\]/);
+  assert.match(since(marks.delivered, marks.chip), /\[Image #2\]/);
 });
 
 test("R5: Alt+Up restores a steer and a follow-up under the numbers they had", (t) => {
@@ -410,11 +425,31 @@ test("R5: Alt+Up restores a steer and a follow-up under the numbers they had", (
     ["type", "BBB "], ["key", "ctrl+v"], ["wait", 300],
     ["key", "alt+enter"], ["wait", 500], ["mark", "queued"],
     ["key", "alt+up"], ["wait", 400], ["mark", "restored"],
+    ["key", "ctrl+v"], ["wait", 300], ["mark", "chip3"],
+    ["key", "enter"], ["wait", 14000], ["mark", "delivered"],
     ["key", "ctrl+d"],
   ]);
   const restored = since(marks.queued, marks.restored);
-  assert.match(restored, /BBB\s+\[Image #2\]/);
-  assert.match(restored, /AAA\s+\[Image #1\]/);
+  assert.match(restored, /BBB \[Image #2\]/);
+  assert.match(restored, /AAA \[Image #1\]/);
+  assert.match(since(marks.restored, marks.chip3), /\[Image #3\]/);
+  // The restored labels resolve to their images again: all three are sent in one message.
+  assert.match(since(marks.chip3, marks.delivered), /❯ BBB \[Image #2\][^❯]*AAA \[Image #1\][^❯]*\[Image #3\]/);
+});
+
+test("Transcript: the next number comes from the history's labels; unlabelled images count for nothing", () => {
+  initTheme("dark");
+  const session = (messages) => ({ messages, sessionManager: { getCwd: () => "/tmp" }, extensionRunner: { getMarkdownTransformers: () => [] } });
+  const image = { type: "image", data: "AAAA", mimeType: "image/png" };
+  const user = (text, images) => ({ role: "user", timestamp: 0, content: [{ type: "text", text }, ...Array(images).fill(image)] });
+  const transcript = new Transcript({ requestRender() {} }, createMmpTheme("dark"), session([]));
+  transcript.reset(session([user("a [Image #1] [Image #4]", 2), user("old", 1)]));
+  assert.equal(transcript.highestImageNumber, 4);
+  const rendered = transcript.root.render(80).join("\n");
+  assert.match(rendered, /a \[Image #1\] \[Image #4\]/);
+  assert.match(rendered, /\[Image\]/);
+  transcript.reset(session([user("from before D11", 1)]));
+  assert.equal(transcript.highestImageNumber, 0);
 });
 
 test("R6: every Pi resize/convert note at the end of the text is hidden, even before an omitted note", async () => {

@@ -328,7 +328,7 @@ test("Ctrl+V with an image on the clipboard (via the test seam) becomes an [Imag
   ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterPaste, /\[Image #1\]/);
   assert.match(marks.afterPaste, /Image #1 ─ PNG · 1x1 · 0\.1 KB/);
-  assert.match(marks.sent, /ECHO:\|IMAGES:image\/png/);
+  assert.match(marks.sent, /ECHO:\[Image #1\]\|IMAGES:image\/png/);
 });
 
 test("an @image argument is attached as an image to the initial message", (t) => {

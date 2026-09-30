@@ -7,7 +7,7 @@
 // Checked from outside, through getExpandedText()/getImageAttachments()/submit:
 // 1. The expansion is the document with each `[Pasted: …]` label replaced by itself or by the
 //    content of one paste made under that same label, no paste's content used twice, and each
-//    `[Image #N]` removed and attached with image N's own bytes (or left literal if N is unknown).
+//    `[Image #N]` kept as is and attached with image N's own bytes (or not attached if N is unknown).
 // 2. An ordinary edit never attaches content that wasn't attached just before it (a paste adds
 //    only its own). Only undo and leaving history browsing may bring content back, and then it
 //    must be exactly what that earlier state had: the test records (text, expansion) whenever Pi
@@ -60,9 +60,10 @@ function checkResolution(doc, expanded, images, pastes, imageBytes) {
     expect(doc.slice(last, match.index), "plain text");
     last = match.index + match[0].length;
     if (match[1] !== undefined) {
+      // The label stays in the text either way (D11); only a known one attaches its image.
+      expect(match[0], "image label stays in the text");
       const bytes = imageBytes.get(Number(match[1]));
-      if (bytes === undefined) expect(match[0], "unknown image label stays literal");
-      else attached.push(bytes);
+      if (bytes !== undefined) attached.push(bytes);
       continue;
     }
     const paste = pastes.find((candidate) => candidate.label === match[0] && expanded.startsWith(candidate.content, at));

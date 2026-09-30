@@ -62,6 +62,12 @@ const IMAGE_CHIP_SOURCE = String.raw `\[Image #(\d+)\]`;
 const CHIP_REGEX_G = new RegExp(`${TEXT_CHIP_SOURCE}|${IMAGE_CHIP_SOURCE}`, "g");
 const TEXT_CHIP_REGEX_G = new RegExp(TEXT_CHIP_SOURCE, "g");
 const IMAGE_CHIP_SINGLE = new RegExp(`^${IMAGE_CHIP_SOURCE}$`);
+/** Every `[Image #N]` label in a text; group 1 is N. For `replace`/`matchAll` only (it's global). */
+export const IMAGE_LABEL_G = new RegExp(IMAGE_CHIP_SOURCE, "g");
+/** The numbers of the `[Image #N]` labels in `text`, in order. */
+export function imageLabelNumbers(text) {
+    return [...text.matchAll(IMAGE_LABEL_G)].map((match) => Number(match[1]));
+}
 const LEFT_ARROW = "\x1b[D";
 const RIGHT_ARROW = "\x1b[C";
 const BACKSPACE = "\x7f";
@@ -146,12 +152,6 @@ function alignEdit(before, beforeCursor, after, afterCursor) {
         return { prefix: maxPrefix, suffix: maxSuffix };
     const prefix = Math.max(shorter - maxSuffix, Math.min(maxPrefix, beforeCursor, afterCursor));
     return { prefix, suffix: shorter - prefix };
-}
-const chipNumbers = new WeakMap();
-/** The `[Image #N]` number the chip had that an attachment from `getImageAttachments()` (or a
- * submit) came from; undefined for any other image. */
-export function imageChipNumber(image) {
-    return chipNumbers.get(image);
 }
 /**
  * Wraps pi-tui's `Editor`, adding atomic paste/image chips on top of its public API. See the
@@ -240,8 +240,8 @@ export class ChipEditor {
     pasteText(text) {
         this.handlePaste(text);
     }
-    /** Text chips expanded to their full content, image chips stripped out entirely (they're sent
-     * as attachments, not inlined -- docs/tui-design.md 4.3's 发送 row). Non-destructive: safe to
+    /** Text chips expanded to their full content; image chips keep their `[Image #N]` label in the
+     * text and their data goes out as attachments (docs/tui-design.md 4.3's 发送 row, D11). Non-destructive: safe to
      * call more than once before the caller decides what to do with the result (e.g. keys.ts reads
      * this and `getImageAttachments()` separately for Alt+Enter). */
     getExpandedText() {
@@ -260,7 +260,7 @@ export class ChipEditor {
         // A steered draft is cleared without resetting the registry, so its stale chip may still hold
         // the id; the same image under the same id is not a conflict.
         const usable = preferredId !== undefined && (this.imageChips.get(preferredId) === undefined || this.imageChips.get(preferredId)?.base64 === base64);
-        const id = usable ? preferredId : Math.max(this.getHighestImageNumber(), ...this.imageChips.keys()) + 1;
+        const id = usable ? preferredId : Math.max(this.getHighestImageNumber(), ...this.imageChips.keys(), ...imageLabelNumbers(this.inner.getText())) + 1;
         this.lastImageId = id;
         const dimensions = piTui.getImageDimensions(base64, mimeType);
         this.imageChips.set(id, {
@@ -649,10 +649,8 @@ export class ChipEditor {
                 const meta = this.imageChips.get(Number(imageId));
                 if (!meta)
                     return match;
-                const image = { type: "image", data: meta.base64, mimeType: meta.mimeType };
-                chipNumbers.set(image, Number(imageId));
-                images.push(image);
-                return "";
+                images.push({ type: "image", data: meta.base64, mimeType: meta.mimeType });
+                return match;
             }
             const content = this.textContent(slots[textIndex], match);
             textIndex += 1;

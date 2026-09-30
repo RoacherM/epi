@@ -652,7 +652,8 @@ test("Enter on an image chip submits as usual (images never expand)", () => {
   editor.onSubmitImages = (text, images) => { submitted = { text, images }; };
   editor.insertImageChip(ONE_PIXEL_PNG, "image/png");
   editor.handleInput(ENTER);
-  assert.equal(submitted.text, "");
+  // The label stays in the sent text (D11), so the model and the transcript see the chip's number.
+  assert.equal(submitted.text, "[Image #1]");
   assert.equal(submitted.images.length, 1);
   assert.equal(submitted.images[0].type, "image");
   assert.equal(submitted.images[0].mimeType, "image/png");

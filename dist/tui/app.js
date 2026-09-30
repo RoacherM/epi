@@ -10,7 +10,7 @@ import { errorText } from "./errors.js";
 import { createExtensionUIContext } from "./ext-host.js";
 import { installKeybindings } from "./keybindings.js";
 import { createKeyActions } from "./keys.js";
-import { ChipEditor } from "./paste-chips.js";
+import { ChipEditor, IMAGE_LABEL_G } from "./paste-chips.js";
 import { pastePreview } from "./paste-preview.js";
 import { piTui } from "./pi-tui.js";
 import { crossProjectRefusal } from "./project-guard.js";
@@ -730,16 +730,7 @@ export async function runTuiApp(options) {
         const queued = [...steering, ...followUp];
         if (queued.length === 0)
             return 0;
-        // Each image comes back under the number its chip had; one nobody reserved (an extension's
-        // queued message) takes the next free number.
-        const claimed = queued.map((message) => transcript.claimImages(message.images, message.text));
-        let nextImage = Math.max(transcript.highestImageNumber, ...claimed.flatMap((numbers) => numbers ?? [])) + 1;
-        const queuedText = queued
-            .map((message, messageIndex) => [
-            message.text,
-            ...message.images.map((image, imageIndex) => editor.registerImage(Buffer.from(image.data, "base64"), image.mimeType, claimed[messageIndex]?.[imageIndex] ?? nextImage++)),
-        ].filter((part) => part !== "").join(" "))
-            .join("\n\n");
+        const queuedText = queued.map((message) => restoreImageChips(message.text, message.images)).join("\n\n");
         const current = editor.getText();
         editor.setText([queuedText, current].filter((text) => text.trim() !== "").join("\n\n"));
         tui.requestRender();
@@ -772,12 +763,6 @@ export async function runTuiApp(options) {
             const preCommands = messages.slice(0, firstPromptIndex);
             const firstPrompt = messages[firstPromptIndex];
             const rest = messages.slice(firstPromptIndex + 1);
-            // Out of MMP's queue now: the first goes straight in (Pi may resize it), the rest queue in the session.
-            for (const message of messages)
-                if (message.reservation !== undefined)
-                    message.reservation.mode = message.mode;
-            if (firstPrompt.reservation !== undefined && !session.isStreaming)
-                firstPrompt.reservation.mode = "direct";
             for (const message of preCommands)
                 await session.prompt(message.text);
             const promptPromise = session
@@ -847,40 +832,39 @@ export async function runTuiApp(options) {
                 }
                 return;
             }
-            compactionQueue.push({ text, images, mode: "followUp", reservation: transcript.reserveImages(images, text, "compaction") });
+            transcript.noteImageLabels(text);
+            compactionQueue.push({ text, images, mode: "followUp" });
             transcript.notice("Queued message for after compaction.");
             tui.requestRender();
             return;
         }
-        // An extension command consumes its arguments; no user message (and no image) ever shows up.
-        const reservation = isExtensionCommand ? undefined : transcript.reserveImages(images, text, session.isStreaming ? "followUp" : "direct");
+        transcript.noteImageLabels(text);
         try {
             await session.prompt(text, { images, ...(session.isStreaming ? { streamingBehavior: "followUp" } : {}) });
         }
         catch (error) {
-            transcript.releaseImages(reservation);
             // No model, no auth: say why and keep the text.
             transcript.notice(errorText(error), "error");
             if (editor.getText() === "")
                 editor.setText(text);
         }
-        finally {
-            // A prompt that ran has shown its message by now; if it didn't (an extension's input handler
-            // took it) the numbers are free again. A queued one settles when the run ends (Transcript).
-            if (reservation?.mode === "direct")
-                transcript.releaseImages(reservation);
-        }
     }
     /** Alt+Enter while streaming: into the running turn. */
     async function steer(text, images) {
-        const reservation = transcript.reserveImages(images, text, "steer");
-        try {
-            await session.prompt(text, { images, streamingBehavior: "steer" });
-        }
-        catch (error) {
-            transcript.releaseImages(reservation);
-            throw error;
-        }
+        transcript.noteImageLabels(text);
+        await session.prompt(text, { images, streamingBehavior: "steer" });
+    }
+    /** A queued message's text back as a draft: the `[Image #N]` labels it carries get their image
+     * data again, in order, under the same numbers; images beyond its labels (an extension's queued
+     * message) are added as new chips at the end. */
+    function restoreImageChips(text, images) {
+        let index = 0;
+        const restored = text.replace(IMAGE_LABEL_G, (label, id) => {
+            const image = images[index++];
+            return image === undefined ? label : editor.registerImage(Buffer.from(image.data, "base64"), image.mimeType, Number(id));
+        });
+        const extra = images.slice(index).map((image) => editor.registerImage(Buffer.from(image.data, "base64"), image.mimeType));
+        return [restored, ...extra].filter((part) => part !== "").join(" ");
     }
     editor.onSubmitImages = (text, images) => void submit(text, images);
     // Pi binds these on the editor itself (defaultEditor.onAction/onEscape/onCtrlD), so they only

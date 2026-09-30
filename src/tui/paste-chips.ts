@@ -71,6 +71,13 @@ const IMAGE_CHIP_SOURCE = String.raw`\[Image #(\d+)\]`;
 const CHIP_REGEX_G = new RegExp(`${TEXT_CHIP_SOURCE}|${IMAGE_CHIP_SOURCE}`, "g");
 const TEXT_CHIP_REGEX_G = new RegExp(TEXT_CHIP_SOURCE, "g");
 const IMAGE_CHIP_SINGLE = new RegExp(`^${IMAGE_CHIP_SOURCE}$`);
+/** Every `[Image #N]` label in a text; group 1 is N. For `replace`/`matchAll` only (it's global). */
+export const IMAGE_LABEL_G = new RegExp(IMAGE_CHIP_SOURCE, "g");
+
+/** The numbers of the `[Image #N]` labels in `text`, in order. */
+export function imageLabelNumbers(text: string): number[] {
+  return [...text.matchAll(IMAGE_LABEL_G)].map((match) => Number(match[1]));
+}
 
 const LEFT_ARROW = "\x1b[D";
 const RIGHT_ARROW = "\x1b[C";
@@ -191,21 +198,13 @@ function alignEdit(before: string, beforeCursor: number, after: string, afterCur
   return { prefix, suffix: shorter - prefix };
 }
 
-const chipNumbers = new WeakMap<ImageContent, number>();
-
-/** The `[Image #N]` number the chip had that an attachment from `getImageAttachments()` (or a
- * submit) came from; undefined for any other image. */
-export function imageChipNumber(image: ImageContent): number | undefined {
-  return chipNumbers.get(image);
-}
-
 interface ChipEditorOptions extends EditorOptions {
   /** Read live so an image path pasted after /resume resolves against the new session's cwd. */
   getCwd: () => string;
-  /** The highest `[Image #N]` number in use in the session (shown in the transcript or reserved by
-   * a queued message): a new chip is numbered above it, so the label in the editor is the one the
-   * transcript shows once the message is sent. Read live; without it the editor keeps counting up
-   * from its own last chip. */
+  /** The highest `[Image #N]` label in the session's user messages (Transcript.highestImageNumber):
+   * a new chip is numbered above it and above every label in the draft. The label stays in the
+   * sent text, so the transcript shows the chip's own number. Read live; without it the editor
+   * keeps counting up from its own last chip. */
   getHighestImageNumber?: () => number;
 }
 
@@ -313,8 +312,8 @@ export class ChipEditor {
     this.handlePaste(text);
   }
 
-  /** Text chips expanded to their full content, image chips stripped out entirely (they're sent
-   * as attachments, not inlined -- docs/tui-design.md 4.3's 发送 row). Non-destructive: safe to
+  /** Text chips expanded to their full content; image chips keep their `[Image #N]` label in the
+   * text and their data goes out as attachments (docs/tui-design.md 4.3's 发送 row, D11). Non-destructive: safe to
    * call more than once before the caller decides what to do with the result (e.g. keys.ts reads
    * this and `getImageAttachments()` separately for Alt+Enter). */
   getExpandedText(): string {
@@ -335,7 +334,7 @@ export class ChipEditor {
     // A steered draft is cleared without resetting the registry, so its stale chip may still hold
     // the id; the same image under the same id is not a conflict.
     const usable = preferredId !== undefined && (this.imageChips.get(preferredId) === undefined || this.imageChips.get(preferredId)?.base64 === base64);
-    const id = usable ? preferredId : Math.max(this.getHighestImageNumber(), ...this.imageChips.keys()) + 1;
+    const id = usable ? preferredId : Math.max(this.getHighestImageNumber(), ...this.imageChips.keys(), ...imageLabelNumbers(this.inner.getText())) + 1;
     this.lastImageId = id;
     const dimensions = piTui.getImageDimensions(base64, mimeType);
     this.imageChips.set(id, {
@@ -717,10 +716,8 @@ export class ChipEditor {
       if (imageId !== undefined) {
         const meta = this.imageChips.get(Number(imageId));
         if (!meta) return match;
-        const image: ImageContent = { type: "image", data: meta.base64, mimeType: meta.mimeType };
-        chipNumbers.set(image, Number(imageId));
-        images.push(image);
-        return "";
+        images.push({ type: "image", data: meta.base64, mimeType: meta.mimeType });
+        return match;
       }
       const content = this.textContent(slots[textIndex], match);
       textIndex += 1;

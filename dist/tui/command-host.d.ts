@@ -45,7 +45,7 @@ export interface CommandHost {
     /** Run the submit pipeline (built-ins, `!`, `session.prompt`) as if Enter were pressed. */
     submit(text: string, images?: ImageContent[]): Promise<void>;
     /** Alt+Enter while a turn runs: send text and images into the running turn (`session.prompt`
-     * with `streamingBehavior: "steer"`), keeping the transcript's image numbering in step. */
+     * with `streamingBehavior: "steer"`); its `[Image #N]` labels count as used (D11). */
     steer(text: string, images: ImageContent[]): Promise<void>;
     /** Pi's restoreQueuedMessagesToEditor/clearAllQueues (interactive-mode.js ~3729, ~3761): clears
      * both the session's own steering/follow-up queue and app.ts's compaction queue, puts their text

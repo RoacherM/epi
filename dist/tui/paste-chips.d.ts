@@ -2,6 +2,10 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AutocompleteProvider, EditorOptions, EditorTheme, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 export declare const MIN_PASTE_LINES = 4;
 export declare const MAX_PASTE_BYTES: number;
+/** Every `[Image #N]` label in a text; group 1 is N. For `replace`/`matchAll` only (it's global). */
+export declare const IMAGE_LABEL_G: RegExp;
+/** The numbers of the `[Image #N]` labels in `text`, in order. */
+export declare function imageLabelNumbers(text: string): number[];
 export interface ImageChipMeta {
     id: number;
     mimeType: string;
@@ -46,16 +50,13 @@ export declare function sniffImageFile(path: string): {
     bytes: Buffer;
     mimeType: string;
 } | undefined;
-/** The `[Image #N]` number the chip had that an attachment from `getImageAttachments()` (or a
- * submit) came from; undefined for any other image. */
-export declare function imageChipNumber(image: ImageContent): number | undefined;
 interface ChipEditorOptions extends EditorOptions {
     /** Read live so an image path pasted after /resume resolves against the new session's cwd. */
     getCwd: () => string;
-    /** The highest `[Image #N]` number in use in the session (shown in the transcript or reserved by
-     * a queued message): a new chip is numbered above it, so the label in the editor is the one the
-     * transcript shows once the message is sent. Read live; without it the editor keeps counting up
-     * from its own last chip. */
+    /** The highest `[Image #N]` label in the session's user messages (Transcript.highestImageNumber):
+     * a new chip is numbered above it and above every label in the draft. The label stays in the
+     * sent text, so the transcript shows the chip's own number. Read live; without it the editor
+     * keeps counting up from its own last chip. */
     getHighestImageNumber?: () => number;
 }
 /**
@@ -108,8 +109,8 @@ export declare class ChipEditor {
      * bracketed paste (docs/tui-design.md 4.3), unlike `insertTextAtCursor` (used for programmatic,
      * not-a-paste insertions, e.g. an extension's `pasteToEditor`), which never folds. */
     pasteText(text: string): void;
-    /** Text chips expanded to their full content, image chips stripped out entirely (they're sent
-     * as attachments, not inlined -- docs/tui-design.md 4.3's 发送 row). Non-destructive: safe to
+    /** Text chips expanded to their full content; image chips keep their `[Image #N]` label in the
+     * text and their data goes out as attachments (docs/tui-design.md 4.3's 发送 row, D11). Non-destructive: safe to
      * call more than once before the caller decides what to do with the result (e.g. keys.ts reads
      * this and `getImageAttachments()` separately for Alt+Enter). */
     getExpandedText(): string;

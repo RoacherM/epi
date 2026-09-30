@@ -65,12 +65,12 @@ test("user message block paints full width, keeps the time right, and wraps CJK 
   assertFits(block);
 });
 
-test("user message collapse doesn't count [File: …] / [Image #N] lines toward its 3 lines", () => {
+test("user message collapse doesn't count [File: …] / [Image] lines toward its 3 lines", () => {
   const files = ["a.ts", "b.ts", "c.ts"].map((name) => `<file name="/w/${name}">x\n</file>\n`).join("");
   const image = { type: "image", data: "", mimeType: "image/png" };
   const block = new UserMessageBlock(theme, [{ type: "text", text: `${files}why does this fail?` }, image], new Date(2026, 8, 29, 17, 10));
   const text = block.render(80).map(plain).join("\n");
-  assert.match(text, /\[File: a\.ts\][\s\S]*\[File: c\.ts\][\s\S]*why does this fail\?[\s\S]*\[Image #1\]/);
+  assert.match(text, /\[File: a\.ts\][\s\S]*\[File: c\.ts\][\s\S]*why does this fail\?[\s\S]*\[Image\]/);
   assert.doesNotMatch(text, /…/);
   const long = new UserMessageBlock(theme, `${files}one\ntwo\nthree\nfour`, new Date(2026, 8, 29, 17, 10));
   const collapsed = long.render(80).map(plain).join("\n");

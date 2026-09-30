@@ -6,6 +6,7 @@ import { basename, sep } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorComponent, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
+import { imageLabelNumbers } from "./paste-chips.js";
 import { piTui } from "./pi-tui.js";
 
 const { truncateToWidth, visibleWidth } = piTui;
@@ -98,11 +99,6 @@ export function withoutImageHints(text: string): string {
 
 const FILE_BLOCK_RE = /<file name="([^"]*)">[\s\S]*?<\/file>\n?/g;
 
-/** The image content parts of a user message, in order (the transcript numbers them). */
-export function imageParts(content: unknown): { data: string }[] {
-  return Array.isArray(content) ? content.filter((part) => part?.type === "image") : [];
-}
-
 /** The text parts of a user message's content, joined. */
 export function messageText(content: unknown): string {
   return typeof content === "string"
@@ -113,22 +109,24 @@ export function messageText(content: unknown): string {
 }
 
 /** A user message's own display text: `<file name="...">...</file>` blocks (file-arguments.ts's
- * `@file` inlining) collapse to `[File: name]`, and image content parts (never inlined as text)
- * show as `[Image #N]`, numbered with `imageNumbers` -- the model still gets the full `content`
- * array unchanged; this only affects what's drawn in the transcript (item 5, docs/tui-design.md
- * 4.3's 发送 row). */
-function displayText(content: unknown, imageNumbers: readonly number[]): string {
+ * `@file` inlining) collapse to `[File: name]` and Pi's image notes are hidden (D9); this only
+ * affects what's drawn in the transcript (item 5, docs/tui-design.md 4.3's 发送 row). An image
+ * sent from the editor already has its `[Image #N]` label in the text, which the model sees too
+ * (D11). Image parts beyond the text's labels (an extension's `sendUserMessage`, the `@pic.png`
+ * startup message, sessions from before D11) show as `[Image]`, unnumbered. */
+function displayText(content: unknown): string {
   const text = messageText(content);
-  const imageCount = imageParts(content).length;
+  const imageCount = Array.isArray(content) ? content.filter((part) => part?.type === "image").length : 0;
   const withFileChips = (imageCount > 0 ? withoutImageHints(text) : text).replace(FILE_BLOCK_RE, (_match, name: string) => `[File: ${basename(name)}]\n`).trim();
-  const images = Array.from({ length: imageCount }, (_, index) => `[Image #${imageNumbers[index] ?? index + 1}]`).join(" ");
+  const unlabelled = Math.max(0, imageCount - imageLabelNumbers(withFileChips).length);
+  const images = Array.from({ length: unlabelled }, () => "[Image]").join(" ");
   return [withFileChips, images].filter((part) => part !== "").join("\n");
 }
 
 const COLLAPSED_LINES = 3;
-/** A line holding nothing but `[Image #N]` / `[File: name]` chips (what displayText() emits for
- * attachments and `@file` blocks). */
-const CHIP_ONLY_LINE = /^\s*(?:\[(?:Image #\d+|File: [^\]\n]*)\]\s*)+$/;
+/** A line holding nothing but `[Image #N]` / `[Image]` / `[File: name]` chips (image labels and
+ * what displayText() emits for unlabelled images and `@file` blocks). */
+const CHIP_ONLY_LINE = /^\s*(?:\[(?:Image(?: #\d+)?|File: [^\]\n]*)\]\s*)+$/;
 
 /** Cuts the text after its `COLLAPSED_LINES`-th logical line and appends `…`. Chip-only lines don't
  * count toward the limit: three `@file` arguments plus a one-line question must still show the
@@ -158,9 +156,8 @@ export class UserMessageBlock implements Component {
     private readonly theme: Theme,
     content: unknown,
     private readonly time: Date,
-    imageNumbers: readonly number[] = [],
   ) {
-    this.text = displayText(content, imageNumbers);
+    this.text = displayText(content);
   }
 
   setExpanded(expanded: boolean): void {

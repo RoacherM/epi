@@ -22,10 +22,6 @@ export declare function headerBar(theme: Theme, state: () => HeaderState): Compo
 /** Drops Pi's resize/convert notes from the block of note lines at the end of `text` (Pi appends
  * them per image, in order, after a blank line); `[Image omitted: ...]` lines in that block stay. */
 export declare function withoutImageHints(text: string): string;
-/** The image content parts of a user message, in order (the transcript numbers them). */
-export declare function imageParts(content: unknown): {
-    data: string;
-}[];
 /** The text parts of a user message's content, joined. */
 export declare function messageText(content: unknown): string;
 /** Full-width `userMessageBg` block with one row of padding, `❯ text` and the time on the right.
@@ -39,7 +35,7 @@ export declare class UserMessageBlock implements Component {
     private readonly time;
     private readonly text;
     private expanded;
-    constructor(theme: Theme, content: unknown, time: Date, imageNumbers?: readonly number[]);
+    constructor(theme: Theme, content: unknown, time: Date);
     setExpanded(expanded: boolean): void;
     render(width: number): string[];
     invalidate(): void;
