@@ -276,6 +276,25 @@ const registry = [
     },
   },
   {
+    id: "editor-undo-stack",
+    async check() {
+      const { piTui } = await import(pathToFileURL(join(root, "dist", "tui", "pi-tui.js")).href);
+      const fakeTui = { requestRender() {}, terminal: { rows: 40, columns: 120 } };
+      const editor = new piTui.Editor(fakeTui, { borderColor: (text) => text, selectList: getSelectListTheme() }, {});
+      const stack = editor.undoStack;
+      assert.ok(stack && typeof stack.length === "number" && typeof stack.pop === "function", "Editor has no private `undoStack` {length, pop}");
+      for (const key of "ab cd") editor.handleInput(key);
+      const depth = stack.length;
+      editor.handleInput("\x7f");
+      editor.handleInput("\x7f");
+      assert.equal(stack.length, depth + 2, "each Backspace no longer pushes its own undo snapshot (the D27 premise); re-check ChipEditor.removeChipFragments");
+      stack.pop(); // the second Backspace's snapshot: both deletes are now one undo step
+      assert.equal(stack.length, depth + 1);
+      editor.handleInput("\x1f"); // Ctrl+- (undo)
+      assert.equal(editor.getText(), "ab cd", "undo no longer restores the snapshot on top of `undoStack`");
+    },
+  },
+  {
     id: "tool-execution-component-overrides",
     async check() {
       const { ToolExecutionComponent } = await import("@earendil-works/pi-coding-agent");

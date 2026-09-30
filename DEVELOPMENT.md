@@ -902,6 +902,8 @@ Handler 必须只返回一个严格 JSON decision：
 
 失败必须可见（不静默 fallback）。`tool_call`/`tool_result` 失败通过它们本来就有的 tool result 渠道显示，任何模式下都可见。`session_start`/`user_prompt`/`session_before_compact`/`session_shutdown` 没有 tool result 可用，只能靠 Pi UI 通知（`context.ui.notify`）——但 Pi 的 `print`/`json` 模式用的是 `noOpUIContext`（`core/extensions/runner.js`），`notify` 是空实现；这两种模式下 `notifyFailure`（`src/extensions/hooks.ts`）额外把同一条消息写到 stderr（`context.mode !== "tui"` 时才写，MMP 自己的 TUI 和 Pi 的 `rpc` 模式已经有可用的 notify，不重复）。`HooksRuntime.run()`（`src/hooks-runtime.ts`）把每个 handler 的失败包一层 `${event} hook (${declaredIn}, ${handlerLabel}) failed: ...`，命令 spawn 失败会带上 Node 的原始错误（如 `spawn ./x.mjs ENOENT`），非零退出会带上一段 stderr 尾部（`MAX_HOOK_ERROR_TAIL_BYTES = 4KiB`）。
 
+`user_prompt` 的 `block` / `cancel` 同理：Pi 的 `input` 结果 `handled` 没有 reason 字段，Pi 要扩展自己提示（Pi 的 `examples/extensions/input-transform.ts`），所以 `mmp:hooks` 用同一个渠道提示 `Prompt blocked by user_prompt hook: <reason>`（warning 级；`print`/`json` 模式也写 stderr）。不提示的话提示词从编辑器消失、界面上什么都没有（D26）。`-p` 被拦下时退出码仍是 0，和 Pi 对 `handled` 的处理一致。
+
 完整用户配置说明与可复制示例位于根目录 `README.md`。
 
 ### 14.3 验证
