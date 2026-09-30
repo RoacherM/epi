@@ -142,7 +142,7 @@ jobs:
       # --- Gate failed: open (or update) an issue with the report --------------------------------
       # Comments only when the report actually changed (must-fix #5): a stale, unfixed failure would
       # otherwise get a new comment every single day the cron runs. REPORT_HASH is computed by
-      # pi-upgrade.mjs itself over the stable facts only (versions, adapter decision, failing test
+      # pi-upgrade.mjs itself over the stable facts only (versions, failing test
       # names) -- not a hash of report.md's raw bytes, whose gate-log tail includes timings that
       # change on every run even when nothing else did (re-review N3).
       - name: Open or update the failure issue

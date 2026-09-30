@@ -5,16 +5,12 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
-  applyAdapterOverride,
   bumpPatch,
   computeReportHash,
   extractChangelogEntries,
   extractFailingTests,
   isNewerVersion,
-  NoCompatibleAdapterError,
   runPiUpgrade,
-  satisfiesDeclaredRange,
-  selectAdapterVersion,
 } from "../scripts/pi-upgrade.mjs";
 
 // Fixed reference instant for every test: well past the 3-day publish-age guard for any
@@ -22,7 +18,7 @@ import {
 const NOW = new Date("2026-10-15T00:00:00Z");
 const LONG_AGO = new Date("2026-09-01T00:00:00Z");
 
-function makeCwd({ piVersion = "0.87.1", adapterVersion = "2.38.0", mmpVersion = "0.1.4" } = {}) {
+function makeCwd({ piVersion = "0.87.1", mmpVersion = "0.1.4" } = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "mmp-pi-upgrade-test-"));
   mkdirSync(join(cwd, "test"));
   writeFileSync(join(cwd, "test", "foundation.test.mjs"), "");
@@ -36,7 +32,6 @@ function makeCwd({ piVersion = "0.87.1", adapterVersion = "2.38.0", mmpVersion =
           "@earendil-works/pi-ai": piVersion,
           "@earendil-works/pi-coding-agent": piVersion,
           "@earendil-works/pi-tui": piVersion,
-          "pi-mcp-adapter": adapterVersion,
         },
       },
       null,
@@ -54,22 +49,16 @@ function makeCwd({ piVersion = "0.87.1", adapterVersion = "2.38.0", mmpVersion =
   return cwd;
 }
 
-function fakeRegistry({ latestPi, adapterVersions, peerRanges, publishedAt = LONG_AGO, adapterPublishedAt }) {
+function fakeRegistry({ latestPi, publishedAt = LONG_AGO }) {
   return {
     latestVersion: (name) => {
       assert.equal(name, "@earendil-works/pi-coding-agent");
       return latestPi;
     },
-    versions: (name) => {
-      assert.equal(name, "pi-mcp-adapter");
-      return adapterVersions;
+    publishedAt: (name) => {
+      assert.equal(name, "@earendil-works/pi-coding-agent");
+      return publishedAt;
     },
-    peerDependencies: (name, version) => {
-      assert.equal(name, "pi-mcp-adapter");
-      const range = peerRanges[version];
-      return range === undefined ? {} : { "@earendil-works/pi-ai": range };
-    },
-    publishedAt: (name) => (name === "pi-mcp-adapter" ? adapterPublishedAt ?? publishedAt : publishedAt),
   };
 }
 
@@ -94,32 +83,6 @@ test("version helpers: isNewer, bumpPatch (semver-backed)", () => {
   assert.equal(bumpPatch("0.1.4"), "0.1.5");
 });
 
-// Every case here is real npm range syntax (some pulled directly from a pre-merge review of a hand-
-// rolled matcher that only understood `^` and exact match, and silently returned false -- i.e.
-// "incompatible" -- for anything else, and threw on a prerelease version during a sort).
-test("satisfiesDeclaredRange handles the real range syntaxes npm allows, and treats undeclared as false", () => {
-  const cases = [
-    ["0.99.1", "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0", false],
-    ["0.87.1", "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0", true],
-    ["0.88.0", ">=0.87 <0.89", true],
-    ["0.88.0", ">=0.87.0 <0.89.0", true],
-    ["0.88.0", "~0.88.0", true],
-    ["0.88.0", "0.88.x", true],
-    ["0.88.0", "^0.87.0 || ^0.88.0", true],
-    ["0.88.0", "^0.87", false],
-    ["0.88.0", "^0.88", true],
-    ["0.88.0", "*", false], // undeclared, not "matches anything" (the actual bug this review found)
-    ["0.88.0", "", false], // undeclared
-    ["0.88.0", ">=0.88.0", true],
-    ["1.0.0", "^1", true],
-    ["0.99.1", "^0.99.1", true],
-    ["0.99.1", undefined, false], // missing peer key entirely
-  ];
-  for (const [version, range, expected] of cases) {
-    assert.equal(satisfiesDeclaredRange(version, range), expected, `${version} vs ${JSON.stringify(range)}`);
-  }
-});
-
 test("compareVersions/sort never crashes on a prerelease version", () => {
   assert.doesNotThrow(() => ["3.0.0", "3.1.0-beta.1"].sort((a, b) => (isNewerVersion(a, b) ? 1 : -1)));
 });
@@ -130,11 +93,7 @@ test("extractFailingTests pulls names out of tap output", () => {
 });
 
 test("computeReportHash ignores gate log timings (re-review N3) but changes with the failing tests", () => {
-  const base = {
-    oldPiVersion: "0.87.1",
-    newPiVersion: "0.88.0",
-    adapter: { version: "2.38.0", previous: "2.38.0", changed: false, declared: true },
-  };
+  const base = { oldPiVersion: "0.87.1", newPiVersion: "0.88.0" };
   // Realistic node --test tap output: durations live in a YAML diagnostic block under each line,
   // not in the "not ok ... - name" line itself (which is all extractFailingTests captures) -- so
   // two runs of the same unfixed failure differ only in exactly the parts the hash must ignore.
@@ -189,124 +148,10 @@ test("extractChangelogEntries caps a huge slice instead of dumping the whole fil
   assert.match(section, /truncated/);
 });
 
-// Real peer-dependency table from `npm view pi-mcp-adapter@<v> peerDependencies` (pre-merge review
-// blocker #1), replayed as a fixture so the regression it found can't come back silently: picking
-// "the newest version whose range is satisfied" without excluding versions older than what's
-// already pinned downgraded 2.38.0 to 2.21.0, because every 2.12.0-2.21.0 release declares `*`.
-const REAL_ADAPTER_PEER_TABLE = {
-  "1.1.0": undefined,
-  "2.11.0": undefined,
-  "2.12.0": "*",
-  "2.21.0": "*",
-  "2.21.1": "^0.84.1",
-  "2.32.1": "^0.84.1",
-  "2.37.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0",
-  "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0",
-  "3.3.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0",
-};
-
-test("selectAdapterVersion: real-world snapshot -- never downgrades to an older `*` version (the actual bug)", () => {
-  const registry = fakeRegistry({
-    latestPi: "0.99.1",
-    adapterVersions: Object.keys(REAL_ADAPTER_PEER_TABLE),
-    peerRanges: REAL_ADAPTER_PEER_TABLE,
-  });
-  const result = selectAdapterVersion({ registry, currentAdapterVersion: "2.38.0", piVersion: "0.99.1" });
-  // Nothing declares 0.99.1 support (the range tops out at ^0.87.0), so this tries the newest
-  // published adapter overall and flags it as undeclared -- NOT 2.21.0, which only "matches" via `*`.
-  assert.deepEqual(result, { version: "3.3.0", changed: true, declared: false });
-});
-
-test("selectAdapterVersion: real-world snapshot -- current version already covers the target", () => {
-  const registry = fakeRegistry({
-    latestPi: "0.87.1",
-    adapterVersions: Object.keys(REAL_ADAPTER_PEER_TABLE),
-    peerRanges: REAL_ADAPTER_PEER_TABLE,
-  });
-  const result = selectAdapterVersion({ registry, currentAdapterVersion: "2.38.0", piVersion: "0.87.1" });
-  assert.deepEqual(result, { version: "2.38.0", changed: false, declared: true });
-});
-
-test("selectAdapterVersion keeps the current adapter when its range already covers the target", () => {
-  const registry = fakeRegistry({
-    latestPi: "0.87.1",
-    adapterVersions: ["2.38.0", "2.37.0"],
-    peerRanges: { "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0" },
-  });
-  const result = selectAdapterVersion({ registry, currentAdapterVersion: "2.38.0", piVersion: "0.87.1" });
-  assert.deepEqual(result, { version: "2.38.0", changed: false, declared: true });
-});
-
-test("selectAdapterVersion picks the newest compatible version when the current one doesn't cover it", () => {
-  const registry = fakeRegistry({
-    latestPi: "0.88.0",
-    adapterVersions: ["2.38.0", "2.39.0", "2.40.0"],
-    peerRanges: {
-      "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0",
-      "2.39.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0",
-      "2.40.0": "^0.88.0",
-    },
-  });
-  const result = selectAdapterVersion({ registry, currentAdapterVersion: "2.38.0", piVersion: "0.88.0" });
-  assert.deepEqual(result, { version: "2.40.0", changed: true, declared: true });
-});
-
-test("selectAdapterVersion never considers a version older than the one already pinned", () => {
-  const registry = fakeRegistry({
-    latestPi: "0.88.0",
-    adapterVersions: ["2.10.0", "2.38.0"],
-    // The OLDER version happens to declare a matching range; it must never be picked over keeping
-    // (or bumping past) the newer one already pinned.
-    peerRanges: { "2.10.0": "^0.88.0", "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0" },
-  });
-  const result = selectAdapterVersion({ registry, currentAdapterVersion: "2.38.0", piVersion: "0.88.0" });
-  assert.notEqual(result.version, "2.10.0");
-});
-
-test("selectAdapterVersion falls back to the newest published adapter, declared:false, when nothing declares support", () => {
-  const registry = fakeRegistry({
-    latestPi: "0.99.0",
-    adapterVersions: ["2.38.0", "2.50.0"],
-    peerRanges: {
-      "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0",
-      "2.50.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0",
-    },
-  });
-  const result = selectAdapterVersion({ registry, currentAdapterVersion: "2.38.0", piVersion: "0.99.0" });
-  assert.deepEqual(result, { version: "2.50.0", changed: true, declared: false });
-});
-
-test("selectAdapterVersion throws NoCompatibleAdapterError only when the registry has nothing at all", () => {
-  const registry = fakeRegistry({ latestPi: "0.99.0", adapterVersions: [], peerRanges: {} });
-  assert.throws(
-    () => selectAdapterVersion({ registry, currentAdapterVersion: "2.38.0", piVersion: "0.99.0" }),
-    NoCompatibleAdapterError,
-  );
-});
-
-test("applyAdapterOverride writes the npm overrides entry only when the adapter is undeclared", () => {
-  const adapter = { version: "3.3.0", previous: "2.38.0", changed: true, declared: false };
-  const pkg = { dependencies: {} };
-  applyAdapterOverride(pkg, adapter);
-  assert.deepEqual(pkg.overrides, { "pi-mcp-adapter": { "@earendil-works/pi-ai": "$@earendil-works/pi-ai" } });
-});
-
-test("applyAdapterOverride removes a stale override once the adapter declares real support again", () => {
-  const pkg = { dependencies: {}, overrides: { "pi-mcp-adapter": { "@earendil-works/pi-ai": "$@earendil-works/pi-ai" } } };
-  applyAdapterOverride(pkg, { version: "3.4.0", previous: "3.3.0", changed: true, declared: true });
-  assert.equal(pkg.overrides, undefined);
-});
-
-test("applyAdapterOverride leaves an unrelated overrides entry alone", () => {
-  const pkg = { dependencies: {}, overrides: { "some-other-package": "1.0.0" } };
-  applyAdapterOverride(pkg, { version: "3.4.0", previous: "3.3.0", changed: true, declared: true });
-  assert.deepEqual(pkg.overrides, { "some-other-package": "1.0.0" });
-});
-
 test("runPiUpgrade: already on the latest version exits 0 without touching package.json", () => {
   const cwd = makeCwd();
   try {
-    const registry = fakeRegistry({ latestPi: "0.87.1", adapterVersions: ["2.38.0"], peerRanges: {} });
+    const registry = fakeRegistry({ latestPi: "0.87.1" });
     const before = readFileSync(join(cwd, "package.json"), "utf8");
     const result = runPiUpgrade({ cwd, registry, exec: fakeExec().exec, now: () => NOW });
     assert.equal(result.exitCode, 0);
@@ -323,8 +168,6 @@ test("runPiUpgrade: a version published inside the safety window is not adopted 
   try {
     const registry = fakeRegistry({
       latestPi: "0.88.0",
-      adapterVersions: ["2.38.0"],
-      peerRanges: { "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0 || ^0.88.0" },
       publishedAt: new Date(NOW.getTime() - 6 * 60 * 60 * 1000), // 6h ago
     });
     const before = readFileSync(join(cwd, "package.json"), "utf8");
@@ -339,38 +182,11 @@ test("runPiUpgrade: a version published inside the safety window is not adopted 
   }
 });
 
-test("runPiUpgrade: a speculatively-adopted (declared:false) adapter is also held to the publish-age guard", () => {
-  const cwd = makeCwd();
-  try {
-    const registry = fakeRegistry({
-      latestPi: "0.99.0",
-      adapterVersions: ["2.38.0", "2.50.0"],
-      peerRanges: {
-        "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0",
-        "2.50.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0", // still doesn't declare 0.99.0
-      },
-      publishedAt: LONG_AGO, // Pi itself is old enough
-      adapterPublishedAt: new Date(NOW.getTime() - 6 * 60 * 60 * 1000), // but the adapter pick is not
-    });
-    const before = readFileSync(join(cwd, "package.json"), "utf8");
-    const result = runPiUpgrade({ cwd, registry, exec: fakeExec(true).exec, now: () => NOW });
-    assert.equal(result.exitCode, 0);
-    assert.equal(result.upgraded, false);
-    assert.match(result.report, /pi-mcp-adapter 2\.50\.0/);
-    assert.match(result.report, /published 6h ago/);
-    assert.equal(readFileSync(join(cwd, "package.json"), "utf8"), before);
-  } finally {
-    rmSync(cwd, { recursive: true, force: true });
-  }
-});
-
 test("runPiUpgrade: --version bypasses the publish-age safety window", () => {
   const cwd = makeCwd();
   try {
     const registry = fakeRegistry({
       latestPi: "0.99.0", // ignored; requestedVersion wins
-      adapterVersions: ["2.38.0"],
-      peerRanges: { "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0 || ^0.88.0" },
       publishedAt: new Date(NOW.getTime() - 60 * 1000), // 1 minute ago
     });
     const result = runPiUpgrade({
@@ -401,14 +217,10 @@ test("runPiUpgrade: rejects a 'v'-prefixed --version before writing package.json
   }
 });
 
-test("runPiUpgrade: newer version, compatible adapter, gate passes -> bumps MMP patch version", () => {
+test("runPiUpgrade: newer version, gate passes -> bumps MMP patch version", () => {
   const cwd = makeCwd();
   try {
-    const registry = fakeRegistry({
-      latestPi: "0.88.0",
-      adapterVersions: ["2.38.0"],
-      peerRanges: { "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0 || ^0.88.0" },
-    });
+    const registry = fakeRegistry({ latestPi: "0.88.0" });
     const { exec, calls } = fakeExec(true);
     const result = runPiUpgrade({ cwd, registry, exec, now: () => NOW });
 
@@ -416,14 +228,12 @@ test("runPiUpgrade: newer version, compatible adapter, gate passes -> bumps MMP 
     assert.equal(result.upgraded, true);
     assert.equal(result.mmpVersion, "0.1.5");
     assert.match(result.report, /0\.87\.1 → 0\.88\.0/);
-    assert.match(result.report, /unchanged \(2\.38\.0\)/);
     assert.match(result.report, /Gate: pass/);
 
     const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
     assert.equal(pkg.dependencies["@earendil-works/pi-coding-agent"], "0.88.0");
     assert.equal(pkg.dependencies["@earendil-works/pi-tui"], "0.88.0");
     assert.equal(pkg.dependencies["@earendil-works/pi-ai"], "0.88.0");
-    assert.equal(pkg.dependencies["pi-mcp-adapter"], "2.38.0");
     assert.equal(pkg.version, "0.1.5");
 
     const lock = JSON.parse(readFileSync(join(cwd, "package-lock.json"), "utf8"));
@@ -437,65 +247,30 @@ test("runPiUpgrade: newer version, compatible adapter, gate passes -> bumps MMP 
     );
     const installCall = calls[0];
     assert.ok(installCall.args.includes("--ignore-scripts"));
-    assert.equal(pkg.overrides, undefined); // no override needed -- the adapter declares support
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
 });
 
-test("runPiUpgrade: adapter needs a bump when the current one's peer range excludes the new Pi version", () => {
+// Regression test for the cron failure found reviewing the Pi 0.99 upgrade (docs/mcp-design.md):
+// pi-mcp-adapter was removed as a dependency once MMP switched to Pi's native MCP support, but the
+// upgrade script still read pkg.dependencies["pi-mcp-adapter"] and called `npm view
+// pi-mcp-adapter@undefined ...` -- which throws, caught by main()'s try/catch (visible: stderr +
+// exit 2), but blocks every future automated upgrade PR until fixed. The adapter-selection logic is
+// now removed entirely (not just made to tolerate a missing key), so this asserts the whole run
+// completes normally against a package.json that never had pi-mcp-adapter, and never reintroduces it.
+test("runPiUpgrade: runs cleanly against a package.json with no pi-mcp-adapter, and never reintroduces it", () => {
   const cwd = makeCwd();
   try {
-    const registry = fakeRegistry({
-      latestPi: "0.88.0",
-      adapterVersions: ["2.38.0", "2.39.0"],
-      peerRanges: {
-        "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0",
-        "2.39.0": "^0.88.0",
-      },
-    });
+    assert.equal(JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")).dependencies["pi-mcp-adapter"], undefined);
+    const registry = fakeRegistry({ latestPi: "0.88.0" });
     const result = runPiUpgrade({ cwd, registry, exec: fakeExec(true).exec, now: () => NOW });
     assert.equal(result.exitCode, 0);
-    assert.match(result.report, /pi-mcp-adapter: 2\.38\.0 → 2\.39\.0/);
+    assert.equal(result.upgraded, true);
+    assert.doesNotMatch(result.report, /pi-mcp-adapter/);
     const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
-    assert.equal(pkg.dependencies["pi-mcp-adapter"], "2.39.0");
-  } finally {
-    rmSync(cwd, { recursive: true, force: true });
-  }
-});
-
-test("runPiUpgrade: no adapter declares support -- tries the newest anyway, writes an overrides entry, and says so in the report", () => {
-  const cwd = makeCwd();
-  try {
-    const registry = fakeRegistry({
-      latestPi: "0.99.0",
-      adapterVersions: ["2.38.0", "2.50.0"],
-      peerRanges: {
-        "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0",
-        "2.50.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0",
-      },
-    });
-    const { exec, calls } = fakeExec(true);
-    const result = runPiUpgrade({ cwd, registry, exec, now: () => NOW });
-
-    assert.equal(result.adapterDeclared, false);
-    assert.match(result.report, /No published pi-mcp-adapter version declares peer support/);
-    assert.match(result.report, /overrides/);
-    // The overrides limitation (re-review N2): only applies when MMP is the install root.
-    assert.match(result.report, /install root/);
-    assert.match(result.report, /npm warn ERESOLVE overriding peer dependency/);
-    const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
-    assert.equal(pkg.dependencies["pi-mcp-adapter"], "2.50.0");
-    // The override is what makes plain `npm install`/`npm ci` (not just this gate, also
-    // release.yml's `npm ci` on main after merge) resolve the declared-incompatible peer --
-    // verified locally against the real registry (pi-mcp-adapter@3.3.0 next to
-    // @earendil-works/pi-ai@0.99.1 fails with ERESOLVE without it, succeeds with it, no
-    // --legacy-peer-deps needed either way).
-    assert.deepEqual(pkg.overrides, { "pi-mcp-adapter": { "@earendil-works/pi-ai": "$@earendil-works/pi-ai" } });
-
-    const installCall = calls.find((call) => call.command === "npm" && call.args[0] === "install");
-    assert.ok(installCall.args.includes("--ignore-scripts"));
-    assert.ok(!installCall.args.includes("--legacy-peer-deps"));
+    assert.equal(pkg.dependencies["pi-mcp-adapter"], undefined, "runPiUpgrade must never reintroduce pi-mcp-adapter");
+    assert.equal(pkg.overrides, undefined, "no overrides entry should exist without an adapter to override");
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
@@ -509,11 +284,7 @@ test("runPiUpgrade: gate failure -> exit 1, report lists failing tests, no MMP v
       join(cwd, "node_modules", "@earendil-works", "pi-coding-agent", "CHANGELOG.md"),
       "# Changelog\n\n## [0.88.0] - 2026-09-25\n\n- a breaking change worth knowing about even though the gate failed\n\n## [0.87.1] - 2026-09-22\n\n- old thing\n",
     );
-    const registry = fakeRegistry({
-      latestPi: "0.88.0",
-      adapterVersions: ["2.38.0"],
-      peerRanges: { "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0 || ^0.88.0" },
-    });
+    const registry = fakeRegistry({ latestPi: "0.88.0" });
     const { exec } = fakeExec(false, { testOutput: "1..2\nok 1 - fine\nnot ok 2 - regression in foo\n" });
     const result = runPiUpgrade({ cwd, registry, exec, now: () => NOW });
 
@@ -540,11 +311,7 @@ test("runPiUpgrade: gate failure -> exit 1, report lists failing tests, no MMP v
 test("runPiUpgrade: --version pins to an exact requested version instead of the registry's latest", () => {
   const cwd = makeCwd();
   try {
-    const registry = fakeRegistry({
-      latestPi: "0.99.0", // must be ignored in favor of requestedVersion
-      adapterVersions: ["2.38.0"],
-      peerRanges: { "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0 || ^0.88.0" },
-    });
+    const registry = fakeRegistry({ latestPi: "0.99.0" }); // must be ignored in favor of requestedVersion
     const result = runPiUpgrade({
       cwd,
       requestedVersion: "0.88.0",
@@ -568,11 +335,7 @@ test("runPiUpgrade: reads CHANGELOG.md entries between the two versions when the
       join(cwd, "node_modules", "@earendil-works", "pi-coding-agent", "CHANGELOG.md"),
       "# Changelog\n\n## [0.88.0] - 2026-09-25\n\n- new thing\n\n## [0.87.1] - 2026-09-22\n\n- old thing\n",
     );
-    const registry = fakeRegistry({
-      latestPi: "0.88.0",
-      adapterVersions: ["2.38.0"],
-      peerRanges: { "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0 || ^0.88.0" },
-    });
+    const registry = fakeRegistry({ latestPi: "0.88.0" });
     const result = runPiUpgrade({ cwd, registry, exec: fakeExec(true).exec, now: () => NOW });
     assert.match(result.report, /new thing/);
     assert.doesNotMatch(result.report, /old thing/);
@@ -584,11 +347,7 @@ test("runPiUpgrade: reads CHANGELOG.md entries between the two versions when the
 test("runPiUpgrade: missing model-snapshot.mjs is reported, not fatal", () => {
   const cwd = makeCwd();
   try {
-    const registry = fakeRegistry({
-      latestPi: "0.88.0",
-      adapterVersions: ["2.38.0"],
-      peerRanges: { "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0 || ^0.88.0" },
-    });
+    const registry = fakeRegistry({ latestPi: "0.88.0" });
     const result = runPiUpgrade({ cwd, registry, exec: fakeExec(true).exec, now: () => NOW });
     assert.match(result.report, /model-snapshot\.mjs does not exist yet/);
   } finally {
@@ -599,14 +358,7 @@ test("runPiUpgrade: missing model-snapshot.mjs is reported, not fatal", () => {
 test("runPiUpgrade: a large minor-version jump is flagged in the report as notable", () => {
   const cwd = makeCwd({ piVersion: "0.87.1" });
   try {
-    const registry = fakeRegistry({
-      latestPi: "0.99.1",
-      adapterVersions: ["2.38.0", "3.3.0"],
-      peerRanges: {
-        "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0",
-        "3.3.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0",
-      },
-    });
+    const registry = fakeRegistry({ latestPi: "0.99.1" });
     const result = runPiUpgrade({ cwd, registry, exec: fakeExec(true).exec, now: () => NOW });
     assert.match(result.report, /12 minor versions at once/);
   } finally {

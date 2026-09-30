@@ -25,7 +25,6 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
   │
   ├─ 升级脚本（代码决定）
   │     新分支 → pi-coding-agent / pi-tui / pi-ai 升到同一个新版本
-  │           → pi-mcp-adapter 的 peer 范围不包含新版本时，升到声明兼容的最新版
   │           → npm install
   │
   ├─ 兼容性门禁（代码决定，第 3 节）
@@ -52,7 +51,7 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 | 全部测试（`npm test`） | 行为回归 | 发现 MCP adapter 加载失败、8 个文件的版本号写死 | 已有 |
 | ambient 资源隔离 | Pi 新增的自动发现来源 | 手工从 CHANGELOG 找到 `AGENTS.override.md` 补进测试；`SYSTEM.md` / `APPEND_SYSTEM.md` 一直没被覆盖，今天才发现并修好 | 已改进（2026-09-30）：埋设的资源清单改为在测试里直接从安装好的 Pi 读取（`test/fixtures/pi-ambient-sources.mjs` 读 `trust-manager.js` 的 `TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES` 和 `resource-loader.js` 的 context-file 候选名单），不再手写；`test/ambient-isolation.test.mjs` 用它埋设。Pi 新增一种来源，测试就会自动覆盖；读取的位置本身登记在 `docs/pi-internals.md` |
 | 配置隔离 | 项目 `.pi/settings.json`、`~/.pi/agent` 被读取 | 实测：启动阶段总会读项目设置；`--approve` 时运行阶段也生效（已修复） | 运行阶段已是正式测试（`test/ambient-isolation.test.mjs`）。启动阶段的读取还挡不住，只能在报告里记录 |
-| MCP 离线验收 | adapter 和新 Pi 不兼容 | 正好能发现 `complete` 被删掉 | 今天新增（`test/mcp.test.mjs`，用 faux provider 按剧本调用） |
+| MCP 离线验收 | 原生 MCP（`createMcpExtension`）和新 Pi 不兼容 | 0.87 升级时发现 pi-mcp-adapter 和新 pi-ai 不兼容（`complete` 被删掉）；0.99 升级把 MCP 整个换成 Pi 原生实现，去掉了 adapter 这层，见 [mcp-design.md](mcp-design.md) | `test/mcp.test.mjs`，用 faux provider 按剧本调用一个真实 stdio fixture server |
 | 模型可见内容快照 | system prompt 和工具 schema 的变化 | 0.87 把 system prompt 改成了 `<tools>`、`<rules>` 这样的分段格式，没有任何测试发现 | 已实现（2026-09-30，`scripts/model-snapshot.mjs` + `test/snapshots/model-visible.json`）。用固定的离线装配（rules+skills+三个内置 Extension，全部能离线加载）跑一次 faux 模型，截获它实际收到的 system prompt 和工具声明；路径、cwd、MMP/Pi 版本号都做了归一化，两次运行逐字节相同。只报告、不判失败：`--diff` 恒定退出码 0，没变化打印 `NO MODEL-VISIBLE CHANGES`，变了打印统一 diff，提示需要重跑 benchmark 基线 |
 | 启动契约 | `piMain` 路径和 SDK 路径给模型的内容不一致（新 TUI 之后才有两条路径） | — | 新增，随新 TUI 一起做（tui-design 3.1 节） |
 | Pi 接口清单 | MMP 用到的 Pi 符号被删掉或改名 | — | 已实现（2026-09-30，`test/pi-interface-inventory.test.mjs`）。用 TypeScript 编译器 API 静态收集 `src/**/*.ts` 里所有从 `pi-coding-agent`/`pi-tui`/`pi-ai` import 的名字（含 `import type`/内联 `type`），值导入对已安装包的运行时导出断言存在，类型导入对其 `.d.ts` 的导出断言存在。门禁不通过时报告具体符号和引用它的文件 |
@@ -70,7 +69,7 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 1. **版本号只保留一个来源。** 测试和夹具里写死的 `0.87.1` 全部改为读取已安装 Pi 的 `VERSION`。这次改了 8 个文件，以后不用再改。
 2. **benchmark 变体名去掉版本号**：`pi-0.87-baseline` 改成 `pi-baseline`，版本记录在 metadata 里。
 3. **文档里不写具体版本号**，统一写"见 `package.json`"，或者由发布脚本生成。
-4. **MCP adapter 跟着升级**：升级脚本检查 adapter 的 peer 依赖范围，不包含新 Pi 时，自动换成声明兼容的最新版。
+4. ~~**MCP adapter 跟着升级**：升级脚本检查 adapter 的 peer 依赖范围，不包含新 Pi 时，自动换成声明兼容的最新版。~~ 已被 0.99 升级取代：MMP 改用 Pi 原生 MCP（`createMcpExtension`），`pi-mcp-adapter` 整个移除，升级脚本不再需要管理任何 adapter 版本或 peer 范围（见 [mcp-design.md](mcp-design.md)）。
 
 ## 5. 发布自动化
 
@@ -95,18 +94,13 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 
 **供应链防护（pre-merge review 后加）。** 升级脚本会给一个几小时前刚发布、我们不掌控的上游包跑 `npm install`，这本身就是攻击面：
 
-- `npm install` 固定加 `--ignore-scripts`（本地验证过：从零装依赖、`--ignore-scripts`、`npm run build`、跑满 507 个测试，全部通过——这个仓库的构建和测试不依赖任何包的 postinstall/install 脚本，包括 esbuild、fsevents、protobufjs 这几个真正带脚本的包）。
-- adapter 的声明 peer 范围不包含新 Pi 版本时（见下），升级脚本会往 `package.json` 写一条 npm 原生的 `overrides`（`{ "pi-mcp-adapter": { "@earendil-works/pi-ai": "$@earendil-works/pi-ai" } }`），否则 npm 的严格 peer 校验会直接拒绝安装（`ERESOLVE`，本地对着真实 registry 验证过：`pi-mcp-adapter@3.3.0` 配 `@earendil-works/pi-ai@0.99.1` 会报这个错）。没选 `--legacy-peer-deps`：那个开关只能加在"门禁这一次"的 install 命令上，PR 合并后 `release.yml`/`ci.yml` 跑的是不带这个开关的 `npm ci`，一样会报 `ERESOLVE`——门禁绿了但合并后的 main 装不上。写进 `package.json` 的 `overrides` 是仓库状态的一部分，PR 的 diff 里能直接看到，合并后不带任何开关的 `npm ci` 也验证过能正常跑通；adapter 以后声明支持了，`overrides` 会在下一次升级时自动删掉。
+- `npm install` 固定加 `--ignore-scripts`（本地验证过：从零装依赖、`--ignore-scripts`、`npm run build`、跑满全部测试，全部通过——这个仓库的构建和测试不依赖任何包的 postinstall/install 脚本，包括 esbuild、fsevents、protobufjs 这几个真正带脚本的包）。
 - `pi-upgrade.yml` 的 `actions/checkout` 用 `persist-credentials: false`：token 不写进 `.git/config`，只在真正要 push / 调 `gh` 的那一步里临时塞进远程 URL——这一步在 `npm install` 已经跑完之后才执行，缩小了"万一 `--ignore-scripts` 没挡住"时 token 暴露的窗口。
-- 新版本发布不到 3 天（`MIN_PUBLISH_AGE_MS`，读 `npm view <pkg> time --json`）不会自动采用，除非显式传 `--version`——给生态一点时间发现被入侵或有问题的发布。这个数字是我定的。同一个检查也套用在"猜的" adapter 版本上（adapter 是 `declared: false` 时）：那个版本也可能是刚发布的，同样没人验证过，`--version` 会同时跳过 Pi 和 adapter 两边的检查。
+- 新版本发布不到 3 天（`MIN_PUBLISH_AGE_MS`，读 `npm view <pkg> time --json`）不会自动采用，除非显式传 `--version`——给生态一点时间发现被入侵或有问题的发布。这个数字是我定的。
 
-**`overrides` 只在 MMP 自己是安装根目录时生效。** 这是 npm 的既有行为，不是这次改动引入的限制，但值得记在这里：`npm install --global` 装 MMP 的 tgz 时，MMP 自己就是那次安装的根，`overrides` 按预期生效，只是 npm 会打印一条 `npm warn ERESOLVE overriding peer dependency` 的提示（能装上，行为符合预期，只是有告警）；但如果有人把 MMP 的 tgz 当作*另一个*项目的普通依赖装进去（非 global），MMP 自己的 `overrides` 不会被外层项目继承——那种场景下装出来的树里会有两份 `@earendil-works/pi-ai`。MMP 的正常分发方式（`install.sh` → `npm install --global`）走的是前一种情况，不受影响；这里不改 `install.sh`。
+**（已废弃，2026-09-30 随 0.99 升级一起做）：`pi-mcp-adapter` 的版本选择、`overrides` 写回、peer 范围校验。** 早期设计里，升级脚本要检查 `pi-mcp-adapter` 的声明 peer 范围是否覆盖新 Pi 版本，不覆盖时自动换版本、往 `package.json` 写 npm 原生的 `overrides` 条目、并对"猜的"adapter 版本单独套用发布时间窗口。这套逻辑（`selectAdapterVersion`、`applyAdapterOverride`、相关的 peer-range 校验）曾经修过一个真实的降级 bug（新→旧排序选第一个满足声明范围的版本，会把已锁定的 `2.38.0` 降级成 `2.21.0`，因为 `2.12.0-2.21.0` 全声明 `*`）。Pi 0.99 升级把 MCP 整个换成 Pi 原生实现（`createMcpExtension`），`pi-mcp-adapter` 作为依赖被整体移除，升级脚本里这一整套 adapter 管理逻辑随之删掉——不是"处理 adapter 缺失"，而是"再也不需要管理 adapter"。见 [mcp-design.md](mcp-design.md)。
 
-**adapter 选择不能降级（pre-merge review 修的一个真实 bug）。** 早期实现按"新→旧排序，选第一个满足声明范围的版本"选 adapter，会把已经锁定的 `2.38.0` **降级**成 `2.21.0`——因为 `pi-mcp-adapter` 2.12.0-2.21.0 声明的 peer 范围是 `*`（什么都匹配），排序上又比更晚的、范围写得更精确的版本先满足条件。现在的规则：`*`、空字符串、或者压根没声明这个 peer key，一律算"没声明"，不算"兼容"；候选版本也只看比当前锁定版本更新的；如果连最新版本都没声明支持新 Pi 版本，就试最新版本（装的时候用上面的 `overrides`），把结果交给门禁（尤其是 `test/mcp.test.mjs` 的离线 MCP 验收）去判断真假兼容，并在报告里如实写清楚"这是猜的，不是 adapter 自己说的"。范围匹配用 `semver` 包（现在是正式 devDependency），不再手撸——手撸的版本只认识 `^` 和精确匹配，遇到 `~`、`x`、`>=` 这类合法写法会直接判"不兼容"，也会在排序遇到预发布版本号时抛异常。
-
-备注：`--version` 传一个预发布版本号（比如 `0.88.0-rc.1`）时，即使 adapter 声明的范围本来能覆盖对应的正式版（`^0.88.0`），`semver.satisfies` 默认也不认预发布版本命中——所以显式传预发布版本永远走"没声明，试最新版本"这条路径，这是 `semver` 的默认行为，符合"没人验证过这个预发布版本"的直觉，不用额外处理。
-
-**现状（写这段的时候）：下一次真实升级会是 0.87.1 → 0.99.1，跨 12 个 minor 版本。** 门禁大概率过不了，报告里会标出"一次跨这么多版本，不是日常小步升级"；`pi-mcp-adapter` 目前最新版（3.3.0）声明的 peer 范围只到 `^0.87.0`，大概率会走"没有 adapter 声明支持，试最新版本"这条路径。这不是这次改动要解决的问题——第一次真实升级本来就需要人来处理，设计本身允许门禁失败、开 issue、等人决定。
+**实际发生的情况：0.87.1 → 0.99.1，跨 12 个 minor 版本。** 报告按设计标出了"一次跨这么多版本，不是日常小步升级"；门禁最初确实失败（ambient 隔离、mutating renderer、MCP 相关测试），按第 9 节的决定改用 Pi 原生 MCP 后全部修好，手工分三个 stage 完成（Pi 0.99.1 内核 -> Pi 原生 MCP -> `mmp mcp` 子命令），细节见 [mcp-design.md](mcp-design.md)。这次是手工做的，不是这条自动化流水线真的跑通了一次；下一次日常的小步升级才会真正走这条自动化路径。
 
 **PR 和 issue 不会刷屏。** 分支固定叫 `pi-upgrade`（不是每个版本一个分支）：门禁通过就在这条分支上强制更新（force-push 前先检查分支上是否有非 bot 的提交，有就不推，改成在 PR 下留言说明，等人处理）；同一个版本的 PR 被人关掉且没合并过，就不会再自动开一个一样的。门禁失败开的 issue 只在报告内容真正变化时才追加评论（给报告内容算哈希，跟 issue 最后一条评论或者 issue 本身的正文比对），同一个失败原因不会每天多一条评论。
 
