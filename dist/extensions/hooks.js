@@ -16,11 +16,29 @@ function failureMessage(error) {
  * the same message to stderr there is a fallback, not a duplicate: those modes' stdout is the
  * model's reply/JSON stream, so the failure has to go somewhere else to be seen without corrupting it.
  */
-function notifyVisibly(context, message, type) {
+function notifyVisibly(context, text, type) {
+    const message = displayLine(text);
     context.ui.notify(message, type);
     if (context.mode === "print" || context.mode === "json") {
         process.stderr.write(`mmp: ${message}\n`);
     }
+}
+/**
+ * Hook reasons and a failing command's stderr tail are text from user-configured programs. Shown
+ * raw, a newline breaks the one-line TUI notice and the `mmp: ...` stderr line, and an escape
+ * sequence restyles or moves the terminal. Drops ANSI escape sequences and other control
+ * characters and joins the lines with " | ".
+ */
+function displayLine(text) {
+    return text
+        // CSI (ESC [ ... final byte) and OSC (ESC ] ... BEL or ESC \) sequences, then any other ESC pair.
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+        .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "")
+        .replace(/\x1b[@-_]?/g, "")
+        .split(/\r\n|\r|\n/)
+        .map((line) => line.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/ {2,}/g, " ").trim())
+        .filter((line) => line.length > 0)
+        .join(" | ");
 }
 function notifyFailure(context, error) {
     notifyVisibly(context, failureMessage(error), "error");
@@ -32,7 +50,10 @@ function notifyFailure(context, error) {
  */
 function notifyPromptBlocked(context, decision) {
     const verb = decision.action === "cancel" ? "cancelled" : "blocked";
-    notifyVisibly(context, `Prompt ${verb} by user_prompt hook: ${blockReason(decision)}`, "warning");
+    // No reason: just say what happened. blockReason()'s "Blocked by MMP hook" fallback would read
+    // "Prompt cancelled by user_prompt hook: Blocked by MMP hook".
+    const reason = displayLine(decision.reason ?? "");
+    notifyVisibly(context, `Prompt ${verb} by user_prompt hook${reason.length > 0 ? `: ${reason}` : ""}`, "warning");
 }
 function taskPayload(event) {
     if (event.type === "task_start") {
@@ -161,21 +182,24 @@ export function createHooksInlineExtension(options) {
                 }
             });
             pi.on("input", async (event, context) => {
+                let decision;
                 try {
-                    const decision = await runtime.run(inputPayload(event, context), context);
-                    if (decision.action === "transform") {
-                        return { action: "transform", text: decision.text ?? "" };
-                    }
-                    if (decision.action === "block" || decision.action === "cancel") {
-                        notifyPromptBlocked(context, decision);
-                        return { action: "handled" };
-                    }
-                    return { action: "continue" };
+                    decision = await runtime.run(inputPayload(event, context), context);
                 }
                 catch (error) {
                     notifyFailure(context, error);
                     return { action: "handled" };
                 }
+                if (decision.action === "transform") {
+                    return { action: "transform", text: decision.text ?? "" };
+                }
+                if (decision.action === "block" || decision.action === "cancel") {
+                    // Outside the try: a notify that throws is not a hook failure, and must not be reported
+                    // a second time as one.
+                    notifyPromptBlocked(context, decision);
+                    return { action: "handled" };
+                }
+                return { action: "continue" };
             });
             pi.on("tool_call", async (event, context) => {
                 try {

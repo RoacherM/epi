@@ -538,6 +538,16 @@ test("one undo takes back a chip expansion, with the chip's content", () => {
   assert.equal(editor.getExpandedText(), A);
 });
 
+test("one undo takes back a paste-again expansion, with the chip's content", () => {
+  const editor = makeEditor();
+  paste(editor, A);
+  paste(editor, A); // "paste again" expands the chip
+  assert.equal(editor.getText(), A);
+  editor.handleInput(UNDO);
+  assert.equal(editor.getText(), "[Pasted: 4 lines]");
+  assert.equal(editor.getExpandedText(), A);
+});
+
 test("text pasted inside an expanded chip that looks like a label stays literal", () => {
   const editor = makeEditor();
   const inner = "p1\n[Pasted: 4 lines]\np3\np4";

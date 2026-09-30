@@ -19,6 +19,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { MmpArgumentError } from "../errors.js";
+import { EXTENSION_LOAD_FAILURE_HINT } from "../pi-output.js";
 import { importFromPi } from "./pi-tui.js";
 import { crossProjectRefusal, type ProjectIdentity } from "./project-guard.js";
 
@@ -304,6 +305,16 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
     // the initial model is picked from a stale snapshot. A refresh started now is the latest one.
     await services.modelRuntime.refresh({ allowNetwork: false });
     const diagnostics: Diagnostic[] = [...services.diagnostics];
+    // createAgentSessionServices leaves extension load results out of its diagnostics; Pi's main.js
+    // adds them itself (~641-648). Without this, a Manifest extension that failed to load was
+    // skipped with nothing on screen (dogfood D45).
+    const extensions = services.resourceLoader.getExtensions();
+    for (const { path, error } of extensions.errors) {
+      diagnostics.push({ type: "error", message: `Failed to load extension "${path}": ${error}` });
+    }
+    for (const { path, warning } of extensions.warnings ?? []) {
+      diagnostics.push({ type: "warning", message: `Extension package "${path}": ${warning}` });
+    }
 
     const cli = parsed.provider || parsed.model || parsed.thinking
       ? resolveCliModel({
@@ -372,7 +383,9 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
     // does the same with `runtime.diagnostics`, so nothing is dropped, it just isn't printed here.
     const errors = diagnostics.filter((diagnostic) => diagnostic.type === "error");
     if (errors.length > 0) {
-      throw new Error(errors.map((diagnostic) => diagnostic.message).join("\n"));
+      const lines = errors.map((diagnostic) => diagnostic.message);
+      if (extensions.errors.length > 0) lines.push(EXTENSION_LOAD_FAILURE_HINT);
+      throw new Error(lines.join("\n"));
     }
 
     const created = await createAgentSessionFromServices({

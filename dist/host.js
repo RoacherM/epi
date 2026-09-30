@@ -11,6 +11,7 @@ import { reportRunFailure } from "./errors.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { isInteractivePiRun } from "./interactive.js";
 import { resolveMmpPaths } from "./paths.js";
+import { rewritePiStderr } from "./pi-output.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { createMmpRuntimeIdentity, } from "./runtime-identity.js";
 import { askProjectTrust, saveProjectTrustChoice, shouldAskProjectTrust } from "./trust-prompt.js";
@@ -276,6 +277,7 @@ export async function runMmp(argv) {
         // as a compaction request that ignored its abort (dogfood D35, D41).
         process.exit(code);
     }
+    rewritePiStderr();
     await piMain(prepared.piArgs, { extensionFactories });
 }
 //# sourceMappingURL=host.js.map

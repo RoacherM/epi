@@ -565,6 +565,88 @@ for (const [action, verb, reason] of [
   }
 }
 
+async function runUserPromptHook(t, handler, mode, notify) {
+  const root = createFixture(t);
+  const handlers = new Map();
+  const inline = createHooksInlineExtension({
+    hooks: [hook("user_prompt", [handler])],
+    mmpHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: undefined,
+    workerPath: fakeWorker,
+  });
+  await inline.factory(fakePiWithBus(handlers));
+  const context = createContext(root, { mode, ui: { notify } });
+  t.after(() => handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context));
+  return withCapturedStderr(() => handlers.get("input")(
+    { type: "input", text: "hello", images: [], source: "interactive" },
+    context,
+  ));
+}
+
+// D46: with no reason, the notice used to end in blockReason()'s tool_call fallback, so a cancel read
+// "Prompt cancelled by user_prompt hook: Blocked by MMP hook".
+// (Only cancel can omit it: the hook decision schema requires a block reason.)
+for (const mode of ["print", "tui"]) {
+  test(`a user_prompt hook cancel with no reason says only that (${mode} mode)`, async (t) => {
+    const notifications = [];
+    const { result, stderr } = await runUserPromptHook(t, command("cancel-noreason"), mode, (message, level) => {
+      notifications.push({ message, level });
+    });
+    assert.deepEqual(result, { action: "handled" });
+    const expected = "Prompt cancelled by user_prompt hook";
+    assert.deepEqual(notifications, [{ message: expected, level: "warning" }]);
+    assert.equal(stderr(), mode === "tui" ? "" : `mmp: ${expected}\n`);
+  });
+}
+
+// D46: a hook's reason is text from a user-configured program; a newline or escape sequence in it
+// used to reach the one-line TUI notice and the stderr line raw.
+test("a user_prompt hook's block reason is shown as one line without control characters", async (t) => {
+  const notifications = [];
+  const { stderr } = await runUserPromptHook(t, command("block-dirty"), "print", (message) => {
+    notifications.push(message);
+  });
+  const expected = "Prompt blocked by user_prompt hook: line1 | red end";
+  assert.deepEqual(notifications, [expected]);
+  assert.equal(stderr(), `mmp: ${expected}\n`);
+});
+
+test("a failing hook's stderr tail is shown as one line without control characters", async (t) => {
+  const failingScript = join(tmpdir(), `mmp-hooks-dirty-${process.pid}.mjs`);
+  writeFileSync(
+    failingScript,
+    "process.stderr.write('first\\n\\x1b[31msecond\\x1b[0m\\r\\n'); process.exit(3);\n",
+  );
+  t.after(() => rmSync(failingScript, { force: true }));
+  const notifications = [];
+  const { result, stderr } = await runUserPromptHook(
+    t,
+    { type: "command", command: process.execPath, args: [failingScript], timeoutMs: 1000 },
+    "print",
+    (message) => { notifications.push(message); },
+  );
+  assert.deepEqual(result, { action: "handled" });
+  assert.equal(notifications.length, 1);
+  assert.match(notifications[0], /exited with code 3: .*: first \| second$/);
+  assert.doesNotMatch(notifications[0], /[\x00-\x1f]/);
+  assert.equal(stderr(), `mmp: ${notifications[0]}\n`);
+});
+
+// D46: the block notice used to be sent inside the try around the hook run, so a notify that threw
+// was caught as a hook failure and reported a second time.
+test("a notify that throws on a user_prompt block is not reported again as a hook failure", async (t) => {
+  const notifications = [];
+  await assert.rejects(
+    runUserPromptHook(t, command("block"), "tui", (message) => {
+      notifications.push(message);
+      throw new Error("notify broke");
+    }),
+    /notify broke/,
+  );
+  assert.deepEqual(notifications, ["Prompt blocked by user_prompt hook: blocked:user_prompt"]);
+});
+
 // D26 end to end: the real CLI and the real TUI, with a global mmp:hooks user_prompt block hook
 // and a faux model that would echo the prompt if it ever got through.
 function blockingHookHome(t) {

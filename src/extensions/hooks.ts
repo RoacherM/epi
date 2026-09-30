@@ -46,13 +46,32 @@ function failureMessage(error: unknown): string {
  */
 function notifyVisibly(
   context: ExtensionContext,
-  message: string,
+  text: string,
   type: "warning" | "error",
 ): void {
+  const message = displayLine(text);
   context.ui.notify(message, type);
   if (context.mode === "print" || context.mode === "json") {
     process.stderr.write(`mmp: ${message}\n`);
   }
+}
+
+/**
+ * Hook reasons and a failing command's stderr tail are text from user-configured programs. Shown
+ * raw, a newline breaks the one-line TUI notice and the `mmp: ...` stderr line, and an escape
+ * sequence restyles or moves the terminal. Drops ANSI escape sequences and other control
+ * characters and joins the lines with " | ".
+ */
+function displayLine(text: string): string {
+  return text
+    // CSI (ESC [ ... final byte) and OSC (ESC ] ... BEL or ESC \) sequences, then any other ESC pair.
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "")
+    .replace(/\x1b[@-_]?/g, "")
+    .split(/\r\n|\r|\n/)
+    .map((line) => line.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/ {2,}/g, " ").trim())
+    .filter((line) => line.length > 0)
+    .join(" | ");
 }
 
 function notifyFailure(context: ExtensionContext, error: unknown): void {
@@ -66,9 +85,12 @@ function notifyFailure(context: ExtensionContext, error: unknown): void {
  */
 function notifyPromptBlocked(context: ExtensionContext, decision: HookDecision): void {
   const verb = decision.action === "cancel" ? "cancelled" : "blocked";
+  // No reason: just say what happened. blockReason()'s "Blocked by MMP hook" fallback would read
+  // "Prompt cancelled by user_prompt hook: Blocked by MMP hook".
+  const reason = displayLine(decision.reason ?? "");
   notifyVisibly(
     context,
-    `Prompt ${verb} by user_prompt hook: ${blockReason(decision)}`,
+    `Prompt ${verb} by user_prompt hook${reason.length > 0 ? `: ${reason}` : ""}`,
     "warning",
   );
 }
@@ -241,20 +263,23 @@ export function createHooksInlineExtension(
       });
 
       pi.on("input", async (event, context) => {
+        let decision: HookDecision;
         try {
-          const decision = await runtime.run(inputPayload(event, context), context);
-          if (decision.action === "transform") {
-            return { action: "transform" as const, text: decision.text ?? "" };
-          }
-          if (decision.action === "block" || decision.action === "cancel") {
-            notifyPromptBlocked(context, decision);
-            return { action: "handled" as const };
-          }
-          return { action: "continue" as const };
+          decision = await runtime.run(inputPayload(event, context), context);
         } catch (error) {
           notifyFailure(context, error);
           return { action: "handled" as const };
         }
+        if (decision.action === "transform") {
+          return { action: "transform" as const, text: decision.text ?? "" };
+        }
+        if (decision.action === "block" || decision.action === "cancel") {
+          // Outside the try: a notify that throws is not a hook failure, and must not be reported
+          // a second time as one.
+          notifyPromptBlocked(context, decision);
+          return { action: "handled" as const };
+        }
+        return { action: "continue" as const };
       });
 
       pi.on("tool_call", async (event, context) => {
