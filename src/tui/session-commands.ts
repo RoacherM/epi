@@ -200,7 +200,7 @@ export async function runCopy(host: CommandHost, options: { fromKey?: boolean } 
   }
   const text = host.session().getLastAssistantText();
   if (!text) {
-    host.notice("No agent messages to copy yet.", "warning");
+    host.notice("No agent messages to copy yet.", "error");
     return;
   }
   try {

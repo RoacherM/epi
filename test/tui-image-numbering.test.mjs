@@ -767,4 +767,24 @@ describe("image numbering", { concurrency: Math.min(8, Math.max(2, availablePara
     // Dim and struck through on both lines, not over the padding.
     assert.match(text, /\x1b\[2;9m\[Image(?:\x1b\[[0-9;]*m)* \x1b\[0m(?:\x1b\[2;9m)?\x1b\[22;29m {2}\n\x1b\[2;9m#7\]\x1b\[22;29m tail/);
   });
+
+  test("D49: text that only looks like a label across a line break is not drawn as one", () => {
+    // `[Image⏎#7]`: split by a hard Enter, with or without a space before it.
+    for (const draft of ["x [Image\n#7] y", "x [Image \n#7] y"]) {
+      const editor = bareEditor();
+      editor.insertTextAtCursor(draft);
+      assert.doesNotMatch(editor.render(60).join("\n"), /\x1b\[2;9m/, JSON.stringify(draft));
+    }
+    // `[Image  #7]`: two spaces, with the soft wrap falling after them.
+    const spaced = bareEditor();
+    spaced.insertTextAtCursor("abcdefghij [Image  #7] tail");
+    const spacedLines = spaced.render(20);
+    assert.ok(spacedLines.some((line) => /\[Image {2}/.test(line)) && spacedLines.some((line) => line.startsWith("#7]")), "the wrap falls after the two spaces");
+    assert.doesNotMatch(spacedLines.join("\n"), /\x1b\[2;9m/);
+    // A real label wrapped at its space is still drawn unattached next to another number's near miss.
+    const mixed = bareEditor();
+    mixed.insertTextAtCursor("abcdefghij [Image #7] tail [Image\n#8]");
+    assert.match(mixed.render(20).join("\n"), /\x1b\[2;9m\[Image\x1b\[22;29m *\n\x1b\[2;9m#7\]\x1b\[22;29m/);
+    assert.doesNotMatch(mixed.render(20).join("\n"), /#8\]\x1b\[22;29m/);
+  });
 });

@@ -133,6 +133,10 @@ const DRAWN_IMAGE_LABEL_G = new RegExp(
     `${DRAWN_ESCAPES}(?: |(?: |${DRAWN_ESCAPE})*\\n *)${DRAWN_ESCAPES}#${DRAWN_ESCAPES}((?:\\d|${DRAWN_ESCAPE})+)\\]`,
   "g",
 );
+/** Text that isn't a label but can be drawn like a wrapped one: `[Image` and `#N]` split by a hard
+ * newline, or by any run of spaces but one (group 1 is N). Only the draft's text tells these apart
+ * from a label a soft wrap splits at its space: padding makes them look the same once drawn. */
+const IMAGE_LABEL_NEAR_MISS_G = /\[Image(?! #)(?: *\n *| *)#(\d+)\]/g;
 
 /** Styles a drawn label as unattached: dim and struck through from `[` to `]`, again after any
  * styling inside it (the caret's reset), and not over the padding at a soft wrap. */
@@ -329,8 +333,14 @@ export class ChipEditor {
 
   render(width: number): string[] {
     const lines = this.inner.render(width);
-    const drawn = lines.join("\n").replace(DRAWN_IMAGE_LABEL_G, (label, id: string) =>
-      this.imageChips.has(Number(id.replace(DRAWN_ESCAPE_G, ""))) ? label : drawUnattached(label));
+    // A drawn label split across lines may be a near miss instead; when the draft has one with the
+    // same number, such a label is left plain, even if a real one could also be wrapped there.
+    const nearMisses = new Set([...this.getText().matchAll(IMAGE_LABEL_NEAR_MISS_G)].map((match) => Number(match[1])));
+    const drawn = lines.join("\n").replace(DRAWN_IMAGE_LABEL_G, (label, id: string) => {
+      const number = Number(id.replace(DRAWN_ESCAPE_G, ""));
+      if (this.imageChips.has(number) || (label.includes("\n") && nearMisses.has(number))) return label;
+      return drawUnattached(label);
+    });
     return drawn.split("\n");
   }
 

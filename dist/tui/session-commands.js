@@ -153,7 +153,7 @@ export async function runCopy(host, options = {}) {
     }
     const text = host.session().getLastAssistantText();
     if (!text) {
-        host.notice("No agent messages to copy yet.", "warning");
+        host.notice("No agent messages to copy yet.", "error");
         return;
     }
     try {

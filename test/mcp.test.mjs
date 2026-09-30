@@ -9,7 +9,7 @@
 //     "direct" exposure, env var expansion, and child-process cleanup on session exit
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -178,9 +178,15 @@ test("/mcp with zero configured servers shows MMP's own message, not Pi's", asyn
   assert.equal(notices.length, 1);
   // Dogfood D4: one sentence saying what to run, not "Add them to ... then run `mmp mcp add`".
   assert.match(notices[0].message, /^No MCP servers configured -- add one to .*mcp\.json with `mmp mcp add <server> /);
-  assert.match(notices[0].message, /with -l to this project's \.mmp[\\/]mcp\.json\.$/);
   assert.doesNotMatch(notices[0].message, /then run/);
   assert.doesNotMatch(notices[0].message, /\.pi\/mcp\.json/, "leaked Pi's own path, not MMP's");
+  // Dogfood D47: -l is offered only where the cwd has a project Manifest for it to go with.
+  assert.match(notices[0].message, /`\.$/);
+  assert.doesNotMatch(notices[0].message, /-l/);
+  mkdirSync(join(root, ".mmp"), { recursive: true });
+  writeJson(join(root, ".mmp", "mmp.json"), { version: 1 });
+  await pi.commands.get("mcp").handler("", ctx);
+  assert.match(notices[1].message, /`, or with -l to this project's \.mmp[\\/]mcp\.json\.$/);
 });
 
 test("/mcp with configured servers delegates to Pi's own handler instead of MMP's message", async (t) => {
@@ -445,6 +451,43 @@ for (const mode of ["print", "json"]) {
     }
   });
 }
+
+// Dogfood D47 (B1 review F6): in rpc mode ctx.ui.notify reaches the client as an
+// extension_ui_request, so writing the failure to stderr as well reported it twice.
+test("rpc mode: a failure in Pi's MCP startup reaches the client once, not stderr too (D6, D47)", async (t) => {
+  const root = createFixture(t);
+  const mmpHome = join(root, "home");
+  mkdirSync(mmpHome, { recursive: true });
+  const driver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
+  const hooks = fileURLToPath(new URL("./fixtures/mcp-connection-throws.mjs", import.meta.url));
+  writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", driver] });
+  writeJson(join(mmpHome, "mcp.json"), { mcpServers: { one: { command: "node", args: [fixtureServerPath] } } });
+  const child = spawn(
+    process.execPath,
+    ["--import", hooks, cliPath, "--no-project", "--model", "mmp-faux/echo", "--mode", "rpc"],
+    { env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, PI_OFFLINE: "1" }, stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const killTimer = setTimeout(() => child.kill(), 30_000);
+  let stdout = "";
+  let stderr = "";
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+    // The turn is over: closing stdin ends the rpc session.
+    if (stdout.includes('"type":"agent_end"')) child.stdin.end();
+  });
+  child.stdin.write(`${JSON.stringify({ type: "prompt", message: "hi" })}\n`);
+  const status = await new Promise((resolve) => child.on("close", resolve));
+  clearTimeout(killTimer);
+  const context = `status=${status}\nstdout:\n${stdout}\nstderr:\n${stderr}`;
+  assert.equal(status, 0, context);
+  const events = stdout.trim().split("\n").map((line) => JSON.parse(line));
+  const failures = events.filter((event) => event.type === "extension_ui_request" && event.method === "notify" && /MCP failed to load/.test(event.message));
+  assert.deepEqual(failures.map((event) => [event.message, event.notifyType]), [["MCP failed to load: simulated: McpServerConnection is unavailable", "error"]], context);
+  assert.ok(events.some((event) => event.type === "agent_end"), context);
+  // No "still connecting" lines either: the client already has the real error.
+  assert.equal(stderr, "", context);
+});
 
 // ── Offline end-to-end: real stdio fixture server, codemode + direct calls, cleanup ────────────
 
