@@ -20,7 +20,7 @@
 | D14 | P3 | D2 的 worker（旧工具版 b0d88c4，跑了约 1.5 小时）空输入框按 Ctrl+D 等 15 秒没退出，输入 `/quit` 4 秒内退出。没有点过图片标签。同样旧版本的 reviewer 上 Ctrl+D 1 秒退出，没复现 | 长时间运行的会话里按 Ctrl+D | 待复现（在新版本上留意） |
 | D15 | P0 | 上下文超长的自动恢复失败后，界面永远停在 "Compacting…"（实测 76 分钟），Esc 也停不下来。原因：Pi 在回合结束后的收尾阶段做恢复压缩，`compaction_end` 到达时 `isStreaming` 仍为 true，MMP 不清状态；之后的 `agent_settled` 也不清 | D11 worker 会话（magpie，约 176K token 时报 "Prompt is too long"） | 已修（合并 D15；另外修了两个同根的变体：回合结束后压缩成功也会卡住，回合中途压缩结束后状态不更新） |
 | D16 | P1 | magpie 的上下文上限配错：MMP 的 magpie 扩展照抄了 magpie 给 Pi 的 100 万，实际约 20 万，所以 Pi 从不自动压缩，直接撞上 "Prompt is too long"；恢复时的摘要请求又被 magpie 以 `content_filter` 拒绝 | 长任务里看上下文用量 | 已修（`~/.mmp/extensions/magpie/index.mjs` 改为 200000）；`content_filter` 的原因待查。2026-10-01 又见 D21 worker 上下文显示 `240K / 200K` 后才开始压缩（阈值压缩没在 200K 之前触发，原因待查） |
-| D17 | P3 | D15 复审发现：自动重试的等待期间按 Esc，曾是另一个状态卡住的变体（已被 D15 的修复覆盖），但没有测试；D15 新增的两处清理（回合结束时、重试结束时）也没有单独的测试 | D15 的 review-1.md 第 1、2 条 | 待补测试 |
+| D17 | P3 | D15 复审发现：自动重试的等待期间按 Esc，曾是另一个状态卡住的变体（已被 D15 的修复覆盖），但没有测试；D15 新增的两处清理（回合结束时、重试结束时）也没有单独的测试 | D15 的 review-1.md 第 1、2 条 | 已修（合并 D17：两个场景有测试；Esc 取消自动压缩后写 `Stopped after`；扩展取消压缩仍写 `Worked for`） |
 | D18 | P2 | 用退格删掉一个图片标签后立刻按回车，弹出的是路径补全（如 `see foo home/`），消息没有发出去；先随便打一个字再回车就正常（D11 worker 发现，D11 之前就存在） | `see foo `，Ctrl+V，退格，回车 | 已修（合并 D18：删标签时残留的 `#` 补全请求会被取消；Ctrl+W、Alt+退格同样修了） |
 | D19 | P2 | 完整测试又变回约 5 分钟：D11 新增的 `test/tui-image-numbering.test.mjs` 里二十多个测试每个 17–24 秒，同一文件内串行执行，整个文件就要几分钟，抵消了 D2 的提速 | `node --test --test-reporter=tap test/*.test.mjs`，按耗时排序 | 已修（合并 D19：固定等待改成等画面、同文件并行；该文件 305 秒 → 约 9 秒，完整 `npm test` 约 64 秒） |
 | D20 | P3 | D11 复审提出的小问题：同一条草稿里出现两次同一个标签会把图片发两次；`/fork` 一条没有标签的图片消息会丢图（D11 之前就有）；`/tree` 恢复图片没有测试 | D11 的 review-3.md | 已修（合并 D20：重复标签只发一次图；`/fork` 无标签的图片消息把图放回为新标签；`/tree` 恢复有测试；未附图样式在换行和光标处也生效） |
@@ -40,3 +40,4 @@
 | D34 | P3 | Ctrl+X 只复制最后一条回答；Pi 会先复制当前选中的文字（interactive-mode.js ~5367），关掉"选中即复制"后就没有办法复制选区（D21 worker 发现） | `/settings` 关掉 Copy on select，拖选一段文字，按 Ctrl+X | 待修 |
 | D35 | P2 | 压缩进行中按 Ctrl+D：界面已经退出（终端回到普通模式，画面停在最后一帧，之后的按键被原样回显），但进程不退出，一直挂着一个到 magpie 的压缩请求（`lsof` 可见 ESTABLISHED 连接），只能 kill。可能就是 D14（Ctrl+D 不退出）和 D25（留下最后一帧）的原因 | D21 worker 写完报告后自动压缩（240K/200K），此时 Ctrl+D；进程 `S+` 状态、CPU≈0 | 待修：退出时应中止进行中的压缩/请求，或限时后强制退出并提示 |
 | D36 | P3 | D20 复审的小问题：光标正好在把未附图标签拆到两行的那个空格上时，标签不画成暗色删除线；`chrome.ts` 的 `displayText` 按标签出现次数（而不是不同标签数）计算要显示几个 `[Image]`，与 `labelStoredImages` 不一致（只有扩展构造的消息会碰到） | D20 的 review-1.md | 待修 |
+| D37 | P3 | D17 复审第 2 轮的小缺口：压缩进行中输入 `/compact` 会中止这一轮，但结尾写 `Worked for`（`runCompact` 没调用 `markRunStopped()`）；扩展在自己的 `agent_settled` 里调用 `ctx.abort()` 会把正常结束的一轮写成 `Stopped after`（`abortHandler` 缺 `isStreaming` 判断）。修法见 D17 的 review-2.md | D17 的 review-2.md 第 1、2 条 | 待修 |

@@ -265,7 +265,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | 项 | 做法 | 来源 |
 |---|---|---|
 | 助手消息时间 ✓ | 助手消息第一行右侧显示时间（和用户消息一样） | 实测 |
-| `Worked for Ns` ✓ | 每轮 agent 结束后，在最后一块下面加一行 `Worked for 6.6s`（muted），时长从 `agent_start` 算到 `agent_end`；中止的轮次写 `Stopped after Ns` | 实测（中止的写法是我定的） |
+| `Worked for Ns` ✓ | 每轮 agent 结束后，在最后一块下面加一行 `Worked for 6.6s`（muted），时长从 `agent_start` 算到 `agent_end`；中止的轮次写 `Stopped after Ns`：只在用户自己停下这一轮时（Esc、Ctrl+C、扩展的 `ctx.abort()`、运行中 `/tree` 离开），包括回答已完整、Esc 取消随后的自动压缩；扩展在 `session_before_compact` 里取消压缩不算，仍写 `Worked for`（D17） | 实测（中止的写法是我定的） |
 | thinking ✓ | 运行中：`◆ Thinking…` 下面显示 thinking 的最后 3 行（dim）；结束后折叠成一行 `◆ Thought for 2.0s`（◆ 灰色，Thought 粗体 muted），时长从第一个 thinking 事件算到最后一个。`Ctrl+T`（Pi 的 `app.thinking.toggle`）切换全部 thinking 展开/折叠；单击这一行只切换这一条 | 笔记（运行中 3 行、折叠文字和颜色）；Ctrl+T 是 Pi 的键 |
 | 连续只读工具合并 ✓ | 连续的已折叠 read、grep、find、ls 合并成一行：`◈ Read 3 files`，多种时 `◈ Read 2 files, Searched 1 pattern, Listed 1 dir`；运行中 `Reading… · 2 completed`，失败的写 `· 1 failed`（error 色）；中间出现别的工具、正文或 thinking 就断开；组内超过 10 项时只显示最近 10 项，更早的收成最前面一行 `◈ N more`（可点开）；`Ctrl+O` 展开时恢复成逐个工具块 | 实测（`◈ Read 3 files`）+ 笔记（其余） |
 | 完成闪烁 ✓ | 工具或 thinking 结束时竖条闪一次 `success` 色，400ms | 笔记 |
