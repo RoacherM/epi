@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "rules": ["../AGENTS.md", "../docs/dev-workflow-herdr.md"],
+  "skills": [],
+  "extensions": []
+}

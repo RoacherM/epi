@@ -7,7 +7,9 @@ coverage/
 .env.*
 !.env.example
 .pi/
-.mmp/
+.mmp/*
+# The repo's own project Manifest: dev rules for mmp working on itself (docs/dev-workflow-herdr.md)
+!.mmp/mmp.json
 
 # Agent-local context
 .agents/
@@ -26,3 +28,6 @@ test/fixtures/**/pi/mcp-cache.json
 # Logs and operating-system metadata
 *.log
 .DS_Store
+
+# Task hand-off files for mmp working on itself (docs/dev-workflow-herdr.md section 4)
+.dev/

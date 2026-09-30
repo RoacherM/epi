@@ -1,6 +1,6 @@
 # 用 mmp 开发 mmp（Herdr 自举流程）
 
-状态：2026-09-30 草案，等用户确认。当前功能（Pi 0.99 + 原生 MCP）验收后启用；启用后替换 [dev-workflow.md](dev-workflow.md) 第 1–4 节，第 5 节（不可违反的约定）不变。
+状态：2026-09-30 用户确认。当前功能（Pi 0.99 + 原生 MCP）验收后启用；启用后替换 [dev-workflow.md](dev-workflow.md) 第 1–4 节，第 5 节（不可违反的约定）不变。
 
 目标：开发和审查都由 Herdr 里运行的 mmp 完成，mmp 在给自己干活的过程中暴露问题，再按优先级修掉。主控只管进度、文档和质量把关。
 
@@ -12,7 +12,7 @@
 | 编码 | mmp，`magpie` 的 `claude/claude-sonnet-5-5`，thinking `high` | Herdr pane，cwd 是任务的 worktree | 按任务说明实现、写测试、提交 |
 | 编码（升级） | mmp，`claude/claude-opus-5-5`，thinking `high` | 同上 | 同一任务被退回 2 轮、或修复引入倒退时接手 |
 | 初审 | mmp，`claude/claude-opus-5-5`，thinking `high` | 另一个 pane，同一 worktree，只读 | 每个任务合并前审查：复现、分级、写审查报告 |
-| 终审 | Fable（主控的只读 subagent） | 主控会话 | 高风险改动合并前的最终把关（见第 5 节），并抽查初审质量 |
+| 终审 | Fable（主控的只读 subagent） | 主控会话 | 大节点审查：主控把一个阶段的改动打成审查包交给它（见第 5 节） |
 | 调研 | agy（`agy -p`）或 mmp | — | 同现在；写进 scratchpad，主控核对后再用 |
 
 用哪个模型、什么 thinking 级别，由启动命令决定（第 3 节），不靠 mmp 的默认设置。
@@ -37,7 +37,7 @@
 仓库根目录提交一份项目 Manifest（`.mmp/mmp.json`，要从 `.gitignore` 里放开这一个文件），把开发规范作为 Rules 声明进去，每个 worktree 都自动带上：
 
 ```json
-{ "version": 1, "rules": ["../AGENTS.md", "../docs/dev-workflow-herdr.md"], "skills": [], "extensions": ["mmp:task"] }
+{ "version": 1, "rules": ["../AGENTS.md", "../docs/dev-workflow-herdr.md"], "skills": [], "extensions": [] }
 ```
 
 （MMP 不自动读 `AGENTS.md`，必须声明成 Rules 才会进 system prompt。）
@@ -73,22 +73,30 @@ cd <worktree> && node ~/Desktop/Projects/sides/mmp-tool/dist/cli.js --approve \
   → 初审 pane：Review the diff of <branch> against pi-087-upgrade per .dev/tasks/<id>/brief.md; write .dev/tasks/<id>/review-1.md. Do not modify files.
       审完主控检查 worktree `git status` 仍然干净（mmp 没有权限系统，只读靠指令 + 事后检查）
   → 不可合并 → 把 review-N.md 发给编码者修 → 再审（只审新提交，但重跑上一轮全部复现命令）
-  → 可合并 → 需要终审的交 Fable（第 5 节）→ 主控合并、跑完整测试、Herdr 验收 → 升级工具版
+  → 可合并 → 主控合并、跑完整测试、Herdr 验收 → 升级工具版
+  → 一个阶段的任务都合并后 → 主控打审查包交 Fable 终审（第 5 节）
 ```
 
 退回规则、测试要求、策略问题由主控拍板等，和 [dev-workflow.md](dev-workflow.md) 第 2 节一样。
 
 ## 5. 质量把关
 
-- **初审**：每个任务都要，由 mmp（opus）做。
-- **终审（Fable）**：以下情况必须：
-  - 碰到硬规则（配置隔离、信任、密钥、对外接口）；
-  - 复杂状态（编辑器坐标、队列、会话切换、MCP 连接生命周期）；
-  - 改动超过约 300 行；
-  - 初审和编码者对某条发现有分歧。
+- **初审**：每个任务合并前都要，由 mmp（opus）做。
+- **终审（Fable）**：只在大节点做（用户 2026-09-30 定），不逐个任务审。大节点指一个阶段的功能做完、准备验收的时候，例如"Pi 0.99 + MCP"、"/settings"这样一组任务全部合并后，或者工具版要跨大版本升级前。
+- **审查包**：主控在 `.dev/milestones/<名字>/pack.md` 里打包，交给 Fable：
 
-  其他小改动只要初审 + 主控看 diff。启用后的前 5 个任务 Fable 全部终审，用来校准初审的水平；之后按上面的条件。（这个数字是主控定的，可改。）
-- **质量记录**：`subagent-quality-log.md` 继续记，作者一栏写 `mmp-sonnet` / `mmp-opus`，另记初审漏掉、被 Fable 查出的问题数——这是判断初审能不能信任的依据。
+  | 内容 | 说明 |
+  |---|---|
+  | 目标和范围 | 这个阶段要做成什么，对应哪些设计文档章节和决策编号 |
+  | 提交范围 | `git log <上一个大节点>..<现在>`，每个任务的分支和合并提交 |
+  | 每个任务的材料 | `brief.md`、`report.md`、各轮 `review-N.md` 的路径，以及初审没解决的分歧 |
+  | 风险清单 | 主控标出碰到硬规则（配置隔离、信任、密钥、对外接口）和复杂状态的文件和函数，请 Fable 重点看 |
+  | 证据 | 完整测试的输出、模型可见快照的差异、Herdr 验收的步骤和画面 |
+  | 已知问题 | `docs/dogfood-issues.md` 里这个阶段新增、还没修的条目 |
+  | 要 Fable 回答的问题 | 主控拿不准的具体点 |
+
+  Fable 的结论照旧：可合并/不可合并、按严重程度排的发现（CONFIRMED / PLAUSIBLE、文件行号、复现）。不通过的发现拆成任务交回 mmp 修，修完主控再打一个小的补充包复查。
+- **质量记录**：`subagent-quality-log.md` 继续记，作者一栏写 `mmp-sonnet` / `mmp-opus`，另记"初审放过、被 Fable 在大节点查出"的问题数——这是判断初审能不能信任的依据。
 
 ## 6. mmp 自己的问题：记录和修复顺序
 
@@ -128,14 +136,22 @@ mmp 不是 Herdr 认识的 agent 类型，所以用 pane 命令（`pane run` / `
 
 | # | 事项 | 说明 |
 |---|---|---|
-| 1 | MMP 自己的 magpie 配置 | 现在 magpie 只接到了 Pi（`~/.pi/agent/models.json`），MMP 看不到。在 `~/.mmp/pi/models.json` 里写一份 magpie provider（地址 `http://127.0.0.1:3425/v1`，只列用到的模型）。这是复制一份，不是读 Pi 的配置；magpie 改了地址或 key 时要手动同步，失败会直接报错 |
+| 1 | MMP 自己的 magpie 配置 | **已完成（2026-09-30）**：`~/.mmp/extensions/magpie/index.mjs` 用 `pi.registerProvider` 注册 magpie，全局 Manifest `~/.mmp/mmp.json` 声明它。配置是从 magpie 接给 Pi 的那份手动复制来的，不读 Pi 的文件；magpie 改地址、key 或模型时手动改这个文件。`mmp -p` 实测 sonnet-5.5 和 opus-5.5 都能回复 |
 | 2 | 工具版 | 建 `mmp-tool` worktree，切到验收通过的提交，`npm install` + `npm run build` |
-| 3 | 项目 Manifest | 提交 `.mmp/mmp.json`（第 3 节），`.gitignore` 放开它、加上 `.dev/` |
-| 4 | 辅助脚本 | `scripts/dev/herdr.sh` |
+| 3 | 项目 Manifest | **已完成**：`.mmp/mmp.json`（第 3 节），`.gitignore` 放开它、忽略 `.dev/` |
+| 4 | 辅助脚本 | **已完成**：`scripts/dev/herdr.sh`（`startmmp` / `quitmmp` / `say` / `scr` / `waitreport`） |
 | 5 | Herdr tab | 新开 tab 和 pane，记进 `.dev/panes.json` |
 | 6 | 试运行 | 用一个小的待办任务（例如展开后思考内容的 markdown 渲染）完整走一遍，看交接、等待、审查哪里卡，调整本文后正式切换 |
 
-## 9. 还没解决的问题
+## 9. MMP 的扩展放在哪
+
+和 skills 一样与 Pi 分开，但扩展会执行代码，所以**不做自动发现**，只认 Manifest 声明：
+
+- 用户自己的扩展：放 `~/.mmp/extensions/<名字>/`，在 `~/.mmp/mmp.json` 的 `extensions` 里声明（magpie 就是这样）。
+- 项目的扩展：放项目 `.mmp/extensions/<名字>/`，在项目 `.mmp/mmp.json` 里声明，项目被信任才加载。
+- Pi 的扩展目录一律不读：`~/.pi/agent/extensions`、`~/.mmp/pi/extensions`、项目 `.pi/extensions`。Pi 自己的扩展发现是关掉的（`--no-extensions` / `noExtensions: true`），`test/ambient-isolation.test.mjs` 在这三处放了会留下标记的扩展，验证它们都不会加载。
+
+## 10. 还没解决的问题
 
 - mmp 没有权限系统，编码者和审查者都能执行任意 bash。靠 worktree 隔离、指令和事后 `git status` 检查兜底。
 - 等待完成靠 `wait-output` 匹配 `STATUS:`，模型忘了写就会一直等到超时；超时后主控读屏处理。
