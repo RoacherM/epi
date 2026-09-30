@@ -290,3 +290,86 @@ test("/import during compaction does not send the queued message into the outgoi
   assert.match(log, /gen0:go/);
   assert.match(log, /gen1:still alive/);
 });
+
+// Dogfood D15: an overflow ("prompt is too long") ends the run, then Pi -- still inside the same
+// prompt run, after agent_end -- starts a recovery compaction. When that compaction failed, the
+// status row kept showing "Compacting…" forever: compaction_end only cleared it when the session
+// was not streaming (it still was), and agent_settled never cleared it at all.
+const overflowTurn = [
+  ["waitReady"],
+  // "Worked for" is printed at agent_settled; a turn this fast may never redraw the footer.
+  ["type", "go"], ["key", "enter"], ["waitFor", { regex: "BEFORE-OVERFLOW[\\s\\S]*Worked for" }],
+  ["type", "again"], ["key", "enter"], ["waitFor", "Compacting…"],
+];
+// The last drawn frame, from the transcript's bottom edge down: the status row, editor and footer.
+const lastFrameOf = (screen) => screen.slice(screen.lastIndexOf("Worked for"));
+
+test("a failed overflow recovery leaves no Compacting… status once the run settles", (t) => {
+  const { marks, text: out } = runApp(t, [fixture("faux-overflow.mjs")], [
+    ...overflowTurn,
+    ["waitFor", "Context overflow recovery failed"],
+    ["waitFor", "Worked for"],
+    ["waitFor", "Ctrl+t:thinking", { timeoutMs: 3000 }],
+    ["wait", 300], ["mark", "settled"],
+    ["key", "ctrl+d"],
+  ], { ...KEEP_NO_RECENT, env: { MMP_FAUX_OVERFLOW_RECOVERY: "fail" } });
+  // The error lines stay; only the status row goes.
+  assert.match(out, /prompt is too long/);
+  assert.match(out, /Context overflow recovery failed: .*summary request rejected/);
+  const lastFrame = lastFrameOf(marks.settled);
+  assert.doesNotMatch(lastFrame, /Compacting…/);
+  assert.match(lastFrame, /Ctrl\+t:thinking/);
+});
+
+test("a successful overflow recovery goes back to the running status, then idle after the retry", (t) => {
+  const { marks, text: out } = runApp(t, [fixture("faux-overflow.mjs")], [
+    ...overflowTurn,
+    ["waitFor", { regex: "Context compacted\\.[\\s\\S]*Waiting for response…" }, { timeoutMs: 5000 }],
+    ["waitFor", "AFTER-RECOVERY"],
+    ["waitFor", "Worked for"],
+    ["waitFor", "Ctrl+t:thinking", { timeoutMs: 3000 }],
+    ["wait", 300], ["mark", "settled"],
+    ["key", "ctrl+d"],
+  ], KEEP_NO_RECENT);
+  assert.match(out, /Context compacted\./);
+  const lastFrame = lastFrameOf(marks.settled);
+  assert.doesNotMatch(lastFrame, /Compacting…|Waiting for response…/);
+  assert.match(lastFrame, /Ctrl\+t:thinking/);
+});
+
+test("a threshold compaction inside a running turn goes back to Waiting for response… when it ends", (t) => {
+  // Compact once the projected context passes 8K tokens: the first turn stays under that, the
+  // second prompt (~10K tokens of pasted text) goes over it, so Pi compacts before its request.
+  const settings = { compaction: { keepRecentTokens: 0, reserveTokens: 120_000 } };
+  const { marks, text: out } = runApp(t, [fixture("faux-threshold-compact.mjs")], [
+    ["waitReady"],
+    ["type", "go"], ["key", "enter"], ["waitFor", { regex: "BEFORE-COMPACT[\\s\\S]*Worked for" }],
+    ["paste", "word ".repeat(8000)], ["key", "enter"], ["waitFor", "Compacting…"],
+    ["waitFor", "Context compacted."], ["mark", "compacted"],
+    ["waitFor", { regex: "Context compacted\\.[\\s\\S]*Waiting for response…" }, { timeoutMs: 1000 }],
+    ["waitFor", "AFTER-COMPACT-REPLY"],
+    ["waitFor", "Worked for"],
+    ["waitFor", "Ctrl+t:thinking", { timeoutMs: 3000 }],
+    ["key", "ctrl+d"],
+  ], { settings });
+  assert.match(out, /AFTER-COMPACT-REPLY/);
+  assert.ok(marks.compacted);
+});
+
+test("a threshold compaction after the run's last reply leaves no Compacting… status once it ends", (t) => {
+  const settings = { compaction: { keepRecentTokens: 0, reserveTokens: 120_000 } };
+  const { marks, text: out } = runApp(t, [fixture("faux-threshold-compact.mjs")], [
+    ["waitReady"],
+    ["type", "go"], ["key", "enter"], ["waitFor", { regex: "BEFORE-COMPACT[\\s\\S]*Worked for" }],
+    ["paste", "word ".repeat(8000)], ["key", "enter"], ["waitFor", "Compacting…"],
+    ["waitFor", "Context compacted."],
+    ["waitFor", "Worked for"],
+    ["waitFor", "Ctrl+t:thinking", { timeoutMs: 3000 }],
+    ["wait", 300], ["mark", "settled"],
+    ["key", "ctrl+d"],
+  ], { settings, env: { MMP_FAUX_THRESHOLD_AFTER_RUN: "1" } });
+  assert.match(out, /AFTER-COMPACT-REPLY/);
+  const lastFrame = lastFrameOf(marks.settled);
+  assert.doesNotMatch(lastFrame, /Compacting…/);
+  assert.match(lastFrame, /Ctrl\+t:thinking/);
+});

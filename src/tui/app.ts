@@ -118,6 +118,10 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   let toolsExpanded = false;
   let thinkingExpanded = false;
   let turn: TurnState | undefined;
+  // Between agent_start and agent_end. Pi keeps session.isStreaming true for the whole prompt run,
+  // including the post-run recovery compactions and retry backoffs between one agent_end and the
+  // next agent_start, so isStreaming alone can't tell whether another request is on its way.
+  let inAgentLoop = false;
   let queued: QueuedMessagesState = { steering: [], followUp: [] };
   // Messages submitted while compaction is running (Pi's compactionQueuedMessages): session.prompt()
   // throws during compaction, so these are held here and sent once compaction_end fires.
@@ -345,6 +349,11 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     submit: (text, images) => submit(text, images),
     restoreQueuedMessagesToEditor: () => restoreQueuedMessagesToEditor(),
     isWorking: () => turn !== undefined,
+    clearTurnStatus: () => {
+      turn = undefined;
+      inAgentLoop = false;
+      tui.requestRender();
+    },
     toggleToolsExpanded: () => surface.setToolsExpanded(!toolsExpanded),
     toggleThinkingExpanded: () => {
       thinkingExpanded = !thinkingExpanded;
@@ -488,9 +497,11 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     switch (event.type) {
       case "agent_start":
         turn = { startedAt: now, phaseStartedAt: now, activity: "Waiting for response…", outputTokens: 0, estimated: false };
+        inAgentLoop = true;
         break;
       case "agent_end":
         turn = undefined;
+        inAgentLoop = false;
         workingMessage = undefined;
         break;
       case "queue_update":
@@ -525,7 +536,12 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
           : { ...turn, activity: "Compacting…", phaseStartedAt: now };
         break;
       case "compaction_end":
-        if (!session.isStreaming) turn = undefined;
+        // Pi's interactive mode clears its compaction indicator here unconditionally and shows the
+        // working one again on the next agent_start. MMP has one shared turn state, so: inside the
+        // agent loop (a threshold compaction before the next request) the request follows; after a
+        // successful overflow compaction the retry's agent_start follows; otherwise nothing does.
+        if (session.isStreaming && (inAgentLoop || event.willRetry)) setActivity("Waiting for response…");
+        else turn = undefined;
         // Pi flushes its compaction queue unconditionally here, whether compaction succeeded,
         // failed, or was aborted by Esc; a message typed while it ran still deserves sending.
         // Except: this same event also fires as a side effect of tearing down this very session for
@@ -540,7 +556,16 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
           : { ...turn, activity: `Retrying (${event.attempt}/${event.maxAttempts})…`, phaseStartedAt: now };
         break;
       case "auto_retry_end":
-        if (!session.isStreaming) turn = undefined;
+        // Inside the loop the retry's agent_start already replaced the Retrying… status; outside
+        // it (a cancelled backoff) no request follows.
+        if (!session.isStreaming || !inAgentLoop) turn = undefined;
+        break;
+      case "agent_settled":
+        // The prompt run is over: _runAgentPrompt's finally emits this after awaiting every
+        // recovery compaction and retry, so neither should still be running; if one somehow is,
+        // leave its status to its own compaction_end/auto_retry_end.
+        inAgentLoop = false;
+        if (!session.isCompacting && !session.isRetrying) turn = undefined;
         break;
       default:
         break;
@@ -553,6 +578,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     // Pi's renderCurrentSessionState (interactive-mode.js ~1615), called on every rebind: a message
     // queued during the outgoing session's compaction belongs to a session that no longer exists.
     compactionQueue = [];
+    inAgentLoop = false;
     branch = readGitBranch(session.sessionManager.getCwd());
     unsubscribe?.();
     unsubscribe = session.subscribe(onEvent);
