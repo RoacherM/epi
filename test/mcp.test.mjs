@@ -182,7 +182,8 @@ test("/mcp with zero configured servers shows MMP's own message, not Pi's", asyn
   assert.doesNotMatch(notices[0].message, /\.pi\/mcp\.json/, "leaked Pi's own path, not MMP's");
   // Dogfood D47: -l is offered only where the cwd has a project Manifest for it to go with.
   assert.match(notices[0].message, /`\.$/);
-  assert.doesNotMatch(notices[0].message, /-l/);
+  // Match the offer itself, not a bare "-l": the message contains a random mkdtemp path (B8 review F5).
+  assert.doesNotMatch(notices[0].message, /with -l to/);
   mkdirSync(join(root, ".mmp"), { recursive: true });
   writeJson(join(root, ".mmp", "mmp.json"), { version: 1 });
   await pi.commands.get("mcp").handler("", ctx);
