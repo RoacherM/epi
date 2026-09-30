@@ -666,11 +666,13 @@ const extensionFactories: InlineExtension[] = [
 }
 ```
 
+`skills[]` 的每一项在自动发现（7.1 节）时还会带一个 `discovered: "agents" | "mmp" | "project"` 字段；Manifest 声明的 Skill 没有这个字段。
+
 它必须能回答：
 
 - 实际链接的是哪个 Pi package 和版本；
 - MMP 是否会调用 SDK 而不是全局 binary；
-- 加载哪些 Rules、Skills 和 Extensions；
+- 加载哪些 Rules、Skills 和 Extensions，其中哪些 Skill 是自动发现的、来自哪个固定目录；
 - 每项来自 global 还是 project；
 - 项目配置是否被信任和读取；
 - 哪些 Extension 是 inline factory，哪些交给 Pi package resolver；

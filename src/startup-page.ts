@@ -206,7 +206,7 @@ function heroRows(
     theme.fg("text", options.modelName ?? options.modelId ?? "No model selected"),
     theme.fg("dim", modelMeta(identity, options)),
     "",
-    theme.fg("dim", "manifest-only · deterministic"),
+    theme.fg("dim", "manifest + fixed skill roots · deterministic"),
     "",
   ];
 }

@@ -97,7 +97,7 @@ MMP 自有、和 Pi 行为不同的参数：
 
 其余模型、Session、工具、输出参数（`--provider`、`--model`、`--thinking`、`-c/--continue`、`--session*`、`-p/--print`、`--mode`、`--list-models`、`--export`、`--offline`、`--verbose` 等）和 Pi 对齐，参数名和取值语义不变。`--verbose` 在交互界面里把启动信息（已加载的 Rules/Skills/Extensions 数量、当前模型、当前 Session）显示成对话区提示；非交互模式行为和 Pi 一致。`@file` 参数：文本文件原文内联进第一条消息，图片文件按路径提示（交互界面的首条消息没有二进制附件通道），文件不存在会报错退出。`--session-dir` 没给时依次看 `MMP_SESSION_DIR` 环境变量、`~/.mmp/pi/settings.json` 里的 `sessionDir`（和 Pi 的 `--session-dir`/`PI_CODING_AGENT_SESSION_DIR`/`sessionDir` 顺序一致，只是变量名换成 MMP 自己的——Pi 装置里设置的 `PI_CODING_AGENT_SESSION_DIR` 不会被读取，不会跟 MMP 共享）。
 
-以下参数**不提供**：`--use-theme`、`--tui-mode`（界面已经是 grok 风格的单一全屏主题，由 MMP 管理）；`--extension`/`-e`、`--skill`、`--prompt-template`、`--theme`、`--system-prompt`、`--append-system-prompt` 及其 `--no-*` 形式（Rules/Skills/Extensions 只能通过 Manifest 声明，直接传入会报错并提示改用 `mmp install`/编辑 Manifest）。
+以下参数**不提供**：`--use-theme`、`--tui-mode`（界面已经是 grok 风格的单一全屏主题，由 MMP 管理）；`--extension`/`-e`、`--skill`、`--prompt-template`、`--theme`、`--system-prompt`、`--append-system-prompt` 及其 `--no-*` 形式（Rules/Extensions 只能通过 Manifest 声明；Skills 除 Manifest 声明外还会从固定目录自动发现，见"Manifest"一节；这些 flag 都不提供，直接传入会报错并提示改用 `mmp install`/编辑 Manifest）。
 
 如需隔离配置，设置绝对路径：
 
