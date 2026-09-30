@@ -360,7 +360,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | `skill-commands` | MMP 接线 | 重建补全（`slashCompletions` 读它） |
 | `show-hardware-cursor` | MMP 接线 | `tui.setShowHardwareCursor`。没设置时是关，不看 `PI_HARDWARE_CURSOR`（主控 2026-10-01：MMP 不认用户 Pi 环境里的 `PI_*` 变量，同 `MMP_SESSION_DIR` 的先例）。Pi 的 `getShowHardwareCursor` 会回退到这个环境变量，所以界面和 `/settings` 都用 `settings-command.ts` 的 `showHardwareCursor()`（`getGlobalSettings().showHardwareCursor ?? false`） |
 | `autocomplete-max-visible` | MMP 接线 | `Editor.setAutocompleteMaxVisible` |
-| `terminal-progress` | MMP 接线（D31） | 同 Pi（`interactive-mode.js` 的 `handleEvent`、`stop()`）：打开时（默认关）每次 `turn_start`/`compaction_start` 调 `terminal.setProgress(true)`（OSC 9;4;3，pi-tui 每秒重发），`agent_end`/`compaction_end` 清掉；`app.ts` 的 `stopTui()` 也清，所以 `exit()`、崩溃、`fatal()` 这些退出路径都会清。和 Pi 一处不同：清除时不再看设置，回合中途关掉设置也不会留着进度 |
+| `terminal-progress` | MMP 接线（D31） | 同 Pi（`interactive-mode.js` 的 `handleEvent`、`stop()`）：打开时（默认关）每次 `turn_start`/`compaction_start` 调 `terminal.setProgress(true)`（OSC 9;4;3，pi-tui 每秒重发），`agent_end`/`compaction_end` 清掉；`app.ts` 的 `stopTui()` 也清，所以 `exit()`、崩溃、`fatal()` 这些退出路径都会清。和 Pi 两处不同：回合中途关掉设置会马上清掉进度（清除时也不再看设置）；TUI 停下后不再打开进度——退出时 `session_shutdown` 处理期间回合可能进到下一轮，Pi 会在这时重新打开，而 `session.dispose` 已丢掉监听、等不到 `agent_end`，进度会留在退出后的标签页上 |
 | `steering-mode`、`follow-up-mode` | Pi 核心 | `session.setSteeringMode`/`setFollowUpMode`。说明文字改了：MMP 里运行中 Enter 是 follow-up、Alt+Enter 是 steer（4.7 节），和 Pi 相反 |
 | `transport` | Pi 核心 | 写设置并改 `session.agent.transport`，同 Pi |
 | `http-idle-timeout` | MMP 接线 | 重跑 `services.ts` 的 `configureHttp`（Pi 的 `configureHttpDispatcher` 没导出） |

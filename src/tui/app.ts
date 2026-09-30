@@ -278,6 +278,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     tui.setWheelScrollLines(settings.getFullscreenWheelScrollLines());
     scroll.setScrollbar(settings.getFullscreenScrollbar());
     editor.setAutocompleteMaxVisible(settings.getAutocompleteMaxVisible());
+    if (!settings.getShowTerminalProgress()) clearTerminalProgress();
   }
 
   /** Pi's applyRuntimeSettings: on every bind(), /reload, and after a /settings change. Like Pi's,
@@ -447,11 +448,14 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   /** Pi's terminal progress (dogfood D31): with terminal-progress on (off by default), the tab bar
    * shows OSC 9;4 progress from each turn_start/compaction_start until agent_end/compaction_end,
    * and it is cleared when the TUI stops (interactive-mode.js handleEvent and stop()). Unlike Pi,
-   * clearing doesn't check the setting again, so turning it off mid-turn can't leave it on
-   * (ProcessTerminal.setProgress also re-sends it every second until cleared). */
+   * clearing doesn't check the setting again, and turning the setting off mid-turn clears it at
+   * once (applyUiSettings), so it can't stay on (ProcessTerminal.setProgress also re-sends it every
+   * second until cleared). Also unlike Pi, nothing sets it after the TUI stopped: session events
+   * keep arriving while session_shutdown handlers run, and a turn_start there would turn it back
+   * on with no agent_end to follow (session.dispose drops the listeners), leaving it on after exit. */
   let terminalProgress = false;
   function showTerminalProgress(): void {
-    if (!session.settingsManager.getShowTerminalProgress()) return;
+    if (tuiStopped || !session.settingsManager.getShowTerminalProgress()) return;
     terminalProgress = true;
     terminal.setProgress(true);
   }

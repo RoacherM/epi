@@ -585,43 +585,63 @@ test("MMP's items match Pi's SettingsSelectorComponent: same order, labels, desc
   }
 
   // D29: MMP's copy of Pi's model-thinking submenu draws what Pi's does at each step: the models
-  // (current first, saved levels beside them), a reasoning model's levels with the saved one ticked
-  // and "(clear override)", a non-reasoning model's "off", and the search box filtering the models.
+  // (current first, then the default model, saved levels beside them), a reasoning model's levels
+  // with the saved one ticked and "(clear override)", a non-reasoning model's "off", the search box
+  // filtering the models, and the loop back to the models after saving. No global default level is
+  // set, so "(clear override)" shows Pi's DEFAULT_THINKING_LEVEL (core/defaults.js, not exported;
+  // read by path here only) against MMP's copy.
   const { modelThinkingSubmenu } = await import("../dist/tui/model-thinking-submenu.js");
+  const { DEFAULT_THINKING_LEVEL } = await import(new URL("./core/defaults.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href);
   const model = (provider, id, reasoning) => ({ provider, id, name: id, reasoning, input: ["text"] });
   const models = [model("zeta", "plain-model", false), model("alpha", "reasoner", true), model("beta", "other", true)];
   const thinking = SettingsManager.inMemory();
   thinking.setModelThinkingLevel("alpha", "reasoner", "high");
-  const piSubmenu = new SettingsSelectorComponent({
-    ...config, availableDefaultModels: models, currentModel: models[1],
-    modelThinkingLevels: thinking.getAllModelThinkingLevels(),
-  }, noop);
-  for (const char of "Default thinking level per model") piSubmenu.getSettingsList().handleInput(char);
-  piSubmenu.getSettingsList().handleInput("\r");
-  const mmpSubmenu = modelThinkingSubmenu({
-    theme,
-    tui: { requestRender() {} },
-    session: () => ({ settingsManager: thinking, modelRuntime: { getAvailableSnapshot: () => models }, model: models[1] }),
-  }, () => {});
+  // The default model sorts last by provider, so only the default-model rule puts it second.
+  thinking.setDefaultModelAndProvider("zeta", "plain-model");
+  /** Pi's and MMP's submenus over the same settings, opened as Pi's showSettingsSelector does. */
+  const submenus = (currentModel) => {
+    const pi = new SettingsSelectorComponent({
+      ...config, availableDefaultModels: models, currentModel,
+      defaultModel: `${thinking.getDefaultProvider()}/${thinking.getDefaultModel()}`,
+      thinkingLevel: thinking.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+      modelThinkingLevels: thinking.getAllModelThinkingLevels(),
+    }, noop);
+    for (const char of "Default thinking level per model") pi.getSettingsList().handleInput(char);
+    pi.getSettingsList().handleInput("\r");
+    const mmp = modelThinkingSubmenu({
+      theme,
+      tui: { requestRender() {} },
+      session: () => ({ settingsManager: thinking, modelRuntime: { getAvailableSnapshot: () => models }, model: currentModel }),
+    }, () => {});
+    return { pi, mmp };
+  };
   // Pi's selector draws a border above and below whatever the list shows.
   const drawn = (component, border) => component.render(100).map((line) => strip(line).trimEnd()).slice(border ? 1 : 0, border ? -1 : undefined);
-  const same = (step) => assert.deepEqual(drawn(mmpSubmenu, false), drawn(piSubmenu, true), `model-thinking: ${step}`);
-  const both = (data) => {
-    piSubmenu.getSettingsList().handleInput(data);
-    mmpSubmenu.handleInput(data);
+  const same = ({ pi, mmp }, step) => assert.deepEqual(drawn(mmp, false), drawn(pi, true), `model-thinking: ${step}`);
+  const both = ({ pi, mmp }, data) => {
+    pi.getSettingsList().handleInput(data);
+    mmp.handleInput(data);
   };
-  same("models");
-  both("\r");
-  same("levels of the current model");
-  both("\x1b");
-  same("back to the models");
-  both(DOWN);
-  both(DOWN);
-  both("\r");
-  same("levels of a model without reasoning");
-  both("\x1b");
-  for (const char of "oth") both(char);
-  same("models filtered by the search box");
-  both("\r");
-  same("levels of a searched model");
+
+  // No current model: the default model comes first and is preselected.
+  same(submenus(undefined), "models with no current model");
+
+  const menus = submenus(models[1]);
+  same(menus, "models");
+  both(menus, "\r");
+  same(menus, "levels of the current model");
+  both(menus, "\x1b");
+  same(menus, "back to the models");
+  both(menus, DOWN);
+  both(menus, "\r");
+  same(menus, "levels of a model without reasoning");
+  both(menus, "\x1b");
+  for (const char of "oth") both(menus, char);
+  same(menus, "models filtered by the search box");
+  both(menus, "\r");
+  same(menus, "levels of a searched model");
+  both(menus, DOWN);
+  both(menus, "\r");
+  same(menus, "back to the models after saving a level");
+  assert.equal(thinking.getAllModelThinkingLevels()["beta/other"], "minimal", "MMP's submenu saved the level");
 });

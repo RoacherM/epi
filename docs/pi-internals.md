@@ -58,6 +58,10 @@ reach-in covered by this table. `settings-command.ts` (the /settings item list a
 copy, but already has its own drift check: `test/tui-settings.test.mjs` compares it against Pi's real
 `SettingsSelectorComponent` through that component's public input and render only, including
 Pi's label for each copied idle-timeout value in milliseconds.
+`src/tui/model-thinking-submenu.ts` (a copy of Pi's per-model thinking submenu and its
+`DEFAULT_THINKING_LEVEL`/`THINKING_DESCRIPTIONS`) is checked by the same test against Pi's real
+submenu; to pin the default level it reads Pi's `core/defaults.js` by path (test only, so a move
+fails that test, never an `mmp` run).
 
 `src/tui/chrome.ts`'s `(this.editor as unknown as { focused?: boolean })` cast is *not* a Pi
 internal either: pi-tui's `Editor.focused` is a public field (`components/editor.d.ts`); the cast is

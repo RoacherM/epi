@@ -71,6 +71,30 @@ test("terminal-progress on: quitting mid-turn clears it", (t) => {
   assert.equal(progress.at(-1), "off");
 });
 
+// Review F1-1: session events keep arriving while session_shutdown handlers run after the TUI
+// stopped. A turn_start there (the tool finished) must not turn it back on: session.dispose drops
+// the listeners, so no agent_end would clear it and the tab would keep it after exit.
+test("terminal-progress on: a turn starting during shutdown doesn't turn it back on", (t) => {
+  const { progress } = run(t, [
+    ["waitReady"], ["type", "go"], ["key", "enter"], ["wait", 400], ["key", "ctrl+d"],
+  ], { extension: "faux-shutdown-mid-tool.mjs", settings: ENABLED });
+  assert.deepEqual(progress, ["on", "off"]);
+});
+
+test("terminal-progress turned off in /settings mid-turn clears it at once", (t) => {
+  const { marks, progress } = run(t, [
+    ["waitReady"], ["type", "go"], ["key", "enter"], ["waitFor", "SLOW-START"], ["rawMark", "during"],
+    ["type", "/settings"], ["key", "enter"], ["waitFor", "Type to search"],
+    ["type", "Terminal progress"], ["wait", 50], ["key", "enter"], ["wait", 100], ["rawMark", "toggled"],
+    ["key", "esc"], ["wait", 100], ["mark", "screen"],
+    ...quit,
+  ], { extension: "faux-slow.mjs", settings: ENABLED });
+  assert.equal(lastProgress(marks.during), "on");
+  assert.equal(lastProgress(marks.toggled), "off");
+  assert.ok(!marks.screen.includes("SLOW-END"), "the turn was still running");
+  assert.deepEqual(progress, ["on", "off"]);
+});
+
 test("terminal-progress on: /compact shows it until compaction ends", (t) => {
   const { marks, progress } = run(t, [
     ["waitReady"], ["type", "go"], ["key", "enter"], ["waitFor", { regex: "BEFORE-COMPACT[\\s\\S]*Ctrl\\+t:thinking" }],

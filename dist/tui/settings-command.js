@@ -114,7 +114,8 @@ export function settingsItems(host) {
         },
         {
             // D31: app.ts reads it at every turn_start/compaction_start, like Pi, so it takes effect on
-            // the next turn.
+            // the next turn. Turning it off clears a running turn's progress at once (applySettings),
+            // which Pi doesn't do.
             item: {
                 id: "terminal-progress",
                 label: "Terminal progress",
@@ -122,7 +123,10 @@ export function settingsItems(host) {
                 currentValue: bool(settings.getShowTerminalProgress()),
                 values: ["true", "false"],
             },
-            apply: (value) => settings.setShowTerminalProgress(value === "true"),
+            apply: (value) => {
+                settings.setShowTerminalProgress(value === "true");
+                host.applySettings();
+            },
         },
         {
             item: {
