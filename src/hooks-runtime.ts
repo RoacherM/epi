@@ -135,6 +135,20 @@ function httpUrlLabel(declaredUrl: string): string {
   }
 }
 
+/** fetch's own error text can quote the request URL (undici does, e.g. for a URL with
+ * credentials), and `handler.url` is the `${ENV}`-expanded one -- replace it, in the form written
+ * and the form `new URL()` normalizes it to, with the declared, trimmed label. The original error
+ * is not kept as `cause`, since that would carry the secret along. */
+function redactExpandedUrl(
+  message: string,
+  handler: Extract<HookHandler, { type: "http" }>,
+): string {
+  const label = httpUrlLabel(handler.declaredUrl);
+  return message
+    .replaceAll(handler.url, label)
+    .replaceAll(new URL(handler.url).href, label);
+}
+
 /** Names which handler failed, for the wrapped error `run()` throws (naming the hook is the point
  * of "failures must show" -- a bare "hook command could not be started" doesn't say which hook).
  * Never includes headers or a request/response body -- only enough to identify the handler. */
@@ -143,7 +157,7 @@ function handlerLabel(handler: HookHandler): string {
     case "command":
       return `command ${handler.command}`;
     case "http":
-      return `http ${handler.method} ${httpUrlLabel(handler.declaredUrl ?? handler.url)}`;
+      return `http ${handler.method} ${httpUrlLabel(handler.declaredUrl)}`;
     case "prompt":
       return `prompt${handler.model === undefined ? "" : ` (${handler.model})`}`;
     case "agent":
@@ -484,10 +498,17 @@ export class HooksRuntime {
     // -- not the decision channel (stdout is). The real error is usually the last thing a failing
     // command prints, so keeping only the earliest bytes would drop it behind any earlier output.
     let stderrTail = Buffer.alloc(0);
+    // After a cut, the tail may start inside a multi-byte UTF-8 character; skip its leftover
+    // continuation bytes (0b10xxxxxx, at most 3) so the message doesn't start with U+FFFD.
+    let stderrTailCutBytes = 0;
     child.stderr.on("data", (chunk: Buffer) => {
       stderrTail = Buffer.concat([stderrTail, chunk]);
       if (stderrTail.byteLength > MAX_HOOK_ERROR_TAIL_BYTES) {
         stderrTail = stderrTail.subarray(stderrTail.byteLength - MAX_HOOK_ERROR_TAIL_BYTES);
+        stderrTailCutBytes = 0;
+        while (stderrTailCutBytes < 3 && ((stderrTail[stderrTailCutBytes] ?? 0) & 0xc0) === 0x80) {
+          stderrTailCutBytes += 1;
+        }
       }
     });
     child.once("error", (error) => {
@@ -513,7 +534,7 @@ export class HooksRuntime {
         );
       }
       if (result.code !== 0) {
-        const tail = stderrTail.toString("utf8").trim();
+        const tail = stderrTail.subarray(stderrTailCutBytes).toString("utf8").trim();
         throw new Error(
           tail.length > 0
             ? `hook command exited with code ${result.code}: ${handler.command}: ${tail}`
@@ -542,12 +563,17 @@ export class HooksRuntime {
     if (body !== undefined && !headers.has("content-type")) {
       headers.set("content-type", "application/json");
     }
-    const response = await fetch(handler.url, {
-      method: handler.method,
-      headers,
-      ...(body === undefined ? {} : { body }),
-      signal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(handler.url, {
+        method: handler.method,
+        headers,
+        ...(body === undefined ? {} : { body }),
+        signal,
+      });
+    } catch (error) {
+      throw new Error(redactExpandedUrl(errorMessage(error), handler));
+    }
     if (!response.ok) {
       await response.body?.cancel();
       throw new Error(`hook HTTP handler returned status ${response.status}`);

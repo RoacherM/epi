@@ -260,3 +260,52 @@ test("MMP's own <MMP_HOME>/skills symlinked into MMP's own Pi data dir is reject
   assert.equal(result.status, 2, `expected a config-error exit, got:\n${result.stdout}${result.stderr}`);
   assert.match(result.stderr, /inside Pi's own data/);
 });
+
+// A root that CONTAINS Pi's data is as bad as one inside it: Pi's skill loader recurses into
+// subdirectories, so `.mmp/skills -> <mmpHome>` would reach <mmpHome>/pi/skills.
+function rejectedDryRun(f, args) {
+  const result = spawnSync(process.execPath, [cliPath, ...args, "--dry-run"], {
+    cwd: f.project,
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_OFFLINE: "1" },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(result.status, 2, `expected a config-error exit, got:\n${result.stdout}${result.stderr}`);
+  assert.equal(result.stdout, "");
+  return result.stderr;
+}
+
+test("a trusted project's .mmp/skills symlinked to <MMP_HOME> (an ancestor of Pi's data dir) is rejected", (t) => {
+  const f = fixture(t);
+  writeGlobalManifest(f);
+  mkdirSync(join(f.project, ".mmp"), { recursive: true });
+  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
+  plantSkill(join(f.mmpHome, "pi", "skills"), "mmp-pi-data-skill");
+  symlinkSync(f.mmpHome, join(f.project, ".mmp", "skills"));
+
+  const stderr = rejectedDryRun(f, ["--approve"]);
+  assert.match(stderr, /\.mmp[\\/]skills: resolves to /);
+  assert.match(stderr, /which contains Pi's own data at .*[\\/]\.mmp[\\/]pi/);
+});
+
+test("~/.agents/skills symlinked to HOME (an ancestor of ~/.pi and <MMP_HOME>/pi) is rejected", (t) => {
+  const f = fixture(t);
+  writeGlobalManifest(f);
+  // No ~/.pi and no <MMP_HOME>/pi on disk: the check is path-based, not existence-based.
+  mkdirSync(join(f.home, ".agents"), { recursive: true });
+  symlinkSync(f.home, join(f.home, ".agents", "skills"));
+
+  const stderr = rejectedDryRun(f, ["--no-project"]);
+  assert.match(stderr, /\.agents[\\/]skills: resolves to /);
+  assert.match(stderr, /which contains Pi's own data at .*[\\/](\.pi|\.mmp[\\/]pi)\b/);
+});
+
+test("MMP's own <MMP_HOME>/skills symlinked to HOME is rejected", (t) => {
+  const f = fixture(t);
+  writeGlobalManifest(f);
+  mkdirSync(join(f.mmpHome, "pi"), { recursive: true });
+  symlinkSync(f.home, join(f.mmpHome, "skills"));
+
+  const stderr = rejectedDryRun(f, ["--no-project"]);
+  assert.match(stderr, /which contains Pi's own data at /);
+});

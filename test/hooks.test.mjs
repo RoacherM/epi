@@ -282,6 +282,7 @@ test("HTTP hook handlers receive rendered JSON templates", async (t) => {
       type: "http",
       method: "POST",
       url: `http://127.0.0.1:${address.port}/hook`,
+      declaredUrl: `http://127.0.0.1:${address.port}/hook`,
       body: {
         tool: "{{event.toolName}}",
         event: "{{event}}",
@@ -614,6 +615,33 @@ test("the stderr tail keeps the END of a long failure, not the start", async (t)
   await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
 });
 
+// The 4 KiB tail cut can land inside a multi-byte UTF-8 character; its leftover continuation
+// bytes must not decode to a leading U+FFFD. 6000 bytes of "中" (3 bytes each) + 12-byte trailer
+// = 6012, so the cut lands 1 byte before a character boundary; one extra leading "x" makes it 2.
+for (const prefix of ["", "x"]) {
+  test(`the stderr tail drops a character split by the cut (prefix ${JSON.stringify(prefix)})`, async (t) => {
+    const root = createFixture(t);
+    const failingScript = join(root, "fail-multibyte.mjs");
+    writeFileSync(
+      failingScript,
+      `process.stderr.write(${JSON.stringify(prefix)} + "中".repeat(2000) + "\\nREAL ERROR\\n"); process.exit(1);\n`,
+    );
+    const runtime = createRuntime(t, root, [hook("tool_call", [
+      { type: "command", command: process.execPath, args: [failingScript], timeoutMs: 5000 },
+    ])]);
+
+    await assert.rejects(
+      runtime.run({ type: "tool_call", cwd: root, toolName: "bash", input: {} }, createContext(root)),
+      (error) => {
+        assert.match(error.message, /REAL ERROR/);
+        assert.ok(!error.message.includes("\uFFFD"), `tail starts with U+FFFD: ${error.message.slice(0, 200)}`);
+        assert.ok(error.message.includes(`${process.execPath}: 中中`), error.message.slice(0, 200));
+        return true;
+      },
+    );
+  });
+}
+
 // Regression: an http hook's failure message used to print handler.url, which hooks-config.ts's
 // resolveHandler had already expanded ${ENV} placeholders into -- a secret in the URL (a query
 // token, most commonly) reached the model (tool_call block reason, saved in the session),
@@ -661,6 +689,93 @@ test("an http hook failure never repeats a secret from an ${ENV}-expanded URL", 
   }
   await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
 });
+
+// fetch (undici) always rejects a URL with user:password@ and quotes the whole expanded URL in its
+// error, so a credentials URL can never work and would only leak the secret: refuse it at load.
+test("hook config rejects an http URL with credentials without repeating them", (t) => {
+  const root = createFixture(t);
+  const configPath = join(root, "hooks.json");
+  for (const url of [
+    "http://user:${HOOK_SECRET}@127.0.0.1:9/hook",
+    "http://${HOOK_SECRET}@127.0.0.1:9/hook",
+  ]) {
+    writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      hooks: [{ event: "tool_call", handlers: [{ type: "http", url }] }],
+    }));
+    assert.throws(
+      () => loadHooksConfig(configPath, "global", { HOOK_SECRET: "sk-live-SUPERSECRET" }),
+      (error) => {
+        assert.equal(error.name, "MmpConfigError");
+        assert.match(error.message, /hooks handler 0\.url must not contain credentials/);
+        assert.doesNotMatch(error.message, /SUPERSECRET/);
+        assert.ok(!error.message.includes("${HOOK_SECRET}"), error.message);
+        return true;
+      },
+    );
+  }
+});
+
+// Defense in depth for the load-time check above: if fetch's own error text quotes the expanded
+// URL (raw, as undici does, or normalized by new URL()), the failure message must replace it with
+// the declared, trimmed label. The handlers are built directly because loadHooksConfig would
+// already refuse them.
+for (const [name, url, stubFetch] of [
+  ["undici's own credentials error (raw URL)", "http://user:sk-live-SUPERSECRET@127.0.0.1:9/hook", false],
+  ["a fetch error quoting the normalized URL", "http://127.0.0.1:9/a/../hook?token=sk-live-SUPERSECRET", true],
+]) {
+  test(`an http hook's fetch error never repeats the expanded URL: ${name}`, async (t) => {
+    const root = createFixture(t);
+    if (stubFetch) {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (input) => {
+        throw new TypeError(`fetch failed for ${new URL(input).href}`);
+      };
+      t.after(() => { globalThis.fetch = originalFetch; });
+    }
+    const declaredUrl = url.replace("sk-live-SUPERSECRET", "${HOOK_SECRET}");
+    const hooks = [hook("tool_call", [{
+      type: "http",
+      method: "POST",
+      url,
+      declaredUrl,
+      timeoutMs: 1000,
+    }])];
+
+    const runtime = createRuntime(t, root, hooks);
+    await assert.rejects(
+      runtime.run({ type: "tool_call", cwd: root, toolName: "bash", input: {} }, createContext(root)),
+      (error) => {
+        assert.match(error.message, /http POST http:\/\/127\.0\.0\.1:9\//);
+        assert.doesNotMatch(error.message, /SUPERSECRET/, `runtime error leaked the secret: ${error.message}`);
+        return true;
+      },
+    );
+
+    const handlers = new Map();
+    const inline = createHooksInlineExtension({
+      hooks,
+      mmpHome: root,
+      agentDir: join(root, "pi"),
+      projectAgentsDir: undefined,
+      workerPath: fakeWorker,
+    });
+    await inline.factory(fakePiWithBus(handlers));
+    const notifications = [];
+    const context = createContext(root, {
+      ui: { notify(message) { notifications.push(message); } },
+    });
+    const { result, stderr } = await withCapturedStderr(() => handlers.get("tool_call")(
+      { type: "tool_call", toolCallId: "call-1", toolName: "bash", input: {} },
+      context,
+    ));
+    assert.equal(result.block, true);
+    for (const output of [result.reason, stderr(), ...notifications]) {
+      assert.doesNotMatch(output, /SUPERSECRET/, `hook failure output leaked the secret: ${output}`);
+    }
+    await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
+  });
+}
 
 // session_start, session_before_compact, and session_shutdown share notifyFailure with user_prompt
 // (hooks.ts) -- one fixed function, one test proving the stderr fallback covers all of them.

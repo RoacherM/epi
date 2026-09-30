@@ -79,9 +79,14 @@ declare const hookSchema: z.ZodObject<{
 type MatchScalar = z.infer<typeof matchScalarSchema>;
 export type HookMatchValue = MatchScalar | MatchScalar[];
 export type HookEventName = z.infer<typeof hookSchema>["event"];
-export type HookHandler = z.infer<typeof handlerSchema> & {
-    declaredUrl?: string;
-};
+type DeclaredHookHandler = z.infer<typeof handlerSchema>;
+export type HookHandler = Exclude<DeclaredHookHandler, {
+    type: "http";
+}> | (Extract<DeclaredHookHandler, {
+    type: "http";
+}> & {
+    declaredUrl: string;
+});
 export interface ResolvedHook {
     event: HookEventName;
     match?: Record<string, HookMatchValue>;

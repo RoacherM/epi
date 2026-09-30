@@ -3,7 +3,7 @@
 // data dir <MMP_HOME>/pi/skills, a project's .pi/skills) and never a project's .agents/skills
 // (not a location the user chose for MMP). A missing directory is skipped, not an error.
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { join, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 
 import { MmpConfigError } from "./errors.js";
 import type { DiscoveredSkillProvenance, ResolvedResource } from "./manifest.js";
@@ -14,8 +14,9 @@ export interface DiscoverSkillRootsOptions {
    * honored instead of the real `os.homedir()` so tests never touch the real user's home. */
   environment: NodeJS.ProcessEnv;
   mmpHome: string;
-  /** MMP's own Pi data dir (`<mmpHome>/pi`) -- a discovered root resolving inside it (e.g. a
-   * project's `.mmp/skills` symlinked to it) is rejected, not silently skipped. */
+  /** MMP's own Pi data dir (`<mmpHome>/pi`) -- a discovered root resolving inside it or to one of
+   * its ancestors (e.g. a project's `.mmp/skills` symlinked to it or to `<mmpHome>`) is rejected,
+   * not silently skipped. */
   agentDir: string;
   /** The trusted project's root (ProjectManifestState.root), or undefined when there is no
    * trusted project for this run -- the same gate `.mmp/mmp.json` itself uses. */
@@ -36,6 +37,23 @@ function canonicalDirectory(dir: string): string | undefined {
   }
 }
 
+/** Canonical form of `path` even when it doesn't exist yet: realpath of the deepest existing
+ * ancestor plus the rest. On macOS /tmp and /var are symlinks into /private, so comparing a
+ * realpath'd candidate against a literal path would miss a match. */
+function canonicalPath(path: string): string {
+  const suffix: string[] = [];
+  let current = resolve(path);
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) {
+      return resolve(path);
+    }
+    suffix.unshift(basename(current));
+    current = parent;
+  }
+  return join(realpathSync(current), ...suffix);
+}
+
 interface DiscoveryCandidate {
   dir: string;
   provenance: DiscoveredSkillProvenance;
@@ -53,17 +71,27 @@ function hasPiPathSegment(canonicalPath: string): boolean {
 }
 
 /** Hard rule 1 (AGENTS.md): MMP never reads Pi's own state, even through a symlink a project or
- * ~/.agents/skills happens to contain -- a project's `.mmp/skills -> <MMP_HOME>/pi/skills` (or any
- * path resolving under MMP's own Pi data dir or containing a `.pi` segment) is rejected outright,
- * the same way an invalid Manifest path fails, not silently skipped like a merely-missing directory. */
+ * ~/.agents/skills happens to contain. Rejected outright (the same way an invalid Manifest path
+ * fails, not silently skipped like a merely-missing directory):
+ * - a root inside Pi's data: under MMP's own Pi data dir, or containing a `.pi` segment
+ *   (e.g. a project's `.mmp/skills -> <MMP_HOME>/pi/skills`);
+ * - a root that contains Pi's data: an ancestor of MMP's Pi data dir or of `~/.pi`
+ *   (e.g. `.mmp/skills -> <MMP_HOME>` or `~/.agents/skills -> ~`), since Pi's skill loader
+ *   recurses into subdirectories. `piDataDirs` are canonical (see canonicalPath). */
 function assertNotPiPath(
   declaredDir: string,
   canonical: string,
-  agentDir: string,
+  piDataDirs: readonly string[],
 ): void {
-  if (isUnderOrEqual(canonical, agentDir) || hasPiPathSegment(canonical)) {
+  if (piDataDirs.some((dir) => isUnderOrEqual(canonical, dir)) || hasPiPathSegment(canonical)) {
     throw new MmpConfigError(
       `${declaredDir}: resolves to ${canonical}, inside Pi's own data -- MMP never auto-discovers skills there, even via a symlink`,
+    );
+  }
+  const contained = piDataDirs.find((dir) => isUnderOrEqual(dir, canonical));
+  if (contained !== undefined) {
+    throw new MmpConfigError(
+      `${declaredDir}: resolves to ${canonical}, which contains Pi's own data at ${contained} -- MMP never auto-discovers skills there, even via a symlink`,
     );
   }
 }
@@ -71,19 +99,21 @@ function assertNotPiPath(
 export function discoverSkillRoots(
   options: DiscoverSkillRootsOptions,
 ): ResolvedResource[] {
+  const home = resolveHomeDir(options.environment);
   const candidates: DiscoveryCandidate[] = [
-    { dir: join(resolveHomeDir(options.environment), ".agents", "skills"), provenance: "agents", source: "global" },
+    { dir: join(home, ".agents", "skills"), provenance: "agents", source: "global" },
     { dir: join(options.mmpHome, "skills"), provenance: "mmp", source: "global" },
     ...(options.trustedProjectRoot === undefined
       ? []
       : [{ dir: join(options.trustedProjectRoot, ".mmp", "skills"), provenance: "project" as const, source: "project" as const }]),
   ];
-  // Canonicalize once, the same way every candidate already is below -- comparing a realpath'd
-  // candidate against a non-realpath'd agentDir would miss the match on macOS, where /tmp and /var
-  // are themselves symlinks into /private (a candidate under <agentDir>/skills would realpath to
-  // /private/var/... while a literal agentDir stays /var/...). Falls back to the literal path when
-  // agentDir doesn't exist yet (a fresh MMP_HOME) -- nothing can have realpath'd underneath it then.
-  const canonicalAgentDir = canonicalDirectory(options.agentDir) ?? options.agentDir;
+  // Canonicalized the same way every candidate is below. ~/.pi is listed in both its path-wise
+  // form (what a recursive walk from an ancestor reaches) and its realpath (if it is a symlink).
+  const piDataDirs = [
+    canonicalPath(options.agentDir),
+    join(canonicalPath(home), ".pi"),
+    canonicalPath(join(home, ".pi")),
+  ];
 
   const roots: ResolvedResource[] = [];
   for (const candidate of candidates) {
@@ -91,7 +121,7 @@ export function discoverSkillRoots(
     if (canonical === undefined) {
       continue;
     }
-    assertNotPiPath(candidate.dir, canonical, canonicalAgentDir);
+    assertNotPiPath(candidate.dir, canonical, piDataDirs);
     roots.push({
       kind: "skill",
       value: canonical,
