@@ -32,9 +32,9 @@
 | D26 | P3 | `mmp:hooks` 的 `user_prompt` 钩子拦下一轮时，界面上可能看不到拦截原因（旧待办的简记，细节没留下；钩子启动失败的情况已按"失败要可见"修过） | 写一个返回 block 的 `user_prompt` 钩子，发一句话 | 已修（合并 B2：复现确认 TUI 和 `-p` 都完全没有提示；现在 TUI 显示拦截原因，`-p`/json 写到 stderr） |
 | D27 | P3 | 用退格删掉图片标签后按 Ctrl+-（撤销），标签一个字符一个字符地回来（约 10 次才恢复完整）：删标签时的每次模拟退格各是 Pi 的一个撤销快照（D18 worker 发现，D18 之前就有） | `see foo `，Ctrl+V，退格，Ctrl+- | 已修（合并 B2：删标签时的模拟按键不再各留撤销快照，一次 Ctrl+- 恢复整个标签） |
 | D28 | P3 | kitty 协议下 Shift+退格（`\x1b[127;2u`）只删掉标签的 `]`，不会整个删掉：`shift+backspace` 不在 `DELETE_ACTIONS` 里（D18 worker 发现，初审未复现，真实终端未确认） | Ghostty 里贴图后按 Shift+退格 | 待确认 |
-| D29 | P3 | `/settings` 里没有 Pi 的"每个模型的默认思考档位"（model-thinking 子菜单）：D21 先不做，现有 `/thinking` 和 Shift+Tab 只改当前模型 | 对照 Pi 的 `/settings` | 待排期 |
-| D30 | P3 | 空输入框按两次 Esc 没有动作；Pi 可以设成打开 `/tree` 或 `/fork`（double-escape-action），D21 里隐藏了这个设置项 | 空输入框按 Esc Esc | 待排期 |
-| D31 | P3 | 没有终端标签栏进度提示（Pi 的 terminal-progress，OSC 9;4），D21 里隐藏了这个设置项 | 在支持 OSC 9;4 的终端里跑一个长回合 | 待排期 |
+| D29 | P3 | `/settings` 里没有 Pi 的"每个模型的默认思考档位"（model-thinking 子菜单）：D21 先不做，现有 `/thinking` 和 Shift+Tab 只改当前模型 | 对照 Pi 的 `/settings` | 已修（合并 F1：/settings 里每个模型的默认思考档位子菜单，照 Pi） |
+| D30 | P3 | 空输入框按两次 Esc 没有动作；Pi 可以设成打开 `/tree` 或 `/fork`（double-escape-action），D21 里隐藏了这个设置项 | 空输入框按 Esc Esc | 已修（合并 F1：空输入框 Esc Esc 按设置打开 /tree 或 /fork，默认 tree，运行中 Esc 仍先停止） |
+| D31 | P3 | 没有终端标签栏进度提示（Pi 的 terminal-progress，OSC 9;4），D21 里隐藏了这个设置项 | 在支持 OSC 9;4 的终端里跑一个长回合 | 已修（合并 F1：OSC 9;4 进度，默认关，所有退出路径都清掉） |
 | D32 | P3 | D10 复审的小问题：`test/pi-internals.test.mjs` 的 osc133 检查用固定 40ms 等待画面（机器忙时可能偶发失败）；测试辅助会去掉 OSC 序列，所以没有应用层测试能发现 OSC 133 标记漏到终端上（只靠跳转测试间接发现） | D10 的 review-1.md 第 1、2 条 | 待修 |
 | D33 | P3 | D13 复审的小问题：A6 测试（扩展 ctx.abort）改成只查最终屏幕后，丢了"恢复后排队提示不再出现"这项检查；`waitGone` 和 `waitFor {screen:true}` 的正则写法还没有测试用到 | D13 的 review-1.md 第 2、3 条 | 待修 |
 | D34 | P3 | Ctrl+X 只复制最后一条回答；Pi 会先复制当前选中的文字（interactive-mode.js ~5367），关掉"选中即复制"后就没有办法复制选区（D21 worker 发现） | `/settings` 关掉 Copy on select，拖选一段文字，按 Ctrl+X | 已修（合并 D34：照 Pi 的 `handleCopyCommand`，"选中即复制"关掉时 Ctrl+X 复制选区） |
