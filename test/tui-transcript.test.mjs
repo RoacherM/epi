@@ -463,6 +463,33 @@ test("an extension's markdown transformer is applied to thinking text", () => {
   assert.match(rendered, /TRANSFORMED-REASONING/, "the transformer's output must actually be what's shown");
 });
 
+// Pi hands the whole message's isStreaming to the thinking transformers, so an earlier, already
+// expanded thinking run of a message that is still streaming its answer gets `true`.
+test("expanded thinking's transformers get the message's streaming state, like Pi", () => {
+  let calls = [];
+  const transformer = (markdown, context) => {
+    if (context.messageType === "assistant-thinking") calls.push(context.isStreaming);
+    return markdown;
+  };
+  const session = { ...stubSession(), extensionRunner: { getMarkdownTransformers: () => [transformer] } };
+  const transcript = new Transcript(stubTui(), theme, session);
+  transcript.setThinkingExpanded(true);
+  const message = assistantMessage([{ type: "thinking", thinking: "early" }, { type: "text", text: "streaming ans" }]);
+  transcript.handle({ type: "message_start", message });
+  transcript.handle({
+    type: "message_update",
+    message,
+    assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "ans", partial: message },
+  });
+  const streaming = stripAnsi(transcript.root.render(80).join("\n"));
+  assert.match(streaming, /Thought[\s\S]*early/, `the earlier run must be expanded:\n${streaming}`);
+  assert.deepEqual([...new Set(calls)], [true], "while the message streams");
+  calls = [];
+  transcript.handle({ type: "message_end", message });
+  transcript.root.render(80);
+  assert.deepEqual([...new Set(calls)], [false], "after message_end");
+});
+
 // Regression: AssistantBlock.render() draws its inner container at a narrower `innerWidth` (room for
 // the clock) but handleMouse() forwarded the click's original, wider `event.width` unchanged --
 // pi-tui's Container only reuses its cached row heights when the width matches exactly, so it
