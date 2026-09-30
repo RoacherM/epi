@@ -31,10 +31,10 @@
 | 2026-09-30 | U1 | Pi 内核升级用做法 B：版本仍然锁死，升级过程自动化（定时任务发现新版本后自动升级三个 Pi 包和 adapter、跑离线兼容性门禁） | 用户同意推荐方案；做法 A（放宽版本范围）在 Pi 还是 0.x 阶段风险太高，做法 C（运行时用本机装的 Pi）有同样的可复现性问题 | A. 放宽版本范围；C. 运行时用本机装的 Pi | 已定 | pi-upgrade-design 第 1 节 |
 | 2026-09-30 | U2 | 门禁通过、模型可见内容也没变时，先开 PR 由你合并，合并后发布脚本自动跑；稳定一段时间后再考虑全自动 | 用户同意推荐方案 | 门禁通过即自动合并并发布 | 已定 | pi-upgrade-design 第 7 节 |
 | 2026-09-30 | U3 | 新建 GitHub Actions（每日定时任务 + PR 检查），门禁全部离线，不需要 secrets | 用户同意推荐方案 | 不建 CI，继续手工升级 | 已定 | pi-upgrade-design 第 7 节 |
-| 2026-09-30 | P1 | Pi 内核升级到 0.99（本地试跑是从 0.87.1 升到 0.99.1）；门禁失败的地方全部修好再合并 | 用户决定：0.99 内置 MCP 是优势 | 停在 0.87 | 已定 | pi-upgrade-design 第 9 节 |
-| 2026-09-30 | MCP1 | 改用 Pi 0.99 的原生 MCP，去掉 pi-mcp-adapter；配置仍是 `~/.mmp/mcp.json` 和被信任项目的 `.mmp/mcp.json`，由 MMP 用 `pi.registerMcpServer()` 交给 Pi，不读 Pi 自己的 `mcp.json`；管理功能对齐 Pi：`mmp mcp …` 子命令和界面里的 `/mcp` | 用户同意推荐方案 | 继续用 pi-mcp-adapter；直接读 Pi 的 mcp.json | 已定（具体接法等调研结果再细化） | — |
+| 2026-09-30 | P1 | Pi 内核升级到 0.99（本地试跑是从 0.87.1 升到 0.99.1）；门禁失败的地方全部修好再合并 | 用户决定：0.99 内置 MCP 是优势 | 停在 0.87 | 已定（已实现，ac9b407） | pi-upgrade-design 第 9 节 |
+| 2026-09-30 | MCP1 | 改用 Pi 0.99 的原生 MCP，去掉 pi-mcp-adapter；配置仍是 `~/.mmp/mcp.json` 和被信任项目的 `.mmp/mcp.json`，由 MMP 用 `pi.registerMcpServer()` 交给 Pi，不读 Pi 自己的 `mcp.json`；管理功能对齐 Pi：`mmp mcp …` 子命令和界面里的 `/mcp` | 用户同意推荐方案 | 继续用 pi-mcp-adapter；直接读 Pi 的 mcp.json | 已定（具体接法等调研结果再细化）（已实现，ac9b407） | — |
 | 2026-09-30 | S1 | skills 自动发现只读两处：全局 `~/.agents/skills`，和 MMP 自己的 `~/.mmp/skills` 及被信任项目的 `.mmp/skills`；Pi 路径下的一律不读（`~/.pi/agent/skills`、项目 `.pi/skills`；`~/.mmp/pi` 只是 MMP 替 Pi 存运行状态的目录，不是 skills 位置，自动发现的目录也不许指进去）；Manifest 里显式声明的 skills 照旧加载。项目各级的 `.agents/skills` 暂不读 | 用户决定 | 只认 Manifest；照搬 Pi 的全部发现路径 | 已定 | — |
-| 2026-09-30 | MCP2 | MCP 的具体接法（细化 MCP1）：用 `createMcpExtension` 的 `loadConfig` 选项交配置，不用 `registerMcpServer`（`/mcp` 里的启用/停用、曝光方式才能写回 MMP 的 `mcp.json`）；配置格式改成 Pi 的（不再支持 SSE、socket 和 pi-mcp-adapter 独有字段）；默认曝光沿用 Pi 的 `codemode`；仍由 Manifest 的 `mmp:mcp` 开关；`/mcp` 没有服务时的提示由 MMP 改写 | 用户确认（"mcp/skills 的改造你的意思是对的"） | `registerMcpServer` 交配置；保留 pi-mcp-adapter 的格式 | 已定 | [mcp-design.md](mcp-design.md) |
+| 2026-09-30 | MCP2 | MCP 的具体接法（细化 MCP1）：用 `createMcpExtension` 的 `loadConfig` 选项交配置，不用 `registerMcpServer`（`/mcp` 里的启用/停用、曝光方式才能写回 MMP 的 `mcp.json`）；配置格式改成 Pi 的（不再支持 SSE、socket 和 pi-mcp-adapter 独有字段）；默认曝光沿用 Pi 的 `codemode`；仍由 Manifest 的 `mmp:mcp` 开关；`/mcp` 没有服务时的提示由 MMP 改写 | 用户确认（"mcp/skills 的改造你的意思是对的"） | `registerMcpServer` 交配置；保留 pi-mcp-adapter 的格式 | 已定（已实现，ac9b407） | [mcp-design.md](mcp-design.md) |
 | 2026-09-30 | H1 | 长期方向：更接近 OMP（oh-my-pi）的设计。grok 风格的界面是第一步，之后按 OMP 的思路构建 MMP 自己的 harness | 用户决定 | — | 已定（方向；具体 harness 设计以后逐项确认） | DEVELOPMENT.md 第 3.1、3.3、3.4、17 节里"不做 OMP 结构"等条目已和这个方向不一致，做 harness 设计时一起改 |
 
 ## 待定
