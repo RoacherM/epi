@@ -10,6 +10,7 @@ import { runMcpCommand } from "./commands/mcp-cli.js";
 import { reportRunFailure } from "./errors.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { isInteractivePiRun } from "./interactive.js";
+import { isListModelsRun, runListModels } from "./list-models.js";
 import { resolveMmpPaths } from "./paths.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { installProviderCostValidation } from "./provider-validation.js";
@@ -278,6 +279,17 @@ export async function runMmp(argv) {
         // instead left the process running with the TUI gone whenever anything still held it open, such
         // as a compaction request that ignored its abort (dogfood D35, D41).
         process.exit(code);
+    }
+    // `--list-models` is MMP's own (dogfood D48): piMain's drops the extension diagnostics `-p` stops
+    // on and prints Pi's empty-list text (src/list-models.ts).
+    if (isListModelsRun(prepared.piArgs)) {
+        await runListModels(prepared.piArgs, {
+            cwd: process.cwd(),
+            agentDir: prepared.agentDir,
+            externalExtensionPaths: prepared.assembly.externalExtensions.map((extension) => extension.value),
+            extensionFactories,
+        });
+        return;
     }
     await piMain(prepared.piArgs, { extensionFactories });
 }

@@ -20,7 +20,8 @@ MMP 是**改名叫 mmp 的定制版 Pi**：
 | 运行方式 | 走哪条路 |
 |---|---|
 | 交互（stdin、stdout 都是终端，且没有 `-p`、`--mode`、`--help`、`--list-models`、`--export`） | MMP 自己的界面（`src/tui/`） |
-| 非交互：`-p`、`--mode json`、`--mode rpc`、`--list-models`、`--export`、非终端 | 底层用 Pi 的实现（`piMain`），对外参数和帮助是 MMP 的 |
+| 非交互：`-p`、`--mode json`、`--mode rpc`、`--export`、非终端 | 底层用 Pi 的实现（`piMain`），对外参数和帮助是 MMP 的 |
+| `--list-models [search]` | MMP 自己实现（`src/list-models.ts`，dogfood D48）：Pi 的这条路不报扩展诊断、空列表时打印 Pi 的 `/login` 文案和文档链接 |
 | 子命令：`mmp update / install / remove / uninstall / list / config / auth` | MMP 自己的子命令（第 3 节） |
 
 ## 2. 参数清单
@@ -33,7 +34,8 @@ MMP 自己维护这份清单。清单外的短参数（`-x`）一律报错退出
 | `-c/--continue`、`-r/--resume`、`--session`、`--session-id`、`--fork`、`--session-dir`、`--no-session`、`-n/--name` | 是 | `--session-dir` 和 Pi 一样展开 `~`；没给时依次看 `MMP_SESSION_DIR`（MMP 自己的变量，语义和 Pi 的 `PI_CODING_AGENT_SESSION_DIR` 一样，但从不读取后者——Pi 装置设置的这个变量不会泄漏进 MMP）、设置里的 `sessionDir`。两条运行路径（`piMain` 和 `src/tui/services.ts`）用同一份解析结果：非交互路径调用 Pi 前会清掉进程里的 `PI_CODING_AGENT_SESSION_DIR`，再按 `MMP_SESSION_DIR` 重新赋值 |
 | `-t/--tools`、`-xt/--exclude-tools`、`-nt/--no-tools`、`-nbt/--no-builtin-tools` | 是 | |
 | `-p/--print`、`--mode text/json/rpc` | 是 | benchmark 的标准入口 `mmp --mode json --no-session --no-approve -p "…"`（DEVELOPMENT.md 第 20 节）保持不变 |
-| `--list-models [search]`、`--export <file>` | 是 | |
+| `--list-models [search]` | 是 | 输出表格和 Pi 一样。扩展诊断（注册 provider 失败、扩展加载失败）和 `-p` 一样打到 stderr，有错误就退出 1；没有模型时打印 MMP 自己的提示（`/login` 或在 Manifest 里声明 provider 扩展）。不加载 Pi 内置的 llama.cpp 扩展（和交互界面一样） |
+| `--export <file>` | 是 | |
 | `--offline`、`--verbose` | 是 | `--verbose` 让启动信息显示在消息区 |
 | 初始消息、`@文件` | 是 | |
 | `--approve/-a`、`--no-approve/-na` | 名字对齐，作用不同 | 只作用于项目的 `.mmp/mmp.json`，从不交给 Pi（DEVELOPMENT.md 8.2） |
