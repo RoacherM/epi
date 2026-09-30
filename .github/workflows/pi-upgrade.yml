@@ -66,6 +66,7 @@ jobs:
             fs.appendFileSync(out, `gate_passed=${r.gatePassed}\n`);
             fs.appendFileSync(out, `model_visible_changed=${r.modelVisibleChanged}\n`);
             fs.appendFileSync(out, `new_pi_version=${r.newPiVersion ?? ""}\n`);
+            fs.appendFileSync(out, `report_hash=${r.reportHash ?? ""}\n`);
           '
 
       - name: Nothing new
@@ -89,21 +90,24 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "$BOT_EMAIL"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          title="Pi upgrade to $NEW_PI_VERSION"
 
           # A PR for this exact version was already closed without merging: a human said no to it.
-          # Don't reopen the same fight every day (must-fix #4).
+          # Don't reopen the same fight every day (must-fix #4). Exact title match, not `contains`
+          # (re-review N5): "0.99.1" must not match a closed PR titled "...to 0.99.10".
           closed=$(gh pr list --state closed --head "$BRANCH" --json number,title,mergedAt \
-            --jq ".[] | select(.mergedAt == null and (.title | contains(\"$NEW_PI_VERSION\"))) | .number" \
-            | head -1)
+            --jq ".[] | select(.mergedAt == null and .title == \"$title\") | .number" | head -1)
           if [ -n "$closed" ]; then
             echo "PR #$closed for $NEW_PI_VERSION was already closed without merging; not recreating it."
             exit 0
           fi
 
-          # Never force-push over commits a human added to the branch by hand (must-fix #4).
-          git fetch origin "$BRANCH" 2>/dev/null || true
+          # Never force-push over commits a human added to the branch by hand (must-fix #4). Diffed
+          # against origin/main, not unbounded (re-review N1): an unbounded `git log origin/$BRANCH`
+          # lists every human commit ever made to main, not just ones added to this branch.
+          git fetch origin main "$BRANCH" 2>/dev/null || true
           if git rev-parse --verify "refs/remotes/origin/$BRANCH" >/dev/null 2>&1; then
-            foreign=$(git log "origin/$BRANCH" --format='%ae' | grep -v -F "$BOT_EMAIL" || true)
+            foreign=$(git log "origin/main..origin/$BRANCH" --format='%ae' | grep -v -F "$BOT_EMAIL" || true)
             if [ -n "$foreign" ]; then
               message="A new Pi version ($NEW_PI_VERSION) is available, but this branch has commits I did not make, so I am not overwriting it. Rebase/update it manually, or close this PR so a fresh one can be opened."
               existing=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number' | head -1)
@@ -129,25 +133,28 @@ jobs:
 
           existing=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number' | head -1)
           if [ -n "$existing" ]; then
-            gh pr edit "$existing" --title "Pi upgrade to $NEW_PI_VERSION" --body-file report.md
+            gh pr edit "$existing" --title "$title" --body-file report.md
           else
-            gh pr create --title "Pi upgrade to $NEW_PI_VERSION" \
+            gh pr create --title "$title" \
               --body-file report.md --label "$labels" --head "$BRANCH" --base main
           fi
 
       # --- Gate failed: open (or update) an issue with the report --------------------------------
       # Comments only when the report actually changed (must-fix #5): a stale, unfixed failure would
-      # otherwise get a new comment every single day the cron runs.
+      # otherwise get a new comment every single day the cron runs. REPORT_HASH is computed by
+      # pi-upgrade.mjs itself over the stable facts only (versions, adapter decision, failing test
+      # names) -- not a hash of report.md's raw bytes, whose gate-log tail includes timings that
+      # change on every run even when nothing else did (re-review N3).
       - name: Open or update the failure issue
         if: steps.info.outputs.new_pi_version != '' && steps.info.outputs.upgraded != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           NEW_PI_VERSION: ${{ steps.info.outputs.new_pi_version }}
+          REPORT_HASH: ${{ steps.info.outputs.report_hash }}
         run: |
           gh label create pi-upgrade-failed --color b60205 --force
           title="Pi upgrade to $NEW_PI_VERSION failed the gate"
-          hash=$(sha256sum report.md | cut -d' ' -f1)
-          marker="<!-- report-hash: $hash -->"
+          marker="<!-- report-hash: $REPORT_HASH -->"
           printf '%s\n\n%s\n' "$marker" "$(cat report.md)" > report-with-marker.md
 
           existing=$(gh issue list --label pi-upgrade-failed --state open --json number,title \

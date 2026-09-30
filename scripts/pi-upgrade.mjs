@@ -10,6 +10,7 @@
 // this file is executed directly, never when it's imported.
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -344,7 +345,8 @@ function buildReport({
     lines.push(
       `  **No published pi-mcp-adapter version declares peer support for ${ADAPTER_PEER_KEY}@${newPiVersion}.** ` +
         `Tried the newest published adapter anyway and let the gate below decide -- peer ranges lag real compatibility often enough that failing outright here would block on stale metadata, not an actual problem. ` +
-        `package.json now carries an \`overrides\` entry forcing that peer to the pinned version so plain \`npm install\`/\`npm ci\` (not just this gate) resolve it; drop that entry once pi-mcp-adapter's declared range actually covers ${newPiVersion}.`,
+        `package.json now carries an \`overrides\` entry forcing that peer to the pinned version so plain \`npm install\`/\`npm ci\` (not just this gate) resolve it; drop that entry once pi-mcp-adapter's declared range actually covers ${newPiVersion}. ` +
+        `Note: this only takes effect when MMP is the install root (a global install of the released tgz -- prints a harmless \`npm warn ERESOLVE overriding peer dependency\`, still installs correctly). It does not propagate if something else installs this tgz as its own dependency; that gets two copies of ${ADAPTER_PEER_KEY} instead. MMP's normal distribution (install.sh -> npm install --global) is the first case.`,
     );
   }
   lines.push(`- Gate: ${formatGateResult(gate)}`);
@@ -370,6 +372,49 @@ function buildReport({
     lines.push(changelog);
   }
   return `${lines.join("\n")}\n`;
+}
+
+/** Supply-chain guard (pre-merge review blocker #2, and re-review N4): applies equally to the Pi
+ * version itself and to an adapter version adopted speculatively (`declared: false`) -- a freshly
+ * published adapter release picked only because nothing else declares support is exactly the kind
+ * of thing the age window exists to catch. */
+function checkPublishAge({ registry, name, version, now }) {
+  const publishedAt = registry.publishedAt(name, version);
+  const ageMs = now().getTime() - publishedAt.getTime();
+  return { tooNew: ageMs < MIN_PUBLISH_AGE_MS, ageHours: Math.max(0, Math.round(ageMs / (60 * 60 * 1000))) };
+}
+
+function publishAgeWaitingResult({ reason, oldPiVersion, newPiVersion }) {
+  const waitDays = (MIN_PUBLISH_AGE_MS / (24 * 60 * 60 * 1000)).toFixed(0);
+  return {
+    exitCode: 0,
+    upgraded: false,
+    gatePassed: false,
+    modelVisibleChanged: false,
+    report:
+      `# Pi upgrade report\n\n${reason}; waiting for the ${waitDays}-day supply-chain safety window ` +
+      `before adopting it automatically (docs/pi-upgrade-design.md §2). Still on ${oldPiVersion}. ` +
+      `Pass --version ${newPiVersion} to adopt it immediately (also skips the adapter's own age check).\n`,
+  };
+}
+
+/** A stable fingerprint of what the report is actually *about*, for the failure-issue's dedup check
+ * (re-review N3): the gate's raw log tail (in `formatGateResult`) includes timings that change on
+ * every run even when nothing else did, so hashing `report.md` verbatim would comment daily on an
+ * unfixed, unchanged failure. This hashes only the facts that determine whether the situation
+ * changed: the version pairing, the adapter's decision, and (for a test failure) which tests failed
+ * -- not how long anything took or the log around a build/install failure. */
+export function computeReportHash({ oldPiVersion, newPiVersion, adapter, gate }) {
+  const failingTests = gate?.step === "test" ? extractFailingTests(`${gate.stdout}\n${gate.stderr}`) : [];
+  const fingerprint = {
+    oldPiVersion,
+    newPiVersion,
+    adapterVersion: adapter.version,
+    adapterDeclared: adapter.declared,
+    gateStep: gate.step,
+    failingTests,
+  };
+  return createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex");
 }
 
 function safeMinorJump(oldVersion, newVersion) {
@@ -419,28 +464,35 @@ export function runPiUpgrade({
   // had a chance to react to yet. An explicit `--version` is a human's deliberate choice and skips
   // this entirely.
   if (requestedVersion === undefined) {
-    const publishedAt = registry.publishedAt(PI_PACKAGES[0], newPiVersion);
-    const ageMs = now().getTime() - publishedAt.getTime();
-    if (ageMs < MIN_PUBLISH_AGE_MS) {
-      const ageHours = Math.max(0, Math.round(ageMs / (60 * 60 * 1000)));
-      const waitDays = (MIN_PUBLISH_AGE_MS / (24 * 60 * 60 * 1000)).toFixed(0);
-      return {
-        exitCode: 0,
-        upgraded: false,
-        gatePassed: false,
-        modelVisibleChanged: false,
-        report:
-          `# Pi upgrade report\n\n${newPiVersion} was published ${ageHours}h ago; waiting for the ` +
-          `${waitDays}-day supply-chain safety window before adopting it automatically ` +
-          `(docs/pi-upgrade-design.md §2). Still on ${oldPiVersion}. Pass --version ${newPiVersion} ` +
-          `to adopt it immediately.\n`,
-      };
+    const piAge = checkPublishAge({ registry, name: PI_PACKAGES[0], version: newPiVersion, now });
+    if (piAge.tooNew) {
+      return publishAgeWaitingResult({
+        reason: `${newPiVersion} was published ${piAge.ageHours}h ago`,
+        oldPiVersion,
+        newPiVersion,
+      });
     }
   }
 
   const currentAdapterVersion = pkg.dependencies[ADAPTER_PACKAGE];
   const selected = selectAdapterVersion({ registry, currentAdapterVersion, piVersion: newPiVersion });
   const adapter = { version: selected.version, previous: currentAdapterVersion, changed: selected.changed, declared: selected.declared };
+
+  // Same guard for a speculatively-adopted adapter (re-review N4): `declared: false` means we're
+  // trusting the gate over the peer metadata for a version nobody has vetted for this pairing --
+  // if it was *also* just published, wait for it too.
+  if (requestedVersion === undefined && !adapter.declared) {
+    const adapterAge = checkPublishAge({ registry, name: ADAPTER_PACKAGE, version: adapter.version, now });
+    if (adapterAge.tooNew) {
+      return publishAgeWaitingResult({
+        reason:
+          `pi-mcp-adapter ${adapter.version} (picked because no version declares peer support for ` +
+          `${ADAPTER_PEER_KEY}@${newPiVersion}) was published ${adapterAge.ageHours}h ago`,
+        oldPiVersion,
+        newPiVersion,
+      });
+    }
+  }
 
   for (const name of PI_PACKAGES) pkg.dependencies[name] = newPiVersion;
   pkg.dependencies[ADAPTER_PACKAGE] = adapter.version;
@@ -478,6 +530,7 @@ export function runPiUpgrade({
     mmpVersion,
     newPiVersion,
     adapterDeclared: adapter.declared,
+    reportHash: computeReportHash({ oldPiVersion, newPiVersion, adapter, gate }),
     report: buildReport({
       oldPiVersion,
       newPiVersion,
@@ -523,6 +576,7 @@ function main() {
         modelVisibleChanged: result.modelVisibleChanged,
         mmpVersion: result.mmpVersion,
         newPiVersion: result.newPiVersion,
+        reportHash: result.reportHash,
       },
       null,
       2,

@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   applyAdapterOverride,
   bumpPatch,
+  computeReportHash,
   extractChangelogEntries,
   extractFailingTests,
   isNewerVersion,
@@ -53,7 +54,7 @@ function makeCwd({ piVersion = "0.87.1", adapterVersion = "2.38.0", mmpVersion =
   return cwd;
 }
 
-function fakeRegistry({ latestPi, adapterVersions, peerRanges, publishedAt = LONG_AGO }) {
+function fakeRegistry({ latestPi, adapterVersions, peerRanges, publishedAt = LONG_AGO, adapterPublishedAt }) {
   return {
     latestVersion: (name) => {
       assert.equal(name, "@earendil-works/pi-coding-agent");
@@ -68,7 +69,7 @@ function fakeRegistry({ latestPi, adapterVersions, peerRanges, publishedAt = LON
       const range = peerRanges[version];
       return range === undefined ? {} : { "@earendil-works/pi-ai": range };
     },
-    publishedAt: () => publishedAt,
+    publishedAt: (name) => (name === "pi-mcp-adapter" ? adapterPublishedAt ?? publishedAt : publishedAt),
   };
 }
 
@@ -126,6 +127,35 @@ test("compareVersions/sort never crashes on a prerelease version", () => {
 test("extractFailingTests pulls names out of tap output", () => {
   const tap = "TAP version 13\nok 1 - passes\nnot ok 2 - breaks\nnot ok 3 - also breaks\n# fail 2\n";
   assert.deepEqual(extractFailingTests(tap), ["breaks", "also breaks"]);
+});
+
+test("computeReportHash ignores gate log timings (re-review N3) but changes with the failing tests", () => {
+  const base = {
+    oldPiVersion: "0.87.1",
+    newPiVersion: "0.88.0",
+    adapter: { version: "2.38.0", previous: "2.38.0", changed: false, declared: true },
+  };
+  // Realistic node --test tap output: durations live in a YAML diagnostic block under each line,
+  // not in the "not ok ... - name" line itself (which is all extractFailingTests captures) -- so
+  // two runs of the same unfixed failure differ only in exactly the parts the hash must ignore.
+  const gateA = {
+    status: 1,
+    step: "test",
+    stdout: "ok 1 - fine\n  ---\n  duration_ms: 12.3\n  ...\nnot ok 2 - broken\n  ---\n  duration_ms: 456.7\n  ...\n# time=469ms\n",
+    stderr: "",
+  };
+  const gateB = {
+    status: 1,
+    step: "test",
+    stdout: "ok 1 - fine\n  ---\n  duration_ms: 99.9\n  ...\nnot ok 2 - broken\n  ---\n  duration_ms: 1.2\n  ...\n# time=101.1ms\n",
+    stderr: "",
+  };
+  // Same failing test, different timings (as a re-run of the same unfixed failure would produce):
+  // same hash, so the issue step doesn't comment again.
+  assert.equal(computeReportHash({ ...base, gate: gateA }), computeReportHash({ ...base, gate: gateB }));
+
+  const gateC = { status: 1, step: "test", stdout: "ok 1 - fine\nnot ok 2 - a different test broke\n", stderr: "" };
+  assert.notEqual(computeReportHash({ ...base, gate: gateA }), computeReportHash({ ...base, gate: gateC }));
 });
 
 test("extractChangelogEntries slices between two version headings", () => {
@@ -309,6 +339,31 @@ test("runPiUpgrade: a version published inside the safety window is not adopted 
   }
 });
 
+test("runPiUpgrade: a speculatively-adopted (declared:false) adapter is also held to the publish-age guard", () => {
+  const cwd = makeCwd();
+  try {
+    const registry = fakeRegistry({
+      latestPi: "0.99.0",
+      adapterVersions: ["2.38.0", "2.50.0"],
+      peerRanges: {
+        "2.38.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0",
+        "2.50.0": "^0.84.1 || ^0.85.0 || ^0.86.0 || ^0.87.0", // still doesn't declare 0.99.0
+      },
+      publishedAt: LONG_AGO, // Pi itself is old enough
+      adapterPublishedAt: new Date(NOW.getTime() - 6 * 60 * 60 * 1000), // but the adapter pick is not
+    });
+    const before = readFileSync(join(cwd, "package.json"), "utf8");
+    const result = runPiUpgrade({ cwd, registry, exec: fakeExec(true).exec, now: () => NOW });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.upgraded, false);
+    assert.match(result.report, /pi-mcp-adapter 2\.50\.0/);
+    assert.match(result.report, /published 6h ago/);
+    assert.equal(readFileSync(join(cwd, "package.json"), "utf8"), before);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("runPiUpgrade: --version bypasses the publish-age safety window", () => {
   const cwd = makeCwd();
   try {
@@ -426,6 +481,9 @@ test("runPiUpgrade: no adapter declares support -- tries the newest anyway, writ
     assert.equal(result.adapterDeclared, false);
     assert.match(result.report, /No published pi-mcp-adapter version declares peer support/);
     assert.match(result.report, /overrides/);
+    // The overrides limitation (re-review N2): only applies when MMP is the install root.
+    assert.match(result.report, /install root/);
+    assert.match(result.report, /npm warn ERESOLVE overriding peer dependency/);
     const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
     assert.equal(pkg.dependencies["pi-mcp-adapter"], "2.50.0");
     // The override is what makes plain `npm install`/`npm ci` (not just this gate, also

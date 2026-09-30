@@ -100,14 +100,22 @@ test("pi-upgrade.yml parses, runs the gate, and branches on the result", () => {
   // Never force-push over a human's manual commits (must-fix #4): the run body must check commit
   // authorship against the bot's own email before pushing.
   assert.match(prStep.run, /BOT_EMAIL/);
-  assert.match(prStep.run, /git log .*--format=.%ae./);
-  // A PR closed-without-merging for the exact same version must not be recreated (must-fix #4).
+  // Diffed against origin/main, not an unbounded `git log origin/$BRANCH` (re-review N1) -- the
+  // latter lists every human commit ever made to main, not just ones added to this branch.
+  assert.match(prStep.run, /git fetch origin main "\$BRANCH"/);
+  assert.match(prStep.run, /git log "origin\/main\.\.origin\/\$BRANCH" --format='%ae'/);
+  // A PR closed-without-merging for the exact same version must not be recreated (must-fix #4),
+  // matched by exact title, not `contains` (re-review N5: "0.99.1" must not match "...to 0.99.10").
   assert.match(prStep.run, /mergedAt == null/);
+  assert.match(prStep.run, /\.title == \\"\$title\\"/);
+  assert.doesNotMatch(prStep.run, /\.title \| contains/);
 
   const issueStep = job.steps.find((step) => step.name === "Open or update the failure issue");
-  // Comment only when the report actually changed (must-fix #5): a hash-based marker, compared
-  // against the last comment (or the issue body, if there are no comments yet).
-  assert.match(issueStep.run, /sha256sum report\.md/);
+  // Comment only when the report actually changed (must-fix #5, refined by re-review N3): a
+  // hash computed by pi-upgrade.mjs itself over stable facts only (not `sha256sum report.md`,
+  // whose gate-log tail includes timings that change on every run).
+  assert.equal(issueStep.env.REPORT_HASH, "${{ steps.info.outputs.report_hash }}");
+  assert.doesNotMatch(issueStep.run, /sha256sum/);
   assert.match(issueStep.run, /report-hash/);
   assert.match(issueStep.run, /comments\[-1\]\.body \/\/ \.body/);
 });

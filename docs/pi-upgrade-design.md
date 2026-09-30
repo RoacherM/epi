@@ -97,9 +97,13 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 - `npm install` 固定加 `--ignore-scripts`（本地验证过：从零装依赖、`--ignore-scripts`、`npm run build`、跑满 507 个测试，全部通过——这个仓库的构建和测试不依赖任何包的 postinstall/install 脚本，包括 esbuild、fsevents、protobufjs 这几个真正带脚本的包）。
 - adapter 的声明 peer 范围不包含新 Pi 版本时（见下），升级脚本会往 `package.json` 写一条 npm 原生的 `overrides`（`{ "pi-mcp-adapter": { "@earendil-works/pi-ai": "$@earendil-works/pi-ai" } }`），否则 npm 的严格 peer 校验会直接拒绝安装（`ERESOLVE`，本地对着真实 registry 验证过：`pi-mcp-adapter@3.3.0` 配 `@earendil-works/pi-ai@0.99.1` 会报这个错）。没选 `--legacy-peer-deps`：那个开关只能加在"门禁这一次"的 install 命令上，PR 合并后 `release.yml`/`ci.yml` 跑的是不带这个开关的 `npm ci`，一样会报 `ERESOLVE`——门禁绿了但合并后的 main 装不上。写进 `package.json` 的 `overrides` 是仓库状态的一部分，PR 的 diff 里能直接看到，合并后不带任何开关的 `npm ci` 也验证过能正常跑通；adapter 以后声明支持了，`overrides` 会在下一次升级时自动删掉。
 - `pi-upgrade.yml` 的 `actions/checkout` 用 `persist-credentials: false`：token 不写进 `.git/config`，只在真正要 push / 调 `gh` 的那一步里临时塞进远程 URL——这一步在 `npm install` 已经跑完之后才执行，缩小了"万一 `--ignore-scripts` 没挡住"时 token 暴露的窗口。
-- 新版本发布不到 3 天（`MIN_PUBLISH_AGE_MS`，读 `npm view <pkg> time --json`）不会自动采用，除非显式传 `--version`——给生态一点时间发现被入侵或有问题的发布。这个数字是我定的。
+- 新版本发布不到 3 天（`MIN_PUBLISH_AGE_MS`，读 `npm view <pkg> time --json`）不会自动采用，除非显式传 `--version`——给生态一点时间发现被入侵或有问题的发布。这个数字是我定的。同一个检查也套用在"猜的" adapter 版本上（adapter 是 `declared: false` 时）：那个版本也可能是刚发布的，同样没人验证过，`--version` 会同时跳过 Pi 和 adapter 两边的检查。
+
+**`overrides` 只在 MMP 自己是安装根目录时生效。** 这是 npm 的既有行为，不是这次改动引入的限制，但值得记在这里：`npm install --global` 装 MMP 的 tgz 时，MMP 自己就是那次安装的根，`overrides` 按预期生效，只是 npm 会打印一条 `npm warn ERESOLVE overriding peer dependency` 的提示（能装上，行为符合预期，只是有告警）；但如果有人把 MMP 的 tgz 当作*另一个*项目的普通依赖装进去（非 global），MMP 自己的 `overrides` 不会被外层项目继承——那种场景下装出来的树里会有两份 `@earendil-works/pi-ai`。MMP 的正常分发方式（`install.sh` → `npm install --global`）走的是前一种情况，不受影响；这里不改 `install.sh`。
 
 **adapter 选择不能降级（pre-merge review 修的一个真实 bug）。** 早期实现按"新→旧排序，选第一个满足声明范围的版本"选 adapter，会把已经锁定的 `2.38.0` **降级**成 `2.21.0`——因为 `pi-mcp-adapter` 2.12.0-2.21.0 声明的 peer 范围是 `*`（什么都匹配），排序上又比更晚的、范围写得更精确的版本先满足条件。现在的规则：`*`、空字符串、或者压根没声明这个 peer key，一律算"没声明"，不算"兼容"；候选版本也只看比当前锁定版本更新的；如果连最新版本都没声明支持新 Pi 版本，就试最新版本（装的时候用上面的 `overrides`），把结果交给门禁（尤其是 `test/mcp.test.mjs` 的离线 MCP 验收）去判断真假兼容，并在报告里如实写清楚"这是猜的，不是 adapter 自己说的"。范围匹配用 `semver` 包（现在是正式 devDependency），不再手撸——手撸的版本只认识 `^` 和精确匹配，遇到 `~`、`x`、`>=` 这类合法写法会直接判"不兼容"，也会在排序遇到预发布版本号时抛异常。
+
+备注：`--version` 传一个预发布版本号（比如 `0.88.0-rc.1`）时，即使 adapter 声明的范围本来能覆盖对应的正式版（`^0.88.0`），`semver.satisfies` 默认也不认预发布版本命中——所以显式传预发布版本永远走"没声明，试最新版本"这条路径，这是 `semver` 的默认行为，符合"没人验证过这个预发布版本"的直觉，不用额外处理。
 
 **现状（写这段的时候）：下一次真实升级会是 0.87.1 → 0.99.1，跨 12 个 minor 版本。** 门禁大概率过不了，报告里会标出"一次跨这么多版本，不是日常小步升级"；`pi-mcp-adapter` 目前最新版（3.3.0）声明的 peer 范围只到 `^0.87.0`，大概率会走"没有 adapter 声明支持，试最新版本"这条路径。这不是这次改动要解决的问题——第一次真实升级本来就需要人来处理，设计本身允许门禁失败、开 issue、等人决定。
 
