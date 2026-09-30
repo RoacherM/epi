@@ -540,3 +540,14 @@ test("verbGroupLine: find counts calls (paths searched), not results found", () 
   assert.match(line, /Searched 1 path/);
   assert.doesNotMatch(line, /Found/);
 });
+
+test("grep and find in one run name the shared verb once, even when a read sits between them", async () => {
+  const { verbGroupLine } = await import("../dist/tui/tools/group.js");
+  const { createMmpTheme } = await import("../dist/tui/theme.js");
+  const theme = createMmpTheme("dark");
+  const member = (groupKind) => ({ groupKind, status: "done" });
+  const line = verbGroupLine([member("grep"), member("read"), member("find"), member("find")], theme, 120)
+    .replace(/\x1b\[[0-9;]*m/g, "");
+  assert.match(line, /Searched 1 pattern, 2 paths, Read 1 file/);
+  assert.doesNotMatch(line, /Searched.*Searched/);
+});

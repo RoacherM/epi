@@ -132,11 +132,19 @@ function summarize(members: MemberLike[]): { running: number; completed: number;
       counts.set(member.groupKind, (counts.get(member.groupKind) ?? 0) + 1);
     }
   }
-  const breakdown = order
+  // grep and find share "Searched"; keep them together and name the verb once:
+  // "Searched 1 pattern, 2 paths", in the order each verb first appeared.
+  const firstLabelIndex = (kind: GroupKind) => order.findIndex((other) => VERBS[other].label === VERBS[kind].label);
+  let previousLabel: string | undefined;
+  const breakdown = [...order]
+    .sort((a, b) => firstLabelIndex(a) - firstLabelIndex(b))
     .map((kind) => {
       const count = counts.get(kind) ?? 0;
       const verb = VERBS[kind];
-      return `${verb.label} ${count} ${count === 1 ? verb.singular : verb.plural}`;
+      const noun = `${count} ${count === 1 ? verb.singular : verb.plural}`;
+      const clause = verb.label === previousLabel ? noun : `${verb.label} ${noun}`;
+      previousLabel = verb.label;
+      return clause;
     })
     .join(", ");
   return { running, completed, failed, breakdown };
