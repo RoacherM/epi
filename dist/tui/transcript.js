@@ -174,7 +174,7 @@ export class Transcript {
             this.messageCount += 1;
     }
     assistant(message, streaming) {
-        const component = new AssistantBlock(this.theme, message, this.session.extensionRunner.getMarkdownTransformers());
+        const component = new AssistantBlock(this.theme, message, this.session.extensionRunner.getMarkdownTransformers(), streaming);
         component.setGlobalExpanded(this.thinkingExpanded);
         this.assistantBlocks.push(component);
         this.add(component, false);

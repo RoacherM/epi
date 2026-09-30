@@ -121,11 +121,12 @@ export class AssistantBlock implements Component {
     private readonly theme: Theme,
     message: AssistantMessage,
     private readonly transformers: readonly MarkdownTransformer[],
+    streaming: boolean,
   ) {
     // Captured once, like UserMessageBlock's `time`: the component is reused across every
     // streaming update for this message, so this must not drift as content arrives.
     this.clock = theme.fg("muted", new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
-    this.updateContent(message, true);
+    this.updateContent(message, streaming);
   }
 
   /** Finds which thinking segment (by its startIndex key) a streaming event's contentIndex falls
@@ -166,7 +167,11 @@ export class AssistantBlock implements Component {
     if (message === undefined) return;
     const hasVisibleContent = message.content.some((part) =>
       (part.type === "text" && part.text.trim() !== "") || (part.type === "thinking" && part.thinking.trim() !== ""));
-    if (hasVisibleContent) this.container.addChild(new piTui.Spacer(1));
+    // Only when the message *starts* with thinking: a leading content/tool-call segment already
+    // brings its own leading Spacer(1) (Pi's AssistantMessageComponent adds one itself whenever it
+    // has visible content), so adding this one too would double it up -- the bug a test caught
+    // (a plain, thinking-free reply rendering two blank rows instead of one).
+    if (hasVisibleContent && segments[0]?.kind === "thinking") this.container.addChild(new piTui.Spacer(1));
 
     segments.forEach((segment, segmentIndex) => {
       if (segment.kind === "thinking") {
@@ -187,24 +192,23 @@ export class AssistantBlock implements Component {
       }
       // A text/tool-call run: Pi's own component, fed only this run's `content` and a neutral
       // `stopReason` -- the real stopReason (aborted/error/length) is handled once, below, for the
-      // whole message, not per run (Pi's version only ever had one run to worry about).
+      // whole message, not per run (Pi's version only ever had one run to worry about). Constructed
+      // with no initial message so it doesn't render once with the wrong (default `false`)
+      // isStreaming before this updateContent call gives it the real one.
       const synthetic: AssistantMessage = { ...message, content: segment.parts, stopReason: "stop" };
-      const component = new AssistantMessageComponent(
-        synthetic,
-        false,
-        getMarkdownTheme(),
-        undefined,
-        CONTENT_PAD,
-        this.transformers,
-      );
+      const component = new AssistantMessageComponent(undefined, false, getMarkdownTheme(), undefined, CONTENT_PAD, this.transformers);
+      component.updateContent(synthetic, this.lastStreaming);
       const wrapped: Component = {
         render: (width: number) => {
           const rendered = component.render(width);
-          // Pi's component always opens with a blank spacer row when it has visible content; drop
-          // it for every run after the first so a text run right after a thinking block sits flush
-          // under it (the M4 mock-up shows no gap there), while the very first run in the message
-          // keeps its spacer under the user bubble above.
-          return segmentIndex === 0 || rendered[0]?.trim() !== "" ? rendered : rendered.slice(1);
+          // Pi's component always opens with a blank spacer row when it has visible content. Kept
+          // for the very first segment (its only source of the one leading blank under the user
+          // bubble above); dropped for every later one so a text run right after a thinking block
+          // sits flush under it (the M4 mock-up shows no gap there). `visibleWidth`, not `.trim()`:
+          // Pi also prepends a zero-width OSC133 marker to this exact row, which defeats a plain
+          // string-emptiness check -- losing that marker for a non-first run is an accepted, minor
+          // side effect (it only affects a terminal's "jump to previous/next prompt" feature).
+          return segmentIndex === 0 || piTui.visibleWidth(rendered[0] ?? "") > 0 ? rendered : rendered.slice(1);
         },
         invalidate: () => component.invalidate(),
         handleMouse: (mouseEvent) => component.handleMouse(mouseEvent),
@@ -236,7 +240,10 @@ export class AssistantBlock implements Component {
   render(width: number): string[] {
     const innerWidth = Math.max(1, width - piTui.visibleWidth(this.clock) - 2);
     const lines = this.container.render(innerWidth);
-    const index = lines.findIndex((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trim() !== "");
+    // `visibleWidth`, not a string-emptiness check: the leading blank row is often not literally ""
+    // -- Pi's AssistantMessageComponent prepends a zero-width OSC133 marker to it -- so a plain
+    // `.trim() !== ""` would treat that row as "visible" and put the clock on the blank line.
+    const index = lines.findIndex((line) => piTui.visibleWidth(line) > 0);
     if (index === -1) return lines;
     return lines.map((line, lineIndex) => (lineIndex === index ? spread(line, this.clock, width) : line));
   }

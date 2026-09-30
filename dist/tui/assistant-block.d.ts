@@ -11,7 +11,7 @@ export declare class AssistantBlock implements Component {
     private readonly expandedOverride;
     private globalExpanded;
     private readonly clock;
-    constructor(theme: Theme, message: AssistantMessage, transformers: readonly MarkdownTransformer[]);
+    constructor(theme: Theme, message: AssistantMessage, transformers: readonly MarkdownTransformer[], streaming: boolean);
     /** Finds which thinking segment (by its startIndex key) a streaming event's contentIndex falls
      * into, so a run built from several adjacent `thinking` content parts still gets one timer. */
     private recordEvent;

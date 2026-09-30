@@ -181,7 +181,7 @@ export class Transcript {
   }
 
   private assistant(message: Extract<AgentMessage, { role: "assistant" }>, streaming: boolean): AssistantBlock {
-    const component = new AssistantBlock(this.theme, message, this.session.extensionRunner.getMarkdownTransformers());
+    const component = new AssistantBlock(this.theme, message, this.session.extensionRunner.getMarkdownTransformers(), streaming);
     component.setGlobalExpanded(this.thinkingExpanded);
     this.assistantBlocks.push(component);
     this.add(component, false);

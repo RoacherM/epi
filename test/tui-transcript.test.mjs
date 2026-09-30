@@ -35,9 +35,13 @@ function assistantMessage(content, extra = {}) {
 // "Thought" is styled bold-then-plain within one muted line (assistant-block.ts's ThinkingBlock):
 // the ANSI codes marking that boundary sit textually between "Thought" and "for", so a plain
 // substring/regex match against the raw rendered text must strip them first, same as it would need
-// to for any other line whose styling changes mid-phrase.
+// to for any other line whose styling changes mid-phrase. Also strips OSC133 (`\x1b]133;X\x07`),
+// the zero-width prompt marker Pi's AssistantMessageComponent prepends/appends to an assistant
+// message's own first/last line -- without this, a "blank" row carrying only that marker doesn't
+// compare equal to "", same trap the code itself has to avoid (assistant-block.ts's `visibleWidth`
+// checks) when deciding what counts as blank.
 function stripAnsi(text) {
-  return text.replace(/\x1b\[[0-9;]*m/g, "");
+  return text.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "").replace(/\x1b\[[0-9;]*m/g, "");
 }
 
 function assertLinesFitWidth(lines, width) {
@@ -303,4 +307,46 @@ test("assistant messages with thinking fit widths 40, 80, and 120", () => {
     transcript.setThinkingExpanded(true);
     assertLinesFitWidth(transcript.root.render(width), width);
   }
+});
+
+// Regression: a replayed message (reset() -> addFinishedMessage(), never streamed live in this
+// process) ending in thinking must render as finished ("Thought for"), not stuck showing the live
+// "Thinking…" tail forever -- AssistantBlock's `streaming` flag has to actually reach it, not
+// default to true regardless of what Transcript.assistant() was called with.
+test("a replayed message ending in thinking renders as finished, not stuck streaming", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  const message = assistantMessage([{ type: "thinking", thinking: "reasoning only, no reply text" }]);
+  transcript.reset({ ...stubSession(), messages: [message] });
+  const rendered = stripAnsi(transcript.root.render(80).join("\n"));
+  assert.doesNotMatch(rendered, /Thinking…/, "a replayed, already-finished message must not show the live streaming view");
+  assert.match(rendered, /Thought for \d+\.\ds/);
+});
+
+// Regression: a plain text-only reply (the common case, no thinking at all) must show exactly the
+// one blank row above it that UserMessageBlock/assistant messages have always shown -- not two, from
+// AssistantBlock's own leading Spacer(1) stacking on top of the inner AssistantMessageComponent's.
+test("a plain text reply (no thinking) has exactly one blank row above it, not two", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  const message = assistantMessage([{ type: "text", text: "hello there" }]);
+  transcript.handle({ type: "message_start", message });
+  transcript.handle({ type: "message_end", message });
+  const lines = transcript.root.render(80).map(stripAnsi);
+  const replyIndex = lines.findIndex((line) => line.includes("hello there"));
+  assert.ok(replyIndex > 0);
+  assert.equal(lines[replyIndex - 1].trim(), "", "expected exactly one blank row directly above the reply");
+  assert.notEqual(lines[replyIndex - 2]?.trim(), "", "expected only one blank row, not two");
+});
+
+// Regression: thinking immediately followed by text must stay flush (the M4 mock-up shows no gap),
+// not gain a stray blank row from the text segment's own inner spacer failing to be dropped.
+test("thinking followed by text has no blank row between the header and the text", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  const message = assistantMessage([{ type: "thinking", thinking: "reasoning" }, { type: "text", text: "the answer" }]);
+  transcript.handle({ type: "message_start", message });
+  transcript.handle({ type: "message_end", message });
+  const lines = transcript.root.render(80).map(stripAnsi);
+  const headerIndex = lines.findIndex((line) => line.includes("Thought for"));
+  const answerIndex = lines.findIndex((line) => line.includes("the answer"));
+  assert.ok(headerIndex >= 0 && answerIndex > headerIndex);
+  assert.equal(answerIndex, headerIndex + 1, "expected the text to sit directly under the thinking header");
 });
