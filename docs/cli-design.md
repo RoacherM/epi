@@ -44,7 +44,7 @@ MMP 自己维护这份清单。清单外的短参数（`-x`）一律报错退出
 
 ## 3. 子命令
 
-`mmp update / install / remove / uninstall / list / config / auth` 都支持 `--help`（和 `-h`）打印各自的用法说明，用 MMP 自己的说法（Manifest 而不是 settings.json），不报错。
+`mmp update / install / remove / uninstall / list / config / auth / mcp` 都支持 `--help`（和 `-h`）打印各自的用法说明，用 MMP 自己的说法（Manifest 而不是 settings.json），不报错。
 
 | 子命令 | 和 Pi 对齐 | MMP 的做法 |
 |---|---|---|
@@ -54,6 +54,7 @@ MMP 自己维护这份清单。清单外的短参数（`-x`）一律报错退出
 | `mmp list` | 用法对齐 | 列出全局和项目 Manifest 里的扩展、Rules、Skills，标明来自哪个 Manifest；项目未被信任时只打印 "not trusted" 提示，不读取其声明内容；额外打印自动发现的 skill root 及其 provenance（`discovered: agents`/`mmp`/`project`） |
 | `mmp config [-l] [--approve\|--no-approve]` | 用途对齐 | 用 `$VISUAL`/`$EDITOR` 打开对应的 `mmp.json`，保存后按 Manifest 规则校验，出错就显示错误并保留原文件；`-l` 的信任规则和 `install -l` 相同 |
 | `mmp auth print-api-key / print-bearer-token / check` | 是 | 读写 `~/.mmp/pi` 里的凭证 |
+| `mmp mcp add\|remove\|list\|login\|logout`（docs/mcp-design.md §6） | 用法对齐 Pi 的 `pi mcp`（`extensions/mcp/cli.js`），不能直接复用：它写死 `.pi/mcp.json` 和 Pi 自己的信任存储 | MMP 自己解析参数；`add`/`remove` 读写 `~/.mmp/mcp.json`，加 `-l` 读写项目的 `.mmp/mcp.json`（信任规则和 `install -l` 相同：`--approve`/`-a` 本次生效，不持久化）；`add` 校验格式后再写（复用 Pi 的 `validateMcpServerConfig`），格式和字段名和 `mcp.json` 完全一致；`list` 真的连接每个已启用服务，报告状态、工具、`toolExposure` 覆盖、资源计数，有配置错误或连接失败退出码为 1，`--json` 输出机读格式；一个服务都没配置时打印 MMP 自己的提示（`~/.mmp/mcp.json`、`.mmp/mcp.json`、`mmp mcp add`），不是 Pi 的 `.pi/mcp.json`；`login`/`logout` 只对 HTTP/OAuth 服务有效，stdio 服务直接报错；凭据在 `<MMP_HOME>/pi/mcp-auth.json`（Pi 默认位置，`getAgentDir()` 已被重定向）。永远走 `src/host.ts` 的子命令表，不会落到 `piMain` |
 
 ## 4. 斜杠命令
 

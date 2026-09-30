@@ -325,7 +325,7 @@ Extension source scheme：
 
 ```text
 mmp:task               -> 包内 createTaskExtension(config)
-mmp:mcp                -> 包内 createMcpAdapter({ config })
+mmp:mcp                -> 包内 createMmpMcpExtension(source)，接 Pi 原生 createMcpExtension（现状见 §13）
 mmp:hooks              -> 包内 createHooksExtension(config)
 npm:<package>          -> 交给 Pi package resolver 的临时显式 source
 git:<owner>/<repo>     -> 交给 Pi package resolver 的临时显式 source
@@ -614,10 +614,7 @@ interface ResolvedAssembly {
 
 ```ts
 const extensionFactories: InlineExtension[] = [
-  {
-    name: "mmp:mcp",
-    factory: createMcpAdapter({ config: effectiveMcpConfig }),
-  },
+  createMmpMcpExtension(mcpConfigSource), // 现状见 §13 -- Pi 原生 createMcpExtension，不再是 createMcpAdapter
 ];
 ```
 
@@ -759,44 +756,59 @@ Project agent 仅在项目 trust 生效后可见。
 
 ## 13. MCP Extension
 
-> 升级到 Pi 0.99 时改用 Pi 原生 MCP、去掉 pi-mcp-adapter，设计见 [docs/mcp-design.md](docs/mcp-design.md)。本节描述的是升级前的现状。
+Pi 0.99 起原生支持 MCP（`createMcpExtension`），MMP 不再自带 MCP 客户端（`pi-mcp-adapter` 已移除）。设计见 [docs/mcp-design.md](docs/mcp-design.md)（决策 MCP1、MCP2）。
 
-MMP 不实现 MCP 协议栈。`mmp:mcp` 只负责：
+`mmp:mcp` 只负责决定**读哪些配置文件、用谁的信任判断**，其余（连接、OAuth、工具注册、`/mcp` 面板）全部是 Pi 的代码：
 
 ```text
-global mcp.json
-+ trusted project mcp.json
--> validate and build effective MCP config
--> createMcpAdapter({ config })
--> InlineExtension factory
+~/.mmp/mcp.json ─────────────┐
+<项目>/.mmp/mcp.json ─(仅信任)┤→ loadNativeMcpConfig ─→ createMcpExtension({ loadConfig, logPath })
+                             │                            │  （Pi 代码：连接、OAuth、注册 mcp__<server>__<tool>、/mcp）
+Pi 自己的 ~/.mmp/pi/mcp.json ✗                            ├─ createCodemodeExtension()
+项目 .pi/mcp.json            ✗                            └─ createToolSearchExtension()
 ```
 
-实现轮廓：
+实现轮廓（`src/extensions/mcp.ts`、`src/extensions/index.ts` 的 `case "mmp:mcp"`）：
 
 ```ts
-import { createMcpAdapter } from "pi-mcp-adapter";
-import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import { createMcpExtension, createCodemodeExtension, createToolSearchExtension } from "@earendil-works/pi-coding-agent";
 
-export function createMmpMcpExtension(config: McpConfig): InlineExtension {
+// config.js 不在包的 exports 里，按文件路径引用（docs/pi-internals.md "mcp-native-config-loader"）
+const { loadMcpConfig: piLoadMcpConfig } = await import(/* extensions/mcp/config.js 的绝对路径 */);
+
+function loadNativeMcpConfig(source, cwd) {
+  const assembly = source.resolveAssembly();
+  const global = piLoadMcpConfig({ agentDir: source.mmpHome, cwd, projectTrusted: false });
+  if (assembly.projectManifest?.loaded !== true) return global;
+  const project = piLoadMcpConfig({ agentDir: join(assembly.projectManifest.root, ".mmp"), cwd, projectTrusted: false });
+  // 合并：project 的条目 scope 改成 "project"，同名覆盖 global
+}
+
+export function createMmpMcpExtension(source) {
+  const loadConfig = (ctx) => loadNativeMcpConfig(source, ctx.cwd);
+  const piFactory = createMcpExtension({ loadConfig, logPath: join(source.mmpHome, "pi", "mcp.log") });
   return {
     name: "mmp:mcp",
-    factory: createMcpAdapter({ config }),
+    factory: async (pi) => {
+      // 包一层 Proxy，只拦截 registerCommand("mcp", ...)：零服务时显示 MMP 自己的提示
+      await piFactory(wrappedPi);
+      // session_start 里查 pi.getCommands()，发现别的扩展也注册了 /mcp 就可见地失败
+    },
   };
 }
 ```
 
-已核实 `pi-mcp-adapter`（见 `package.json`）提供 programmatic factory：
+要点（都已用真实源码核实，不是照抄设计稿）：
 
-```ts
-createMcpAdapter({
-  config?: McpConfig;
-  configPath?: string;
-})
-```
+- `loadMcpConfig` 的 `projectTrusted` 参数只控制它自己是否**额外**读 `<cwd>/.pi/mcp.json`；MMP 永远传 `false`，改用两次调用（`agentDir` 分别是 `~/.mmp` 和 `<项目>/.mmp`）来精确控制读哪两份文件，`.pi/mcp.json` 永远不会被这条路径读到。
+- `McpServerEntry.source` 就是传给 `loadMcpConfig` 的那个 `agentDir` 拼出来的路径；`/mcp` 面板的写回（启用/停用/改曝光方式）默认调 `updateMcpServerConfig(entry.source, ...)`——只要不传自定义 `updateConfig`，写回自然落在 MMP 自己的文件上，不用额外代码。
+- `credentials` 没有显式传：它的类型是 `McpOAuthCredentialStore` 实例（不是路径），Pi 的默认值走 `getAgentDir()`，MMP 早就把它重定向到 `<MMP_HOME>/pi` 了，结果和显式传一样，省了引入 `oauth.js` 的代价。
+- 一份坏的 `mcp.json`（`loadNativeMcpConfig` 的 `errors` 非空）在 `src/extensions/index.ts` 里同步抛 `MmpConfigError`，不等 Pi 自己那句软提示（`ctx.ui.notify(..., "warning")`，在 `-p` 模式下是空操作）。
+- Manifest 同时声明别的扩展也注册 `/mcp` 时，Pi 自己的处理是把两边都改名成 `/mcp:1`/`/mcp:2`（不报错）；`mmp:mcp` 在 `session_start` 里查这个改名信号，throw 一个错误——在 print 模式下这条错误经由 Pi 的 `onError` 打到 stderr，在 TUI 里额外用 `ctx.ui.notify` 落一条常驻提示（`ctx.shutdown()` 在 print 模式是空操作，在 TUI 里会立刻退出，可能和提示渲染赛跑，所以不调用它）。
 
-`pi-mcp-adapter` 已 exact pin（见 `package.json`）。2.17.0 在 Pi 0.87 下无法加载（`pi-ai` 不再导出 `complete`），升级 Pi 时一起换成 2.x 最后一版。它在当前锁定的 Pi 版本上通过离线验收：`test/mcp.test.mjs` 用 faux provider 按剧本驱动真实 stdio MCP `search -> call`，同时覆盖环境变量展开与 Session 退出回收。（2.17.0 当初在 Pi `0.83.0` 上是用真实模型验收的。）
+`mmp mcp add|remove|list|login|logout`（`src/commands/mcp-cli.ts`，docs/mcp-design.md §6）复用同一批 Pi 代码（`config.js` 的 `addMcpServerConfig`/`removeMcpServerConfig`/`getMcpToolExposure`、`core/mcp-servers.js` 的 `validateMcpServerConfig`、`runtime.js` 的 `McpServerConnection`/`McpOAuthCredentialStore`/`signInMcpServer`，全部登记进 [docs/pi-internals.md](docs/pi-internals.md)），但参数解析和信任判断是 MMP 自己的——Pi 的 `runMcpCommand` 写死 `.pi/mcp.json` 和 Pi 自己的项目信任存储，不能直接用。
 
-MMP 不拥有 transport、OAuth、connection lifecycle、tool discovery/call、renderer 和 metadata cache。
+MMP 不拥有 transport、OAuth、connection lifecycle、tool discovery/call、renderer 和 metadata cache——这些全部是 Pi 的代码，跟着 Pi 升级自动走。
 
 ## 14. Hooks Extension
 

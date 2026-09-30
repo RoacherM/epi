@@ -42,10 +42,12 @@ const { loadMcpConfig: piLoadMcpConfig } = (await import(
 export interface McpConfigSource {
   /** MMP's own home (`~/.mmp` or `$MMP_HOME`), never Pi's `<agentDir>/pi`. */
   mmpHome: string;
-  /** Called fresh on every invocation (session_start, /reload, /trust) -- never a captured value,
-   * so a project that becomes trusted mid-run, or a Manifest reload, is picked up (docs/mcp-design.md
-   * §2 "如何复用 Pi 的解析"). */
-  resolveAssembly: () => ResolvedAssembly;
+  /** Only `projectManifest` is ever read (never the rest of `ResolvedAssembly`), so `mmp mcp`
+   * (src/commands/mcp-cli.ts) can build one without the full session assembly. Called fresh on
+   * every invocation (session_start, /reload, /trust) -- never a captured value, so a project that
+   * becomes trusted mid-run, or a Manifest reload, is picked up (docs/mcp-design.md §2 "如何复用 Pi
+   * 的解析"). */
+  resolveAssembly: () => Pick<ResolvedAssembly, "projectManifest">;
 }
 
 /**

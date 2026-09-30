@@ -115,6 +115,7 @@ mmp uninstall <source> [-l] [--approve|--no-approve]            # remove 的别�
 mmp list                                                        # 列出全局与项目 Manifest 里的 Rules/Skills/Extensions
 mmp config [-l] [--approve|--no-approve]                        # 用 $VISUAL/$EDITOR 编辑 Manifest，保存后立即校验
 mmp auth print-api-key|print-bearer-token|check                # 打印或检查 provider 凭证（读写 ~/.mmp/pi，不读 ~/.pi/agent）
+mmp mcp add|remove|list|login|logout                            # 配置、检查 MCP 服务，OAuth 登录/登出
 ```
 
 `-l` 把 `install`/`remove`/`config` 的目标从全局 `~/.mmp/mmp.json` 换成当前目录的 `.mmp/mmp.json`；目标项目未被信任时三者都会拒绝，报同一句 "not trusted" 提示，除非带 `--approve`（仅本次生效，和 Pi 自己的项目级 package 命令一样，见 `package-manager-cli.js`）。`mmp install` 写入前会校验来源是否真实存在：`npm:` 用 `npm view <spec> version` 确认包（和版本）能解析，`git:` 用 `git ls-remote` 确认仓库可达（10 秒超时；命令缺失或返回非零都会带上原始报错说明原因；`--offline` 和 `PI_OFFLINE` 一样跳过这项检查），本地路径确认文件存在；`git:` 只接受 Pi 自己会接受的形状（host/path、显式协议 URL、scp 语法，可选 `@ref`），校验失败不写入，并说明原因。写入后需要重启 `mmp` 才生效；扩展包本身不会被预先下载进 `.pi/` 或 Pi 的 `settings.json`——它们和其它 Manifest 声明的 Extension 一样，在下次 `mmp` 启动时按 `--extension npm:x`/`git:x` 的方式加载，缓存在 `~/.mmp/pi/tmp/extensions` 下；`mmp update --extensions` 清空这份缓存，让声明的来源在下次启动时重新拉取。`mmp config` 的编辑结果如果校验失败，会保留编辑前的文件内容并报错。
@@ -231,29 +232,23 @@ Review only the requested change. Return findings with file and line evidence.
 
 ## MCP
 
-在 Manifest 声明 `mmp:mcp`，然后创建 `~/.mmp/mcp.json`：
+在 Manifest 声明 `mmp:mcp`，然后创建 `~/.mmp/mcp.json`（格式和 Pi 自己的 `mcp.json` 逐字一致，见 Pi 的 `docs/mcp.md`）：
 
 ```json
 {
   "mcpServers": {
-    "local": {
-      "command": "node",
-      "args": ["/absolute/path/to/server.mjs"],
-      "env": {
-        "SERVICE_TOKEN": "${SERVICE_TOKEN}"
-      },
-      "lifecycle": "eager",
-      "requestTimeoutMs": 30000
-    }
+    "docs": { "url": "https://example.com/mcp", "headers": { "Authorization": "Bearer ${DOCS_TOKEN}" } },
+    "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."] }
   },
-  "settings": {
-    "hostConfigDiscovery": "off",
-    "mcpFooterStatus": "off"
-  }
+  "autoEnableCodemode": true
 }
 ```
 
-每个 server 必须且只能声明一个 transport：`command`、`socket` 或 `url`。`${ENV_NAME}` 在启动前展开；缺失变量 fail-fast。可信项目的 `<repo>/.mmp/mcp.json` 在全局配置之后合并。MMP 只负责校验和装配，MCP transport、OAuth、连接生命周期、tool discovery/call 与进程回收由固定版本的 `pi-mcp-adapter`（见 `package.json`）提供。
+传输只有 stdio（`command`/`args`/`env`/`cwd`）和 streamable HTTP（`url`/`headers`/`oauth`）；不支持 SSE、unix socket。`${ENV_NAME}`/`$ENV_NAME` 在连接前展开，`!command` 执行子进程取值。可信项目的 `<repo>/.mmp/mcp.json` 在全局配置之后合并，同名服务项目覆盖全局。用 `mmp mcp add/remove/list/login/logout` 管理（见上面的子命令一节），或直接编辑文件后 `/reload`。
+
+模型默认通过 `codemode` 工具调用 MCP 服务（写 JS 脚本批量/串联调用，见 Pi 的 `docs/cli.md#how-codemode-works`），配了服务时 Pi 自动启用；某个服务想让模型直接看到，加 `"exposure": "direct"`（也可以用 `toolExposure` 按工具设置）。`/mcp` 打开 Pi 自己的管理面板（登录、重连、启用/停用、改曝光方式）；没有配置任何服务时显示 MMP 自己的提示，不是 Pi 的 `.pi/mcp.json`。
+
+MMP 只决定读哪些配置文件（上面两份，从不读 Pi 自己的 `~/.mmp/pi/mcp.json` 或项目 `.pi/mcp.json`）和项目是否可信；连接、OAuth、工具注册、`/mcp` 面板全部是 Pi 0.99 内置的原生 MCP 支持（`createMcpExtension`），MMP 不再自带 MCP 客户端。凭据明文存在 `~/.mmp/pi/mcp-auth.json`（和 Pi 一样，不进系统钥匙串）。
 
 ## Hooks
 

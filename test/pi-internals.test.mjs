@@ -198,8 +198,12 @@ const registry = [
   {
     id: "mcp-native-config-loader",
     async check() {
-      const { loadMcpConfig } = await importDeep("extensions", "mcp", "config.js");
+      const { loadMcpConfig, addMcpServerConfig, removeMcpServerConfig, getMcpToolExposure } =
+        await importDeep("extensions", "mcp", "config.js");
       assertFunction(loadMcpConfig, "loadMcpConfig");
+      assertFunction(addMcpServerConfig, "addMcpServerConfig");
+      assertFunction(removeMcpServerConfig, "removeMcpServerConfig");
+      assertFunction(getMcpToolExposure, "getMcpToolExposure");
       const os = await import("node:os");
       const fs = await import("node:fs");
       const path = await import("node:path");
@@ -226,9 +230,39 @@ const registry = [
         );
         const stillOne = loadMcpConfig({ agentDir: dir, cwd: dir, projectTrusted: false });
         assert.equal(stillOne.servers.length, 1, "loadMcpConfig read <cwd>/.pi/mcp.json even with projectTrusted: false");
+        assert.equal(getMcpToolExposure({ command: "node" }, "any_tool"), "codemode", "getMcpToolExposure no longer defaults to \"codemode\"");
+        const added = addMcpServerConfig(path.join(dir, "written.json"), "wrote", { command: "node" });
+        assert.equal(added, false, "addMcpServerConfig no longer returns false for a brand-new entry");
+        assert.equal(removeMcpServerConfig(path.join(dir, "written.json"), "wrote"), true, "removeMcpServerConfig no longer returns true after removing an entry it just added");
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }
+    },
+  },
+  {
+    id: "mcp-native-validate-config",
+    async check() {
+      const { validateMcpServerConfig } = await importDeep("core", "mcp-servers.js");
+      assertFunction(validateMcpServerConfig, "validateMcpServerConfig");
+      const ok = validateMcpServerConfig("fixture", { command: "node" });
+      assert.equal(typeof ok, "object", "validateMcpServerConfig no longer returns the config object for a valid entry");
+      const bad = validateMcpServerConfig("fixture", {});
+      assert.equal(typeof bad, "string", "validateMcpServerConfig no longer returns an error string for an invalid entry");
+    },
+  },
+  {
+    id: "mcp-native-runtime",
+    async check() {
+      const runtime = await importDeep("extensions", "mcp", "runtime.js");
+      for (const name of ["McpServerConnection", "createDefaultTransport", "McpOAuthCredentialStore", "McpSignInCancelledError", "signInMcpServer", "McpServerLog"]) {
+        assert.ok(name in runtime, `extensions/mcp/runtime.js no longer exports ${name}`);
+      }
+      assertFunction(runtime.createDefaultTransport, "createDefaultTransport");
+      assertFunction(runtime.signInMcpServer, "signInMcpServer");
+      assertFunction(runtime.McpServerConnection, "McpServerConnection");
+      const store = new runtime.McpOAuthCredentialStore();
+      assertFunction(store.forServer, "McpOAuthCredentialStore.prototype.forServer");
+      assertFunction(store.remove, "McpOAuthCredentialStore.prototype.remove");
     },
   },
 ];
@@ -321,6 +355,8 @@ const KNOWN_DEEP_PATHS = new Map([
   ["@earendil-works/pi-tui", "pi-tui-nested-copy"],
   ["diff", "pi-diff-package"],
   ["extensions/mcp/config.js", "mcp-native-config-loader"],
+  ["core/mcp-servers.js", "mcp-native-validate-config"],
+  ["extensions/mcp/runtime.js", "mcp-native-runtime"],
 ]);
 
 test("every join(piDist, ...)/importFromPi/createRequire(piEntry).resolve deep reach is registered in docs/pi-internals.md", () => {
