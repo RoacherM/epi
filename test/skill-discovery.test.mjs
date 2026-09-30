@@ -6,7 +6,7 @@
 // only edit there). Every run here uses a temp HOME/MMP_HOME -- never the real user's home.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -308,4 +308,68 @@ test("MMP's own <MMP_HOME>/skills symlinked to HOME is rejected", (t) => {
 
   const stderr = rejectedDryRun(f, ["--no-project"]);
   assert.match(stderr, /which contains Pi's own data at /);
+});
+
+// On a case-insensitive filesystem (macOS default) `~/.PI/agent` IS `~/.pi/agent`; the guard must
+// compare on-disk names, not the case a symlink happened to spell. Skipped where the temp
+// filesystem is case-sensitive (Linux CI), since there the variants are different directories.
+function caseInsensitiveFs(dir) {
+  writeFileSync(join(dir, "case-probe"), "");
+  return existsSync(join(dir, "CASE-PROBE"));
+}
+
+for (const [name, target, args, setup] of [
+  ["~/.agents/skills -> ~/.PI/agent/skills", (f) => join(f.home, ".PI", "agent", "skills"), ["--no-project"],
+    (f) => plantSkill(join(f.home, ".pi", "agent", "skills"), "pi-only-skill")],
+  ["project .mmp/skills -> ~/.MMP/PI/skills", (f) => join(f.home, ".MMP", "PI", "skills"), ["--approve"],
+    (f) => plantSkill(join(f.mmpHome, "pi", "skills"), "mmp-pi-data-skill")],
+  ["project .mmp/skills -> ~/.MMP", (f) => join(f.home, ".MMP"), ["--approve"],
+    (f) => plantSkill(join(f.mmpHome, "pi", "skills"), "mmp-pi-data-skill")],
+]) {
+  test(`a case-variant symlink into Pi's data is rejected on a case-insensitive filesystem: ${name}`, (t) => {
+    const f = fixture(t);
+    if (!caseInsensitiveFs(f.root)) {
+      t.skip("temp filesystem is case-sensitive");
+      return;
+    }
+    writeGlobalManifest(f);
+    setup(f);
+    const link = args[0] === "--approve"
+      ? join(f.project, ".mmp", "skills")
+      : join(f.home, ".agents", "skills");
+    if (args[0] === "--approve") {
+      mkdirSync(join(f.project, ".mmp"), { recursive: true });
+      writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
+    } else {
+      mkdirSync(join(f.home, ".agents"), { recursive: true });
+    }
+    symlinkSync(target(f), link);
+
+    const stderr = rejectedDryRun(f, args);
+    assert.match(stderr, /Pi's own data/);
+  });
+}
+
+test("~/.agents/skills pointing into the target of a symlinked ~/.pi/agent is rejected", (t) => {
+  const f = fixture(t);
+  writeGlobalManifest(f);
+  const elsewhere = join(f.root, "dotfiles", "pi-agent");
+  plantSkill(join(elsewhere, "skills"), "pi-only-skill");
+  mkdirSync(join(f.home, ".pi"), { recursive: true });
+  symlinkSync(elsewhere, join(f.home, ".pi", "agent"));
+  mkdirSync(join(f.home, ".agents"), { recursive: true });
+  symlinkSync(join(elsewhere, "skills"), join(f.home, ".agents", "skills"));
+
+  const stderr = rejectedDryRun(f, ["--no-project"]);
+  assert.match(stderr, /inside Pi's own data/);
+});
+
+test("~/.agents/skills symlinked to the filesystem root is rejected", (t) => {
+  const f = fixture(t);
+  writeGlobalManifest(f);
+  mkdirSync(join(f.home, ".agents"), { recursive: true });
+  symlinkSync("/", join(f.home, ".agents", "skills"));
+
+  const stderr = rejectedDryRun(f, ["--no-project"]);
+  assert.match(stderr, /resolves to \/, which contains Pi's own data/);
 });

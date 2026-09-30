@@ -13,7 +13,7 @@ function canonicalDirectory(dir) {
         return undefined;
     }
     try {
-        const canonical = realpathSync(dir);
+        const canonical = realpathSync.native(dir);
         return statSync(canonical).isDirectory() ? canonical : undefined;
     }
     catch {
@@ -22,7 +22,9 @@ function canonicalDirectory(dir) {
 }
 /** Canonical form of `path` even when it doesn't exist yet: realpath of the deepest existing
  * ancestor plus the rest. On macOS /tmp and /var are symlinks into /private, so comparing a
- * realpath'd candidate against a literal path would miss a match. */
+ * realpath'd candidate against a literal path would miss a match. `.native` (here and in
+ * canonicalDirectory) returns the on-disk case: plain realpathSync keeps the caller's case, so on a
+ * case-insensitive filesystem `~/.PI/agent` would not compare equal to `~/.pi/agent`. */
 function canonicalPath(path) {
     const suffix = [];
     let current = resolve(path);
@@ -34,10 +36,12 @@ function canonicalPath(path) {
         suffix.unshift(basename(current));
         current = parent;
     }
-    return join(realpathSync(current), ...suffix);
+    return join(realpathSync.native(current), ...suffix);
 }
 function isUnderOrEqual(canonicalPath, ancestor) {
-    return canonicalPath === ancestor || canonicalPath.startsWith(`${ancestor}${sep}`);
+    // The filesystem root already ends in a separator; appending another would never match.
+    const prefix = ancestor.endsWith(sep) ? ancestor : `${ancestor}${sep}`;
+    return canonicalPath === ancestor || canonicalPath.startsWith(prefix);
 }
 /** A dot-segment literally named `.pi` anywhere in the path -- Pi's own agent dir convention
  * (`~/.pi/agent`, a project's `.pi`), wherever it shows up after resolving symlinks. */
@@ -71,11 +75,13 @@ export function discoverSkillRoots(options) {
             : [{ dir: join(options.trustedProjectRoot, ".mmp", "skills"), provenance: "project", source: "project" }]),
     ];
     // Canonicalized the same way every candidate is below. ~/.pi is listed in both its path-wise
-    // form (what a recursive walk from an ancestor reaches) and its realpath (if it is a symlink).
+    // form (what a recursive walk from an ancestor reaches) and its realpath (if it is a symlink);
+    // ~/.pi/agent is listed too, in case it alone is a symlink elsewhere (a dotfiles setup).
     const piDataDirs = [
         canonicalPath(options.agentDir),
         join(canonicalPath(home), ".pi"),
         canonicalPath(join(home, ".pi")),
+        canonicalPath(join(home, ".pi", "agent")),
     ];
     const roots = [];
     for (const candidate of candidates) {

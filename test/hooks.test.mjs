@@ -777,6 +777,35 @@ for (const [name, url, stubFetch] of [
   });
 }
 
+// undici's bare "fetch failed" hides why; the cause's error code is kept, but never the cause's
+// message, which quotes the expanded address.
+test("an http hook's fetch failure keeps the cause's error code but not its message", async (t) => {
+  const root = createFixture(t);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const cause = Object.assign(new Error(`connect ECONNREFUSED ${input}`), { code: "ECONNREFUSED" });
+    throw new TypeError("fetch failed", { cause });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const runtime = createRuntime(t, root, [hook("tool_call", [{
+    type: "http",
+    method: "POST",
+    url: "http://127.0.0.1:9/hook?token=sk-live-SUPERSECRET",
+    declaredUrl: "http://127.0.0.1:9/hook?token=${HOOK_SECRET}",
+    timeoutMs: 1000,
+  }])]);
+
+  await assert.rejects(
+    runtime.run({ type: "tool_call", cwd: root, toolName: "bash", input: {} }, createContext(root)),
+    (error) => {
+      assert.match(error.message, /failed: fetch failed \(ECONNREFUSED\)$/);
+      assert.doesNotMatch(error.message, /SUPERSECRET/);
+      assert.equal(error.cause, undefined);
+      return true;
+    },
+  );
+});
+
 // session_start, session_before_compact, and session_shutdown share notifyFailure with user_prompt
 // (hooks.ts) -- one fixed function, one test proving the stderr fallback covers all of them.
 test("a session_start hook failure also falls back to stderr outside the TUI", async (t) => {

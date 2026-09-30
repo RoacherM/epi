@@ -149,6 +149,15 @@ function redactExpandedUrl(
     .replaceAll(new URL(handler.url).href, label);
 }
 
+/** undici's "fetch failed" says nothing on its own; the cause's system error code (ECONNREFUSED,
+ * ENOTFOUND, UND_ERR_CONNECT_TIMEOUT, ...) is the useful part. Only the code, never the cause's
+ * message, which can quote the expanded host or URL. */
+function fetchCauseCode(error: unknown): string {
+  const cause = error instanceof Error ? error.cause : undefined;
+  const code = isRecord(cause) ? cause.code : undefined;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]*$/.test(code) ? ` (${code})` : "";
+}
+
 /** Names which handler failed, for the wrapped error `run()` throws (naming the hook is the point
  * of "failures must show" -- a bare "hook command could not be started" doesn't say which hook).
  * Never includes headers or a request/response body -- only enough to identify the handler. */
@@ -572,7 +581,7 @@ export class HooksRuntime {
         signal,
       });
     } catch (error) {
-      throw new Error(redactExpandedUrl(errorMessage(error), handler));
+      throw new Error(`${redactExpandedUrl(errorMessage(error), handler)}${fetchCauseCode(error)}`);
     }
     if (!response.ok) {
       await response.body?.cancel();
