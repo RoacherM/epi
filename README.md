@@ -183,7 +183,7 @@ Skills 的资源只由 Manifest 声明这一条承诺有三个固定例外：除
 - MMP 自己的全局 `<MMP_HOME>/skills`（默认 `~/.mmp/skills`，和 `mmp.json` 同级）；
 - 被信任项目的 `.mmp/skills`（信任规则与 `.mmp/mmp.json` 一致——项目如果没有 `.mmp/mmp.json`，就不算 MMP 项目，其 `.mmp/skills` 也不会被发现，`--approve` 也不例外）。
 
-永远不会读取 Pi 自己的 Skill 目录（`~/.pi/agent/skills`、MMP 的 Pi 数据目录 `<MMP_HOME>/pi/skills`、项目 `.pi/skills`），也不读取项目的 `.agents/skills`（不是用户为 MMP 选定的目录）。自动发现的目录和 Manifest 声明的目录一样，以显式绝对路径传给 Pi；canonical path 与已声明的 Skill 相同时去重，声明的一方保留其 source/declaredIn。`mmp --dry-run`、`/mmp`、启动页和 `mmp list` 都会标注每个自动发现 skill root 的来源（`discovered: agents` / `discovered: mmp` / `discovered: project`）。
+永远不会读取 Pi 自己的 Skill 目录（`~/.pi/agent/skills`、项目 `.pi/skills`），也不读取项目的 `.agents/skills`（不是用户为 MMP 选定的目录）。`<MMP_HOME>/pi` 是 MMP 存放 Pi 运行状态（登录凭据、会话、模型目录、设置）的目录，不是 Skill 目录；三个自动发现的目录解析符号链接后，如果落在它或 `~/.pi` 里面、或者是它们的上级目录，本次运行直接报配置错误。自动发现的目录和 Manifest 声明的目录一样，以显式绝对路径传给 Pi；canonical path 与已声明的 Skill 相同时去重，声明的一方保留其 source/declaredIn。`mmp --dry-run`、`/mmp`、启动页和 `mmp list` 都会标注每个自动发现 skill root 的来源（`discovered: agents` / `discovered: mmp` / `discovered: project`）。
 
 Manifest 修改后：
 

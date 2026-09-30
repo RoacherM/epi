@@ -55,8 +55,9 @@ export interface MmpRuntimeIdentity {
     relativePaths: "declaring-manifest-directory";
     /** The only three directories skills are auto-discovered from beyond the Manifest
      * (docs/decisions.md S1); entries actually loaded from them are tagged `discovered` in
-     * `skillRoots` below. Never Pi's own discovery paths (~/.pi/agent/skills, MMP's Pi data dir,
-     * project .pi/skills) or a project's .agents/skills. */
+     * `skillRoots` below. Never Pi's own discovery paths (~/.pi/agent/skills, project .pi/skills)
+     * or a project's .agents/skills, and never a root inside or containing Pi's state dir
+     * (`<mmpHome>/pi`: auth, sessions, model catalog, settings). */
     fixedSkillRoots: readonly [string, string, string];
     /** Whether Pi's own ambient discovery paths (~/.pi/agent/skills, cwd .pi/skills, cwd
      * .agents/skills, ...) were loaded -- always false; MMP always passes noSkills etc. and feeds

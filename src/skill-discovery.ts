@@ -1,7 +1,9 @@
 // Auto-discovery of skill roots beyond the Manifest (docs/decisions.md S1). Exactly three fixed
-// directories are ever consulted -- never Pi's own skill locations (~/.pi/agent/skills, MMP's Pi
-// data dir <MMP_HOME>/pi/skills, a project's .pi/skills) and never a project's .agents/skills
-// (not a location the user chose for MMP). A missing directory is skipped, not an error.
+// directories are ever consulted -- never Pi's own skill locations (~/.pi/agent/skills, a
+// project's .pi/skills) and never a project's .agents/skills (not a location the user chose for
+// MMP). None of them may resolve into, or contain, Pi's state: <MMP_HOME>/pi (where MMP keeps
+// Pi's auth, sessions, model catalog and settings) or ~/.pi. A missing directory is skipped, not
+// an error.
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
@@ -14,9 +16,10 @@ export interface DiscoverSkillRootsOptions {
    * honored instead of the real `os.homedir()` so tests never touch the real user's home. */
   environment: NodeJS.ProcessEnv;
   mmpHome: string;
-  /** MMP's own Pi data dir (`<mmpHome>/pi`) -- a discovered root resolving inside it or to one of
-   * its ancestors (e.g. a project's `.mmp/skills` symlinked to it or to `<mmpHome>`) is rejected,
-   * not silently skipped. */
+  /** `<mmpHome>/pi`, the directory where MMP keeps Pi's runtime state (auth, sessions, model
+   * catalog, settings). It is not a skills location: a discovered root resolving inside it or to
+   * one of its ancestors (e.g. a project's `.mmp/skills` symlinked to it or to `<mmpHome>`) is
+   * rejected, not silently skipped. */
   agentDir: string;
   /** The trusted project's root (ProjectManifestState.root), or undefined when there is no
    * trusted project for this run -- the same gate `.mmp/mmp.json` itself uses. */
@@ -68,18 +71,22 @@ function isUnderOrEqual(canonicalPath: string, ancestor: string): boolean {
   return canonicalPath === ancestor || canonicalPath.startsWith(prefix);
 }
 
-/** A dot-segment literally named `.pi` anywhere in the path -- Pi's own agent dir convention
- * (`~/.pi/agent`, a project's `.pi`), wherever it shows up after resolving symlinks. */
+/** A segment named `.pi` anywhere in the path -- Pi's own agent dir convention (`~/.pi/agent`, a
+ * project's `.pi`), wherever it shows up after resolving symlinks. Compared case-insensitively on
+ * every platform: realpathSync.native returns the on-disk case, so on macOS a project dir created
+ * as `.PI` (which Pi opens as `.pi`) must still match. The cost is rejecting a folder literally
+ * named `.PI` on a case-sensitive filesystem. */
 function hasPiPathSegment(canonicalPath: string): boolean {
-  return canonicalPath.split(sep).includes(".pi");
+  return canonicalPath.split(sep).some((segment) => segment.toLowerCase() === ".pi");
 }
 
 /** Hard rule 1 (AGENTS.md): MMP never reads Pi's own state, even through a symlink a project or
- * ~/.agents/skills happens to contain. Rejected outright (the same way an invalid Manifest path
- * fails, not silently skipped like a merely-missing directory):
- * - a root inside Pi's data: under MMP's own Pi data dir, or containing a `.pi` segment
- *   (e.g. a project's `.mmp/skills -> <MMP_HOME>/pi/skills`);
- * - a root that contains Pi's data: an ancestor of MMP's Pi data dir or of `~/.pi`
+ * ~/.agents/skills happens to contain. Pi's state is `<MMP_HOME>/pi` (MMP's Pi state dir: auth,
+ * sessions, model catalog, settings) and `~/.pi`. Rejected outright (the same way an invalid
+ * Manifest path fails, not silently skipped like a merely-missing directory):
+ * - a root inside Pi's state: under one of those dirs, or containing a `.pi` segment
+ *   (e.g. a project's `.mmp/skills -> <MMP_HOME>/pi/sessions`);
+ * - a root that contains Pi's state: an ancestor of one of those dirs
  *   (e.g. `.mmp/skills -> <MMP_HOME>` or `~/.agents/skills -> ~`), since Pi's skill loader
  *   recurses into subdirectories. `piDataDirs` are canonical (see canonicalPath). */
 function assertNotPiPath(

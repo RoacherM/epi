@@ -204,15 +204,17 @@ test("/reload picks up a skill created after startup", (t) => {
 });
 
 // Hard rule 1 (AGENTS.md): MMP never reads Pi's own state, even through a symlink one of the
-// three fixed discovery roots happens to be or contain.
-test("a trusted project's .mmp/skills symlinked into MMP's own Pi data dir is rejected, not silently skipped", (t) => {
+// three fixed discovery roots happens to be or contain. <MMP_HOME>/pi is Pi's state dir (auth,
+// sessions, model catalog, settings), not a skills location; `sessions` below just stands for
+// any folder inside it.
+test("a trusted project's .mmp/skills symlinked to a folder inside Pi's state dir is rejected, not silently skipped", (t) => {
   const f = fixture(t);
   writeGlobalManifest(f);
   mkdirSync(join(f.project, ".mmp"), { recursive: true });
   writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
-  const agentSkills = join(f.mmpHome, "pi", "skills");
-  mkdirSync(agentSkills, { recursive: true });
-  symlinkSync(agentSkills, join(f.project, ".mmp", "skills"));
+  const piStateFolder = join(f.mmpHome, "pi", "sessions");
+  mkdirSync(piStateFolder, { recursive: true });
+  symlinkSync(piStateFolder, join(f.project, ".mmp", "skills"));
 
   const result = spawnSync(process.execPath, [cliPath, "--approve", "--dry-run"], {
     cwd: f.project,
@@ -244,11 +246,11 @@ test("~/.agents/skills symlinked into Pi's own agent skills dir is rejected", (t
   assert.match(result.stderr, /inside Pi's own data/);
 });
 
-test("MMP's own <MMP_HOME>/skills symlinked into MMP's own Pi data dir is rejected", (t) => {
+test("MMP's own <MMP_HOME>/skills symlinked to a folder inside Pi's state dir is rejected", (t) => {
   const f = fixture(t);
-  const agentSkills = join(f.mmpHome, "pi", "skills");
-  mkdirSync(agentSkills, { recursive: true });
-  symlinkSync(agentSkills, join(f.mmpHome, "skills"));
+  const piStateFolder = join(f.mmpHome, "pi", "sessions");
+  mkdirSync(piStateFolder, { recursive: true });
+  symlinkSync(piStateFolder, join(f.mmpHome, "skills"));
   writeGlobalManifest(f);
 
   const result = spawnSync(process.execPath, [cliPath, "--no-project", "--dry-run"], {
@@ -261,8 +263,8 @@ test("MMP's own <MMP_HOME>/skills symlinked into MMP's own Pi data dir is reject
   assert.match(result.stderr, /inside Pi's own data/);
 });
 
-// A root that CONTAINS Pi's data is as bad as one inside it: Pi's skill loader recurses into
-// subdirectories, so `.mmp/skills -> <mmpHome>` would reach <mmpHome>/pi/skills.
+// A root that CONTAINS Pi's state is as bad as one inside it: Pi's skill loader recurses into
+// subdirectories, so `.mmp/skills -> <mmpHome>` would reach anything inside <mmpHome>/pi.
 function rejectedDryRun(f, args) {
   const result = spawnSync(process.execPath, [cliPath, ...args, "--dry-run"], {
     cwd: f.project,
@@ -275,12 +277,12 @@ function rejectedDryRun(f, args) {
   return result.stderr;
 }
 
-test("a trusted project's .mmp/skills symlinked to <MMP_HOME> (an ancestor of Pi's data dir) is rejected", (t) => {
+test("a trusted project's .mmp/skills symlinked to <MMP_HOME> (an ancestor of Pi's state dir) is rejected", (t) => {
   const f = fixture(t);
   writeGlobalManifest(f);
   mkdirSync(join(f.project, ".mmp"), { recursive: true });
   writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
-  plantSkill(join(f.mmpHome, "pi", "skills"), "mmp-pi-data-skill");
+  plantSkill(join(f.mmpHome, "pi", "sessions"), "stray-skill-in-pi-state");
   symlinkSync(f.mmpHome, join(f.project, ".mmp", "skills"));
 
   const stderr = rejectedDryRun(f, ["--approve"]);
@@ -321,10 +323,14 @@ function caseInsensitiveFs(dir) {
 for (const [name, target, args, setup] of [
   ["~/.agents/skills -> ~/.PI/agent/skills", (f) => join(f.home, ".PI", "agent", "skills"), ["--no-project"],
     (f) => plantSkill(join(f.home, ".pi", "agent", "skills"), "pi-only-skill")],
-  ["project .mmp/skills -> ~/.MMP/PI/skills", (f) => join(f.home, ".MMP", "PI", "skills"), ["--approve"],
-    (f) => plantSkill(join(f.mmpHome, "pi", "skills"), "mmp-pi-data-skill")],
+  ["project .mmp/skills -> ~/.MMP/PI/sessions", (f) => join(f.home, ".MMP", "PI", "sessions"), ["--approve"],
+    (f) => plantSkill(join(f.mmpHome, "pi", "sessions"), "stray-skill-in-pi-state")],
   ["project .mmp/skills -> ~/.MMP", (f) => join(f.home, ".MMP"), ["--approve"],
-    (f) => plantSkill(join(f.mmpHome, "pi", "skills"), "mmp-pi-data-skill")],
+    (f) => plantSkill(join(f.mmpHome, "pi", "sessions"), "stray-skill-in-pi-state")],
+  // The project dir exists on disk as `.PI`; the link spells `.pi`. realpathSync.native returns
+  // `.PI`, so the `.pi` segment rule must compare case-insensitively.
+  ["project .mmp/skills -> ./.pi/skills with the dir on disk as .PI", (f) => join(f.project, ".pi", "skills"), ["--approve"],
+    (f) => plantSkill(join(f.project, ".PI", "skills"), "project-pi-skill")],
 ]) {
   test(`a case-variant symlink into Pi's data is rejected on a case-insensitive filesystem: ${name}`, (t) => {
     const f = fixture(t);
