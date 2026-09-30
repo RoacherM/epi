@@ -150,10 +150,15 @@ export class Transcript {
                     // getFollowUpMessages when the agent would stop, then emits turn_start + this user
                     // message_start) or, when it was queued after the loop's last poll, through
                     // agent.continue() (another agent_start, then this message_start). This user message is
-                    // the one boundary both paths share: close the previous turn's footer above it.
+                    // the one boundary both paths share: close the previous turn's footer above it. That turn
+                    // finished on its own, so a stop pending here (Esc after its reply ended, while
+                    // prepareNextTurn still compacts) belongs to the new turn, not to its label.
                     if (this.turnStartedAt !== undefined && this.finishedReply !== undefined) {
+                        const stopPending = this.turnAborted;
+                        this.turnAborted = false;
                         this.turnFooter([this.finishedReply]);
                         this.turnStartedAt = Date.now();
+                        this.turnAborted = stopPending;
                     }
                     this.addFinishedMessage(event.message);
                 }

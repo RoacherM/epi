@@ -657,3 +657,44 @@ test("a steer between tool calls stays in the running turn; one after a finished
   assert.equal(rendered.match(/Worked for/g)?.length, 2, rendered);
   assert.match(rendered, /STEER-MID[\s\S]*REPLY-ONE[\s\S]*Worked for[\s\S]*FOLLOW-UP[\s\S]*REPLY-TWO[\s\S]*Worked for/);
 });
+
+test("a stop pending when a drained follow-up arrives marks the follow-up's turn, not the finished one", () => {
+  const transcript = new Transcript(stubTui(), theme, { ...stubSession(), getToolDefinition: () => undefined, getAllTools: () => [] });
+  const user = (text) => ({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
+  transcript.handle({ type: "agent_start" });
+  transcript.handle({ type: "message_start", message: user("go") });
+  const first = assistantMessage([{ type: "text", text: "REPLY-ONE" }]);
+  transcript.handle({ type: "message_start", message: first });
+  transcript.handle({ type: "message_end", message: first });
+  // agent-loop.js has already drained the follow-up; Esc lands while prepareNextTurn compacts, and
+  // the loop still emits the follow-up's user message and then an aborted reply.
+  transcript.markStopped();
+  transcript.handle({ type: "message_start", message: user("FOLLOW-UP") });
+  const aborted = assistantMessage([], { stopReason: "aborted" });
+  transcript.handle({ type: "message_start", message: aborted });
+  transcript.handle({ type: "message_end", message: aborted });
+  transcript.handle({ type: "agent_end", messages: [aborted] });
+  transcript.handle({ type: "agent_settled" });
+  const rendered = stripAnsi(transcript.root.render(80).join("\n"));
+  assert.deepEqual(rendered.match(/Worked for|Stopped after/g), ["Worked for", "Stopped after"], rendered);
+  assert.match(rendered, /REPLY-ONE[\s\S]*Worked for[\s\S]*FOLLOW-UP[\s\S]*Stopped after/);
+});
+
+test("a follow-up delivered through agent.continue() (a second agent_start) gets its own footer", () => {
+  const transcript = new Transcript(stubTui(), theme, { ...stubSession(), getToolDefinition: () => undefined, getAllTools: () => [] });
+  const user = (text) => ({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
+  const run = (prompt, text) => {
+    const reply = assistantMessage([{ type: "text", text }]);
+    transcript.handle({ type: "agent_start" });
+    transcript.handle({ type: "message_start", message: user(prompt) });
+    transcript.handle({ type: "message_start", message: reply });
+    transcript.handle({ type: "message_end", message: reply });
+    transcript.handle({ type: "agent_end", messages: [user(prompt), reply] });
+  };
+  run("go", "REPLY-ONE");
+  run("FOLLOW-UP", "REPLY-TWO");
+  transcript.handle({ type: "agent_settled" });
+  const rendered = stripAnsi(transcript.root.render(80).join("\n"));
+  assert.deepEqual(rendered.match(/Worked for|Stopped after/g), ["Worked for", "Worked for"], rendered);
+  assert.match(rendered, /REPLY-ONE[\s\S]*Worked for[\s\S]*FOLLOW-UP[\s\S]*REPLY-TWO[\s\S]*Worked for/);
+});
