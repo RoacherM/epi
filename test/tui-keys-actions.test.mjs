@@ -191,6 +191,21 @@ test("Ctrl+V pastes text from the clipboard into the editor", (t) => {
   assert.match(marks.afterPaste, /PASTED-TEXT/);
 });
 
+test("a kitty-protocol key release does not run the shortcut a second time (one chip per Ctrl+V)", (t) => {
+  // Ghostty/kitty/WezTerm send press and release for each key when the kitty keyboard protocol's
+  // event-type flag is on (pi-tui asks for it). Ctrl+V here is CSI 118;5u; the release adds :3.
+  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-kitty-release-"));
+  t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
+  const clipboardFile = join(clipboardDir, "clipboard.png");
+  writeFileSync(clipboardFile, ONE_PIXEL_PNG);
+  const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
+    ["wait", 2500], ["raw", "\x1b[118;5u"], ["raw", "\x1b[118;5:3u"], ["wait", 500], ["mark", "afterPaste"],
+    ["key", "ctrl+c"], ["wait", 300], ["key", "ctrl+d"],
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  assert.match(marks.afterPaste, /\[Image #1\]/);
+  assert.doesNotMatch(marks.afterPaste, /\[Image #2\]/);
+});
+
 // Ctrl+Z (app.suspend) is not exercised through the harness: the real handler calls
 // `process.kill(0, "SIGTSTP")`, which would suspend the harness's own process group (and the test
 // runner, if run in the same group) with nothing to send it SIGCONT in a non-interactive test.

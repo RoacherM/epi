@@ -90,6 +90,11 @@ for (const [kind, value] of steps) {
     } while (Date.now() < deadline);
     marks[value.mark] = output;
   }
+  // Raw terminal bytes, for sequences with no KEYS name (e.g. kitty press/release events).
+  else if (kind === "raw") {
+    onInput(value);
+    await sleep(50);
+  }
   else if (kind === "key") {
     if (!(value in KEYS)) throw new Error(`tui-harness.mjs: unknown key "${value}"`);
     onInput(KEYS[value]);

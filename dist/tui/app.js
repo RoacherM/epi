@@ -860,6 +860,11 @@ export async function runTuiApp(options) {
     tui.addInputListener((data) => {
         if (tui.getFocusedComponent() !== editor)
             return undefined;
+        // Terminals speaking the kitty keyboard protocol (Ghostty, kitty, WezTerm) also send a release
+        // event for every key; pi-tui drops those only after input listeners run, so without this each
+        // shortcut fired twice (two image chips per Ctrl+V, toggles undoing themselves).
+        if (piTui.isKeyRelease(data))
+            return undefined;
         const action = keyActions.find((candidate) => keybindings.matches(data, candidate.id) && (candidate.when?.(commandHost) ?? true));
         if (action === undefined)
             return undefined;
