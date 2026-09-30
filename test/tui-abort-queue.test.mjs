@@ -53,6 +53,10 @@ test("Esc puts a queued follow-up back in the editor and aborts, instead of send
     ["waitFor", "FIRST-START"], ["type", "later"], ["key", "enter"],
     ["waitFor", "Follow-up: later"], ["mark", "queued"],
     ["key", "esc"], ["waitFor", { regex: "❯ later\\s" }], ["mark", "afterEsc"],
+    // The restore lands before the aborted turn ends; once it ends, its footer is on screen and its
+    // status row ("Responding… … [stop]") is gone, not left stale.
+    ["waitFor", { regex: "Stopped after \\d" }, { screen: true, timeoutMs: 5000 }],
+    ["waitGone", "Responding…", { timeoutMs: 5000 }],
     // A stray delivery of "later" would start the second turn right as the aborted one ends, and
     // its one-word SECOND-REPLY finishes well inside this window.
     ["wait", 1500], ["mark", "settled"], ["screen", "settled"],
@@ -94,12 +98,12 @@ test("Ctrl+C on a running turn also restores the queue instead of dropping it", 
 // (interactive-mode.js ~1437-1439); this fails before app.ts's bindExtensions() call gets the same
 // abortHandler, and passes after.
 test("an extension's ctx.abort() restores the queue too, not just Esc/Ctrl+C", (t) => {
-  const { marks, screens, text: out } = runApp(t, [fixture("faux-queue.mjs"), fixture("abort-command-extension.mjs")], [
+  const { marks, screens, output, text: out } = runApp(t, [fixture("faux-queue.mjs"), fixture("abort-command-extension.mjs")], [
     ["waitReady"], ["type", "go"], ["key", "enter"],
     ["waitFor", "FIRST-START"], ["type", "later"], ["key", "enter"],
     ["waitFor", "Follow-up: later"], ["mark", "queued"],
     ["type", "/doabort"], ["key", "enter"],
-    ["waitFor", { regex: "❯ later\\s" }],
+    ["waitFor", { regex: "❯ later\\s" }], ["mark", "restored"],
     ["wait", 1500], // same window as the Esc test: the restore is drawn ~0.4s before the aborted turn ends
     ["screen", "settled"],
     ["detach"],
@@ -110,5 +114,8 @@ test("an extension's ctx.abort() restores the queue too, not just Esc/Ctrl+C", (
   // is the screen once the command has run. Ctrl+D only quits with an empty editor -- "later" ends
   // up back in it -- so the run detaches; there is nothing to assert about EXIT.
   assertQueueRestoredOnScreen(screens.settled, "later");
+  // The screen check catches a queue bar that stays; this catches one drawn again after the
+  // restore and cleared before the screen was taken.
+  assert.doesNotMatch(output.slice(marks.restored.length), /Follow-up:/);
   assert.doesNotMatch(out, /SECOND-REPLY/);
 });

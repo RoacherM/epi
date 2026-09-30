@@ -8,18 +8,21 @@
 // the harness exits non-zero with the screen tail. By default it looks only at what was drawn
 // since the last input step began, so an earlier identical text can't satisfy it; opts.all looks at
 // everything drawn so far (for text that was drawn before the step was reached); opts.screen looks
-// at the current screen instead (see "screen" below).
+// at the current screen instead (see "screen" below), and ignores the since-last-input window, so
+// text already on screen before the last input step satisfies it at once.
 // ["screen", name] records the current screen into screens[name] as an array of `rows` strings
 // (trailing spaces trimmed). Everything the app writes is also fed to a headless xterm -- the
 // emulator pi-tui's own tests use -- so this is what a terminal shows after all cursor moves and
 // clears. "Drawn" (the output and marks) can't tell that a line went away: the alt screen only
 // rewrites rows that changed, so a row that should have been cleared but wasn't never shows up again.
 // ["waitGone", pattern, opts?] waits until `pattern` is no longer on the current screen (same
-// pattern and timeout rules as waitFor).
+// pattern and timeout rules as waitFor; like opts.screen, no since-last-input window).
 // ["detach"], as the last step, ends the run without waiting for the app to quit (Ctrl+D does not
 // quit while the editor has text, so a test that doesn't check the exit code would wait 5s for it).
 // Prints the exit code, the marks, the screens, the terminal after the app quit (`afterExit`), and
 // everything the app wrote (ANSI stripped) as JSON.
+// `rawOsc133` counts the raw OSC 133 (`\x1b]133;`) sequences in what the app wrote: pi-tui strips
+// the prompt-zone markers before painting, and `output` has every OSC stripped, so a leak shows only here.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -212,4 +215,4 @@ const code = detached ? "detached" : await Promise.race([running, sleep(5000).th
 // what is left on it.
 const afterExit = typeof code === "number" ? { screen: await currentScreen(), buffer: screen.buffer.active.type } : undefined;
 // Writes to a pipe are asynchronous; exiting before the callback truncates large outputs.
-process.stdout.write(JSON.stringify({ exit: code, marks, screens, afterExit, output: strip(output) }), () => process.exit(0));
+process.stdout.write(JSON.stringify({ exit: code, marks, screens, afterExit, output: strip(output), rawOsc133: (output.match(/\x1b\]133;/g) ?? []).length }), () => process.exit(0));
