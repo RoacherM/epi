@@ -37,3 +37,4 @@
 | D31 | P3 | 没有终端标签栏进度提示（Pi 的 terminal-progress，OSC 9;4），D21 里隐藏了这个设置项 | 在支持 OSC 9;4 的终端里跑一个长回合 | 待排期 |
 | D32 | P3 | D10 复审的小问题：`test/pi-internals.test.mjs` 的 osc133 检查用固定 40ms 等待画面（机器忙时可能偶发失败）；测试辅助会去掉 OSC 序列，所以没有应用层测试能发现 OSC 133 标记漏到终端上（只靠跳转测试间接发现） | D10 的 review-1.md 第 1、2 条 | 待修 |
 | D33 | P3 | D13 复审的小问题：A6 测试（扩展 ctx.abort）改成只查最终屏幕后，丢了"恢复后排队提示不再出现"这项检查；`waitGone` 和 `waitFor {screen:true}` 的正则写法还没有测试用到 | D13 的 review-1.md 第 2、3 条 | 待修 |
+| D34 | P3 | Ctrl+X 只复制最后一条回答；Pi 会先复制当前选中的文字（interactive-mode.js ~5367），关掉"选中即复制"后就没有办法复制选区（D21 worker 发现） | `/settings` 关掉 Copy on select，拖选一段文字，按 Ctrl+X | 待修 |
