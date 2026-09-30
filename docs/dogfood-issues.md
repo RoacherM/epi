@@ -29,8 +29,8 @@
 | D23 | P3 | 回答进行中排队的追问，和原来的问题共用一行 `Worked for`；grok 是每轮各显示一行（M4 Fable 审查） | 运行中输入一句按 Enter 排队，等两轮都结束 | 已修（合并 G1：以"不带工具调用的回复结束后出现用户消息"为轮次边界） |
 | D24 | P3 | 思考结束时没有闪烁提示（grok 有；M4 Fable 审查） | 看一次思考结束 | 已修（合并 G1：思考结束时竖条闪 success 色 400ms，重放不闪） |
 | D25 | P3 | 在 Herdr 里退出 mmp 后，pane 里留着退出前的最后一帧画面（Ghostty 里是否也有未确认） | Herdr pane 里启动再 Ctrl+D | 已修（合并 D35、D41：所有退出路径都不留画面，Herdr 实测） |
-| D26 | P3 | `mmp:hooks` 的 `user_prompt` 钩子拦下一轮时，界面上可能看不到拦截原因（旧待办的简记，细节没留下；钩子启动失败的情况已按"失败要可见"修过） | 写一个返回 block 的 `user_prompt` 钩子，发一句话 | 待复现 |
-| D27 | P3 | 用退格删掉图片标签后按 Ctrl+-（撤销），标签一个字符一个字符地回来（约 10 次才恢复完整）：删标签时的每次模拟退格各是 Pi 的一个撤销快照（D18 worker 发现，D18 之前就有） | `see foo `，Ctrl+V，退格，Ctrl+- | 待修 |
+| D26 | P3 | `mmp:hooks` 的 `user_prompt` 钩子拦下一轮时，界面上可能看不到拦截原因（旧待办的简记，细节没留下；钩子启动失败的情况已按"失败要可见"修过） | 写一个返回 block 的 `user_prompt` 钩子，发一句话 | 已修（合并 B2：复现确认 TUI 和 `-p` 都完全没有提示；现在 TUI 显示拦截原因，`-p`/json 写到 stderr） |
+| D27 | P3 | 用退格删掉图片标签后按 Ctrl+-（撤销），标签一个字符一个字符地回来（约 10 次才恢复完整）：删标签时的每次模拟退格各是 Pi 的一个撤销快照（D18 worker 发现，D18 之前就有） | `see foo `，Ctrl+V，退格，Ctrl+- | 已修（合并 B2：删标签时的模拟按键不再各留撤销快照，一次 Ctrl+- 恢复整个标签） |
 | D28 | P3 | kitty 协议下 Shift+退格（`\x1b[127;2u`）只删掉标签的 `]`，不会整个删掉：`shift+backspace` 不在 `DELETE_ACTIONS` 里（D18 worker 发现，初审未复现，真实终端未确认） | Ghostty 里贴图后按 Shift+退格 | 待确认 |
 | D29 | P3 | `/settings` 里没有 Pi 的"每个模型的默认思考档位"（model-thinking 子菜单）：D21 先不做，现有 `/thinking` 和 Shift+Tab 只改当前模型 | 对照 Pi 的 `/settings` | 待排期 |
 | D30 | P3 | 空输入框按两次 Esc 没有动作；Pi 可以设成打开 `/tree` 或 `/fork`（double-escape-action），D21 里隐藏了这个设置项 | 空输入框按 Esc Esc | 待排期 |
@@ -49,3 +49,4 @@
 | D43 | P3 | 扩展工具全部返回 `terminate: true` 后，Pi 会停下并投递排队的追问，但这条追问和上一轮共用一行 `Worked for`（G1 只以"不带工具调用的回复结束"为轮次边界）（G1 复审第 2 条） | 带 terminate 工具的扩展 + 运行中排队一句 | 待修 |
 | D44 | P3 | 复制的小差异：最后一条回复为空时 MMP 复制空串并提示成功，Pi 提示 "No agent messages to copy yet."（`session-commands.ts` 用 `=== undefined`，Pi 用 `!text`）；`/copy` 提示末尾多一个句号；D34 的 "on" 测试里 Ctrl+X 后的 `Copied!` 可能匹配到松开鼠标时的那次闪烁（有剪贴板文件断言兜底）（D34 复审） | 空回复后按 Ctrl+X | 待修 |
 | D45 | P3 | Pi 在扩展加载失败时的报错末尾带着 `Hint: Start without extensions using "pi -ne".`（Pi `main.js` 的原文），经 MMP 原样输出，违反硬规则 4（只暴露 mmp 自己的命令和参数；MMP 也不提供 `-ne`）（B1 worker 发现） | 让一个 Manifest 扩展加载失败，`mmp -p hi </dev/null` | 待修 |
+| D46 | P3 | B2 复审的小问题：钩子 cancel 且没给原因时提示写成 "Prompt cancelled by user_prompt hook: Blocked by MMP hook"（自相矛盾）；`notifyPromptBlocked` 在 try 内，notify 抛错会多报一次；钩子原因里的换行/ANSI 原样输出（和已有的失败信息同类）；粘贴再次展开后的撤销、无原因的提示文字没有测试 | B2 的 review-1.md | 待修 |
