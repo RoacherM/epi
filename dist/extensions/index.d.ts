@@ -1,4 +1,4 @@
-import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import { type InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { ResolvedAssembly } from "../assembly.js";
 import type { MmpRuntimeIdentity } from "../runtime-identity.js";
 import type { UpdateCheckOptions } from "./runtime.js";

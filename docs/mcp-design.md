@@ -30,9 +30,10 @@ Pi 自己的 ~/.mmp/pi/mcp.json ✗                          ├─ createCodemo
 
 - **只有一个接入点**：`src/extensions/index.ts` 的 `case "mmp:mcp"`，改成返回三个 inline 扩展：`mmp:mcp`（`createMcpExtension(...)`）、codemode、tool-search。`piMain`（`-p` 等）、MMP 界面（`src/tui/services.ts`）、子任务 worker 三条路径都经过 `buildInlineExtensions`，一处改动全覆盖。
 - **Pi 的内置 MCP 不会自己加载**：0.99 起 `--no-extensions` / `noExtensions: true` 连内置扩展一起关掉（CHANGELOG 0.99.0；`core/resource-loader.js:403`），MMP 两条路径都已经这样传。inline 工厂不受 `noExtensions` 影响（`resource-loader.js:245`）。
-- **日志和 OAuth 凭据路径显式传**：`logPath: ~/.mmp/pi/mcp.log`，`credentials` 指向 `~/.mmp/pi/mcp-auth.json`。结果和 Pi 默认值一样（MMP 下 `getAgentDir()` 就是 `~/.mmp/pi`），显式写出来是为了隔离可以直接审查。凭据和 Pi 一样是明文 JSON（`oauth.js`），不另做钥匙串。
-- **`loadConfig` 怎么复用 Pi 的解析**：`loadMcpConfig` 的项目那一半写死了 `.pi/`（`CONFIG_DIR_NAME`），所以 MMP 调两次、都传 `projectTrusted: false`：一次 `agentDir = ~/.mmp`，读到 `~/.mmp/mcp.json`；项目可信时再调一次 `agentDir = <项目>/.mmp`，读到 `.mmp/mcp.json`，把结果的 `scope` 改成 `"project"`。同名服务项目覆盖全局（和 Pi 一致）。错误原样合并进 `errors`，由 Pi 在启动时报出来。
+- **日志路径显式传，凭据路径不传（2026-09-30 实施时核实并调整）**：`logPath: ~/.mmp/pi/mcp.log` 按计划显式传。`credentials` 本以为能直接传路径，实测 `createMcpExtension` 的 `credentials` 选项类型是 `McpOAuthCredentialStore` 实例（`extensions/mcp/oauth.d.ts`），不是路径字符串——要传显式路径得自己拼一个 `AuthStorageBackend` 再 `new McpOAuthCredentialStore(backend)`，代价是引入 `oauth.js`（它依赖 `@earendil-works/pi-mcp`），而结果和不传完全一样：Pi 的默认凭据存储走 `getAgentDir()`，MMP 早在 `src/host.ts` 就把 `PI_CODING_AGENT_DIR` 指到了 `<mmpHome>/pi`，所以默认值本来就落在 `~/.mmp/pi/mcp-auth.json`。改为不传 `credentials`，用一个测试（`test/mcp.test.mjs`）断言 `getAgentDir()` 在这个重定向下确实解析到 `<mmpHome>/pi`，隔离结论不变，只是不必要地导入 `oauth.js` 的代价省掉了。凭据和 Pi 一样是明文 JSON，不另做钥匙串。
+- **`loadConfig` 怎么复用 Pi 的解析**：`loadMcpConfig` 的项目那一半写死了 `.pi/`（`CONFIG_DIR_NAME`），所以 MMP 调两次、都传 `projectTrusted: false`：一次 `agentDir = ~/.mmp`，读到 `~/.mmp/mcp.json`；项目可信时再调一次 `agentDir = <项目>/.mmp`，读到 `.mmp/mcp.json`，把结果的 `scope` 改成 `"project"`。同名服务项目覆盖全局（和 Pi 一致）。
   - `config.js` 不在包的 `exports` 里，只能按文件路径引用，所以要登记进 `docs/pi-internals.md` 并加测试（AGENTS.md 硬规则 5）。选它而不是自己重写校验，是为了让格式随 Pi 升级自动跟上；它一旦改名或改签名，升级门禁会报出来。
+  - **错误的可见性比设计稿原定的更严格（2026-09-30 实施时调整）**：本以为"错误原样合并进 `errors`，由 Pi 在启动时报出来"就够了，实测 Pi 自己只把 `LoadedMcpConfig.errors` 当软提示——`extensions/mcp/index.js` 的 `reportProblems` 只调 `ctx.ui.notify(..., "warning")`，而且这个 `ui.notify` 在 `-p`/print 模式下是纯空操作（`modes/print-mode.js` 的 `bindExtensions` 调用根本没传 `uiContext`），也就是说错误的 mcp.json 在 `-p` 下会被完全吞掉，违反 AGENTS.md 硬规则 3。改法：`src/extensions/index.ts` 的 `case "mmp:mcp"` 在 `buildInlineExtensions` 时就同步跑一次 `loadNativeMcpConfig`，`errors.length > 0` 直接抛 `MmpConfigError`（和 `mmp:hooks` 现有的模式一致），`--dry-run` 和正常启动都在 Pi 真正跑起来之前就可见地失败。运行期（`session_start` 时）`loadConfig` 仍然照常把 `errors` 交给 Pi，只是不再是唯一的可见渠道。
 
 ## 3. 配置格式
 
@@ -57,6 +58,9 @@ Pi 自己的 ~/.mmp/pi/mcp.json ✗                          ├─ createCodemo
 Pi 的内置 MCP 默认总是开着；MMP 保持现状：Manifest 里声明 `"mmp:mcp"` 才启用（`src/manifest.ts`）。理由是 MMP 的核心约定"资源只由 Manifest 声明"（`cli-design.md` §0 第 2 条），这一条写进 `cli-design.md`。
 
 Manifest 同时声明第三方 MCP 扩展（例如 pi-mcp-adapter）和 `mmp:mcp` 时，两边都会注册 `/mcp`。Pi 的"可替换"机制只对内置扩展生效，对 MMP 的 inline 工厂不生效，所以这种情况要**启动时报错**，说清楚两者只能选一个，不静默丢掉其中一个。
+
+- **怎么发现冲突**：Pi 对两个扩展注册同名命令的处理不是报错，是**都改名**（`core/extensions/runner.js` 的 `resolveRegisteredCommands`：某个命令名被注册超过一次时，两边都变成 `mcp:1`/`mcp:2`，不会有一份还叫 `mcp`）。`mmp:mcp` 自己的 `session_start` 里查 `pi.getCommands()`，看有没有 `/^mcp:\d+$/` 的名字，有就是冲突。命令注册全部发生在扩展加载阶段（同步，早于任何事件），所以不管冲突的扩展在 Manifest 里排第几，到 `session_start` 时都已经能看到。
+- **能见到多硬（2026-09-30 实测，不只是看源码）**：这一步检测出来后能做的补救很有限——`ctx.ui.notify` 和 `ctx.shutdown()` 在 `-p`/print 模式下都是空操作（`modes/print-mode.js` 的 `bindExtensions` 既不传 `uiContext` 也不传 `shutdownHandler`）；扩展加载阶段的抛错（stage 1 `mmp:mcp` 那种）确实会让 Pi 直接 `process.exit(1)`，但那是在**所有**扩展加载完之前的检查点，等不到后面才声明冲突命令的扩展。所以现在的做法是在 `session_start` 里 `throw`：不会改变退出码，但 Pi 自己的 `runner.emit()` 会把它交给每个模式都接了的 `onError`（print 模式打到 `console.error`，TUI 模式弹 `showExtensionError`，RPC/json 模式进事件流），可见，但不保证非零退出码——这是 Pi 架构的限制，测试（`test/mcp.test.mjs`）断言的是 stderr 上出现这条消息，不是退出码。
 
 ## 5. 模型看到什么（曝光方式）
 

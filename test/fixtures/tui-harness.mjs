@@ -2,6 +2,7 @@
 // Usage: MMP_TUI_HARNESS='{"args":[],"steps":[["wait",3000],["type","hi"],["key","enter"],...]}' node tui-harness.mjs
 // ["mark", name] records what had been drawn at that moment, to assert timing without further input.
 // Prints the exit code, the marks, and everything the app wrote (ANSI stripped) as JSON.
+import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -67,6 +68,13 @@ for (const [kind, value] of steps) {
     const dir = join(value.skillsDir, value.name);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "SKILL.md"), `---\nname: ${value.name}\ndescription: ${value.name}\n---\n${value.name}\n`);
+  }
+  // Counts live processes matching `value.pattern` (a `pgrep -f` argument) mid-run, from outside
+  // the app -- e.g. exactly one MCP stdio child surviving a /new or /reload (docs/mcp-design.md's
+  // state checklist: connections must not leak or duplicate across a session-replacement path).
+  // Records the trimmed PID list (one per line, "" when none) into marks[value.mark].
+  else if (kind === "pgrep") {
+    marks[value.mark] = spawnSync("pgrep", ["-f", value.pattern], { encoding: "utf8" }).stdout.trim();
   }
   else if (kind === "key") {
     if (!(value in KEYS)) throw new Error(`tui-harness.mjs: unknown key "${value}"`);

@@ -68,11 +68,14 @@ function captureModelVisibleContent() {
 
     const hookLog = join(work, "hook-acceptance.log");
     const options = { args: ["--no-project", "--no-session"], prompt: "Describe your capabilities." };
-    // cwd is the repo root, not an empty temp dir: full-runtime's hooks.json and mcp.json spawn
+    // cwd is the repo root, not an empty temp dir: full-runtime's hooks.json spawns
     // `node test/fixtures/...` with that relative path resolved against the session's cwd (only a
     // handler's own `command`, if it starts with "/", resolves against hooks.json's directory --
     // src/hooks-config.ts's resolveCommandPath -- args do not). --no-project still disables all
     // project-level manifest/resource discovery at this cwd, so this stays fully offline and fixed.
+    // full-runtime declares "mmp:mcp" but has no mcp.json of its own, so this always sees zero
+    // configured servers -- the point is a clean "adapter tools go away" diff (docs/mcp-design.md
+    // §5), not exercising native MCP itself (test/mcp.test.mjs does that).
     const result = spawnSync(process.execPath, [runner], {
       cwd: root,
       encoding: "utf8",
@@ -82,8 +85,6 @@ function captureModelVisibleContent() {
         HOME: home,
         MMP_HOME: mmpHome,
         PI_OFFLINE: "1",
-        MMP_MCP_CWD: root,
-        MMP_MCP_FIXTURE_VALUE: "unused-by-snapshot",
         HOOK_ACCEPTANCE_LOG: hookLog,
         MMP_MODEL_SNAPSHOT_OUT: captureFile,
         MMP_SDK_RUNNER: JSON.stringify(options),

@@ -195,6 +195,42 @@ const registry = [
       }
     },
   },
+  {
+    id: "mcp-native-config-loader",
+    async check() {
+      const { loadMcpConfig } = await importDeep("extensions", "mcp", "config.js");
+      assertFunction(loadMcpConfig, "loadMcpConfig");
+      const os = await import("node:os");
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mmp-pi-internals-mcp-"));
+      try {
+        const empty = loadMcpConfig({ agentDir: dir, cwd: dir, projectTrusted: false });
+        assert.deepEqual(empty.servers, [], "loadMcpConfig no longer returns {servers: []} for a missing mcp.json");
+        assert.deepEqual(empty.errors, [], "loadMcpConfig no longer returns {errors: []} for a missing mcp.json");
+        fs.writeFileSync(
+          path.join(dir, "mcp.json"),
+          JSON.stringify({ mcpServers: { probe: { command: "node" } } }),
+        );
+        const loaded = loadMcpConfig({ agentDir: dir, cwd: dir, projectTrusted: false });
+        assert.equal(loaded.servers.length, 1, "loadMcpConfig no longer reads join(agentDir, \"mcp.json\")");
+        assert.equal(loaded.servers[0].name, "probe");
+        assert.equal(loaded.servers[0].source, path.join(dir, "mcp.json"), "loadMcpConfig's entry.source is no longer the config file path -- src/extensions/mcp.ts's /mcp write-back routing (Pi's own default updateConfig) relies on this");
+        assert.equal(loaded.servers[0].scope, "global", "loadMcpConfig no longer tags agentDir-sourced entries scope: \"global\"");
+        // projectTrusted: false must never read <cwd>/.pi/mcp.json -- this is the isolation MMP
+        // depends on (docs/mcp-design.md §2): MMP always passes false and varies agentDir instead.
+        fs.mkdirSync(path.join(dir, ".pi"));
+        fs.writeFileSync(
+          path.join(dir, ".pi", "mcp.json"),
+          JSON.stringify({ mcpServers: { untrusted: { command: "node" } } }),
+        );
+        const stillOne = loadMcpConfig({ agentDir: dir, cwd: dir, projectTrusted: false });
+        assert.equal(stillOne.servers.length, 1, "loadMcpConfig read <cwd>/.pi/mcp.json even with projectTrusted: false");
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  },
 ];
 
 test("every docs/pi-internals.md row still matches the installed Pi", async () => {
@@ -284,6 +320,7 @@ const KNOWN_DEEP_PATHS = new Map([
   ["undici", "undici"],
   ["@earendil-works/pi-tui", "pi-tui-nested-copy"],
   ["diff", "pi-diff-package"],
+  ["extensions/mcp/config.js", "mcp-native-config-loader"],
 ]);
 
 test("every join(piDist, ...)/importFromPi/createRequire(piEntry).resolve deep reach is registered in docs/pi-internals.md", () => {

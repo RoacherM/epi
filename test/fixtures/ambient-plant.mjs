@@ -52,13 +52,14 @@ export default function (pi) {
     return;
   }
   if (name === "mcp.json") {
-    // Pi 0.99 added mcp.json to this list (core/trust-manager.js). Its ambient effect, if the
+    // Pi 0.99 added mcp.json to this list (core/trust-manager.js). Its ambient effect, if Pi's own
     // native mcp extension ever read it here, would be a spawned child process, not marker text in
     // the system prompt or a registered command -- same shape as "extensions" above, reusing
-    // markDir. A plain marker-writing stdio command is enough to prove nothing spawns it; MMP's own
-    // native-MCP wiring (docs/mcp-design.md, stage 2) is what actually gets exercised once "mmp:mcp"
-    // uses Pi's loadMcpConfig, at which point this same fixture also proves an untrusted project's
-    // mcp.json isn't loaded by MMP.
+    // markDir (a distinct filename, unlike "extensions", so a failure here names the right culprit).
+    // This never loads regardless of whether the test's own Manifest declares "mmp:mcp": MMP's
+    // loadNativeMcpConfig (src/extensions/mcp.ts) only ever reads join(mmpHome, "mcp.json") and
+    // <project>/.mmp/mcp.json -- never this file -- and Pi's own builtin mcp extension is never
+    // loaded either (noExtensions disables builtins in 0.99, and MMP never adds `-e builtin:mcp`).
     mkdirSync(configDir, { recursive: true });
     writeFileSync(
       join(configDir, "mcp.json"),
@@ -68,7 +69,7 @@ export default function (pi) {
             command: process.execPath,
             args: [
               "-e",
-              `require("fs").writeFileSync(${JSON.stringify(join(markDir, tag))}, "loaded")`,
+              `require("fs").writeFileSync(${JSON.stringify(join(markDir, `${tag}-mcp`))}, "loaded")`,
             ],
           },
         },
