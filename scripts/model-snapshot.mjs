@@ -34,10 +34,6 @@ const bundleTemplate = join(root, "test", "fixtures", "full-runtime");
 // README/docs/examples paths), which npm resolves through node_modules -- realpathSync follows any
 // symlink (e.g. a worktree's node_modules) to the actual on-disk path that ends up in the prompt.
 const piPackageDir = realpathSync(dirname(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")))));
-// pi-mcp-adapter ships its own skill (mcp-scripting), whose absolute file path Pi's skill loader
-// records verbatim in loadedSkills -- same install-location problem as piPackageDir, one level up
-// since this package's entry has no "dist" segment to strip.
-const mcpAdapterPackageDir = realpathSync(dirname(fileURLToPath(import.meta.resolve("pi-mcp-adapter"))));
 
 function parseArgs(argv) {
   const options = {};
@@ -104,7 +100,6 @@ function captureModelVisibleContent() {
       [work, "$TMP"],
       [realpathSync(work), "$TMP"],
       [piPackageDir, "$PI_PACKAGE_DIR"],
-      [mcpAdapterPackageDir, "$MCP_ADAPTER_PACKAGE_DIR"],
       [root, "$CWD"],
     ];
     // mmp:runtime's inventory embeds both versions verbatim (engineVersion, runtime.version): left

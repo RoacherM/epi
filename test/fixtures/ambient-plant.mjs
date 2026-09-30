@@ -51,6 +51,31 @@ export default function (pi) {
     // runtime" tests below, not by the AMBIENT_MARKER scan.
     return;
   }
+  if (name === "mcp.json") {
+    // Pi 0.99 added mcp.json to this list (core/trust-manager.js). Its ambient effect, if the
+    // native mcp extension ever read it here, would be a spawned child process, not marker text in
+    // the system prompt or a registered command -- same shape as "extensions" above, reusing
+    // markDir. A plain marker-writing stdio command is enough to prove nothing spawns it; MMP's own
+    // native-MCP wiring (docs/mcp-design.md, stage 2) is what actually gets exercised once "mmp:mcp"
+    // uses Pi's loadMcpConfig, at which point this same fixture also proves an untrusted project's
+    // mcp.json isn't loaded by MMP.
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          [`ambient-${tag}`]: {
+            command: process.execPath,
+            args: [
+              "-e",
+              `require("fs").writeFileSync(${JSON.stringify(join(markDir, tag))}, "loaded")`,
+            ],
+          },
+        },
+      }),
+    );
+    return;
+  }
   if (name.endsWith(".md")) {
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, name), `AMBIENT-${name.replace(/\.md$/i, "").toUpperCase().replace(/[^A-Z0-9]+/g, "-")}-${tag}\n`);

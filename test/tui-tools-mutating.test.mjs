@@ -412,12 +412,16 @@ test("real tools execution against temporary files fed to mutating renderers", a
 
   // Real bash failure
   let bashFailResult;
+  // Pi 0.99 stopped throwing on a nonzero exit: the bash tool now resolves with `isError: true`
+  // on the result instead (AgentToolResult's new isError field, CHANGELOG 0.99.0) -- a throw is
+  // kept as a fallback in case a future Pi version reverts to throwing for some other failure mode.
   try {
-    await bash.execute("b2", { command: "sh -c 'exit 5'" });
+    bashFailResult = await bash.execute("b2", { command: "sh -c 'exit 5'" });
   } catch (err) {
     bashFailResult = { content: [{ type: "text", text: err.message }], details: {}, isError: true };
   }
   assert.ok(bashFailResult);
+  assert.equal(bashFailResult.isError, true);
   const bashFailCollapsed = bashRenderers.renderResult(bashFailResult, { expanded: false, isPartial: false }, theme, { ...context, isError: true });
   assert.ok(bashFailCollapsed.render(80)[0].includes("exit 5"));
 

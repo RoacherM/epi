@@ -141,7 +141,11 @@ test("effective enabled MCP servers require exactly one transport", (t) => {
   );
 });
 
-test("pinned MCP adapter loads with the selected Pi peer runtime", async () => {
+// TODO(stage 2, docs/mcp-design.md): pi-mcp-adapter is removed for the Pi 0.99 upgrade (stage 1);
+// this whole file gets rewritten into an offline end-to-end test against Pi's native MCP support
+// and a hand-rolled stdio fixture server (design §8). Skipped rather than deleted so the intent and
+// the tests it replaces stay visible until that rewrite lands.
+test("pinned MCP adapter loads with the selected Pi peer runtime", { skip: "TODO(stage 2): pi-mcp-adapter removed; native MCP replaces this in docs/mcp-design.md" }, async () => {
   const adapter = await tsImport("pi-mcp-adapter", import.meta.url);
   assert.equal(typeof adapter.createMcpAdapter, "function");
 });
@@ -174,7 +178,9 @@ test("--dry-run validates declared MCP configuration before starting Pi", (t) =>
   );
 });
 
-test("declared MCP server completes search -> call through a scripted model and is reclaimed", (t) => {
+// TODO(stage 2, docs/mcp-design.md §8): mmp:mcp now throws (pi-mcp-adapter removed, native MCP not
+// wired up yet) -- this rewrites to drive Pi's native MCP through createMcpExtension's loadConfig.
+test("declared MCP server completes search -> call through a scripted model and is reclaimed", { skip: "TODO(stage 2): native MCP not wired up yet (docs/mcp-design.md)" }, (t) => {
   const root = mkdtempSync(join(tmpdir(), "mmp-mcp-acceptance-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const mmpHome = join(root, "home", ".mmp");
