@@ -92,6 +92,10 @@ mmp mcp logout <server>
 
 一处要改：没有配置任何服务时，Pi 的提示是 `Add them to ~/.mmp/pi/mcp.json or .pi/mcp.json`（`index.js:470,633`），这两个路径 MMP 都不读，违反"对外只有 mmp"。做法：一个服务都没加载时，MMP 拦下不带参数的 `/mcp`，自己提示 `~/.mmp/mcp.json` / `.mmp/mcp.json` 和 `mmp mcp add`；有服务时交给 Pi。
 
+- **"一个服务都没加载"最初算窄了（Fable milestone review F1/F2/F3，2026-09-30 修正）**：最初只数*启用*的服务，停用唯一一个服务、或服务只来自另一个扩展的 `pi.registerMcpServer()` 时，也会被当成"零服务"，挡住 Pi 真正的 `/mcp` 面板——而那正是用户想去重新启用它的地方。改法：数配置里的服务（不管 `enabled`）加上 `pi.getMcpServers()` 的数量，两者都是零才拦截（`src/extensions/mcp.ts`）。
+- **codemode 里嵌套的 MCP 调用被渲染成重复的顶层工具块（同一次 review，F1 修正）**：`src/tui/transcript.ts` 的 `tool_execution_start`/`update`/`end` 之前没检查 `event.parentToolCallId`，嵌套调用（codemode 脚本内部调 MCP 工具）除了 Pi 自己内联渲染的那份，还会被 MMP 的 `transcript.ts` 再画一份顶层块。Pi 自己的 `interactive-mode.js` 只在 `start` 里跳过（它的 `pendingTools.get()` 对没见过的 id 天然返回 `undefined`，`update`/`end` 不用另外判断）；MMP 的 `tool()` helper 不一样，见到没见过的 `toolCallId` 会直接创建一个新条目，所以三个事件都要显式跳过。
+- **`-p`/`--mode json` 下连接失败完全静默，违反硬规则 3（同一次 review，F3 修正）**：本节第 2 段已经记过"错误的可见性"，但那次只堵了配置校验错误（`buildInlineExtensions` 时同步抛 `MmpConfigError`）；服务器*配置合法但连接失败*（进程起不来、需要登录）走的是 Pi 自己异步的 `reportProblems()` -> `ctx.ui.notify`，在 `-p`/`--mode json` 下这条路径仍然是纯空操作，之前完全没堵。做法：`src/extensions/mcp.ts` 在 `session_start` 里（非 tui 模式）自己调用捕获到的 Pi 原生 `/mcp` 处理函数（它已经会 `await pending` 等每个服务连接完），把返回的状态文本过滤成只剩 `failed`/`needs sign-in` 的行，写到 stderr；stdout 完全不碰（benchmark 和 json 消费者读 stdout）；退出码不变（和"错误的可见性"那次一样，是已认可的偏差）。依赖 Pi 状态文本的具体措辞，登记进 `docs/pi-internals.md`（`mcp-status-text-problem-lines`）。
+
 ## 8. 测试和升级门禁
 
 | 测试 | 要证明什么 |

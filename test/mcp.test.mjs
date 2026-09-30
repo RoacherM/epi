@@ -268,6 +268,57 @@ test("a Manifest that declares another extension registering \"/mcp\" alongside 
   );
 });
 
+// ── F3 (Fable milestone review, hard rule 3): a server that fails to connect, or needs sign-in, ──
+// ── is silent in -p and --mode json without this fix (ctx.ui.notify is a no-op there) ───────────
+
+function runNonTuiMcp(t, mode, mcpConfig) {
+  const root = createFixture(t);
+  const mmpHome = join(root, "home");
+  mkdirSync(mmpHome, { recursive: true });
+  const driver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
+  writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", driver] });
+  writeJson(join(mmpHome, "mcp.json"), mcpConfig);
+
+  const args =
+    mode === "json"
+      ? [cliPath, "--no-project", "--model", "mmp-faux/echo", "--mode", "json", "hi"]
+      : [cliPath, "--no-project", "--model", "mmp-faux/echo", "-p", "hi"];
+  const result = spawnSync(process.execPath, args, {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, PI_OFFLINE: "1" },
+    timeout: 30_000,
+  });
+  return result;
+}
+
+for (const mode of ["print", "json"]) {
+  test(`${mode} mode: a server that fails to start prints its name and error to stderr, exit 0, stdout untouched (F3)`, (t) => {
+    const result = runNonTuiMcp(t, mode, { mcpServers: { broken: { command: "/nonexistent/x" } } });
+    const context = `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+    assert.equal(result.status, 0, context);
+    assert.match(result.stderr, /broken: failed/, context);
+    assert.match(result.stderr, /ENOENT|nonexistent/, "expected the actual connection error, not just the server name\n" + context);
+    // Never Pi's own zero-server text (it names .pi/mcp.json, a path MMP never reads).
+    assert.doesNotMatch(result.stderr, /\.pi[\\/]mcp\.json/, context);
+    if (mode === "print") {
+      assert.equal(result.stdout, "ECHO:hi\n", context);
+    } else {
+      for (const line of result.stdout.trim().split("\n")) JSON.parse(line); // stdout is clean, valid JSON events only
+      assert.doesNotMatch(result.stdout, /broken|ENOENT/, "the failure leaked into stdout, which json consumers read\n" + context);
+    }
+  });
+
+  test(`${mode} mode: a working server produces no stderr diagnostic (no false alarm) (F3)`, (t) => {
+    const { args: fixtureArgs, marker } = fixtureServerArgs();
+    const result = runNonTuiMcp(t, mode, {
+      mcpServers: { fixture: { command: process.execPath, args: fixtureArgs, env: { MMP_FIXTURE_VALUE: "fixture-ok" } } },
+    });
+    const context = `marker=${marker}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+    assert.equal(result.status, 0, context);
+    assert.equal(result.stderr, "", context);
+  });
+}
+
 // ── Offline end-to-end: real stdio fixture server, codemode + direct calls, cleanup ────────────
 
 test("declared MCP servers: codemode call, direct call, env expansion, and child-process cleanup on exit", (t) => {

@@ -285,6 +285,25 @@ const registry = [
       assertFunction(store.remove, "McpOAuthCredentialStore.prototype.remove");
     },
   },
+  {
+    id: "mcp-status-text-problem-lines",
+    check() {
+      const indexPath = join(piDist, "extensions", "mcp", "index.js");
+      const indexText = readFileSync(indexPath, "utf8");
+      assert.match(
+        indexText,
+        /needs sign-in, run \/mcp login/,
+        `${indexPath} no longer phrases a pending sign-in as "needs sign-in, run /mcp login ..." -- extractMcpProblemLines (src/extensions/mcp.ts) would silently stop matching it`,
+      );
+      const runtimePath = join(piDist, "extensions", "mcp", "runtime.js");
+      const runtimeText = readFileSync(runtimePath, "utf8");
+      assert.match(
+        runtimeText,
+        /this\.state = this\.closed \? "closed" : "failed"/,
+        `${runtimePath} no longer sets a failed connection's state to the literal string "failed" -- extractMcpProblemLines (src/extensions/mcp.ts) would silently stop matching it`,
+      );
+    },
+  },
 ];
 
 test("every docs/pi-internals.md row still matches the installed Pi", async () => {
