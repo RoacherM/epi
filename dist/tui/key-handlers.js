@@ -78,8 +78,11 @@ export async function pasteClipboard(host) {
             host.insertImage(paste.bytes, paste.mimeType);
             return;
         }
-        if (paste.kind === "text")
+        if (paste.kind === "text") {
             host.pasteText(paste.text);
+            return;
+        }
+        host.notice("Nothing to paste: the clipboard holds no image or text.", "warning");
     }
     catch (error) {
         host.notice(`Could not read the clipboard: ${errorText(error)}`, "error");

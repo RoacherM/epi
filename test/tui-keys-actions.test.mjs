@@ -206,6 +206,16 @@ test("a kitty-protocol key release does not run the shortcut a second time (one 
   assert.doesNotMatch(marks.afterPaste, /\[Image #2\]/);
 });
 
+test("Ctrl+V on an empty clipboard says so instead of doing nothing", (t) => {
+  const clipboardFile = join(mkdtempSync(join(tmpdir(), "mmp-clipboard-empty-")), "clipboard.txt");
+  t.after(() => rmSync(clipboardFile, { force: true }));
+  writeFileSync(clipboardFile, "");
+  const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
+    ["wait", 2500], ["key", "ctrl+v"], ["wait", 500], ["mark", "afterPaste"], ["key", "ctrl+d"],
+  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  assert.match(marks.afterPaste, /Nothing to paste/);
+});
+
 // Ctrl+Z (app.suspend) is not exercised through the harness: the real handler calls
 // `process.kill(0, "SIGTSTP")`, which would suspend the harness's own process group (and the test
 // runner, if run in the same group) with nothing to send it SIGCONT in a non-interactive test.
