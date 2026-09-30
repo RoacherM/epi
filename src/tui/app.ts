@@ -349,6 +349,9 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     toggleThinkingExpanded: () => {
       thinkingExpanded = !thinkingExpanded;
       transcript.setThinkingExpanded(thinkingExpanded);
+      // Pi says "Thinking blocks: hidden/visible" here; without it Ctrl+T looks dead whenever
+      // no reply on screen has thinking content.
+      tui.flash(`Thinking: ${thinkingExpanded ? "expanded" : "collapsed"}`);
       tui.requestRender();
     },
     exit: (code) => exit(code),

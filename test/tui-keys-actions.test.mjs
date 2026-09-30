@@ -216,6 +216,15 @@ test("Ctrl+V on an empty clipboard says so instead of doing nothing", (t) => {
   assert.match(marks.afterPaste, /Nothing to paste/);
 });
 
+test("Ctrl+T says whether thinking is now expanded or collapsed, even with no thinking on screen", (t) => {
+  const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
+    ["wait", 2500], ["key", "ctrl+t"], ["wait", 300], ["mark", "first"],
+    ["key", "ctrl+t"], ["wait", 300], ["mark", "second"], ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.first, /Thinking: expanded/);
+  assert.match(marks.second.slice(marks.first.length), /Thinking: collapsed/);
+});
+
 // Ctrl+Z (app.suspend) is not exercised through the harness: the real handler calls
 // `process.kill(0, "SIGTSTP")`, which would suspend the harness's own process group (and the test
 // runner, if run in the same group) with nothing to send it SIGCONT in a non-interactive test.
