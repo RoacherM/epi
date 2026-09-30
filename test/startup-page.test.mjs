@@ -4,6 +4,7 @@ import test from "node:test";
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
+import { MMP_PACKAGE_VERSION as MMP_VERSION } from "./fixtures/mmp-package-version.mjs";
 import { createMmpRuntimeExtension } from "../dist/extensions/runtime.js";
 import { renderMmpStartupPage } from "../dist/startup-page.js";
 
@@ -20,7 +21,7 @@ const theme = {
 const identity = {
   runtime: {
     name: "MMP",
-    version: "0.1.4",
+    version: MMP_VERSION,
     engine: "Pi",
     engineVersion: PI_VERSION,
   },
@@ -84,7 +85,7 @@ test("wide startup page presents the Make My Pi brand and assembly controls", ()
   const output = lines.join("\n");
 
   assertFits(lines, 108);
-  assert.match(output, /mmp v0\.1\.4/);
+  assert.match(output, new RegExp(`mmp v${escapeRegExp(MMP_VERSION)}`));
   assert.match(output, /Make My Pi/);
   assert.match(output, /Compose Pi your way\./);
   assert.match(output, /MoonshotAI: Kimi K2\.5/);

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 
+import { MMP_PACKAGE_VERSION as MMP_VERSION } from "./fixtures/mmp-package-version.mjs";
 import { buildInlineExtensions } from "../dist/extensions/index.js";
 import { createMmpRuntimeExtension } from "../dist/extensions/runtime.js";
 import { createMmpRuntimeIdentity } from "../dist/runtime-identity.js";
@@ -26,7 +27,7 @@ function fixture() {
     externalExtensions: [],
   };
   const identity = createMmpRuntimeIdentity({
-    mmpVersion: "0.1.4",
+    mmpVersion: MMP_VERSION,
     piVersion: PI_VERSION,
     mmpHome: "/fixture/mmp",
     assembly,

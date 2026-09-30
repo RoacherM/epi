@@ -106,15 +106,18 @@ function captureModelVisibleContent() {
       [piPackageDir, "$PI_PACKAGE_DIR"],
       [mcpAdapterPackageDir, "$MCP_ADAPTER_PACKAGE_DIR"],
       [root, "$CWD"],
-      // mmp:runtime's inventory embeds both versions verbatim (engineVersion, runtime.version): left
-      // unnormalized, --diff would report a change on every MMP release and every Pi bump even when
-      // nothing else about the prompt or tools moved -- exactly the false positive this snapshot
-      // exists to avoid (docs/pi-upgrade-design.md 2). The top-level piVersion field still records
-      // the real value.
+    ];
+    // mmp:runtime's inventory embeds both versions verbatim (engineVersion, runtime.version): left
+    // unnormalized, --diff would report a change on every MMP release and every Pi bump even when
+    // nothing else about the prompt or tools moved -- exactly the false positive this snapshot
+    // exists to avoid (docs/pi-upgrade-design.md 2). The top-level piVersion field still records the
+    // real value. Boundary-checked (unlike the plain paths above): a bare substring replace of a
+    // short version string like "0.1.4" could also match inside an unrelated longer number.
+    const versionRoots = [
       [PI_VERSION, "$PI_VERSION"],
       [MMP_VERSION, "$MMP_VERSION"],
     ];
-    return { ...captured, roots };
+    return { ...captured, roots, versionRoots };
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
@@ -128,21 +131,26 @@ function escapeRegExp(text) {
  * value that equals or starts with one, like scripts/normalize-snapshot.mjs's helpers do for JSON
  * field values) -- a system prompt is free-form prose with paths embedded mid-sentence, not a
  * structured record of path-valued fields. Longest roots first, so a nested one (the temp dir under
- * itself, after resolving symlinks) is substituted before its own prefix would otherwise shadow it. */
-function substituteRoots(value, roots) {
+ * itself, after resolving symlinks) is substituted before its own prefix would otherwise shadow it.
+ * `versionRoots` entries are matched with digit/dot boundaries so a short version string like
+ * "0.1.4" doesn't also match inside an unrelated longer number (e.g. "10.1.4"). */
+function substituteRoots(value, roots, versionRoots = []) {
   if (typeof value === "string") {
-    const sorted = [...roots].sort((a, b) => b[0].length - a[0].length);
+    const sortedRoots = [...roots].sort((a, b) => b[0].length - a[0].length);
     let result = value;
-    for (const [path, token] of sorted) {
+    for (const [path, token] of sortedRoots) {
       result = result.replace(new RegExp(escapeRegExp(path), "g"), token);
+    }
+    for (const [version, token] of versionRoots) {
+      result = result.replace(new RegExp(`(?<![\\d.])${escapeRegExp(version)}(?![\\d.])`, "g"), token);
     }
     return result;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => substituteRoots(item, roots));
+    return value.map((item) => substituteRoots(item, roots, versionRoots));
   }
   if (value !== null && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, substituteRoots(item, roots)]));
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, substituteRoots(item, roots, versionRoots)]));
   }
   return value;
 }
@@ -157,9 +165,9 @@ function normalizeDates(value) {
 }
 
 function buildSnapshot() {
-  const { systemPrompt, tools, roots } = captureModelVisibleContent();
-  const normalizedPrompt = normalizeDates(substituteRoots(systemPrompt, roots));
-  const normalizedTools = canonicalize(normalizeDates(substituteRoots(tools, roots)))
+  const { systemPrompt, tools, roots, versionRoots } = captureModelVisibleContent();
+  const normalizedPrompt = normalizeDates(substituteRoots(systemPrompt, roots, versionRoots));
+  const normalizedTools = canonicalize(normalizeDates(substituteRoots(tools, roots, versionRoots)))
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return { piVersion: PI_VERSION, systemPrompt: normalizedPrompt, tools: normalizedTools };
 }

@@ -160,6 +160,22 @@ const registry = [
     },
   },
   {
+    id: "paste-chips-action-ids",
+    async check() {
+      const pasteChipsPath = join(root, "src", "tui", "paste-chips.ts");
+      const text = readFileSync(pasteChipsPath, "utf8");
+      const extractIds = (declaration) => {
+        const match = new RegExp(`const ${declaration} = \\[([^\\]]*)\\]`).exec(text);
+        assert.ok(match, `${pasteChipsPath} no longer declares ${declaration}`);
+        return [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+      };
+      const ids = [...extractIds("HISTORY_ACTIONS"), ...extractIds("DELETE_ACTIONS")];
+      const { KEYBINDINGS } = await importDeep("core", "keybindings.js");
+      const missing = ids.filter((id) => !(id in KEYBINDINGS));
+      assert.deepEqual(missing, [], `paste-chips.ts action ids no longer in Pi's KEYBINDINGS catalog: ${missing.join(", ")}`);
+    },
+  },
+  {
     id: "editor-state",
     async check() {
       const { piTui } = await import(pathToFileURL(join(root, "dist", "tui", "pi-tui.js")).href);
@@ -212,11 +228,18 @@ test("docs/pi-internals.md's table and the test registry have exactly the same r
   assert.deepEqual(docIds, registryIds);
 });
 
-/** Every `join(piDist, "a", "b", ...)`, `importFromPi<T>("spec")` and
- * `createRequire(piEntry).resolve("spec")` call anywhere in src/, test/fixtures/ or scripts/ must
- * resolve to a path/spec some registry row's check() actually imports -- a new deep reach added
- * without a matching row (and doc entry) fails here by name, instead of only surfacing the first
- * time a Pi upgrade happens to break it. */
+/** Every `join(<ident>, "a", "b", ...)` where `<ident>` was itself assigned from a statement
+ * mentioning `import.meta.resolve("@earendil-works/...")` -- not hardcoded to the "piDist" name
+ * every current file happens to use, so a future file naming its own base dir differently still
+ * gets caught. (A per-file identifier match, not full data-flow: a base dir threaded through a
+ * function parameter under a different local name, as `pi-tui.ts`'s `packageVersion(entry)` does
+ * for its own already-registered `pi-tui-nested-copy` check, isn't traced -- acceptable since that
+ * case only reads a package's public `package.json`, not an unexported module.) Also flags
+ * `importFromPi<T>("spec")`, `createRequire(piEntry).resolve("spec")`, and any
+ * `import.meta.resolve("@earendil-works/pkg/subpath")` with a subpath. Any of these anywhere in
+ * src/, test/fixtures/ or scripts/ must resolve to a path/spec some registry row's check() actually
+ * imports -- a new deep reach added without a matching row (and doc entry) fails here by name,
+ * instead of only surfacing the first time a Pi upgrade happens to break it. */
 function findDeepPathUsages() {
   const dirs = [join(root, "src"), join(root, "test", "fixtures"), join(root, "scripts")];
   const files = [];
@@ -228,17 +251,25 @@ function findDeepPathUsages() {
     }
   }
   const usages = [];
-  const patterns = [
-    /join\(piDist,\s*((?:"[^"]+"\s*,\s*)*"[^"]+")\)/g,
+  const literalPatterns = [
     /importFromPi(?:<[^>]*>)?\(\s*"([^"]+)"\s*\)/g,
     /createRequire\(piEntry\)\.resolve\(\s*"([^"]+)"\s*\)/g,
+    /import\.meta\.resolve\(\s*"(@earendil-works\/[\w-]+\/[^"]+)"\s*\)/g,
   ];
+  const piBaseDirDeclaration = /(?:const|let)\s+(\w+)\s*=[^;]*import\.meta\.resolve\(\s*"@earendil-works\/[\w-]+"\s*\)[^;]*;/g;
   for (const file of files) {
     const text = readFileSync(file, "utf8");
-    for (const pattern of patterns) {
+    for (const pattern of literalPatterns) {
       for (const match of text.matchAll(pattern)) {
+        usages.push({ file, path: match[1] });
+      }
+    }
+    const baseDirNames = [...text.matchAll(piBaseDirDeclaration)].map((match) => match[1]);
+    for (const name of new Set(baseDirNames)) {
+      const joinCall = new RegExp(`\\bjoin\\(\\s*${name}\\s*,\\s*((?:"[^"]+"\\s*,\\s*)*"[^"]+")\\)`, "g");
+      for (const match of text.matchAll(joinCall)) {
         const segments = [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-        usages.push({ file, path: segments.length > 0 ? segments.join("/") : match[1] });
+        usages.push({ file, path: segments.join("/") });
       }
     }
   }

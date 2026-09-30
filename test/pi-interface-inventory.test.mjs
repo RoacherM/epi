@@ -13,6 +13,7 @@ import ts from "typescript";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const srcDir = join(root, "src");
+const internalsDocPath = join(root, "docs", "pi-internals.md");
 
 const PACKAGES = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "@earendil-works/pi-ai"];
 
@@ -22,32 +23,82 @@ function listSourceFiles(dir) {
     .map((entry) => join(entry.parentPath ?? entry.path, entry.name));
 }
 
-/** Every name MMP statically imports from one of PACKAGES: `{ file, pkg, name, typeOnly }`.
- * A namespace import (`import * as ns from pkg`) has no per-symbol name to check and is skipped --
- * `ns.whatever` is checked at runtime by whatever calls it, same as any other property access. */
+function namedBindingImports(file, pkg, clause) {
+  const results = [];
+  const declarationTypeOnly = clause.isTypeOnly === true;
+  if (clause.name) {
+    results.push({ file, pkg, name: "default", typeOnly: declarationTypeOnly });
+  }
+  const bindings = clause.namedBindings;
+  if (bindings && ts.isNamedImports(bindings)) {
+    for (const element of bindings.elements) {
+      const importedName = (element.propertyName ?? element.name).text;
+      results.push({ file, pkg, name: importedName, typeOnly: declarationTypeOnly || element.isTypeOnly === true });
+    }
+  }
+  return results;
+}
+
+function namedExportReExports(file, pkg, exportClause, declarationTypeOnly) {
+  const results = [];
+  if (exportClause && ts.isNamedExports(exportClause)) {
+    for (const element of exportClause.elements) {
+      const exportedName = (element.propertyName ?? element.name).text;
+      results.push({ file, pkg, name: exportedName, typeOnly: declarationTypeOnly || element.isTypeOnly === true });
+    }
+  }
+  return results;
+}
+
+/** Every name MMP statically imports from, or re-exports from, one of PACKAGES:
+ * `{ file, pkg, name, typeOnly }`. Handles `import { X } from pkg` and `export { X } from pkg`
+ * (including their `type`-only forms) identically -- both are checked against the installed
+ * package the same way. A namespace form (`import * as ns from pkg`, `export * from pkg`) has no
+ * per-symbol name to check and is skipped -- `ns.whatever` is checked at runtime by whatever calls
+ * it, same as any other property access. */
 function collectImports() {
   const results = [];
   for (const file of listSourceFiles(srcDir)) {
     const text = readFileSync(file, "utf8");
     const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     for (const statement of sourceFile.statements) {
-      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-      const pkg = statement.moduleSpecifier.text;
-      if (!PACKAGES.includes(pkg)) continue;
-      const clause = statement.importClause;
-      if (!clause) continue; // side-effect-only import: `import "pkg"`
-      const declarationTypeOnly = clause.isTypeOnly === true;
-      if (clause.name) {
-        results.push({ file, pkg, name: "default", typeOnly: declarationTypeOnly });
-      }
-      const bindings = clause.namedBindings;
-      if (bindings && ts.isNamedImports(bindings)) {
-        for (const element of bindings.elements) {
-          const importedName = (element.propertyName ?? element.name).text;
-          results.push({ file, pkg, name: importedName, typeOnly: declarationTypeOnly || element.isTypeOnly === true });
-        }
+      if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
+        const pkg = statement.moduleSpecifier.text;
+        if (!PACKAGES.includes(pkg) || !statement.importClause) continue;
+        results.push(...namedBindingImports(file, pkg, statement.importClause));
+      } else if (ts.isExportDeclaration(statement) && statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
+        const pkg = statement.moduleSpecifier.text;
+        if (!PACKAGES.includes(pkg)) continue;
+        results.push(...namedExportReExports(file, pkg, statement.exportClause, statement.isTypeOnly === true));
       }
     }
+  }
+  return results;
+}
+
+/** Every module specifier anywhere in `file` (not just top-level statements) that names one of
+ * PACKAGES or a subpath of one -- `import`/`export ... from` and dynamic `import(...)`, walked
+ * through the whole AST since a dynamic import can appear in any expression position. Used only for
+ * the subpath-registration check below; per-symbol checking is `collectImports()`'s job. */
+function collectAllPackageSpecifiers() {
+  const results = [];
+  for (const file of listSourceFiles(srcDir)) {
+    const text = readFileSync(file, "utf8");
+    const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const visit = (node) => {
+      let specifier;
+      if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+        specifier = node.moduleSpecifier.text;
+      } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        const [arg] = node.arguments;
+        if (arg && ts.isStringLiteral(arg)) specifier = arg.text;
+      }
+      if (specifier !== undefined && PACKAGES.some((pkg) => specifier === pkg || specifier.startsWith(`${pkg}/`))) {
+        results.push({ file, specifier });
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
   }
   return results;
 }
@@ -106,4 +157,18 @@ test("every name MMP imports from Pi's three pinned packages exists in the insta
     }
   }
   assert.deepEqual(missing, [], `Pi no longer exports:\n${missing.join("\n")}`);
+});
+
+test("a subpath import of a Pi package is registered in docs/pi-internals.md", () => {
+  // A subpath (e.g. "@earendil-works/pi-ai/compat") is a different module than the package root
+  // this file otherwise checks -- even one that pi-ai's own "exports" map declares public. It needs
+  // its own row (what it's for, how it fails) rather than silently riding along uninventoried.
+  const specifiers = collectAllPackageSpecifiers();
+  const subpaths = specifiers.filter(({ specifier }) => PACKAGES.every((pkg) => specifier !== pkg));
+  if (subpaths.length === 0) return; // nothing to check today; this guards the next one added
+  const internalsDoc = readFileSync(internalsDocPath, "utf8");
+  const unregistered = subpaths
+    .filter(({ specifier }) => !internalsDoc.includes(specifier))
+    .map(({ file, specifier }) => `${specifier} (${file.slice(root.length + 1)}) is not mentioned in docs/pi-internals.md -- add a row for it`);
+  assert.deepEqual(unregistered, []);
 });

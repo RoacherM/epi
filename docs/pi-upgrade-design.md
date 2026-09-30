@@ -165,3 +165,12 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 | 6 | 更新提示：关掉 Pi 自带的提示、后台检查与缓存、启动页和底栏显示、`mmp update`（新 TUI 里改为显示在快捷键栏右侧） |
 
 新 TUI 开发期间同样执行第 6 节的规则，漂移检查和启动契约随 TUI 代码一起加。
+
+## 9. 已知：升到 Pi 0.99 时需要人决定的一件事
+
+Pi 0.99 加入了原生 MCP 支持（`core/mcp-servers.js`），把 `mcp.json` 变成 Pi 自己识别、并纳入 project trust 的一项资源。MMP 现在的隔离假设是"Pi 不认识 `mcp.json`，只有 `mmp:mcp` + `pi-mcp-adapter` 认识它"——0.99 打破这个假设。升到 0.99（或更高）时，在自动化门禁跑完、开 PR 之前，需要人决定：
+
+- ambient 隔离要不要新增一项：阻止 Pi 原生读取项目/全局的 `mcp.json`（同 `SYSTEM.md`/`APPEND_SYSTEM.md` 现在的做法），还是改用 Pi 原生 MCP 取代 `mmp:mcp` + `pi-mcp-adapter`；
+- 如果两者共存，`mcp.json` 的 schema、trust 语义和生效顺序会不会冲突，MMP 该以哪一份为准。
+
+这不是自动化能替人拍板的决定，先在这里记一笔，免得升级脚本悄悄把 0.99 当成又一次普通的 patch 升级放过去。
