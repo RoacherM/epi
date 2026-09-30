@@ -60,12 +60,7 @@ npm test
 npm link
 ```
 
-版本检查应输出：
-
-```text
-mmp 0.1.4
-pi 0.87.1
-```
+版本检查应输出两行：`mmp <当前 MMP 版本>` 和 `pi <当前锁定的 Pi 版本>`（具体版本号见 `package.json`，不在这里写死，避免每次发布都要改文档）。
 
 首次安装不要求创建 Manifest；`mmp --no-project --dry-run` 可以空配置启动。MMP 使用独立 Pi 运行目录 `~/.mmp/pi`。认证可通过 Pi 支持的 provider 环境变量提供；也可以启动 `mmp` 后使用 Pi 的 `/login`。认证、settings、sessions 与 project trust 都不会从 `~/.pi/agent` 自动继承。
 

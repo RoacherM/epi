@@ -44,6 +44,22 @@ test("renderInstallScript throws if a placeholder is missing", () => {
   );
 });
 
+test("renderInstallScript rejects an invalid version (e.g. a 'v' prefix or a prerelease)", () => {
+  for (const version of ["v1.2.3", "1.2", "1.2.3-beta.1", "not-a-version"]) {
+    assert.throws(
+      () => renderInstallScript(installTemplate, { version, sha256: "a".repeat(64) }),
+      /invalid MMP version/,
+    );
+  }
+});
+
+test("renderInstallScript rejects a malformed sha256", () => {
+  assert.throws(
+    () => renderInstallScript(installTemplate, { version: "1.2.3", sha256: "not-hex" }),
+    /invalid sha256/,
+  );
+});
+
 test("tagExists reflects git ls-remote's output", () => {
   const { exec } = fakeExec({
     git: (args) => ({

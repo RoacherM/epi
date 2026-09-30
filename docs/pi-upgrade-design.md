@@ -73,7 +73,7 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 
 ## 5. 发布自动化
 
-**版本号谁来加。** MMP 的 patch 版本号在升级 PR 里就已经加好了：`scripts/pi-upgrade.mjs` 门禁通过后顺手把 `package.json` 和 `src/host.ts` 里的 `MMP_VERSION` 一起加一个 patch 版本，这样这条 PR 本身就是"可发布"的（见第 8 节步 3）。`scripts/release.mjs` 只读 `package.json` 里已经写好的版本号，自己不改版本号，也不提交任何东西。
+**版本号谁来加。** MMP 的 patch 版本号在升级 PR 里就已经加好了：`scripts/pi-upgrade.mjs` 门禁通过后顺手把 `package.json`（和 `package-lock.json` 里对应的根版本号）加一个 patch 版本，这样这条 PR 本身就是"可发布"的（见第 8 节步 3）。`src/host.ts` 的 `MMP_VERSION` 在运行时直接读 `package.json`（单一来源，另一处并行改动），升级脚本不需要再改它。`scripts/release.mjs` 只读 `package.json` 里已经写好的版本号，自己不改版本号，也不提交任何东西。
 
 **SHA-256 只算一次，仓库里不存哈希。** `install.sh` 在仓库里是一份模板，`MMP_VERSION` 和 `DEFAULT_PACKAGE_SHA256` 两处都是占位符（`__MMP_VERSION__` / `__MMP_PACKAGE_SHA256__`），从来不是真的版本号或哈希——直接跑这份模板会在 SHA-256 格式校验那一步就报错退出，不需要额外代码。真正的哈希只在发布时算一次：
 
@@ -91,6 +91,21 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 对外发布是否需要你每次点一下，由你定（U2）：目前是"升级 PR 你点合并，合并后发布脚本自动跑"，`release.yml` 监听 push to main，跳过判断（tag 已存在）保证它不会重复发布。
 
 **升级 PR 上没有 CI。** `pi-upgrade.yml` 用默认 `GITHUB_TOKEN` 开 PR 时，GitHub 不会为这个 PR 触发别的 workflow（包括 `ci.yml`），这是平台限制，不是 bug——升级脚本自己已经在开 PR 之前跑过完整门禁，所以这不影响正确性，只是那条 PR 页面上看不到绿色的 CI 勾。想要 PR 页面也有 CI，加一个 repo secret `PI_UPGRADE_PAT`（有 `contents:write` / `pull-requests:write` 权限的 PAT）：`pi-upgrade.yml` 已经写好 `secrets.PI_UPGRADE_PAT || github.token` 的兜底逻辑，不需要改代码，加了 secret 就自动生效，没加也能正常工作。
+
+**供应链防护（pre-merge review 后加）。** 升级脚本会给一个几小时前刚发布、我们不掌控的上游包跑 `npm install`，这本身就是攻击面：
+
+- `npm install` 固定加 `--ignore-scripts`（本地验证过：从零装依赖、`--ignore-scripts`、`npm run build`、跑满 507 个测试，全部通过——这个仓库的构建和测试不依赖任何包的 postinstall/install 脚本，包括 esbuild、fsevents、protobufjs 这几个真正带脚本的包）。
+- adapter 的声明 peer 范围不包含新 Pi 版本时（见下），升级脚本会往 `package.json` 写一条 npm 原生的 `overrides`（`{ "pi-mcp-adapter": { "@earendil-works/pi-ai": "$@earendil-works/pi-ai" } }`），否则 npm 的严格 peer 校验会直接拒绝安装（`ERESOLVE`，本地对着真实 registry 验证过：`pi-mcp-adapter@3.3.0` 配 `@earendil-works/pi-ai@0.99.1` 会报这个错）。没选 `--legacy-peer-deps`：那个开关只能加在"门禁这一次"的 install 命令上，PR 合并后 `release.yml`/`ci.yml` 跑的是不带这个开关的 `npm ci`，一样会报 `ERESOLVE`——门禁绿了但合并后的 main 装不上。写进 `package.json` 的 `overrides` 是仓库状态的一部分，PR 的 diff 里能直接看到，合并后不带任何开关的 `npm ci` 也验证过能正常跑通；adapter 以后声明支持了，`overrides` 会在下一次升级时自动删掉。
+- `pi-upgrade.yml` 的 `actions/checkout` 用 `persist-credentials: false`：token 不写进 `.git/config`，只在真正要 push / 调 `gh` 的那一步里临时塞进远程 URL——这一步在 `npm install` 已经跑完之后才执行，缩小了"万一 `--ignore-scripts` 没挡住"时 token 暴露的窗口。
+- 新版本发布不到 3 天（`MIN_PUBLISH_AGE_MS`，读 `npm view <pkg> time --json`）不会自动采用，除非显式传 `--version`——给生态一点时间发现被入侵或有问题的发布。这个数字是我定的。
+
+**adapter 选择不能降级（pre-merge review 修的一个真实 bug）。** 早期实现按"新→旧排序，选第一个满足声明范围的版本"选 adapter，会把已经锁定的 `2.38.0` **降级**成 `2.21.0`——因为 `pi-mcp-adapter` 2.12.0-2.21.0 声明的 peer 范围是 `*`（什么都匹配），排序上又比更晚的、范围写得更精确的版本先满足条件。现在的规则：`*`、空字符串、或者压根没声明这个 peer key，一律算"没声明"，不算"兼容"；候选版本也只看比当前锁定版本更新的；如果连最新版本都没声明支持新 Pi 版本，就试最新版本（装的时候用上面的 `overrides`），把结果交给门禁（尤其是 `test/mcp.test.mjs` 的离线 MCP 验收）去判断真假兼容，并在报告里如实写清楚"这是猜的，不是 adapter 自己说的"。范围匹配用 `semver` 包（现在是正式 devDependency），不再手撸——手撸的版本只认识 `^` 和精确匹配，遇到 `~`、`x`、`>=` 这类合法写法会直接判"不兼容"，也会在排序遇到预发布版本号时抛异常。
+
+**现状（写这段的时候）：下一次真实升级会是 0.87.1 → 0.99.1，跨 12 个 minor 版本。** 门禁大概率过不了，报告里会标出"一次跨这么多版本，不是日常小步升级"；`pi-mcp-adapter` 目前最新版（3.3.0）声明的 peer 范围只到 `^0.87.0`，大概率会走"没有 adapter 声明支持，试最新版本"这条路径。这不是这次改动要解决的问题——第一次真实升级本来就需要人来处理，设计本身允许门禁失败、开 issue、等人决定。
+
+**PR 和 issue 不会刷屏。** 分支固定叫 `pi-upgrade`（不是每个版本一个分支）：门禁通过就在这条分支上强制更新（force-push 前先检查分支上是否有非 bot 的提交，有就不推，改成在 PR 下留言说明，等人处理）；同一个版本的 PR 被人关掉且没合并过，就不会再自动开一个一样的。门禁失败开的 issue 只在报告内容真正变化时才追加评论（给报告内容算哈希，跟 issue 最后一条评论或者 issue 本身的正文比对），同一个失败原因不会每天多一条评论。
+
+**`${{ steps.*.outputs.* }}` 不直接拼进 `run:` 脚本。** step 的输出最终来自升级脚本解析到的、上游 registry 返回的版本号字符串——理论上是不受信输入。所有用到它的地方都走 `env:` 再在脚本里引用 shell 变量，不直接拼进 `run:` 的命令文本，这是 GitHub 自己建议的防注入写法。
 
 ## 5.1 用户侧：更新提示（参照 Claude Code）
 

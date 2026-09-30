@@ -12,10 +12,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: package.json
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run build
       - name: Check dist/ is committed and matches the build
         run: git diff --exit-code -- dist

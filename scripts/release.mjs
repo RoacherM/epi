@@ -21,8 +21,17 @@ export function computeSha256(filePath) {
 }
 
 /** Replaces the two placeholder tokens install.sh ships with. Throws if a token is missing, so a
- * typo in the template (or in a future edit to it) fails loudly instead of shipping a broken asset. */
+ * typo in the template (or in a future edit to it) fails loudly instead of shipping a broken asset.
+ * Also validates `version`/`sha256` themselves (pre-merge review must-fix #8): MMP's own version is
+ * always a plain release version (no "v" prefix, no prerelease), and a malformed hash here would
+ * mean the sha256 computation above is broken, not a value worth shipping either way. */
 export function renderInstallScript(template, { version, sha256 }) {
+  if (!/^\d+\.\d+\.\d+$/.test(version)) {
+    throw new Error(`refusing to render install.sh with an invalid MMP version: ${JSON.stringify(version)}`);
+  }
+  if (!/^[0-9a-f]{64}$/.test(sha256)) {
+    throw new Error(`refusing to render install.sh with an invalid sha256: ${JSON.stringify(sha256)}`);
+  }
   for (const [token, value] of [
     ["__MMP_VERSION__", version],
     ["__MMP_PACKAGE_SHA256__", sha256],

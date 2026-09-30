@@ -2,7 +2,11 @@ name: Release
 
 # Runs on every push to main; scripts/release.mjs itself skips the work (exits 0) when the tag for
 # package.json's current version already exists, so a push that doesn't bump the version is a
-# no-op here. This runs independently of, and in parallel with, ci.yml -- it does not wait for CI.
+# no-op here. Builds and tests the already-merged, already-reviewed tree before releasing it
+# (pre-merge review blocker #3: publishing without running the gate here meant a merge during a red
+# ci.yml window -- see ci.yml's own note about GITHUB_TOKEN-created PRs -- would ship regardless).
+# `concurrency` serializes back-to-back pushes so two runs can't both pass the tag-exists check and
+# race `gh release create` for the same tag.
 
 on:
   push:
@@ -12,16 +16,25 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: package.json
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run build
+      - name: Check dist/ is committed and matches the build
+        run: git diff --exit-code -- dist
+      - run: npm test
       - run: npm run release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -4,67 +4,67 @@
 // compatibility gate, and writes a Markdown report a human (or a PR body) can read. See
 // docs/pi-upgrade-design.md §2-§4 for the design this implements.
 //
-// Every external effect (registry reads, npm/node subprocesses, the filesystem) is injectable so
-// this can be fully exercised by fake-driven tests -- see test/pi-upgrade.test.mjs. `main()` below
-// is the only place that wires up the real implementations, and it only runs when this file is
-// executed directly, never when it's imported.
+// Every external effect (registry reads, npm/node subprocesses, the filesystem, "now") is
+// injectable so this can be fully exercised by fake-driven tests -- see test/pi-upgrade.test.mjs.
+// `main()` below is the only place that wires up the real implementations, and it only runs when
+// this file is executed directly, never when it's imported.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import semver from "semver";
 
 const PI_PACKAGES = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "@earendil-works/pi-ai"];
 const ADAPTER_PACKAGE = "pi-mcp-adapter";
 const ADAPTER_PEER_KEY = "@earendil-works/pi-ai";
 
+// Supply-chain guard (pre-merge review blocker #2): don't adopt a Pi release until it's had time
+// for the ecosystem to notice a compromised or broken publish. `--version` bypasses this
+// explicitly -- a human asking for a specific version has already made that call.
+const MIN_PUBLISH_AGE_MS = 3 * 24 * 60 * 60 * 1000;
+
+// Reviewed as "won't recur every day": upgrades spanning this many minors are expected to need a
+// human, called out explicitly in the report (pre-merge review, point 9) rather than left implicit.
+const NOTABLE_MINOR_JUMP = 3;
+
 export class NoCompatibleAdapterError extends Error {}
 
-// ---- version comparison -----------------------------------------------------------------------
-// A tiny hand-rolled comparator, not the `semver` package: this sandboxed worktree can only run
-// `npm view` (read-only), not `npm install`, so a new dependency can't be added and verified here.
-// The shapes below (exact `X.Y.Z`, caret ranges OR'd with ` || `) are the only ones the Pi/adapter
-// registry entries actually use (verified with `npm view pi-mcp-adapter@<v> peerDependencies`).
-
-export function parseVersion(version) {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
-  if (!match) {
-    throw new Error(`not a plain X.Y.Z version: ${version}`);
-  }
-  return match.slice(1).map(Number);
-}
-
-export function compareVersions(a, b) {
-  const [aMajor, aMinor, aPatch] = parseVersion(a);
-  const [bMajor, bMinor, bPatch] = parseVersion(b);
-  for (const [x, y] of [[aMajor, bMajor], [aMinor, bMinor], [aPatch, bPatch]]) {
-    if (x !== y) return x - y;
-  }
-  return 0;
-}
+// ---- version helpers (semver-backed; see pre-merge review blocker #1) --------------------------
+// The hand-rolled comparator this replaced only understood exact `X.Y.Z` and `^` ranges: real
+// pi-mcp-adapter peer ranges include `*` (2.12.0-2.21.0) and missing keys (<2.12.0), and arbitrary
+// valid npm range syntax is fair game (">=", "~", "x-ranges"). A hand-rolled matcher either crashed
+// on those (prerelease versions in a sort) or silently mis-evaluated them as "incompatible". `yaml`
+// and `semver` are now real devDependencies (see package.json) -- this sandboxed worktree can now
+// run `npm install --save-dev`, unlike when this file was first written.
 
 export function isNewerVersion(candidate, current) {
-  return compareVersions(candidate, current) > 0;
+  return semver.gt(candidate, current);
 }
 
-/** `^X.Y.Z` per npm's own caret semantics, including the 0.x special cases (0.y.z locks the minor,
- * 0.0.z locks the patch too). `*` matches anything; anything else must match exactly. */
-export function satisfiesRange(version, range) {
-  return range
-    .split("||")
-    .map((part) => part.trim())
-    .some((part) => satisfiesSinglePart(version, part));
+function assertPlainVersion(version, label) {
+  // No "v" prefix, no ambiguous shorthand: this string is written verbatim into package.json's
+  // dependencies, which must be an exact, bare semver (pre-merge review, must-fix #8).
+  if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z-.]+)?$/.test(version)) {
+    throw new Error(`${label} must be a plain X.Y.Z version with no "v" prefix, got: ${JSON.stringify(version)}`);
+  }
 }
 
-function satisfiesSinglePart(version, part) {
-  if (part === "*") return true;
-  if (!part.startsWith("^")) return version === part;
-  const [vMajor, vMinor, vPatch] = parseVersion(version);
-  const [bMajor, bMinor, bPatch] = parseVersion(part.slice(1));
-  if (vMajor !== bMajor) return false;
-  if (bMajor > 0) return vMinor > bMinor || (vMinor === bMinor && vPatch >= bPatch);
-  if (bMinor > 0) return vMinor === bMinor && vPatch >= bPatch;
-  return vMinor === 0 && vPatch === bPatch;
+/** A range of `*` or "" declares no real constraint -- npm treats it as "matches anything", but
+ * for our purposes that means the adapter maintainer never actually vetted the new Pi version
+ * against it, so it must not read as an endorsement (pre-merge review blocker #1: this exact
+ * mistake picked 2.21.0, a downgrade from the pinned 2.38.0, because 2.12.0-2.21.0 all declare
+ * `*`). A missing key is the same "never declared" case. Anything else must be valid npm range
+ * syntax to count; unparseable syntax is not silently "incompatible" (semver.satisfies would just
+ * throw, which we let propagate as a script error instead of a wrong answer). */
+function declaresRealConstraint(range) {
+  if (range === undefined) return false;
+  const trimmed = range.trim();
+  return trimmed !== "" && trimmed !== "*" && semver.validRange(trimmed) !== null;
+}
+
+export function satisfiesDeclaredRange(version, range) {
+  return declaresRealConstraint(range) && semver.satisfies(version, range);
 }
 
 // ---- default (real) side-effecting dependencies ------------------------------------------------
@@ -78,11 +78,17 @@ function npmViewJson(spec, field) {
   return trimmed === "" ? undefined : JSON.parse(trimmed);
 }
 
-/** Registry reads, real implementation: `npm view` only (this project's own sandbox is only
- * allowed to run that read-only subcommand -- see AGENTS.md's Setup section for this worktree). */
+/** Registry reads, real implementation: `npm view` only. */
 export const defaultRegistry = {
+  /** The newest *stable* published version -- prereleases are never auto-adopted (pre-merge review
+   * blocker #1: "ignore prerelease Pi versions unless --version is explicit"). Reads the full
+   * `versions` list rather than trusting `dist-tags.latest` to already exclude prereleases. */
   latestVersion(name) {
-    return npmViewJson(name, "dist-tags.latest");
+    const versions = this.versions(name).filter((v) => semver.valid(v) !== null && semver.prerelease(v) === null);
+    if (versions.length === 0) {
+      throw new Error(`${name} has no published stable versions`);
+    }
+    return versions.slice().sort(semver.rcompare)[0];
   },
   versions(name) {
     const versions = npmViewJson(name, "versions");
@@ -90,6 +96,16 @@ export const defaultRegistry = {
   },
   peerDependencies(name, version) {
     return npmViewJson(`${name}@${version}`, "peerDependencies") ?? {};
+  },
+  /** When `version` was published, from `npm view <name> time --json` (a map of version -> ISO
+   * timestamp, plus `created`/`modified`). */
+  publishedAt(name, version) {
+    const time = npmViewJson(name, "time");
+    const iso = time?.[version];
+    if (iso === undefined) {
+      throw new Error(`no publish time found for ${name}@${version}`);
+    }
+    return new Date(iso);
   },
 };
 
@@ -105,11 +121,22 @@ function listTestFiles(cwd) {
     .map((name) => join("test", name));
 }
 
-/** Runs `npm install`, `npm run build`, then the test files directly with the `tap` reporter
+/**
+ * Runs `npm install`, `npm run build`, then the test files directly with the `tap` reporter
  * (rather than `npm test`, which would rebuild) so failing test names are parseable regardless of
- * whether stdout is a TTY. */
+ * whether stdout is a TTY.
+ *
+ * `npm install` always adds `--ignore-scripts` (pre-merge review blocker #2: this step installs
+ * packages published hours ago by an upstream we don't control, so install/postinstall scripts are
+ * a real supply-chain surface). Verified locally: a from-scratch `npm install --ignore-scripts`
+ * followed by `npm run build` and the full `npm test` (507 tests) passes -- nothing in this repo's
+ * build or test path needs a native postinstall step (not esbuild's, not fsevents', not
+ * protobufjs'). No other flags are needed even when the adapter's peer declaration doesn't cover
+ * the new Pi version: `applyAdapterOverride` already wrote the `overrides` entry that makes plain
+ * `npm install`/`npm ci` resolve it (verified locally against the real registry).
+ */
 export function runGate({ cwd, exec = defaultExec }) {
-  const install = exec("npm", ["install"], { cwd });
+  const install = exec("npm", ["install", "--ignore-scripts"], { cwd });
   if (install.status !== 0) {
     return { step: "install", ...install };
   }
@@ -134,16 +161,24 @@ export function extractFailingTests(tapOutput) {
   return names;
 }
 
+const CHANGELOG_MAX_CHARS = 20_000; // keeps the PR body well under GitHub's 65,536-char limit.
+
 /** `## [X.Y.Z] - date` headers, oldest info last (see any installed Pi package's CHANGELOG.md).
  * Returns the slice covering every version strictly newer than `fromVersion` up to and including
- * `toVersion`, or undefined if `toVersion`'s own heading can't be found. */
+ * `toVersion`, or undefined if `toVersion`'s own heading can't be found. Capped at
+ * CHANGELOG_MAX_CHARS: `fromVersion`'s heading can be missing (a many-minor jump, or a changelog
+ * that doesn't go back that far) and without a cap the slice runs to the end of the file -- observed
+ * at 576 KB for a 12-minor jump, which alone blows GitHub's PR body limit (pre-merge review,
+ * must-fix #7). */
 export function extractChangelogEntries(changelogText, fromVersion, toVersion) {
   const headings = [...changelogText.matchAll(/^## \[([^\]]+)\][^\n]*$/gm)];
   const toHeading = headings.find((entry) => entry[1] === toVersion);
   if (toHeading === undefined) return undefined;
   const fromHeading = headings.find((entry) => entry[1] === fromVersion && entry.index > toHeading.index);
   const end = fromHeading?.index ?? changelogText.length;
-  return changelogText.slice(toHeading.index, end).trim();
+  const slice = changelogText.slice(toHeading.index, end).trim();
+  if (slice.length <= CHANGELOG_MAX_CHARS) return slice;
+  return `${slice.slice(0, CHANGELOG_MAX_CHARS)}\n\n... (truncated; see the full upstream CHANGELOG for ${fromVersion}..${toVersion})`;
 }
 
 export function readChangelog(cwd) {
@@ -164,7 +199,7 @@ export function runModelSnapshot({ cwd, exec = defaultExec, fileExists = existsS
   return { available: true, output, changed: output !== "" && output !== "NO MODEL-VISIBLE CHANGES" };
 }
 
-// ---- package.json / MMP_VERSION edits -----------------------------------------------------------
+// ---- package.json version bump --------------------------------------------------------------
 
 export function readPackageJson(cwd) {
   return JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
@@ -175,14 +210,14 @@ function writePackageJson(cwd, pkg, writeFile) {
 }
 
 export function bumpPatch(version) {
-  const [major, minor, patch] = parseVersion(version);
-  return `${major}.${minor}.${patch + 1}`;
+  return semver.inc(version, "patch");
 }
 
-/** Bumps package.json's version, package-lock.json's matching root version (so the lockfile isn't
- * visibly stale in the PR -- `npm ci` doesn't require this, but a release-ready PR shouldn't ship
- * an inconsistent lockfile), and the `MMP_VERSION` constant in src/host.ts, so a passing-gate PR is
- * release-ready (docs/pi-upgrade-design.md §5). */
+/** Bumps package.json's version and package-lock.json's matching root version (so the lockfile
+ * isn't visibly stale in the PR -- `npm ci` doesn't require this, but a release-ready PR shouldn't
+ * ship an inconsistent lockfile), so a passing-gate PR is release-ready (docs/pi-upgrade-design.md
+ * §5). `src/host.ts`'s `MMP_VERSION` now reads package.json at runtime (single source of truth --
+ * a separate concurrent change), so there is nothing else to edit here. */
 export function bumpMmpVersion({ cwd, readFile = readFileSync, writeFile = writeFileSync }) {
   const pkg = readPackageJson(cwd);
   const nextVersion = bumpPatch(pkg.version);
@@ -199,36 +234,73 @@ export function bumpMmpVersion({ cwd, readFile = readFileSync, writeFile = write
     writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
   }
 
-  const hostPath = join(cwd, "src", "host.ts");
-  const hostSource = readFile(hostPath, "utf8");
-  const pattern = /export const MMP_VERSION = "[^"]+";/;
-  if (!pattern.test(hostSource)) {
-    throw new Error(`could not find MMP_VERSION in ${hostPath}`);
-  }
-  writeFile(hostPath, hostSource.replace(pattern, `export const MMP_VERSION = "${nextVersion}";`));
   return nextVersion;
 }
 
 // ---- adapter selection ---------------------------------------------------------------------------
 
-/** Keeps the currently pinned adapter version if its declared peer range already covers
- * `piVersion`; otherwise picks the newest adapter version whose range does. Throws
- * NoCompatibleAdapterError if none does. */
+/**
+ * Keeps the currently pinned adapter version if its declared peer range already covers
+ * `piVersion`. Otherwise looks for the newest adapter version *newer than the current one* whose
+ * declared range covers it (never downgrades -- pre-merge review blocker #1's core bug: picking
+ * the newest version that merely happens to satisfy the range, without excluding versions older
+ * than what's already pinned, silently downgraded 2.38.0 to 2.21.0 because 2.21.0 declares `*`).
+ *
+ * If nothing declares support, peer ranges are sometimes stale (a maintainer ships a working
+ * release without bumping the declared range) -- rather than failing outright, this tries the
+ * newest published adapter overall and returns `declared: false`. The caller runs the real
+ * compatibility gate (in particular test/mcp.test.mjs's offline MCP acceptance test) against that
+ * choice and lets it decide; `declared: false` also tells the caller to write a package.json
+ * `overrides` entry (see `applyAdapterOverride`) and to say so plainly in the report, so a human
+ * reviewing the PR knows the peer metadata was overridden, not satisfied.
+ */
 export function selectAdapterVersion({ registry, currentAdapterVersion, piVersion }) {
   const currentPeers = registry.peerDependencies(ADAPTER_PACKAGE, currentAdapterVersion);
-  if (currentPeers[ADAPTER_PEER_KEY] !== undefined && satisfiesRange(piVersion, currentPeers[ADAPTER_PEER_KEY])) {
-    return { version: currentAdapterVersion, changed: false };
+  if (satisfiesDeclaredRange(piVersion, currentPeers[ADAPTER_PEER_KEY])) {
+    return { version: currentAdapterVersion, changed: false, declared: true };
   }
-  const candidates = registry.versions(ADAPTER_PACKAGE).slice().sort(compareVersions).reverse();
-  for (const candidate of candidates) {
+
+  const allVersions = registry.versions(ADAPTER_PACKAGE).filter((v) => semver.valid(v) !== null);
+  if (allVersions.length === 0) {
+    throw new NoCompatibleAdapterError(`${ADAPTER_PACKAGE} has no published versions`);
+  }
+
+  const newerVersions = allVersions.filter((v) => semver.gt(v, currentAdapterVersion)).sort(semver.rcompare);
+  for (const candidate of newerVersions) {
     const peers = registry.peerDependencies(ADAPTER_PACKAGE, candidate);
-    if (peers[ADAPTER_PEER_KEY] !== undefined && satisfiesRange(piVersion, peers[ADAPTER_PEER_KEY])) {
-      return { version: candidate, changed: candidate !== currentAdapterVersion };
+    if (satisfiesDeclaredRange(piVersion, peers[ADAPTER_PEER_KEY])) {
+      return { version: candidate, changed: true, declared: true };
     }
   }
-  throw new NoCompatibleAdapterError(
-    `no version of ${ADAPTER_PACKAGE} declares peer support for ${ADAPTER_PEER_KEY}@${piVersion}`,
-  );
+
+  const newestOverall = allVersions.slice().sort(semver.rcompare)[0];
+  return { version: newestOverall, changed: newestOverall !== currentAdapterVersion, declared: false };
+}
+
+/**
+ * When the chosen adapter version doesn't declare peer support for the pinned Pi version, plain
+ * `npm install`/`npm ci` refuses with ERESOLVE (verified locally against the real registry: pinning
+ * pi-mcp-adapter@3.3.0 next to @earendil-works/pi-ai@0.99.1 fails exactly this way). `--legacy-peer-
+ * deps` on just the gate's install would "fix" the gate but leave `npm ci` on main broken after
+ * merge -- the same ERESOLVE would hit `release.yml`. Instead this writes the one npm-native
+ * `overrides` entry that tells npm the root's own pinned version of the peer is authoritative for
+ * this dependency (`"$<pkg>"` means "whatever version is installed at the root"), which is visible
+ * in the PR diff and makes plain `npm ci` succeed on main with no flags (also verified locally).
+ * Removes a stale entry from an earlier undeclared-adapter upgrade once the adapter catches up and
+ * declares real support again.
+ */
+export function applyAdapterOverride(pkg, adapter) {
+  if (adapter.declared) {
+    if (pkg.overrides?.[ADAPTER_PACKAGE]?.[ADAPTER_PEER_KEY] !== undefined) {
+      delete pkg.overrides[ADAPTER_PACKAGE][ADAPTER_PEER_KEY];
+      if (Object.keys(pkg.overrides[ADAPTER_PACKAGE]).length === 0) delete pkg.overrides[ADAPTER_PACKAGE];
+      if (Object.keys(pkg.overrides).length === 0) delete pkg.overrides;
+    }
+    return;
+  }
+  pkg.overrides ??= {};
+  pkg.overrides[ADAPTER_PACKAGE] ??= {};
+  pkg.overrides[ADAPTER_PACKAGE][ADAPTER_PEER_KEY] = `$${ADAPTER_PEER_KEY}`;
 }
 
 // ---- report ---------------------------------------------------------------------------------------
@@ -258,11 +330,26 @@ function buildReport({
     "# Pi upgrade report",
     "",
     `- Pi packages: ${oldPiVersion} → ${newPiVersion}`,
-    `- pi-mcp-adapter: ${adapter.changed ? `${adapter.previous} → ${adapter.version}` : `unchanged (${adapter.version})`}`,
-    `- Gate: ${formatGateResult(gate)}`,
   ];
+  const minorJump = safeMinorJump(oldPiVersion, newPiVersion);
+  if (minorJump !== undefined && minorJump >= NOTABLE_MINOR_JUMP) {
+    lines.push(
+      `  **${minorJump} minor versions at once** -- expect the gate to need a human even if it passes; this is not a routine daily bump.`,
+    );
+  }
+  lines.push(
+    `- pi-mcp-adapter: ${adapter.changed ? `${adapter.previous} → ${adapter.version}` : `unchanged (${adapter.version})`}`,
+  );
+  if (!adapter.declared) {
+    lines.push(
+      `  **No published pi-mcp-adapter version declares peer support for ${ADAPTER_PEER_KEY}@${newPiVersion}.** ` +
+        `Tried the newest published adapter anyway and let the gate below decide -- peer ranges lag real compatibility often enough that failing outright here would block on stale metadata, not an actual problem. ` +
+        `package.json now carries an \`overrides\` entry forcing that peer to the pinned version so plain \`npm install\`/\`npm ci\` (not just this gate) resolve it; drop that entry once pi-mcp-adapter's declared range actually covers ${newPiVersion}.`,
+    );
+  }
+  lines.push(`- Gate: ${formatGateResult(gate)}`);
   if (mmpVersion !== undefined) {
-    lines.push(`- MMP version bumped to ${mmpVersion} (package.json + src/host.ts MMP_VERSION)`);
+    lines.push(`- MMP version bumped to ${mmpVersion} (package.json + package-lock.json)`);
   }
   lines.push("", "## Model-visible changes", "");
   if (modelSnapshot === undefined) {
@@ -285,13 +372,20 @@ function buildReport({
   return `${lines.join("\n")}\n`;
 }
 
+function safeMinorJump(oldVersion, newVersion) {
+  if (semver.valid(oldVersion) === null || semver.valid(newVersion) === null) return undefined;
+  const from = semver.major(oldVersion) * 1000 + semver.minor(oldVersion);
+  const to = semver.major(newVersion) * 1000 + semver.minor(newVersion);
+  return Math.max(0, to - from);
+}
+
 // ---- orchestration ----------------------------------------------------------------------------
 
 /**
  * Runs the whole upgrade attempt. Returns `{ exitCode, report, upgraded, gatePassed,
- * modelVisibleChanged }`; never throws for an ordinary gate failure or missing adapter (those are
- * reported and produce exitCode 1) -- only for a genuine script bug (bad package.json, missing
- * MMP_VERSION constant, and the like), which the caller turns into exitCode 2.
+ * modelVisibleChanged }`; never throws for an ordinary gate failure (reported, exitCode 1) -- only
+ * for a genuine script bug (bad package.json, an invalid --version, and the like), which the caller
+ * turns into exitCode 2.
  */
 export function runPiUpgrade({
   cwd,
@@ -301,7 +395,12 @@ export function runPiUpgrade({
   readFile = readFileSync,
   writeFile = writeFileSync,
   fileExists = existsSync,
+  now = () => new Date(),
 }) {
+  if (requestedVersion !== undefined) {
+    assertPlainVersion(requestedVersion, "--version");
+  }
+
   const pkg = readPackageJson(cwd);
   const oldPiVersion = pkg.dependencies[PI_PACKAGES[0]];
   const newPiVersion = requestedVersion ?? registry.latestVersion(PI_PACKAGES[0]);
@@ -316,30 +415,36 @@ export function runPiUpgrade({
     };
   }
 
-  const currentAdapterVersion = pkg.dependencies[ADAPTER_PACKAGE];
-  let adapter;
-  try {
-    const selected = selectAdapterVersion({ registry, currentAdapterVersion, piVersion: newPiVersion });
-    adapter = { version: selected.version, previous: currentAdapterVersion, changed: selected.changed };
-  } catch (error) {
-    if (!(error instanceof NoCompatibleAdapterError)) throw error;
-    return {
-      exitCode: 1,
-      upgraded: false,
-      gatePassed: false,
-      modelVisibleChanged: false,
-      newPiVersion,
-      report: buildReport({
-        oldPiVersion,
-        newPiVersion,
-        adapter: { version: currentAdapterVersion, previous: currentAdapterVersion, changed: false },
-        gate: { status: 1, step: "adapter", stdout: "", stderr: error.message },
-      }),
-    };
+  // Supply-chain guard (pre-merge review blocker #2): don't adopt a release the ecosystem hasn't
+  // had a chance to react to yet. An explicit `--version` is a human's deliberate choice and skips
+  // this entirely.
+  if (requestedVersion === undefined) {
+    const publishedAt = registry.publishedAt(PI_PACKAGES[0], newPiVersion);
+    const ageMs = now().getTime() - publishedAt.getTime();
+    if (ageMs < MIN_PUBLISH_AGE_MS) {
+      const ageHours = Math.max(0, Math.round(ageMs / (60 * 60 * 1000)));
+      const waitDays = (MIN_PUBLISH_AGE_MS / (24 * 60 * 60 * 1000)).toFixed(0);
+      return {
+        exitCode: 0,
+        upgraded: false,
+        gatePassed: false,
+        modelVisibleChanged: false,
+        report:
+          `# Pi upgrade report\n\n${newPiVersion} was published ${ageHours}h ago; waiting for the ` +
+          `${waitDays}-day supply-chain safety window before adopting it automatically ` +
+          `(docs/pi-upgrade-design.md §2). Still on ${oldPiVersion}. Pass --version ${newPiVersion} ` +
+          `to adopt it immediately.\n`,
+      };
+    }
   }
+
+  const currentAdapterVersion = pkg.dependencies[ADAPTER_PACKAGE];
+  const selected = selectAdapterVersion({ registry, currentAdapterVersion, piVersion: newPiVersion });
+  const adapter = { version: selected.version, previous: currentAdapterVersion, changed: selected.changed, declared: selected.declared };
 
   for (const name of PI_PACKAGES) pkg.dependencies[name] = newPiVersion;
   pkg.dependencies[ADAPTER_PACKAGE] = adapter.version;
+  applyAdapterOverride(pkg, adapter);
   writePackageJson(cwd, pkg, writeFile);
 
   const gate = runGate({ cwd, exec });
@@ -372,6 +477,7 @@ export function runPiUpgrade({
     modelVisibleChanged: modelSnapshot?.changed ?? false,
     mmpVersion,
     newPiVersion,
+    adapterDeclared: adapter.declared,
     report: buildReport({
       oldPiVersion,
       newPiVersion,
