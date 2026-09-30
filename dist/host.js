@@ -7,6 +7,7 @@ import { parseMmpArgs, passthroughHasFlag, renderHelp } from "./args.js";
 import { runAuthCommand } from "./commands/auth-cli.js";
 import { runConfigCommand, runInstallCommand, runListCommand, runRemoveCommand } from "./commands/manifest-cli.js";
 import { runMcpCommand } from "./commands/mcp-cli.js";
+import { reportRunFailure } from "./errors.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { isInteractivePiRun } from "./interactive.js";
 import { resolveMmpPaths } from "./paths.js";
@@ -268,10 +269,11 @@ export async function runMmp(argv) {
     // keep going through piMain unchanged (docs/decisions.md D3).
     if (isInteractivePiRun(args.passthrough, process.stdin.isTTY === true, process.stdout.isTTY === true)) {
         const tui = await import("./tui/start.js");
-        const code = await tui.runTuiV2(prepared, extensionFactories);
+        // A failed startup (bind() rejecting) is reported here rather than by cli.ts, so it exits too.
+        const code = await tui.runTuiV2(prepared, extensionFactories).catch(reportRunFailure);
         // Pi's interactive shutdown() ends in process.exit(0) too. Waiting for the event loop to drain
         // instead left the process running with the TUI gone whenever anything still held it open, such
-        // as a compaction request that ignored its abort (dogfood D35).
+        // as a compaction request that ignored its abort (dogfood D35, D41).
         process.exit(code);
     }
     await piMain(prepared.piArgs, { extensionFactories });
