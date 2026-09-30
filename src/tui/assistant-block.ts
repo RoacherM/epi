@@ -66,6 +66,8 @@ interface ThinkingTiming {
 /** One collapsed/expanded/streaming thinking run, keyed by its first content-array index (stable
  * across streaming updates, since content only ever appends). */
 class ThinkingBlock implements Component {
+  private body: Component | undefined;
+
   constructor(
     private readonly theme: Theme,
     private readonly text: string,
@@ -105,9 +107,23 @@ class ThinkingBlock implements Component {
       : "";
     const header = `${pad}${bullet} ${this.theme.bold(this.theme.fg("muted", "Thought"))}${suffix}`;
     if (!this.expanded) return [fit(header, width)];
-    const transformed = applyTransformers(this.text, "assistant-thinking", false, contentWidth, this.transformers);
-    const body = piTui.wrapTextWithAnsi(transformed, contentWidth).map((line) => `${pad}${this.theme.fg("thinkingText", line)}`);
-    return [fit(header, width), ...body];
+    return [fit(header, width), ...this.expandedBody().render(width)];
+  }
+
+  /** Pi's own expanded thinking (assistant-message.js updateContent): a `Markdown` in the
+   * thinkingText color, italic, after the `assistant-thinking` transformers, padded by the same
+   * CONTENT_PAD the answer text's AssistantMessageComponent gets -- so its left edge sits in the
+   * same column as the answer below at every width. Built once per block so Markdown's per-width
+   * cache survives repeated renders. */
+  private expandedBody(): Component {
+    this.body ??= new piTui.Markdown(this.text, CONTENT_PAD, 0, getMarkdownTheme(), {
+      color: (text: string) => this.theme.fg("thinkingText", text),
+      italic: true,
+    }, {
+      transform: (markdown: string, availableWidth: number) =>
+        applyTransformers(markdown, "assistant-thinking", false, availableWidth, this.transformers),
+    });
+    return this.body;
   }
 
   render(width: number): string[] {
@@ -122,7 +138,9 @@ class ThinkingBlock implements Component {
     return { handled: true };
   }
 
-  invalidate(): void {}
+  invalidate(): void {
+    this.body?.invalidate();
+  }
 }
 
 export class AssistantBlock implements Component {

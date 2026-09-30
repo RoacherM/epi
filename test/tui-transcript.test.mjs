@@ -517,3 +517,30 @@ test("user messages and tool-call-free assistant messages are each one OSC 133 p
   assert.deepEqual(starts(toolCall), []);
   assert.ok(!toolCall.some((line) => line.includes("\x1b]133;")), "no stray markers from Pi's per-segment component");
 });
+
+// D22: expanded thinking is Pi's Markdown (no raw markers), and every one of its rows starts in the
+// answer text's column, at every width (test/tui-thinking.test.mjs checks the same on a real screen).
+test("expanded thinking renders markdown in the answer's column at every width", () => {
+  const transcript = new Transcript(stubTui(), theme, stubSession());
+  const message = assistantMessage([
+    { type: "thinking", thinking: "**Bold** lead\n\n* item one\n\nsee `code()`" },
+    { type: "text", text: "ANSWER" },
+  ]);
+  transcript.handle({ type: "message_start", message });
+  transcript.handle({ type: "message_end", message });
+  transcript.setThinkingExpanded(true);
+  for (let width = 30; width <= 120; width += 1) {
+    const lines = transcript.root.render(width).map(stripAnsi);
+    const text = lines.join("\n");
+    assert.doesNotMatch(text, /\*\*Bold\*\*|\* item|`code\(\)`/, `raw markdown at width ${width}:\n${text}`);
+    const column = (needle) => {
+      const line = lines.find((candidate) => candidate.includes(needle));
+      assert.ok(line !== undefined, `expected "${needle}" at width ${width}:\n${text}`);
+      return line.search(/\S/);
+    };
+    const answer = column("ANSWER");
+    for (const needle of ["Bold lead", "- item one", "see code()"]) {
+      assert.equal(column(needle), answer, `"${needle}" must start in the answer's column at width ${width}:\n${text}`);
+    }
+  }
+});

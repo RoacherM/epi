@@ -113,3 +113,27 @@ test("a 16-row terminal hides the header and shortcuts bar; a taller one keeps t
 // frame including its borders), not a single clean screen snapshot -- great for "did this text ever
 // appear", useless for "how many rows does the box have right now" without actually emulating a
 // terminal grid. PromptFrame.render() called directly gives that exact, unambiguous answer.
+
+// D22: expanded thinking goes through Pi's Markdown like the answer does -- no raw `**`/`*`/backtick
+// markers -- and its rows start in the same screen column as the answer text below, at a wide and a
+// narrow width. Checked on the current screen (the headless xterm), not the cumulative output log.
+test("expanded thinking renders markdown and lines up with the answer text", (t) => {
+  for (const columns of [120, 50]) {
+    const { screens } = runApp(t, [fixture("faux-thinking-markdown.mjs")], [
+      ["waitReady"], ["type", "go"], ["key", "enter"],
+      ["waitFor", "Worked for", { screen: true }],
+      ["key", "ctrl+t"], ["waitFor", "doThing", { screen: true }], ["screen", "expanded"],
+      ["key", "ctrl+d"],
+    ], { columns });
+    const rows = screens.expanded;
+    const screen = rows.join("\n");
+    assert.doesNotMatch(screen, /\*\*Plan\*\*|\* first item|`doThing\(\)`/, `raw markdown markers on screen at ${columns} columns:\n${screen}`);
+    const texts = ["Plan for the fix", "- first item", "- second item", "Call doThing() now.", "ANSWER-TEXT here"];
+    const columnsOf = texts.map((text) => {
+      const row = rows.find((candidate) => candidate.includes(text));
+      assert.ok(row !== undefined, `expected "${text}" on screen at ${columns} columns:\n${screen}`);
+      return row.search(/\S/);
+    });
+    assert.deepEqual(columnsOf, texts.map(() => columnsOf.at(-1)), `thinking rows must start in the answer's column at ${columns} columns:\n${screen}`);
+  }
+});
