@@ -55,8 +55,8 @@ export function showHardwareCursor(settings: SettingsManager): boolean {
 /**
  * The items in Pi's order. Each apply mirrors the Pi callback wired in interactive-mode.js
  * showSettingsSelector; `host.applySettings()` stands for the UI half of those callbacks (Pi's
- * applyRuntimeSettings plus setupAutocompleteProvider), so /settings, startup and /reload all apply
- * a setting through the same code.
+ * applyRuntimeSettings), so /settings, startup and /reload all apply a setting through the same
+ * code. Skill commands only rebuild autocomplete (`host.resetAutocomplete()`), like Pi's callback.
  */
 export function settingsItems(host: CommandHost): MmpSetting[] {
   const session = host.session();
@@ -103,7 +103,7 @@ export function settingsItems(host: CommandHost): MmpSetting[] {
       },
       apply: (value) => {
         settings.setEnableSkillCommands(value === "true");
-        host.applySettings();
+        host.resetAutocomplete();
       },
     },
     {

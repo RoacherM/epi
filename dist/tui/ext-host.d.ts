@@ -18,8 +18,8 @@ export interface HostSurface {
     setTitle(title: string): void;
     getEditorText(): string;
     setEditorText(text: string): void;
-    setAutocompleteProvider(provider: AutocompleteProvider): void;
-    getAutocompleteProvider(): AutocompleteProvider;
+    /** Pi's addAutocompleteProvider: keep the wrapper and re-apply it on every autocomplete rebuild. */
+    addAutocompleteProvider(factory: (current: AutocompleteProvider) => AutocompleteProvider): void;
     getToolsExpanded(): boolean;
     setToolsExpanded(expanded: boolean): void;
     notify(message: string, tone: "info" | "warning" | "error"): void;

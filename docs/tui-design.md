@@ -469,7 +469,8 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | `setHiddenThinkingLabel` | 折叠后的 thinking 标题 |
 | `setTitle` | 终端 tab 标题 |
 | `onTerminalInput` | 在动作表之前拿到原始输入 |
-| `pasteToEditor` / `setEditorText` / `getEditorText` / `addAutocompleteProvider` | 转给输入框 |
+| `pasteToEditor` / `setEditorText` / `getEditorText` | 转给输入框 |
+| `addAutocompleteProvider` | 同 Pi：记进包装列表，每次重建补全（bind、`/reload`、`/settings` 的 skill-commands）都重新套上；切换会话前和 `/reload` 时随其余扩展界面状态一起清空，由 `session_start` 重新添加 |
 | `theme` / `getAllThemes` / `getTheme` / `setTheme` | MMP 构造的 `Theme` 实例（4.9 节）；v1 的 `setTheme` 只接受 MMP 的两套主题 |
 | `getToolsExpanded` / `setToolsExpanded` | 对应 `Ctrl+O` 的全局状态 |
 

@@ -239,12 +239,21 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   }
 
   // ── autocomplete ──────────────────────────────────────────────────────────
-  let autocomplete: AutocompleteProvider = new piTui.CombinedAutocompleteProvider([], cwd, null);
-  // Rebuilt in bind() (after a /new, /resume, /reload, or fork), so this always reads the cwd of
-  // whichever session is bound then, not the cwd the app launched with.
+  // Pi's autocompleteProviderWrappers: what extensions added with ctx.ui.addAutocompleteProvider,
+  // re-applied on every rebuild and cleared with the rest of the extension UI state.
+  let autocompleteWrappers: ((current: AutocompleteProvider) => AutocompleteProvider)[] = [];
+  // Pi's setupAutocompleteProvider. Rebuilt in bind() (after a /new, /resume, /reload, or fork), so
+  // this always reads the cwd of whichever session is bound then, not the cwd the app launched with.
   function resetAutocomplete(): void {
-    autocomplete = new piTui.CombinedAutocompleteProvider(slashCompletions(session), session.sessionManager.getCwd(), null);
-    editor.setAutocompleteProvider(autocomplete);
+    let provider: AutocompleteProvider = new piTui.CombinedAutocompleteProvider(
+      slashCompletions(session), session.sessionManager.getCwd(), null);
+    const triggerCharacters: string[] = [];
+    for (const wrap of autocompleteWrappers) {
+      provider = wrap(provider);
+      triggerCharacters.push(...(provider.triggerCharacters ?? []));
+    }
+    if (triggerCharacters.length > 0) provider.triggerCharacters = [...new Set(triggerCharacters)];
+    editor.setAutocompleteProvider(provider);
   }
 
   // ── settings (/settings, docs/tui-design.md 4.6) ────────────────────────────
@@ -262,13 +271,12 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     editor.setAutocompleteMaxVisible(settings.getAutocompleteMaxVisible());
   }
 
-  /** Pi's applyRuntimeSettings plus setupAutocompleteProvider: on every bind(), /reload, and after
-   * a /settings change. The skill-commands setting only takes effect through resetAutocomplete(). */
+  /** Pi's applyRuntimeSettings: on every bind(), /reload, and after a /settings change. Like Pi's,
+   * it leaves autocomplete alone; bind(), /reload and the skill-commands item rebuild that. */
   function applyRuntimeSettings(): void {
     applyUiSettings();
     configureHttp(session.settingsManager).catch((error: unknown) =>
       transcript.notice(`Could not apply the HTTP settings: ${errorText(error)}`, "error"));
-    resetAutocomplete();
   }
 
   // ── extension host ────────────────────────────────────────────────────────
@@ -326,11 +334,10 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       editor.setText(text);
       tui.requestRender();
     },
-    setAutocompleteProvider(provider) {
-      autocomplete = provider;
-      editor.setAutocompleteProvider(provider);
+    addAutocompleteProvider(factory) {
+      autocompleteWrappers.push(factory);
+      resetAutocomplete();
     },
-    getAutocompleteProvider: () => autocomplete,
     getToolsExpanded: () => toolsExpanded,
     setToolsExpanded(expanded) {
       toolsExpanded = expanded;
@@ -397,6 +404,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       applyRuntimeSettings();
       tui.requestRender();
     },
+    resetAutocomplete,
     // navigateTree (session-tree-commands.ts's /tree) stays on the same AgentSession instance, so
     // setRebindSession never fires for it; this is the same replay bind() does after a real switch.
     resetTranscript: () => transcript.reset(session),
@@ -671,8 +679,9 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     });
     // bindExtensions re-registers extension providers, which starts an un-awaited auth refresh in Pi.
     await runtime.services.modelRuntime.refresh({ allowNetwork: false });
-    // Pi's rebindCurrentSession runs applyRuntimeSettings on every rebind.
+    // Pi's rebindCurrentSession runs applyRuntimeSettings and setupAutocompleteProvider on every rebind.
     applyRuntimeSettings();
+    resetAutocomplete();
     tui.requestRender();
   }
 
@@ -685,6 +694,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     rebuildWidgets();
     surface.setHeader(undefined);
     surface.setFooter(undefined);
+    autocompleteWrappers = [];
   }
   runtime.setBeforeSessionInvalidate(clearExtensionUiState);
   runtime.setRebindSession(bind);
@@ -703,6 +713,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     keybindings.reload();
     // Pi's handleReloadCommand: applyRuntimeSettings after session.reload() re-read settings.json.
     applyRuntimeSettings();
+    resetAutocomplete();
     tui.requestRender();
   }
 

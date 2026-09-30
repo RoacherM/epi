@@ -198,6 +198,44 @@ test("Skill commands off drops /skill: suggestions at once", (t) => {
   assert.doesNotMatch(after(marks, "changed", "off"), /SETTINGS-PROBE-SKILL/);
 });
 
+// Review 1 F1: applyRuntimeSettings re-runs configureHttp on every bind, /reload and /settings change.
+test("an extension's own globalThis.fetch survives startup, /settings, /new and /reload (Pi's shouldInstallGlobals)", (t) => {
+  const env = makeEnv(t, { extension: "settings-ext-fetch.mjs" });
+  const check = (mark, n) => [["type", "/fcheck"], ["key", "enter"], ["waitFor", { regex: `FETCH_OVERRIDE_\\w+#${n}\\b` }], ["mark", mark]];
+  const { marks } = env.run([
+    ["waitReady"], ...check("startup", 1),
+    ...change("Fullscreen scrollbar"), ...check("settings", 2),
+    ["type", "/new"], ["key", "enter"], ["wait", 800], ...check("new", 3),
+    ["type", "/reload"], ["key", "enter"], ["wait", 800], ...check("reloaded", 4),
+    ...quit,
+  ]);
+  ["startup", "settings", "new", "reloaded"].forEach((mark, index) =>
+    assert.match(marks[mark], new RegExp(`FETCH_OVERRIDE_KEPT#${index + 1}\\b`), `after ${mark}`));
+  assert.doesNotMatch(marks.reloaded, /FETCH_OVERRIDE_LOST/);
+});
+
+// Review 1 F2: Pi keeps ctx.ui.addAutocompleteProvider wrappers across rebuilds and clears them only
+// with the rest of the extension UI (resetExtensionUI: before a session switch, and on /reload).
+test("extension autocomplete providers survive /settings and rebuilds, and are cleared like Pi's on /reload", (t) => {
+  const env = makeEnv(t, { extension: "settings-ext-autocomplete.mjs" });
+  const probe = (text, tag, mark) => [["type", text], ["wait", 400], ["mark", mark], ["key", "esc"], ["key", "ctrl+c"], ["wait", 150]];
+  const { marks } = env.run([
+    ["waitReady"], ...probe("/zy", "EXTSTART", "startup"),
+    ["type", "/acadd"], ["key", "enter"], ["wait", 300], ["mark", "added"], ...probe("/zz", "EXTCMD", "cmd"),
+    ...change("Fullscreen scrollbar"), ["mark", "scrollbar"], ...probe("/zz", "EXTCMD", "afterScrollbar"),
+    ...change("Skill commands"), ["mark", "skills"], ...probe("/zz", "EXTCMD", "afterSkills"),
+    ["type", "/reload"], ["key", "enter"], ["wait", 800], ["mark", "reloaded"],
+    ...probe("/zy", "EXTSTART", "reloadStart"), ...probe("/zz", "EXTCMD", "reloadCmd"),
+    ...quit,
+  ]);
+  assert.match(marks.startup, /EXTSTART/, "a provider added in session_start is there after startup");
+  assert.match(after(marks, "added", "cmd"), /EXTCMD/);
+  assert.match(after(marks, "scrollbar", "afterScrollbar"), /EXTCMD/, "a /settings change keeps it");
+  assert.match(after(marks, "skills", "afterSkills"), /EXTCMD/, "the skill-commands rebuild re-applies it");
+  assert.match(after(marks, "reloaded", "reloadStart"), /EXTSTART/, "session_start adds it again after /reload");
+  assert.doesNotMatch(after(marks, "reloadStart", "reloadCmd"), /EXTCMD/, "/reload clears the command's, like Pi's resetExtensionUI");
+});
+
 test("Fullscreen scrollbar 'always' shows the bar at once, from settings.json at startup, and after /reload", (t) => {
   // "┃" is the scrollbar thumb; MMP draws it nowhere else, and in "auto" it only shows while scrolling.
   const live = makeEnv(t);
@@ -382,5 +420,16 @@ test("MMP's items match Pi's SettingsSelectorComponent: same order, labels, desc
     const start = item.values.indexOf(item.currentValue);
     const mmpCycle = item.values.map((_, offset) => item.values[(start + 1 + offset) % item.values.length]);
     assert.deepEqual(mmpCycle, piCycle, `${item.id}: values`);
+  }
+
+  // Review 1 F4: the milliseconds behind MMP's copy of HTTP_IDLE_TIMEOUT_CHOICES. Save each label
+  // through MMP's item, then check Pi's selector shows the same label for the saved value.
+  const timeout = settingsItems({ session: () => session, applySettings() {}, notice() {} })
+    .find((setting) => setting.item.id === "http-idle-timeout");
+  for (const label of timeout.item.values) {
+    timeout.apply(label);
+    const selector = new SettingsSelectorComponent({ ...config, httpIdleTimeoutMs: settings.getHttpIdleTimeoutMs() }, noop);
+    for (const char of timeout.item.label) selector.getSettingsList().handleInput(char);
+    assert.equal(read(selector).value, label, `http-idle-timeout: Pi's label for ${settings.getHttpIdleTimeoutMs()} ms`);
   }
 });
