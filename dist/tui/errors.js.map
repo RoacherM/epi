@@ -1,0 +1,1 @@
+{"version":3,"file":"errors.js","sourceRoot":"","sources":["../../src/tui/errors.ts"],"names":[],"mappings":"AAAA,8EAA8E;AAC9E,+DAA+D;AAC/D,MAAM,UAAU,SAAS,CAAC,KAAc;IACtC,OAAO,KAAK,YAAY,KAAK,CAAC,CAAC,CAAC,KAAK,CAAC,OAAO,CAAC,CAAC,CAAC,MAAM,CAAC,KAAK,CAAC,CAAC;AAChE,CAAC"}

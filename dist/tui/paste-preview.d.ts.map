@@ -1,0 +1,1 @@
+{"version":3,"file":"paste-preview.d.ts","sourceRoot":"","sources":["../../src/tui/paste-preview.ts"],"names":[],"mappings":"AAEA,OAAO,KAAK,EAAE,KAAK,EAAE,MAAM,iCAAiC,CAAC;AAC7D,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,wBAAwB,CAAC;AAExD,OAAO,EAAE,KAAK,QAAQ,EAAuB,MAAM,kBAAkB,CAAC;AA6EtE,4FAA4F;AAC5F,wBAAgB,YAAY,CAAC,KAAK,EAAE,KAAK,EAAE,OAAO,EAAE,MAAM,QAAQ,GAAG,SAAS,GAAG,SAAS,CASzF"}

@@ -36,9 +36,9 @@ declare const hookSchema: z.ZodObject<{
     event: z.ZodEnum<{
         session_start: "session_start";
         session_shutdown: "session_shutdown";
-        user_prompt: "user_prompt";
         tool_call: "tool_call";
         tool_result: "tool_result";
+        user_prompt: "user_prompt";
         before_compact: "before_compact";
         task_start: "task_start";
         task_stop: "task_stop";
@@ -79,7 +79,14 @@ declare const hookSchema: z.ZodObject<{
 type MatchScalar = z.infer<typeof matchScalarSchema>;
 export type HookMatchValue = MatchScalar | MatchScalar[];
 export type HookEventName = z.infer<typeof hookSchema>["event"];
-export type HookHandler = z.infer<typeof handlerSchema>;
+type DeclaredHookHandler = z.infer<typeof handlerSchema>;
+export type HookHandler = Exclude<DeclaredHookHandler, {
+    type: "http";
+}> | (Extract<DeclaredHookHandler, {
+    type: "http";
+}> & {
+    declaredUrl: string;
+});
 export interface ResolvedHook {
     event: HookEventName;
     match?: Record<string, HookMatchValue>;

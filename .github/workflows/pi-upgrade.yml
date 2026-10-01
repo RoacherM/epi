@@ -1,0 +1,172 @@
+name: Pi upgrade
+
+# Runs the offline gate itself before opening anything (see docs/pi-upgrade-design.md §2-§3): a PR
+# opened with the default GITHUB_TOKEN does not trigger other workflows, so ci.yml will NOT run on
+# the PR this creates. To also get CI on that PR, push to it using a personal access token stored as
+# a repo secret (e.g. PI_UPGRADE_PAT with `contents:write`/`pull-requests:write`) instead of
+# GITHUB_TOKEN; every `GH_TOKEN`/push below already prefers that secret and falls back to
+# `github.token`, so nothing here requires it to exist.
+#
+# Credential handling (pre-merge review blocker #2): checkout does NOT persist the token to
+# .git/config (`persist-credentials: false`) -- it's injected into the remote URL only in the step
+# that pushes, which runs after `npm run pi:upgrade`'s own `npm install` has already completed.
+# That install also always adds `--ignore-scripts` (verified locally: build + the full 507-test
+# suite pass without it) so a malicious postinstall in a just-published Pi package can't run at all,
+# let alone with a token on disk.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: pi-upgrade
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+      - run: npm ci --ignore-scripts
+
+      - name: Run pi:upgrade
+        id: upgrade
+        run: |
+          set +e
+          npm run pi:upgrade -- --report report.md
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Fail the job on a script error
+        if: steps.upgrade.outputs.exit_code == '2'
+        run: |
+          echo "pi:upgrade exited 2 (script error), see the log above"
+          exit 1
+
+      - name: Read the upgrade result
+        id: info
+        if: steps.upgrade.outputs.exit_code != '2'
+        run: |
+          node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync("report.md.json", "utf8"));
+            const out = process.env.GITHUB_OUTPUT;
+            fs.appendFileSync(out, `upgraded=${r.upgraded}\n`);
+            fs.appendFileSync(out, `gate_passed=${r.gatePassed}\n`);
+            fs.appendFileSync(out, `model_visible_changed=${r.modelVisibleChanged}\n`);
+            fs.appendFileSync(out, `new_pi_version=${r.newPiVersion ?? ""}\n`);
+            fs.appendFileSync(out, `report_hash=${r.reportHash ?? ""}\n`);
+          '
+
+      - name: Nothing new
+        if: steps.info.outputs.new_pi_version == ''
+        run: echo "Already on the latest compatible, sufficiently-aged Pi version; nothing to do."
+
+      # --- Gate passed: open (or update) the upgrade PR -----------------------------------------
+      # One fixed branch, not one per version (pre-merge review must-fix #4): otherwise a Pi release
+      # landing while yesterday's PR is still open would open a second PR bumping to the same MMP
+      # patch version, and merging both would leave the release script silently skipping the second.
+      - name: Open or update the upgrade PR
+        if: steps.info.outputs.upgraded == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PI_UPGRADE_PAT || github.token }}
+          REPO: ${{ github.repository }}
+          NEW_PI_VERSION: ${{ steps.info.outputs.new_pi_version }}
+          MODEL_VISIBLE_CHANGED: ${{ steps.info.outputs.model_visible_changed }}
+          BRANCH: pi-upgrade
+          BOT_EMAIL: github-actions[bot]@users.noreply.github.com
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "$BOT_EMAIL"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          title="Pi upgrade to $NEW_PI_VERSION"
+
+          # A PR for this exact version was already closed without merging: a human said no to it.
+          # Don't reopen the same fight every day (must-fix #4). Exact title match, not `contains`
+          # (re-review N5): "0.99.1" must not match a closed PR titled "...to 0.99.10".
+          closed=$(gh pr list --state closed --head "$BRANCH" --json number,title,mergedAt \
+            --jq ".[] | select(.mergedAt == null and .title == \"$title\") | .number" | head -1)
+          if [ -n "$closed" ]; then
+            echo "PR #$closed for $NEW_PI_VERSION was already closed without merging; not recreating it."
+            exit 0
+          fi
+
+          # Never force-push over commits a human added to the branch by hand (must-fix #4). Diffed
+          # against origin/main, not unbounded (re-review N1): an unbounded `git log origin/$BRANCH`
+          # lists every human commit ever made to main, not just ones added to this branch.
+          git fetch origin main "$BRANCH" 2>/dev/null || true
+          if git rev-parse --verify "refs/remotes/origin/$BRANCH" >/dev/null 2>&1; then
+            foreign=$(git log "origin/main..origin/$BRANCH" --format='%ae' | grep -v -F "$BOT_EMAIL" || true)
+            if [ -n "$foreign" ]; then
+              message="A new Pi version ($NEW_PI_VERSION) is available, but this branch has commits I did not make, so I am not overwriting it. Rebase/update it manually, or close this PR so a fresh one can be opened."
+              existing=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number' | head -1)
+              if [ -n "$existing" ]; then
+                gh pr comment "$existing" --body "$message"
+              fi
+              echo "$message"
+              exit 0
+            fi
+          fi
+
+          git checkout -B "$BRANCH"
+          git add package.json package-lock.json dist
+          git commit -m "chore: upgrade Pi to $NEW_PI_VERSION"
+          git push --force origin "$BRANCH"
+
+          gh label create pi-upgrade --color 5319e7 --force
+          labels="pi-upgrade"
+          if [ "$MODEL_VISIBLE_CHANGED" = "true" ]; then
+            gh label create model-visible-change --color b60205 --force
+            labels="pi-upgrade,model-visible-change"
+          fi
+
+          existing=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number' | head -1)
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "$title" --body-file report.md
+          else
+            gh pr create --title "$title" \
+              --body-file report.md --label "$labels" --head "$BRANCH" --base main
+          fi
+
+      # --- Gate failed: open (or update) an issue with the report --------------------------------
+      # Comments only when the report actually changed (must-fix #5): a stale, unfixed failure would
+      # otherwise get a new comment every single day the cron runs. REPORT_HASH is computed by
+      # pi-upgrade.mjs itself over the stable facts only (versions, failing test
+      # names) -- not a hash of report.md's raw bytes, whose gate-log tail includes timings that
+      # change on every run even when nothing else did (re-review N3).
+      - name: Open or update the failure issue
+        if: steps.info.outputs.new_pi_version != '' && steps.info.outputs.upgraded != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEW_PI_VERSION: ${{ steps.info.outputs.new_pi_version }}
+          REPORT_HASH: ${{ steps.info.outputs.report_hash }}
+        run: |
+          gh label create pi-upgrade-failed --color b60205 --force
+          title="Pi upgrade to $NEW_PI_VERSION failed the gate"
+          marker="<!-- report-hash: $REPORT_HASH -->"
+          printf '%s\n\n%s\n' "$marker" "$(cat report.md)" > report-with-marker.md
+
+          existing=$(gh issue list --label pi-upgrade-failed --state open --json number,title \
+            --jq ".[] | select(.title == \"$title\") | .number" | head -1)
+          if [ -z "$existing" ]; then
+            gh issue create --title "$title" --body-file report-with-marker.md --label pi-upgrade-failed
+            exit 0
+          fi
+
+          last_text=$(gh issue view "$existing" --json body,comments --jq '(.comments[-1].body // .body)')
+          if printf '%s' "$last_text" | grep -qF "$marker"; then
+            echo "Report unchanged since the last update on issue #$existing; not commenting again."
+          else
+            gh issue comment "$existing" --body-file report-with-marker.md
+          fi

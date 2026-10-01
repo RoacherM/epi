@@ -16,6 +16,12 @@ switch (process.env.HOOK_MODE) {
   case "cancel":
     process.stdout.write(JSON.stringify({ action: "cancel", reason: "cancelled-by-fixture" }));
     break;
+  case "cancel-noreason":
+    process.stdout.write(JSON.stringify({ action: "cancel" }));
+    break;
+  case "block-dirty":
+    process.stdout.write(JSON.stringify({ action: "block", reason: "line1\n\x1b[31mred\x1b[0m\tend\x1b]0;title\x07" }));
+    break;
   case "transform":
     process.stdout.write(JSON.stringify({ action: "transform", text: `${event.text}:transformed` }));
     break;

@@ -2,11 +2,15 @@
 
 import { setTimeout as delay } from "node:timers/promises";
 
+import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
+
+import { MMP_PACKAGE_VERSION as MMP_VERSION } from "./mmp-package-version.mjs";
+
 const args = process.argv.slice(2);
 if (args.includes("--dry-run")) {
   process.stdout.write(`${JSON.stringify({
-    mmpVersion: "0.1.4",
-    piVersion: "0.83.0",
+    mmpVersion: MMP_VERSION,
+    piVersion: PI_VERSION,
     mmpHome: process.env.MMP_HOME,
     agentDir: `${process.env.MMP_HOME}/pi`,
     globalManifest: `${process.env.MMP_HOME}/mmp.json`,

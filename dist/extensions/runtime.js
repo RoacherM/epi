@@ -1,5 +1,6 @@
 import { createMmpRuntimeIdentity, createMmpRuntimeReport, normalizeLoadedSkills, renderMmpRuntimePrompt, } from "../runtime-identity.js";
 import { renderMmpStartupPage } from "../startup-page.js";
+import { readUpdateCache, refreshUpdateCache, updateNotice } from "../update.js";
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
@@ -18,12 +19,43 @@ function reloadableAssembly(initial, next) {
         externalExtensions: initial.externalExtensions,
     };
 }
-export function createMmpRuntimeExtension(initialIdentity, initialAssembly, resolveAssembly = () => initialAssembly) {
+/** `--verbose` in MMP's TUI (docs/cli-design.md §2): the startup details Pi's own verbose startup
+ * shows (dist/modes/interactive/interactive-mode.js), reduced to what MMP tracks -- loaded
+ * resources, model, session -- shown as transcript notices via `context.ui.notify`, the same path
+ * `/mmp`'s manifest-reload notice uses. Non-interactive runs (`-p`, `--mode json/rpc`) never build
+ * this extension against a "tui" context, so nothing extra prints there; `--verbose` reaches Pi's
+ * own piMain unchanged for that path. */
+function notifyVerboseStartup(assembly, context) {
+    const resourceCount = assembly.inlineExtensions.length + assembly.externalExtensions.length;
+    context.ui.notify(`Loaded resources: ${assembly.rules.length} rule file(s), ${assembly.skills.length} skill root(s), ${resourceCount} extension(s)`);
+    const model = context.model;
+    const modelText = model === undefined
+        ? "none (/login or /model to pick one)"
+        : `${model.name ?? model.id} (${model.provider})${context.thinkingLevel ? ` thinking=${context.thinkingLevel}` : ""}`;
+    context.ui.notify(`Model: ${modelText}`);
+    const sessionFile = context.sessionManager.getSessionFile();
+    context.ui.notify(`Session: ${sessionFile ?? "ephemeral (--no-session)"} (id ${context.sessionManager.getSessionId()})`);
+}
+export function createMmpRuntimeExtension(initialIdentity, initialAssembly, resolveAssembly = () => initialAssembly, updateCheck, verbose = false) {
     return {
         name: "mmp:runtime",
         factory(pi) {
             let activeAssembly = initialAssembly;
             let activeIdentity = initialIdentity;
+            let sessionActive = false;
+            function showUpdateNotice(context) {
+                if (updateCheck === undefined || updateCheck.disabled) {
+                    return;
+                }
+                const { mmpHome, currentVersion } = updateCheck;
+                const show = (notice) => {
+                    if (notice !== undefined && sessionActive) {
+                        context.ui.setStatus("mmp-update", context.ui.theme.fg("warning", notice));
+                    }
+                };
+                show(updateNotice(readUpdateCache(mmpHome), currentVersion));
+                void refreshUpdateCache({ mmpHome }).then((cache) => show(updateNotice(cache, currentVersion)));
+            }
             function refreshManifest(context, showSuccess) {
                 try {
                     const resolved = resolveAssembly();
@@ -54,20 +86,31 @@ export function createMmpRuntimeExtension(initialIdentity, initialAssembly, reso
                 if (context.mode !== "tui") {
                     return;
                 }
-                const model = context.model;
-                const pageOptions = model === undefined
-                    ? {}
-                    : {
-                        modelName: model.name,
-                        modelProvider: model.provider,
-                        modelId: model.id,
-                    };
+                sessionActive = true;
+                if (event.reason === "startup") {
+                    showUpdateNotice(context);
+                    if (verbose) {
+                        notifyVerboseStartup(activeAssembly, context);
+                    }
+                }
                 context.ui.setHeader((_tui, theme) => ({
                     render(width) {
+                        // Read the model at render time so /login and /model show up on the page.
+                        const model = context.model;
+                        const pageOptions = model === undefined
+                            ? {}
+                            : {
+                                modelName: model.name,
+                                modelProvider: model.provider,
+                                modelId: model.id,
+                            };
                         return renderMmpStartupPage(activeIdentity, theme, width, pageOptions);
                     },
                     invalidate() { },
                 }));
+            });
+            pi.on("session_shutdown", () => {
+                sessionActive = false;
             });
             pi.on("resources_discover", () => ({
                 skillPaths: activeAssembly.skills.map((skill) => skill.value),

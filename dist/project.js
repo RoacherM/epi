@@ -18,6 +18,26 @@ export function findNearestProjectManifest(cwd, globalManifestPath) {
         current = parent;
     }
 }
+/**
+ * The trust store's raw decision for `cwd`: true/false once someone has decided, null when no one
+ * has (yet). The store walks up from `cwd`, so it finds a decision saved for the project root (the
+ * first-run prompt, TUI v2 `/trust`) and one saved for a subfolder (classic Pi `/trust` saves the
+ * session cwd). Skips even opening the store when trust.json does not exist, so an unknown project
+ * never causes MMP's agentDir to be created.
+ */
+export function readProjectTrustDecision(agentDir, cwd) {
+    const trustPath = join(agentDir, "trust.json");
+    if (!existsSync(trustPath)) {
+        return null;
+    }
+    try {
+        return new ProjectTrustStore(agentDir).get(cwd);
+    }
+    catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new MmpConfigError(`failed to resolve project trust: ${detail}`);
+    }
+}
 export function resolveProjectManifest(options) {
     if (options.noProject) {
         return { discovery: "disabled", state: undefined, manifest: undefined };
@@ -26,19 +46,8 @@ export function resolveProjectManifest(options) {
     if (candidate === undefined) {
         return { discovery: "none", state: undefined, manifest: undefined };
     }
-    let trusted = options.trustOverride === true;
-    if (options.trustOverride === undefined) {
-        const trustPath = join(options.agentDir, "trust.json");
-        if (existsSync(trustPath)) {
-            try {
-                trusted = new ProjectTrustStore(options.agentDir).get(candidate.root) === true;
-            }
-            catch (error) {
-                const detail = error instanceof Error ? error.message : String(error);
-                throw new MmpConfigError(`failed to resolve project trust: ${detail}`);
-            }
-        }
-    }
+    const trusted = options.trustOverride ??
+        readProjectTrustDecision(options.agentDir, options.cwd) === true;
     if (!trusted) {
         return {
             discovery: "ignored",

@@ -14,22 +14,26 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.mjs",
-    "benchmark": "node scripts/benchmark-adapter.mjs"
+    "benchmark": "node scripts/benchmark-adapter.mjs",
+    "model-snapshot": "node scripts/model-snapshot.mjs",
+    "pi:upgrade": "node scripts/pi-upgrade.mjs",
+    "release": "node scripts/release.mjs"
   },
   "engines": {
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.74.0",
-    "@earendil-works/pi-coding-agent": "0.83.0",
-    "@earendil-works/pi-tui": "0.83.0",
-    "pi-mcp-adapter": "2.17.0",
-    "tsx": "4.21.0",
+    "@earendil-works/pi-ai": "0.99.1",
+    "@earendil-works/pi-coding-agent": "0.99.1",
+    "@earendil-works/pi-tui": "0.99.1",
     "typebox": "1.3.7",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.12.4",
-    "typescript": "5.9.3"
+    "@xterm/headless": "5.5.0",
+    "semver": "7.8.5",
+    "typescript": "5.9.3",
+    "yaml": "2.9.1"
   }
 }

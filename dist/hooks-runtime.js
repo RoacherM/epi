@@ -5,6 +5,7 @@ import { z } from "zod";
 import { TaskRuntime } from "./task-runtime.js";
 const MAX_HOOK_PAYLOAD_BYTES = 64 * 1024;
 const MAX_HOOK_OUTPUT_BYTES = 64 * 1024;
+const MAX_HOOK_ERROR_TAIL_BYTES = 4 * 1024;
 const KILL_GRACE_MS = 500;
 const hookDecisionSchema = z.discriminatedUnion("action", [
     z.object({ action: z.literal("continue") }).strict(),
@@ -86,6 +87,57 @@ function parseDecision(output) {
         throw new Error("hook handler returned an invalid decision object");
     }
     return parsed.data;
+}
+function errorMessage(error) {
+    return error instanceof Error ? error.message : String(error);
+}
+/** Origin + pathname only, from the URL as declared in hooks.json (never the `${ENV}`-expanded
+ * one) -- a failure message must not repeat a secret from a query string, userinfo, or fragment
+ * (e.g. `?token=${API_KEY}` expands to the real key). A placeholder literally inside the path
+ * (`/hook/${TOKEN}`) stays as that literal text, never the expanded value, since this never reads
+ * the expanded `handler.url`. An unparsable URL (should not happen -- resolveHandler already
+ * validated the expanded form) never falls through to printing the raw string. */
+function httpUrlLabel(declaredUrl) {
+    try {
+        const parsed = new URL(declaredUrl);
+        return `${parsed.origin}${parsed.pathname}`;
+    }
+    catch {
+        return "<unparsable URL>";
+    }
+}
+/** fetch's own error text can quote the request URL (undici does, e.g. for a URL with
+ * credentials), and `handler.url` is the `${ENV}`-expanded one -- replace it, in the form written
+ * and the form `new URL()` normalizes it to, with the declared, trimmed label. The original error
+ * is not kept as `cause`, since that would carry the secret along. */
+function redactExpandedUrl(message, handler) {
+    const label = httpUrlLabel(handler.declaredUrl);
+    return message
+        .replaceAll(handler.url, label)
+        .replaceAll(new URL(handler.url).href, label);
+}
+/** undici's "fetch failed" says nothing on its own; the cause's system error code (ECONNREFUSED,
+ * ENOTFOUND, UND_ERR_CONNECT_TIMEOUT, ...) is the useful part. Only the code, never the cause's
+ * message, which can quote the expanded host or URL. */
+function fetchCauseCode(error) {
+    const cause = error instanceof Error ? error.cause : undefined;
+    const code = isRecord(cause) ? cause.code : undefined;
+    return typeof code === "string" && /^[A-Z][A-Z0-9_]*$/.test(code) ? ` (${code})` : "";
+}
+/** Names which handler failed, for the wrapped error `run()` throws (naming the hook is the point
+ * of "failures must show" -- a bare "hook command could not be started" doesn't say which hook).
+ * Never includes headers or a request/response body -- only enough to identify the handler. */
+function handlerLabel(handler) {
+    switch (handler.type) {
+        case "command":
+            return `command ${handler.command}`;
+        case "http":
+            return `http ${handler.method} ${httpUrlLabel(handler.declaredUrl)}`;
+        case "prompt":
+            return `prompt${handler.model === undefined ? "" : ` (${handler.model})`}`;
+        case "agent":
+            return `agent ${handler.agent}`;
+    }
 }
 function isRecord(value) {
     return typeof value === "object" && value !== null;
@@ -252,7 +304,16 @@ export class HooksRuntime {
                 continue;
             }
             for (const handler of hook.handlers) {
-                const decision = await this.runHandler(handler, currentPayload, context, options.ignoreSessionAbort === true);
+                let decision;
+                try {
+                    decision = await this.runHandler(handler, currentPayload, context, options.ignoreSessionAbort === true);
+                }
+                catch (error) {
+                    // Names the hook (its event + declaring file) and the handler that failed, so a spawn
+                    // error (e.g. a relative command that doesn't resolve against the session cwd) is
+                    // identifiable wherever this propagates to (`hooks.ts`'s per-event mapping).
+                    throw new Error(`${hook.event} hook (${hook.declaredIn}, ${handlerLabel(handler)}) failed: ${errorMessage(error)}`);
+                }
                 assertDecisionAllowed(payload.type, decision);
                 if (decision.action === "block" || decision.action === "cancel") {
                     return decision;
@@ -347,7 +408,23 @@ export class HooksRuntime {
             }
             output.push(chunk);
         });
-        child.stderr.resume();
+        // Bounded TAIL (last MAX_HOOK_ERROR_TAIL_BYTES, not first) for a non-zero exit's error message
+        // -- not the decision channel (stdout is). The real error is usually the last thing a failing
+        // command prints, so keeping only the earliest bytes would drop it behind any earlier output.
+        let stderrTail = Buffer.alloc(0);
+        // After a cut, the tail may start inside a multi-byte UTF-8 character; skip its leftover
+        // continuation bytes (0b10xxxxxx, at most 3) so the message doesn't start with U+FFFD.
+        let stderrTailCutBytes = 0;
+        child.stderr.on("data", (chunk) => {
+            stderrTail = Buffer.concat([stderrTail, chunk]);
+            if (stderrTail.byteLength > MAX_HOOK_ERROR_TAIL_BYTES) {
+                stderrTail = stderrTail.subarray(stderrTail.byteLength - MAX_HOOK_ERROR_TAIL_BYTES);
+                stderrTailCutBytes = 0;
+                while (stderrTailCutBytes < 3 && ((stderrTail[stderrTailCutBytes] ?? 0) & 0xc0) === 0x80) {
+                    stderrTailCutBytes += 1;
+                }
+            }
+        });
         child.once("error", (error) => {
             spawnError = error;
         });
@@ -366,10 +443,13 @@ export class HooksRuntime {
                 throw new Error(`hook command output exceeds ${MAX_HOOK_OUTPUT_BYTES} bytes`);
             }
             if (result.error !== undefined) {
-                throw new Error("hook command could not be started");
+                throw new Error(`hook command could not be started: ${handler.command} (cwd ${handler.cwd ?? cwd}): ${result.error.message}`);
             }
             if (result.code !== 0) {
-                throw new Error(`hook command exited with code ${result.code}`);
+                const tail = stderrTail.subarray(stderrTailCutBytes).toString("utf8").trim();
+                throw new Error(tail.length > 0
+                    ? `hook command exited with code ${result.code}: ${handler.command}: ${tail}`
+                    : `hook command exited with code ${result.code}: ${handler.command}`);
             }
             return Buffer.concat(output, outputBytes).toString("utf8");
         }
@@ -389,12 +469,18 @@ export class HooksRuntime {
         if (body !== undefined && !headers.has("content-type")) {
             headers.set("content-type", "application/json");
         }
-        const response = await fetch(handler.url, {
-            method: handler.method,
-            headers,
-            ...(body === undefined ? {} : { body }),
-            signal,
-        });
+        let response;
+        try {
+            response = await fetch(handler.url, {
+                method: handler.method,
+                headers,
+                ...(body === undefined ? {} : { body }),
+                signal,
+            });
+        }
+        catch (error) {
+            throw new Error(`${redactExpandedUrl(errorMessage(error), handler)}${fetchCauseCode(error)}`);
+        }
         if (!response.ok) {
             await response.body?.cancel();
             throw new Error(`hook HTTP handler returned status ${response.status}`);

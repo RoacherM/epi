@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { MmpConfigError } from "./errors.js";
 import { resolveManifest, } from "./manifest.js";
 import { resolveProjectManifest, } from "./project.js";
+import { discoverSkillRoots } from "./skill-discovery.js";
 function mergeUnique(groups, keyOf) {
     const merged = [];
     const seen = new Set();
@@ -45,7 +46,15 @@ export function resolveAssembly(options) {
     const projectInlineExtensions = project.manifest?.inlineExtensions ?? [];
     const projectExternalExtensions = project.manifest?.externalExtensions ?? [];
     const rules = mergeUnique([globalManifest.rules, projectRules], (resource) => resource.value);
-    const skills = mergeUnique([globalManifest.skills, projectSkills], (resource) => resource.value);
+    const discoveredSkills = discoverSkillRoots({
+        environment: options.environment,
+        mmpHome: options.mmpHome,
+        agentDir: options.agentDir,
+        trustedProjectRoot: project.discovery === "loaded" ? project.state?.root : undefined,
+    });
+    // Declared groups come first: a discovered root that canonicalizes to the same path as a
+    // declared skill is dropped here, so the Manifest entry's own source/declaredIn wins.
+    const skills = mergeUnique([globalManifest.skills, projectSkills, discoveredSkills], (resource) => resource.value);
     const inlineExtensions = mergeUnique([globalManifest.inlineExtensions, projectInlineExtensions], (extension) => extension.name);
     const externalExtensions = mergeUnique([globalManifest.externalExtensions, projectExternalExtensions], (resource) => resource.value);
     return {

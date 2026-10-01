@@ -137,6 +137,10 @@ test("declared paths fail before Pi starts", (t) => {
 
 test("dry-run exposes provenance without rule contents", (t) => {
   const root = createFixture(t);
+  // Isolated HOME: a real ~/.agents/skills (docs/decisions.md S1 auto-discovery) must not affect
+  // this run's exit status or output.
+  const home = mkdtempSync(join(tmpdir(), "mmp-manifest-home-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
   const secretRule = "PRIVATE_RULE_TEXT_MUST_NOT_APPEAR";
   writeFileSync(join(root, "RULES.md"), `${secretRule}\n`);
   writeFileSync(
@@ -147,7 +151,7 @@ test("dry-run exposes provenance without rule contents", (t) => {
   const result = spawnSync(process.execPath, [cliPath.pathname, "--dry-run"], {
     cwd: projectRoot,
     encoding: "utf8",
-    env: { ...process.env, MMP_HOME: root },
+    env: { ...process.env, HOME: home, MMP_HOME: root },
   });
   const output = JSON.parse(result.stdout);
 

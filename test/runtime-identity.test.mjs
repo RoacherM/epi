@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
+
+import { MMP_PACKAGE_VERSION as MMP_VERSION } from "./fixtures/mmp-package-version.mjs";
 import { buildInlineExtensions } from "../dist/extensions/index.js";
 import { createMmpRuntimeExtension } from "../dist/extensions/runtime.js";
 import { createMmpRuntimeIdentity } from "../dist/runtime-identity.js";
@@ -24,8 +27,8 @@ function fixture() {
     externalExtensions: [],
   };
   const identity = createMmpRuntimeIdentity({
-    mmpVersion: "0.1.4",
-    piVersion: "0.83.0",
+    mmpVersion: MMP_VERSION,
+    piVersion: PI_VERSION,
     mmpHome: "/fixture/mmp",
     assembly,
   });
@@ -86,10 +89,10 @@ test("MMP runtime identity injects authoritative loaded skills", async () => {
   assert.match(result.systemPrompt, /^PI BASE PROMPT\n\n# MMP Runtime Contract/);
   assert.match(result.systemPrompt, /hosted by MMP \(Make My Pi\)/);
   assert.match(result.systemPrompt, /not as stock Pi alone/);
-  assert.match(result.systemPrompt, /"ambientResourceDirectoriesLoaded": false/);
+  assert.match(result.systemPrompt, /"piDiscoveryPathsLoaded": false/);
   assert.match(result.systemPrompt, /"name": "fixture-skill"/);
   assert.match(result.systemPrompt, /"modelInvocable": true/);
-  assert.match(result.systemPrompt, /Do not scan ambient ~\/\.pi/);
+  assert.match(result.systemPrompt, /Do not scan ~\/\.pi/);
 
   const command = commands.get("mmp");
   assert.equal(

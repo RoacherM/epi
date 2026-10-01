@@ -1,24 +1,31 @@
 import { join } from "node:path";
 
-import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import {
+  createCodemodeExtension,
+  createToolSearchExtension,
+  type InlineExtension,
+} from "@earendil-works/pi-coding-agent";
 
 import type { ResolvedAssembly } from "../assembly.js";
+import { MmpConfigError } from "../errors.js";
 import { resolveEffectiveHooks } from "../hooks-config.js";
-import { resolveEffectiveMcpConfig } from "../mcp-config.js";
 import { createHooksInlineExtension } from "./hooks.js";
 import { createTaskInlineExtension } from "./task.js";
 import { createMmpRuntimeExtension } from "./runtime.js";
 import type { MmpRuntimeIdentity } from "../runtime-identity.js";
-import { createMmpMcpExtension } from "./mcp.js";
+import { createMmpMcpExtension, loadNativeMcpConfig } from "./mcp.js";
+import type { UpdateCheckOptions } from "./runtime.js";
 
 export function buildInlineExtensions(
   assembly: ResolvedAssembly,
   mmpHome: string,
   runtimeIdentity: MmpRuntimeIdentity,
   resolveAssembly: () => ResolvedAssembly = () => assembly,
+  updateCheck?: UpdateCheckOptions,
+  verbose = false,
 ): InlineExtension[] {
   const extensions: InlineExtension[] = [
-    createMmpRuntimeExtension(runtimeIdentity, assembly, resolveAssembly),
+    createMmpRuntimeExtension(runtimeIdentity, assembly, resolveAssembly, updateCheck, verbose),
   ];
   for (const extension of assembly.inlineExtensions) {
     switch (extension.name) {
@@ -35,19 +42,25 @@ export function buildInlineExtensions(
         );
         break;
       case "mmp:mcp": {
-        const effective = resolveEffectiveMcpConfig({
-          globalConfigPath: join(mmpHome, "mcp.json"),
-          ...(assembly.projectManifest?.loaded === true
-            ? {
-                projectConfigPath: join(
-                  assembly.projectManifest.root,
-                  ".mmp",
-                  "mcp.json",
-                ),
-              }
-            : {}),
-        });
-        extensions.push(createMmpMcpExtension({ config: effective.config }));
+        // Eager, synchronous validation (mirrors mmp:hooks below): a bad mcp.json must fail
+        // --dry-run and startup immediately. Pi's own createMcpExtension only surfaces
+        // LoadedMcpConfig.errors as a soft `ctx.ui.notify(..., "warning")` after session_start
+        // (extensions/mcp/index.js's reportProblems) -- not visible enough for AGENTS.md's "failures
+        // must be visible" (docs/mcp-design.md; this repo's existing --dry-run contract predates the
+        // Pi 0.99 upgrade and is kept here rather than downgraded to Pi's softer default).
+        const mcpConfigSource = { mmpHome, resolveAssembly };
+        const preflight = loadNativeMcpConfig(mcpConfigSource, process.cwd());
+        if (preflight.errors.length > 0) {
+          throw new MmpConfigError(`mmp:mcp: ${preflight.errors.join("; ")}`);
+        }
+        extensions.push(createMmpMcpExtension(mcpConfigSource));
+        // Both required alongside mmp:mcp (docs/mcp-design.md §2): codemode for the default
+        // exposure: "codemode" servers, tool-search for "deferred" exposure. Neither is Pi's own
+        // builtin (those are never loaded -- MMP always runs with noExtensions, which in 0.99 also
+        // disables builtins, and never adds `-e builtin:*`); these are plain inline copies, so there
+        // is no name collision with the (never-instantiated) builtin registry.
+        extensions.push({ name: "codemode", factory: createCodemodeExtension() });
+        extensions.push({ name: "tool-search", factory: createToolSearchExtension() });
         break;
       }
       case "mmp:hooks": {

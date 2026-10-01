@@ -23,17 +23,21 @@ function createProjectFixture(t) {
   const nestedCwd = join(projectRoot, "nested");
   const projectMmp = join(projectRoot, ".mmp");
   const mmpHome = join(root, "home");
+  // Isolated HOME (distinct from mmpHome): a real ~/.agents/skills must not affect these runs
+  // (docs/decisions.md S1 auto-discovery reads it regardless of project trust).
+  const realHome = join(root, "realhome");
   mkdirSync(nestedCwd, { recursive: true });
   mkdirSync(projectMmp, { recursive: true });
+  mkdirSync(realHome, { recursive: true });
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  return { root, projectRoot, nestedCwd, projectMmp, mmpHome };
+  return { root, projectRoot, nestedCwd, projectMmp, mmpHome, realHome };
 }
 
 function runDry(fixture, flags = []) {
   return spawnSync(process.execPath, [cliPath.pathname, ...flags, "--dry-run"], {
     cwd: fixture.nestedCwd,
     encoding: "utf8",
-    env: { ...process.env, MMP_HOME: fixture.mmpHome },
+    env: { ...process.env, HOME: fixture.realHome, MMP_HOME: fixture.mmpHome },
   });
 }
 
@@ -113,6 +117,23 @@ test("persisted Pi ProjectTrustStore decisions gate project resources", (t) => {
   assert.equal(JSON.parse(denied.stdout).projectDiscovery, "ignored");
 });
 
+test("a decision saved for a subfolder (classic Pi /trust saves the cwd) applies from there", (t) => {
+  const fixture = createProjectFixture(t);
+  writeFileSync(join(fixture.projectMmp, "mmp.json"), JSON.stringify({ version: 1 }));
+  const trustStore = new ProjectTrustStore(join(fixture.mmpHome, "pi"));
+
+  trustStore.set(fixture.nestedCwd, true);
+  const trusted = runDry(fixture);
+  assert.equal(trusted.status, 0, trusted.stderr);
+  assert.equal(JSON.parse(trusted.stdout).projectDiscovery, "loaded");
+
+  // The nearest decision wins, as in Pi's store: a subfolder "no" overrides a root "yes".
+  trustStore.set(fixture.projectRoot, true);
+  trustStore.set(fixture.nestedCwd, false);
+  const denied = runDry(fixture);
+  assert.equal(JSON.parse(denied.stdout).projectDiscovery, "ignored");
+});
+
 test("global and trusted project resources merge in order and deduplicate canonically", (t) => {
   const fixture = createProjectFixture(t);
   mkdirSync(fixture.mmpHome, { recursive: true });
@@ -143,6 +164,40 @@ test("global and trusted project resources merge in order and deduplicate canoni
       [realpathSync(projectRule), "project"],
     ],
   );
+});
+
+test("--dry-run never shows the trust prompt, even for an undecided project", (t) => {
+  const fixture = createProjectFixture(t);
+  writeFileSync(join(fixture.projectMmp, "mmp.json"), JSON.stringify({ version: 1 }));
+
+  const result = runDry(fixture);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /Trust project folder\?/);
+  assert.equal(JSON.parse(result.stdout).projectDiscovery, "ignored");
+  // --dry-run never even opens the trust store for an unknown project.
+  assert.equal(existsSync(join(fixture.mmpHome, "pi", "trust.json")), false);
+});
+
+test("-p (non-interactive, non-TTY) never shows the trust prompt and ignores the project", (t) => {
+  const fixture = createProjectFixture(t);
+  writeFileSync(join(fixture.projectMmp, "mmp.json"), JSON.stringify({ version: 1 }));
+  mkdirSync(fixture.mmpHome, { recursive: true });
+  const driver = new URL("./fixtures/faux-two-models.mjs", import.meta.url).pathname;
+  writeFileSync(
+    join(fixture.mmpHome, "mmp.json"),
+    JSON.stringify({ version: 1, extensions: [driver] }),
+  );
+
+  const result = spawnSync(process.execPath, [cliPath.pathname, "-p", "hi"], {
+    cwd: fixture.nestedCwd,
+    env: { PATH: process.env.PATH, HOME: fixture.mmpHome, MMP_HOME: fixture.mmpHome, PI_OFFLINE: "1" },
+    input: "",
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.match(result.stdout, /PICKED=model-a/, `${result.stdout}${result.stderr}`);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /Trust project folder\?/);
+  assert.equal(existsSync(join(fixture.mmpHome, "pi", "trust.json")), false);
 });
 
 test("conflicting project trust overrides fail before Pi", () => {

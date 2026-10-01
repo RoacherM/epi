@@ -11,6 +11,9 @@ import { fileURLToPath } from "node:url";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const hookLog = join(tmpdir(), `mmp-auto-compact-${randomUUID()}.jsonl`);
 const sessionDir = mkdtempSync(join(tmpdir(), "mmp-auto-compact-session-"));
+// Isolated HOME: the real ~/.agents/skills (docs/decisions.md S1 auto-discovery) must not affect
+// this run's system prompt/token accounting.
+const homeDir = mkdtempSync(join(tmpdir(), "mmp-auto-compact-home-"));
 writeFileSync(hookLog, "", "utf8");
 
 const child = spawn(
@@ -31,6 +34,7 @@ const child = spawn(
     cwd: root,
     env: {
       ...process.env,
+      HOME: homeDir,
       MMP_HOME: join(root, "test", "fixtures", "compact-runtime"),
       HOOK_ACCEPTANCE_LOG: hookLog,
     },
@@ -182,4 +186,5 @@ try {
   terminate();
   rmSync(hookLog, { force: true });
   rmSync(sessionDir, { recursive: true, force: true });
+  rmSync(homeDir, { recursive: true, force: true });
 }
