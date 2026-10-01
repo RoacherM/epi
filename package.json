@@ -2,7 +2,7 @@
   "name": "mmp",
   "version": "0.1.4",
   "private": true,
-  "description": "Make My Pi — compose Pi your way with an explicit deterministic harness",
+  "description": "A customizable terminal coding agent built on Pi, with a focused TUI, skills, MCP, hooks, and isolated subagents.",
   "type": "module",
   "bin": {
     "mmp": "./dist/cli.js"
