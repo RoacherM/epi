@@ -2,7 +2,20 @@
 
 > Compose Pi your way.
 
-MMP (Make My Pi) 是基于固定版本 Pi SDK 的显式、确定性 Harness。它复用 Pi 的 Agent Loop、模型、认证、Session、TUI 组件、基础工具和 Auto Compact；交互界面是 MMP 自己写的第 4 层（`src/tui/`），`mmp` 是唯一的启动入口。MMP 只负责配置装配、项目信任、Task、MCP 与 Hooks。
+MMP (Make My Pi) 是基于 Pi SDK 的可定制终端编程助手。自有 grok 风格 TUI，组合 Skills、MCP、Hooks 与隔离子任务；Pi 提供模型、Agent Loop 与 Session，MMP 管理界面、配置、信任和能力装配。
+
+![MMP 终端界面：对话、思考、工具调用与 Markdown](docs/assets/mmp-ui.png)
+
+*真实 TUI，离线演示数据。思考、文件修改与命令执行集中呈现。*
+
+<details>
+<summary>查看启动页</summary>
+
+![MMP 启动页](docs/assets/mmp-welcome.png)
+
+[截图生成方式](docs/assets/README.md)
+
+</details>
 
 当前固定版本：
 
