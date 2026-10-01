@@ -242,7 +242,7 @@ test("--use-theme and --tui-mode are rejected with MMP's reason, not forwarded t
   }
 });
 
-test("the benchmark entry's flags all parse and forward byte-for-byte (DEVELOPMENT.md §20)", () => {
+test("the benchmark entry's flags all parse and forward byte-for-byte (docs/development.md §20)", () => {
   const prepared = prepareMmpRun(
     ["--mode", "json", "--no-session", "--no-approve", "-p", "hello"],
     { MMP_HOME: "/tmp/mmp-foundation" },

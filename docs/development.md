@@ -1,98 +1,45 @@
 # Make My Pi 开发文档
 
 - 项目：MMP（Make My Pi）
-- 状态：阶段 A-E、Benchmark adapter 与 benchmark-ready 契约测试已完成
-- 目标目录：`~/Desktop/Projects/Devs/mmp`
+- 状态：自有 TUI、原生 MCP、Rules/Skills、Task/Hooks 和 benchmark adapter 已实现；验收与遗留项见 §21
 - 目标依赖：`@earendil-works/pi-coding-agent`（见 `package.json`）；Node.js `>=22.19.0`
 - 当前验证环境：`package.json` 锁定的 Pi 版本已通过全部契约测试、ambient 隔离测试和离线 MCP 验收；真实模型冒烟和 benchmark adapter 冒烟是 Pi `0.83.0` 时做的，升级后还没重做，之后每次升级也要看是否需要重跑（见 `docs/pi-upgrade-design.md` 第 3 节"模型可见内容快照"）。OMP `17.1.3` 仅作能力边界参考，不是运行依赖
 - Pi 升级：设计见 `docs/pi-upgrade-design.md`（版本锁死、升级自动化，已定，见 `docs/decisions.md`）
 - 交互界面：设计见 `docs/tui-design.md`，代码在 `src/tui/`，是 `mmp` 唯一的交互入口（不再启动 Pi 经典交互界面），进度见设计文档第 15 节
-- 开发流程：角色分工（Sonnet 编码、Fable 合并前审查、agy 调研）、任务说明要求、Herdr 实测和对照 grok，见 `docs/dev-workflow.md`；给 agent 的硬规则见根目录 `AGENTS.md`
-- 最后更新：2026-09-30
+- 开发流程：角色分工、独立合并前审查、任务说明要求、Herdr 实测和对照 grok，见 `docs/dev-workflow.md`；给 agent 的入口见根目录 `AGENTS.md`，硬规则见 `docs/dev-workflow.md`
+- 最后更新：2026-10-01
 
 ## 1. 产品定义
 
-MMP 是一个基于 Pi SDK（当前锁定版本见 `package.json`）的确定性 Agent Harness。它不是 Pi fork，也不是通过 shell 启动全局 `pi` 二进制的薄包装器。
+MMP（Make My Pi）是在同一 Node.js 进程中使用锁定版本 Pi SDK 的定制 Harness。功能优先对齐 Pi；MMP 拥有 grok-build 风格的交互界面、配置装配、项目信任和能力选择。
 
-> MMP 读取 `~/.mmp/mmp.json`，在可信边界内显式选择 Rules、Skills 和 Extensions，然后在当前 Node.js 进程中调用锁定版本的 Pi SDK。
+| 层 | 所有权 | 入口 |
+|---|---|---|
+| Pi | 模型、Agent Loop、认证、Session、基础工具、Auto Compact、TUI 组件和 MCP runtime | 锁定的 Pi SDK |
+| MMP | CLI、交互应用、Manifest、信任边界、资源来源与运行时身份 | `src/host.ts`、`src/tui/` |
+| Extension | Task、Hooks 和显式选择的第三方能力；MCP 的配置接入 | `src/extensions/` |
 
-所有权分为三层：
+MMP 不调用 PATH 中的全局 `pi`，不复制 Agent Loop。交互应用由 MMP 调用 `createAgentSessionRuntime()` 并复用 pi-tui 组件；print/json/rpc 等模式仍通过 Pi 的 `main()` 运行。
 
-```text
-Pi Core    owns agent runtime primitives
-MMP        owns harness policy and composition
-Extension  owns capability
-```
-
-- Pi Core 负责 Agent Loop、ModelRuntime、认证、Session 格式与管理、TUI 实现、Print/RPC 模式、基础工具和 Auto Compact。
-- MMP 负责自己的 CLI、Pi 版本锁定、运行时身份、Manifest、Project Trust、资源选择、provenance、首批能力装配和启动失败语义。
-- 独立 Extension 负责 Task、MCP、Hooks 等具体能力。
-
-MMP v0 使用 Pi 公开的：
-
-```ts
-main(args, { extensionFactories })
-```
-
-作为最小 SDK Host 缝。这样保留 Pi 原生 CLI、TUI、Session 和模式语义，同时不依赖机器上另行安装的 `pi` 命令。
-
-如果未来需要自定义 UI 或直接访问 Agent 状态，再下沉到：
-
-```ts
-createAgentSessionRuntime()
-InteractiveMode
-runPrintMode()
-runRpcMode()
-```
-
-首版不为“看起来更像自己的 Harness”而提前复制这些实现。
-
-MMP 始终注入内置 `mmp:runtime` Extension。它用 `ctx.ui.setHeader()` 在 TUI 启动页展示身份、Manifest 状态与核心配置入口；在每轮 `before_agent_start` 中结合 `ResolvedAssembly` 与 Pi 的 `systemPromptOptions.skills` 生成权威 runtime inventory，明确区分“MMP 已加载资源”和“宿主机上存在的文件”。`/mmp` 向用户显示同一份清单。Print、JSON/RPC、dry-run 和 benchmark 不渲染启动页。
+`mmp:runtime` 始终注入，用于运行时身份、Rules、Skills、`/mmp` 与启动信息。Task、MCP、Hooks 只有被 Manifest 声明后才装配。Skills 除 Manifest 外还从三个固定根目录发现，见 §7.1。
 
 ## 2. 核心架构
 
-```text
-mmp CLI
-  |
-  +-- 解析 MMP 自有参数
-  +-- 读取 ~/.mmp/mmp.json
-  +-- 依据 Pi ProjectTrustStore 决定是否读取 <repo>/.mmp/mmp.json
-  +-- 解析并校验 Rules / Skills / Extensions
-  +-- 生成 ResolvedAssembly 与 provenance
-  +-- 创建固定 mmp:runtime 与 Manifest 声明的 Task / MCP / Hooks factories
-  +-- 生成受控的 Pi argv
-  +-- await piMain(piArgs, { extensionFactories })
-         |
-         +-- Pi ModelRuntime / SettingsManager / ResourceLoader
-         +-- Pi AgentSessionRuntime
-         +-- Pi InteractiveMode / PrintMode / RpcMode
-         +-- Pi Session / Compact / built-in tools
-         +-- MMP 与显式第三方 Extensions
-```
+`src/cli.ts` 启动 `src/host.ts` 的 `runMmp()`：
 
-入口代码形态：
+1. MMP 自己处理子命令、版本和帮助；帮助会加载已声明扩展以收集扩展参数。
+2. 解析全局路径、项目发现和 trust，生成 `ResolvedAssembly` 与 runtime identity。
+3. 创建内置 Extension factories 并校验其配置；`--dry-run` 到这里输出报告并退出，不执行 factories。
+4. 设置独立的 `<MMP_HOME>/pi` 状态目录；按运行模式分流。
 
-```ts
-import { main as piMain } from "@earendil-works/pi-coding-agent";
+| 模式 | 实现 |
+|---|---|
+| 交互式 TTY（含 `--mode text`） | `src/tui/start.ts` → MMP TUI + Pi session runtime |
+| `--list-models` | `src/list-models.ts`，报告扩展诊断并使用 MMP 文案 |
+| print/json/rpc、export、非 TTY | `piMain(piArgs, { extensionFactories })` |
+| install/remove/uninstall/list/config/auth/mcp/update | MMP 自有子命令实现，不进入 Pi CLI 子命令 |
 
-await piMain(piArgs, { extensionFactories });
-```
-
-禁止：
-
-```ts
-spawn("pi", args);
-exec(`pi ${args.join(" ")}`);
-```
-
-原因：
-
-- 不能依赖用户 PATH 中另一个版本的 Pi；
-- 不能让全局 Pi 升级绕过 MMP lockfile；
-- 不需要为同进程 SDK 调用复制 Pi 的 TUI、Session 或 Agent Loop；
-- 首批内置 Extension 可以通过 closure 接收已解析配置，不需要环境变量或临时 JSON 桥接。
-
-Pi 从 0.83 起支持完整关闭 ambient resources（由 `test/ambient-isolation.test.mjs` 验证，包括 0.84 新增的 `AGENTS.override.md`）：
+资源隔离参数由 `src/host.ts` 的 `BASE_PI_RESOURCE_ARGS` 维护：
 
 ```text
 --no-extensions
@@ -102,20 +49,12 @@ Pi 从 0.83 起支持完整关闭 ambient resources（由 `test/ambient-isolatio
 --no-context-files
 --system-prompt ""
 --append-system-prompt ""
+--no-approve
 ```
 
-后两个参数 2026-09-29 补上：五个 `--no-*` 参数都管不到 `SYSTEM.md` / `APPEND_SYSTEM.md` 的自动发现（Pi 0.46 起就有），之前 `~/.mmp/pi/SYSTEM.md` 会进入 system prompt，`mmp --approve` 时项目 `.pi/SYSTEM.md` 也会。传空值会跳过自动发现，Pi 仍用默认 prompt（实测前后 system prompt 逐字一致）。
+交互路径使用对应的受控 SDK services；外部扩展只从 Manifest 传入，Rules 和 Skills 由 `mmp:runtime` 注入。MMP 的 `--approve` 只影响项目 `.mmp`，不会授予 Pi 原生项目资源权限。非交互启动仍有已知 `.pi/settings.json` 读取限制，见 §8.1。
 
-显式资源仍可通过 `--extension`、`--skill` 和 `extensionFactories` 加载。因此最小运行缝是：
-
-```text
-manifest + trust
--> resolved assembly
--> Pi argv + inline factories
--> Pi SDK main
-```
-
-不实现 `mmp-bootstrap` Extension。资源选择在 Pi Session 创建前完成，Bootstrap Extension 会把启动策略错误地下沉到能力层。
+资源选择在 Session 创建前完成，不另建 bootstrap Extension、全局进程 registry 或 shell 包装层。
 
 ## 3. 不可违反的边界
 
@@ -127,8 +66,8 @@ MMP 不重新实现：
 - Model/provider runtime；
 - Authentication；
 - Session JSONL 格式、tree、resume、fork 和 compact；
-- TUI renderer、editor 和内置命令；
-- Interactive、Print、JSON 和 RPC 运行模式；
+- pi-tui renderer、editor 和可复用组件；MMP 负责应用布局、命令接线与交互；
+- Session runtime、Print、JSON 和 RPC 执行语义；交互应用由 MMP 启动；
 - Auto Compact；
 - Pi 基础工具实现；
 - MCP 协议栈；
@@ -147,7 +86,9 @@ MMP 可以构造和启动这些公开 runtime primitive，但不能 fork 或复�
 - `--dry-run`、版本输出和启动前错误；
 - 子进程能力的回收边界。
 
-### 3.3 MMP 不复制这些 OMP 结构
+### 3.3 当前实现范围
+
+长期 Harness 方向参考 OMP（决策 H1），下面这些能力尚未纳入当前实现；新增能力需单独设计，不作为永久禁止项：
 
 - Capability Registry；
 - 多 Harness Discovery Provider；
@@ -156,92 +97,35 @@ MMP 可以构造和启动这些公开 runtime primitive，但不能 fork 或复�
 - Vibe/Goal/Plan 等运行模式；
 - Agent Hub、IRC、Collaboration Runtime；
 - Advisor、Autolearn、Prewalk；
-- Marketplace、Updater、Gallery、Bench、Stats；
+- Marketplace、Gallery、内置 Bench/Stats（已有 CLI updater 与外部 benchmark adapter 不在此列）；
 - 多套 Memory Backend；
 - 全局进程 Registry。
 
-### 3.4 未声明即不存在
+### 3.4 显式装配边界
 
-```text
-未声明
-= 不发现
-= 不导入
-= 不注册工具
-= 不注入 Prompt
-= 不读取项目 Context Files
-= 不创建状态
-= 不需要清理
-```
+Rules 与可选 Extensions 未声明就不加载；Task/MCP/Hooks 未启用时，不读取对应能力配置或启动子进程。固定 `mmp:runtime` 与 §7.1 的三个 Skill 自动发现根目录是明确的例外。
 
-空 Manifest 仍可启动 Pi，但只包含 Pi Core 和 MMP 明确允许的基础运行语义，不包含任何 MMP Extension。
+空 Manifest 可以启动，并保留运行时身份和固定 Skill 发现行为；不启用 Task/MCP/Hooks。
 
-## 4. 推荐仓库结构
+## 4. 仓库结构
 
-单 npm 包，不建 monorepo：
+单 npm 包，TypeScript + ESM，Pi 依赖使用 exact version 和提交的 lockfile。不引入 DI、通用插件框架或通用配置框架。
 
-```text
-mmp/
-├── package.json
-├── package-lock.json
-├── tsconfig.json
-├── DEVELOPMENT.md
-├── src/
-│   ├── cli.ts
-│   ├── manifest.ts
-│   ├── resolve.ts
-│   ├── paths.ts
-│   ├── trust.ts
-│   ├── pi-args.ts
-│   ├── worker.ts
-│   └── extensions/
-│       ├── task.ts
-│       ├── mcp.ts
-│       └── hooks.ts
-└── test/
-    ├── manifest.test.ts
-    ├── sdk-host.test.ts
-    ├── project-trust.test.ts
-    ├── pi-args.test.ts
-    └── fixtures/
-```
+| 路径 | 用途 |
+|---|---|
+| `README.md` | 安装、使用和配置参考 |
+| `AGENTS.md` | coding agent 的简短入口，详细规则在 `docs/dev-workflow.md` |
+| `docs/` | 架构、开发流程、决策、验收和问题记录；`docs/notes/` 放调研 |
+| `examples/development/mmp.json` | 自开发配置模板，复制到本地 `.mmp/mmp.json` 后才启用 |
+| `src/host.ts`、`src/args.ts` | CLI 调度、参数和 SDK Host |
+| `src/assembly.ts`、`src/manifest.ts`、`src/project.ts` | 装配、schema 和 trust |
+| `src/tui/` | 交互应用与工具渲染 |
+| `src/extensions/`、`src/worker.ts` | 内置能力与隔离 Task worker |
+| `dist/` | 必须与源码构建结果一致的已提交产物 |
+| `test/`、`test/fixtures/` | 离线契约测试、伪模型与隔离配置 |
+| `scripts/`、`.github/workflows/` | 升级、发布、benchmark 和 CI |
 
-构建结果：
-
-```text
-dist/
-├── cli.js
-├── worker.js
-└── extensions/
-    ├── task.js
-    ├── mcp.js
-    └── hooks.js
-```
-
-`package.json` 对外只暴露一个 CLI：
-
-```json
-{
-  "name": "mmp",
-  "type": "module",
-  "engines": {
-    "node": ">=22.19.0"
-  },
-  "bin": {
-    "mmp": "./dist/cli.js"
-  },
-  "dependencies": {
-    "@earendil-works/pi-coding-agent": "<exact version, see package.json>"
-  }
-}
-```
-
-要求：
-
-- Pi 使用 exact version，不使用 `^` 或 `~`；
-- 使用固定 lockfile；
-- TypeScript + ESM；
-- 不引入 DI、通用插件框架或通用配置框架；
-- `worker.js` 只供 Task Extension 内部启动，不暴露第二个用户 CLI。
+仓库不提交活动的 `.mmp/` 配置、凭证或 `.dev/` 任务交接文件。`examples/` 是供人选择的模板；`test/fixtures/` 是测试输入；两者都不能当作用户的默认配置自动加载。`package.json` 只发布 `dist/`，CLI 仅有 `mmp`，worker 不是第二个用户入口。
 
 ## 5. 用户配置目录
 
@@ -418,13 +302,13 @@ Pi 已公开：
 
 Pi 原生 trust 会保护 `.pi/settings.json`、`.pi` project resources、项目 package 和 `.agents/skills`。但 `.mmp/mmp.json` 不是 Pi 原生资源，因此 MMP 仍需在读取其内容前显式套用同一个 trust 决策。
 
-**已知问题（2026-09-29 实测，0.83.0 和 0.87.1 都有）**：Pi 启动查找会话时会读取项目的 `.pi/settings.json`，不经过 trust 判断（0.87.1 `main.js` 的 `SettingsManager.create(cwd, agentDir)`），`--no-approve` 也挡不住。这违反了 MMP 不读 `.pi/` 的承诺，见 `docs/tui-design.md` 3.3 节。
+**已知限制**：交互路径的 `SettingsManager` 使用 `projectTrusted: false`，不读取项目 `.pi/settings.json`。非交互 `piMain` 路径的 bootstrap 配置使用 `projectTrusted: false`，但后续 `startupSettingsManager` 未传该选项，默认仍读取该文件并用于 `sessionDir` 查找；`--no-approve` 只阻止运行阶段应用项目设置。此项隔离目标尚未完全达成，不能把交互路径的保证推广到所有模式，见 `docs/tui-design.md` 3.3 节和决策 D3。
 
 **已修复（2026-09-29）**：以前 MMP 会把自己的 `--approve` 原样转给 Pi，`mmp --approve` 时项目 `.pi/settings.json` 会在运行阶段整份生效（实测：项目设置指定的模型被选中）。现在 MMP 不再转发，并固定给 Pi 传 `--no-approve`，由 `test/ambient-isolation.test.mjs` 覆盖。
 
 MMP 使用 Pi 导出的 `ProjectTrustStore` API，不直接解析 `trust.json`，也不创建第二套 trust database。
 
-### 8.2 MMP v0 决策
+### 8.2 项目信任决策
 
 ```text
 --no-project
@@ -457,9 +341,9 @@ MMP 使用 Pi 导出的 `ProjectTrustStore` API，不直接解析 `trust.json`�
 
 ## 9. SDK Host 契约
 
-### 9.1 参数所有权（2026-09-29 起：见 [cli-design.md](docs/cli-design.md)）
+### 9.1 参数所有权（2026-09-29 起：见 [cli-design.md](cli-design.md)）
 
-`src/args.ts` 的 `MMP_FLAG_TABLE` 是唯一一张参数表，同时驱动解析、校验和 `mmp --help`。清单外的参数（`--xxx`/`-x` 形状但不在表里）一律 `Unknown option: ...` 报错退出，不再像早期版本那样把无法识别的 `--flag` 静默塞进 Pi 的 `unknownFlags`（extension 注册的自定义 CLI flag 因此不再能用；这是明确的取舍，不是遗漏）。
+`src/args.ts` 的 `MMP_FLAG_TABLE` 是唯一一张参数表，同时驱动解析、校验和 `mmp --help`。未知短参数直接报错。未知长参数暂存为扩展参数，由已声明扩展的 `pi.registerFlag()` 注册表校验；无人认领时按名称报错。`--help` 也收集并展示这些扩展参数。资源覆盖参数仍被保留，不能绕过 Manifest。
 
 MMP 自己消费、从不转发的参数：
 
@@ -496,7 +380,7 @@ MMP 固定追加（见 `BASE_PI_RESOURCE_ARGS`）：五个 `--no-*` 参数、`--
 
 以下参数完全不提供，报错说明理由：`--use-theme`、`--tui-mode`（界面已换成 grok 风格的单一全屏主题，由 MMP 管理）。
 
-子命令 `update`/`install`/`remove`/`uninstall`/`list`/`config`/`auth` 只在 `argv[0]` 位置被识别，由 `host.ts` 的 `runMmp` 在参数表解析之前整体接管（`src/commands/manifest-cli.ts`、`src/commands/auth-cli.ts`、`src/update.ts`），从不进入上面的参数表，也从不转发给底层的 CLI 子命令处理逻辑——它们读写的是 MMP 自己的 Manifest 和 `~/.mmp/pi`，不是底层的 `settings.json`。
+子命令 `update`/`install`/`remove`/`uninstall`/`list`/`config`/`auth`/`mcp` 只在 `argv[0]` 位置被识别，由 `host.ts` 的 `runMmp` 在参数表解析之前整体接管（`src/commands/manifest-cli.ts`、`src/commands/auth-cli.ts`、`src/update.ts`），从不进入上面的参数表，也从不转发给底层的 CLI 子命令处理逻辑——它们读写的是 MMP 自己的 Manifest 和 `~/.mmp/pi`，不是底层的 `settings.json`。
 
 `--verbose`：非交互路径原样转发；交互界面里由 `src/extensions/runtime.ts` 的 `mmp:runtime` 扩展在 `session_start`（`reason: "startup"`、`mode: "tui"`）时把启动信息（已加载 Rules/Skills/Extensions 数量、当前模型、当前 Session）显示成对话区提示，不产生底层的 verbose 输出格式。
 
@@ -508,68 +392,15 @@ mmp --model anthropic/claude-sonnet-4 --thinking high --print "fix this"
 
 ### 9.2 核心流程
 
-```ts
-import {
-  main as piMain,
-  ProjectTrustStore,
-  type InlineExtension,
-} from "@earendil-works/pi-coding-agent";
+以 `src/host.ts` 的 `runMmp()` 为准，分流见 §2。`prepareParsedMmpRun()` 保存 `resolveAssembly` 闭包，让 Rules/Skills 重载复用相同 trust 和路径规则。交互路径在退出前回收 TUI/runtime；非交互路径等待 Pi 执行完成、刷新 stdout/stderr 后退出，避免扩展遗留句柄挂住一次性命令。
 
-async function main(argv: string[]) {
-  const options = parseMmpArgs(argv);
-  const globalRoot = resolveMmpHome();
-  const agentDir = `${globalRoot}/pi`;
-  const projectRoot = options.noProject
-    ? undefined
-    : findNearestProjectMmp(process.cwd());
+### 9.3 Pi argv 与重载
 
-  const projectTrusted = resolveProjectTrust({
-    projectRoot,
-    override: options.projectTrustOverride,
-    trustStore: new ProjectTrustStore(agentDir),
-  });
+`buildPiArgs()` 顺序为 `BASE_PI_RESOURCE_ARGS`、Manifest 的显式外部 `--extension`、已解析的透传参数。不要复制一份缺少 `--system-prompt ""`、`--append-system-prompt ""` 或 `--no-approve` 的隔离参数表。
 
-  const resolved = resolveAssembly({
-    globalRoot,
-    projectRoot: projectTrusted ? projectRoot : undefined,
-  });
+Rules 与 Skills 不冻结在 Pi argv 中。`mmp:runtime` 在 `before_agent_start` 注入当前 Rules，并通过 `resources_discover` 返回当前 Skill roots。`/reload` 重新解析 Manifest 并加载 Rules/Skills；失败时保留上一份有效装配并显示错误。
 
-  const extensionFactories = buildInlineExtensions(resolved);
-  const piArgs = buildPiArgs(resolved, options.passthrough);
-
-  if (options.dryRun) {
-    printDryRun(redactResolvedAssembly(resolved));
-    return;
-  }
-
-  process.env.PI_CODING_AGENT_DIR = agentDir;
-  await piMain(piArgs, { extensionFactories });
-}
-```
-
-### 9.3 Pi argv
-
-```ts
-function buildPiArgs(
-  resolved: ResolvedAssembly,
-  passthrough: string[],
-): string[] {
-  return [
-    "--no-extensions",
-    "--no-skills",
-    "--no-prompt-templates",
-    "--no-themes",
-    "--no-context-files",
-    ...resolved.externalExtensions.flatMap(resource => [
-      "--extension",
-      resource.value,
-    ]),
-    ...passthrough,
-  ];
-}
-```
-
-Rules 与 Skills 不冻结在 Pi argv 中。`mmp:runtime` 在 `before_agent_start` 注入当前 Rules，并通过 `resources_discover` 返回当前 Skill roots；Pi 的 `/reload` 重建 Extension 后，MMP 会先重新解析 Manifest，再让 Pi 扫描更新后的 Skills。解析失败时保留上一份有效装配并显示错误。Extension factory、外部 Extension 以及 MCP/Hooks/Task 配置仍是启动期能力，修改后必须重启 MMP。
+Manifest 的 Extension 选择、Hooks/Task 启动配置改变后需要重启。已启用的原生 MCP 通过 `loadConfig` 重新读取配置，`/reload` 可以应用 MCP 服务配置变化；首次在 Manifest 启用 `mmp:mcp` 仍需重启。具体能力边界见 [mcp-design.md](mcp-design.md)。
 
 ### 9.4 运行约束
 
@@ -581,7 +412,7 @@ PI_CODING_AGENT_DIR=~/.mmp/pi
 - 不启动 shell；
 - 不 spawn Pi 主进程；
 - 不通过环境变量传递配置 JSON 或 secret；
-- `await piMain()` 返回后才允许 MMP CLI 退出；
+- 等待当前模式的 runtime 清理完成；非交互 `piMain()` 返回后刷新输出再退出；
 - Pi SDK 初始化失败直接以非零状态失败，禁止 fallback 到全局 Pi。
 
 ## 10. Effective Assembly
@@ -590,7 +421,6 @@ MMP 在内存中构造本次运行的有效装配：
 
 ```ts
 interface ResolvedAssembly {
-  piVersion: string; // installed Pi's VERSION export; see package.json for the pin
   agentDir: string;
   globalManifest: string;
   projectManifest?: {
@@ -756,7 +586,7 @@ Project agent 仅在项目 trust 生效后可见。
 
 ## 13. MCP Extension
 
-Pi 0.99 起原生支持 MCP（`createMcpExtension`），MMP 不再自带 MCP 客户端（`pi-mcp-adapter` 已移除）。设计见 [docs/mcp-design.md](docs/mcp-design.md)（决策 MCP1、MCP2）。
+Pi 0.99 起原生支持 MCP（`createMcpExtension`），MMP 不再自带 MCP 客户端（`pi-mcp-adapter` 已移除）。设计见 [docs/mcp-design.md](mcp-design.md)（决策 MCP1、MCP2）。
 
 `mmp:mcp` 只负责决定**读哪些配置文件、用谁的信任判断**，其余（连接、OAuth、工具注册、`/mcp` 面板）全部是 Pi 的代码：
 
@@ -806,7 +636,7 @@ export function createMmpMcpExtension(source) {
 - 一份坏的 `mcp.json`（`loadNativeMcpConfig` 的 `errors` 非空）在 `src/extensions/index.ts` 里同步抛 `MmpConfigError`，不等 Pi 自己那句软提示（`ctx.ui.notify(..., "warning")`，在 `-p` 模式下是空操作）。
 - Manifest 同时声明别的扩展也注册 `/mcp` 时，Pi 自己的处理是把两边都改名成 `/mcp:1`/`/mcp:2`（不报错）；`mmp:mcp` 在 `session_start` 里查这个改名信号，throw 一个错误——在 print 模式下这条错误经由 Pi 的 `onError` 打到 stderr，在 TUI 里额外用 `ctx.ui.notify` 落一条常驻提示（`ctx.shutdown()` 在 print 模式是空操作，在 TUI 里会立刻退出，可能和提示渲染赛跑，所以不调用它）。
 
-`mmp mcp add|remove|list|login|logout`（`src/commands/mcp-cli.ts`，docs/mcp-design.md §6）复用同一批 Pi 代码（`config.js` 的 `addMcpServerConfig`/`removeMcpServerConfig`/`getMcpToolExposure`、`core/mcp-servers.js` 的 `validateMcpServerConfig`、`runtime.js` 的 `McpServerConnection`/`McpOAuthCredentialStore`/`signInMcpServer`，全部登记进 [docs/pi-internals.md](docs/pi-internals.md)），但参数解析和信任判断是 MMP 自己的——Pi 的 `runMcpCommand` 写死 `.pi/mcp.json` 和 Pi 自己的项目信任存储，不能直接用。
+`mmp mcp add|remove|list|login|logout`（`src/commands/mcp-cli.ts`，docs/mcp-design.md §6）复用同一批 Pi 代码（`config.js` 的 `addMcpServerConfig`/`removeMcpServerConfig`/`getMcpToolExposure`、`core/mcp-servers.js` 的 `validateMcpServerConfig`、`runtime.js` 的 `McpServerConnection`/`McpOAuthCredentialStore`/`signInMcpServer`，全部登记进 [docs/pi-internals.md](pi-internals.md)），但参数解析和信任判断是 MMP 自己的——Pi 的 `runMcpCommand` 写死 `.pi/mcp.json` 和 Pi 自己的项目信任存储，不能直接用。
 
 MMP 不拥有 transport、OAuth、connection lifecycle、tool discovery/call、renderer 和 metadata cache——这些全部是 Pi 的代码，跟着 Pi 升级自动走。
 
@@ -925,7 +755,7 @@ node --test test/hooks.test.mjs
 - lifecycle recorder 观察到 `session_start -> user_prompt -> tool_call -> tool_result -> session_shutdown`；
 - Task recorder 观察到 `task_start -> task_stop(completed)`。
 
-## 15. 实现阶段与验证
+## 15. 分层验证
 
 ### 阶段 A：SDK Host 冒烟
 
@@ -994,14 +824,14 @@ not discovered
 
 - 按 provenance 顺序合并 Rules 内容；
 - 将 Skill absolute paths 显式传给 Pi；
-- 用 inline `createMcpAdapter({ config })` 接入 MCP；
-- 锁定通过契约测试的 `pi-mcp-adapter` 版本。
+- 用 Pi 原生 `createMcpExtension({ loadConfig })` 接入 MCP；
+- 校验配置来源、codemode/direct/deferred 曝光和 `/mcp` 管理面板。
 
 验证：
 
 - Agent 实际遵循一条 MMP Rule；
 - Agent 能读取 Manifest 中声明的 Skill；
-- 未声明的 `.pi/skills`、`.agents/skills` 和项目 Context Files 不可见；
+- Pi 的 skill 根、项目 `.agents/skills` 和未声明 Context Files 不可见；全局 `~/.agents/skills` 按 §7.1 发现；
 - 本地 stdio MCP fixture 完成真实 `search -> describe -> call`；
 - Session 退出后 MCP 子进程消失。
 
@@ -1044,8 +874,8 @@ MMP SDK Host 启动
 
 ### 配置与资源
 
-- 空 Manifest 不加载任何 MMP Extension；
-- ambient Extensions、Skills、Prompt Templates、Themes 和 Context Files 全部关闭；
+- 空 Manifest 不加载可选 Task/MCP/Hooks；`mmp:runtime` 始终存在；
+- Pi ambient 资源发现关闭；MMP 自己的三个固定 Skill 根按 §7.1 工作；
 - 删除一个 Extension 声明后，它的 tool、handler、状态和子进程全部消失；
 - 错误本地路径和错误 schema 在 Pi Session 创建前失败；
 - global/project provenance 可从 `--dry-run` 复核；
@@ -1082,9 +912,9 @@ MMP SDK Host 启动
 - 契约测试覆盖 `main(args, { extensionFactories })`、`InlineExtension`、`ProjectTrustStore`、`--no-context-files` 和 MCP factory；
 - Pi 升级只通过显式依赖更新和完整阶段 E 验收完成。
 
-## 17. 明确非目标
+## 17. 当前非目标
 
-首版不实现：
+以下不在当前实现范围；长期 Harness 方向按决策 H1 单独评估：
 
 - Pi fork；
 - OMP 配置兼容；
@@ -1097,34 +927,26 @@ MMP SDK Host 启动
 - Workflow/Chain DSL；
 - Autonomous Memory/Autolearn；
 - 自定义 Agent Loop；
-- 自定义 TUI renderer；
+- 替换 pi-tui 底层渲染器（MMP 自有交互应用已实现）；
 - 自定义 Compact；
 - 自定义 MCP Runtime；
 - 通过 shell 或全局 `pi` binary 启动主 runtime；
 - 100% 复刻 Pi CLI 的 resource override 行为。
 
-## 18. 开工后的第一步
+## 18. 开发与合并门禁
 
-切换到项目目录后，先只实现阶段 A 和阶段 B，不先写 Task、MCP 或 Hooks：
+从仓库根目录执行：
 
 ```bash
-cd ~/Desktop/Projects/Devs/mmp
+npm ci --ignore-scripts
+npm run build
+git diff --exit-code -- dist
+npm test
 ```
 
-第一批代码的完成标准：
+开发流程与独立审查要求见 [dev-workflow.md](dev-workflow.md)。`dist/` 必须在同一提交中更新。CI 的颜色断言应使用主题的语义颜色 API，不写死当前终端的真彩色字节。手工 TUI 验收见 [e2e-acceptance.md](e2e-acceptance.md)；没有真实终端或 provider 的环境应明确记录未验证项。
 
-```text
-1. mmp CLI 通过 package dependency 启动固定版本的 Pi（见 package.json）；
-2. 不依赖 PATH 中的全局 pi；
-3. Pi model/session/tool 参数无损交给 piMain；
-4. Pi resource flags 被 MMP 保留并 fail-fast；
-5. mmp.json 能解析、校验和解析相对路径；
-6. --approve / --no-approve / --no-project 行为可复核；
-7. --dry-run 输出完整 provenance；
-8. 真实 mmp --print 冒烟成功。
-```
-
-只有该 SDK Host 装配缝真实跑通后，才继续实现三个能力 Extension。
+自开发配置模板见 [examples/development](../examples/development/README.md)，按需复制到本地 `.mmp/`，不提交活动配置。
 
 ## 19. 参考资料
 
@@ -1139,7 +961,6 @@ cd ~/Desktop/Projects/Devs/mmp
 - Pi ResourceLoader types：<https://unpkg.com/@earendil-works/pi-coding-agent@VERSION/dist/core/resource-loader.d.ts>
 - Pi ProjectTrustStore types：<https://unpkg.com/@earendil-works/pi-coding-agent@VERSION/dist/core/trust-manager.d.ts>
 - Pi 最小 Subagent 示例：<https://github.com/earendil-works/pi/tree/main/packages/coding-agent/examples/extensions/subagent>
-- pi-mcp-adapter：<https://github.com/nicobailon/pi-mcp-adapter>
 - OMP：<https://github.com/can1357/oh-my-pi>，仅用于比较已有能力和避免重复设计
 
 `main` 分支文档只能用于发现变化，设计与实现必须以锁定版本 package 内容为准。
@@ -1283,18 +1104,20 @@ Benchmark 不是阶段 A/B 的实现内容，但阶段 A 的 JSON mode、stdout/
 
 两者均使用依赖中的 Pi `0.83.0` 和 resolved model `openrouter/openai/gpt-4o-mini`，分别返回 `BENCHMARK_ADAPTER_OK` 与 `BASELINE_ADAPTER_OK`。升级到 Pi `0.87.1` 后 system prompt 的格式变了（改为 `<tools>`、`<rules>`、`<docs>`、`<cwd>` 分段），这两个冒烟和基线都要重跑；重跑会调用真实模型、产生费用，还没做。
 
-## 21. 当前交接状态
+## 21. 当前验证与遗留项
 
 已完成：
 
 - 固定 `@earendil-works/pi-coding-agent`（版本见 `package.json`），并在启动时核验实际 package 版本；
-- SDK Host、Manifest、Project Trust、Rules、Skills、Task、MCP、Hooks、Pi CLI/TUI/Session/Auto Compact 全链路实现；
-- 阶段 A-E 的契约测试、真实模型 smoke、完整 Task/MCP/Hook E2E 与自动压缩验证；
+- SDK Host、Manifest、Project Trust、固定根 Skill 发现、Task/Hooks、原生 MCP、自有 TUI 与 Pi Session/Auto Compact 已实现；
+- 离线契约测试覆盖上述路径；历史真实模型 smoke、Task/MCP/Hook E2E 与自动压缩记录只证明其当时版本，不能替代当前版本实测；
 - 外部 benchmark adapter、四 variant 入口、可复现 metadata/digest、隔离/泄漏检查和四类失败映射；
 - 真实 `mmp-full` 与 `pi-0.83-baseline` adapter smoke（Pi 0.83.0 时完成；升到 0.87.1 后变体名一度改为 `pi-0.87-baseline`，这次 Pi 升级自动化改造后统一去掉版本号，改为 `pi-baseline`，还没重跑）。
 
 尚未完成：
 
+- 非交互启动读取项目 `.pi/settings.json` 的隔离缺口（§8.1）；
+- 其他未关闭问题以 [dogfood-issues.md](dogfood-issues.md) 为准；
 - 尚未接入九项 benchmark 各自的 dataset、workspace image、provider-qualified `DeepSeek-V4-Flash-0731` 模型标识和官方 grader；
 - 尚未产出任何正式 benchmark 分数。
 

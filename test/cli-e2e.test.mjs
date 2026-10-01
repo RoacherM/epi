@@ -70,7 +70,7 @@ test("mmp install -l writes the project Manifest instead of the global one", (t)
   assert.deepEqual(manifest, { version: 1, extensions: ["npm:proj-extension"] });
 });
 
-// Bug 5 (DEVELOPMENT.md §8.2 rule 1): install/remove/config -l used to read and write an untrusted
+// Bug 5 (docs/development.md §8.2 rule 1): install/remove/config -l used to read and write an untrusted
 // project .mmp/mmp.json unconditionally. The rule is that a project's .mmp/mmp.json is only read
 // once the project is trusted, full stop -- not because resolveManifest executes anything (it just
 // resolves declared paths) -- exactly what `mmp list` already refuses to do for an untrusted project.
@@ -355,7 +355,7 @@ test("mmp list never reads an untrusted project Manifest's declared sources", (t
   const f = fixture(t);
   mkdirSync(join(f.project, ".mmp"), { recursive: true });
   writeFileSync(projectManifestPath(f), JSON.stringify({ version: 1, extensions: ["npm:untrusted-source"] }));
-  // No trust.json planted: this project has never been approved (DEVELOPMENT.md §8.2 rule 1).
+  // No trust.json planted: this project has never been approved (docs/development.md §8.2 rule 1).
   const result = run(f, ["list"]);
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stdout, /npm:untrusted-source/);

@@ -33,13 +33,24 @@
 
 ## 3. 启动一个 mmp 工作者
 
-仓库根目录提交一份项目 Manifest（`.mmp/mmp.json`，要从 `.gitignore` 里放开这一个文件），把开发规范作为 Rules 声明进去，每个 worktree 都自动带上：
+仓库只提交可选模板 [examples/development/mmp.json](../examples/development/mmp.json)，运行时 `.mmp/` 全部忽略。需要用 MMP 开发本仓库时，在每个 worktree 根目录按需创建本地配置，已有配置不要覆盖：
 
-```json
-{ "version": 1, "rules": ["../AGENTS.md", "../docs/dev-workflow-herdr.md"], "skills": [], "extensions": [] }
+```bash
+mkdir -p .mmp
+if [ -e .mmp/mmp.json ] || [ -L .mmp/mmp.json ]; then
+  echo '保留现有 .mmp/mmp.json；请手动合并需要的 rules。'
+else
+  (set -C; cat examples/development/mmp.json > .mmp/mmp.json)
+fi
 ```
 
-（MMP 不自动读 `AGENTS.md`，必须声明成 Rules 才会进 system prompt。）
+模板内容：
+
+```json
+{ "version": 1, "rules": ["../AGENTS.md", "../docs/dev-workflow.md"], "skills": [], "extensions": [] }
+```
+
+路径相对复制后的 `.mmp/mmp.json` 所在目录解析，而非模板的 `examples/development/` 目录；不要直接把模板目录当作运行配置目录。MMP 不自动读 `AGENTS.md`，必须声明成 Rules 才会进 system prompt。模板只加载当前开发流程，不自动启用本文的 Herdr 草案；正式切换仍需完成验收与启用步骤。
 
 启动命令（主控在 pane 里执行，`--approve` 只让这一次信任 worktree 的 `.mmp/mmp.json`，不写进信任记录）：
 
@@ -56,7 +67,7 @@ cd <worktree> && node ~/Desktop/Projects/sides/mmp-tool/dist/cli.js --approve \
 
 | 文件 | 谁写 | 内容 |
 |---|---|---|
-| `brief.md` | 主控 | 任务说明，格式同现在第 3 节（起点、规格来源、状态清单、测试要求、测试卫生、边界、交付） |
+| `brief.md` | 主控 | 任务说明，格式同 [dev-workflow.md](dev-workflow.md) 第 3 节（起点、规格来源、状态清单、测试要求、测试卫生、边界、交付）；默认基于 `main`，写明实际基准提交 |
 | `report.md` | 编码者 | 每项做了什么、对照了 Pi 的哪些函数、测试数、没验证的地方；最后一行 `STATUS: done` 或 `STATUS: blocked` |
 | `question.md` | 编码者 | 需要主控决定的问题；写完就停下等 |
 | `review-N.md` | 初审 | 第 N 轮审查：结论（可合并 / 不可合并）、按严重程度排的发现，每条标 CONFIRMED 或 PLAUSIBLE、附文件行号和复现命令 |
@@ -69,7 +80,7 @@ cd <worktree> && node ~/Desktop/Projects/sides/mmp-tool/dist/cli.js --approve \
   → 等：herdr pane wait-output <pane> --match "STATUS:"（再读 report.md 确认），超时就读屏看卡在哪
   → 有 question.md → 主控回答（send-text）→ 继续等
   → report.md 写完 → 主控看 diff、跑 npm test
-  → 初审 pane：Review the diff of <branch> against pi-087-upgrade per .dev/tasks/<id>/brief.md; write .dev/tasks/<id>/review-1.md. Do not modify files.
+  → 初审 pane：Review the diff of <branch> against <任务说明中的基准提交> per .dev/tasks/<id>/brief.md; write .dev/tasks/<id>/review-1.md. Do not modify files.
       审完主控检查 worktree `git status` 仍然干净（mmp 没有权限系统，只读靠指令 + 事后检查）
   → 不可合并 → 把 review-N.md 发给编码者修 → 再审（只审新提交，但重跑上一轮全部复现命令）
   → 可合并 → 主控合并、跑完整测试、Herdr 验收 → 升级工具版
@@ -139,7 +150,7 @@ mmp 不是 Herdr 认识的 agent 类型，所以用 pane 命令（`pane run` / `
 |---|---|---|
 | 1 | MMP 自己的 magpie 配置 | **已完成（2026-09-30）**：`~/.mmp/extensions/magpie/index.mjs` 用 `pi.registerProvider` 注册 magpie，全局 Manifest `~/.mmp/mmp.json` 声明它。配置是从 magpie 接给 Pi 的那份手动复制来的，不读 Pi 的文件；magpie 改地址、key 或模型时手动改这个文件。`mmp -p` 实测 sonnet-5.5 和 opus-5.5 都能回复 |
 | 2 | 工具版 | 建 `mmp-tool` worktree，切到验收通过的提交，`npm install` + `npm run build` |
-| 3 | 项目 Manifest | **已完成**：`.mmp/mmp.json`（第 3 节），`.gitignore` 放开它、忽略 `.dev/` |
+| 3 | 项目 Manifest | 模板见 `examples/development/mmp.json`；按第 3 节在每个 worktree 按需复制，保留已有配置；`.mmp/` 与 `.dev/` 不提交 |
 | 4 | 辅助脚本 | **已完成**：`scripts/dev/herdr.sh`（`startmmp` / `quitmmp` / `say` / `scr` / `waitreport`） |
 | 5 | Herdr tab | 新开 tab 和 pane，记进 `.dev/panes.json` |
 | 6 | 试运行 | 用 `docs/dogfood-issues.md` 的 D2（加速界面测试）完整走一遍，看交接、等待、审查哪里卡，调整本文后正式切换 |

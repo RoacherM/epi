@@ -11,7 +11,7 @@ MMP 是**改名叫 mmp 的定制版 Pi**：
 - 对外只有 mmp：帮助、报错、文档里只出现 mmp 的名字和参数，不出现 `pi` 命令，也不说"透传给 Pi"。底层可以继续调用 Pi 的实现。
 - 只在两种情况下和 Pi 不同，并在本文写明理由：
   1. 和 grok 界面冲突；
-  2. 和 MMP 的核心约定冲突：资源只由 Manifest 声明；配置不和 Pi 共享（`~/.mmp/pi`，不读 `~/.pi/agent` 和项目 `.pi/`）。
+  2. 和 MMP 的核心约定冲突：Rules/Extensions 由 Manifest 声明，Skills 另有决策 S1 的三个固定根；配置不和 Pi 共享（`~/.mmp/pi`，不读 `~/.pi/agent` 和项目 `.pi/`）。
 
 ## 1. 入口
 
@@ -22,7 +22,7 @@ MMP 是**改名叫 mmp 的定制版 Pi**：
 | 交互（stdin、stdout 都是终端，且没有 `-p`、`--mode json/rpc`、`--help`、`--list-models`、`--export`；`--mode text` 也算交互，和 Pi 的 `resolveAppMode` 一致，dogfood D53） | MMP 自己的界面（`src/tui/`）；Pi 自己的交互界面永远不会启动 |
 | 非交互：`-p`、`--mode json`、`--mode rpc`、`--export`、非终端 | 底层用 Pi 的实现（`piMain`），对外参数和帮助是 MMP 的。读 stdout 的一方提前关掉管道（`\| head -c1`、`\| true`）算正常结束：不再写 stdout，停掉这次运行、跳过剩下的 `-p` 消息，照常关闭会话（`session_shutdown` 跑完），按这次运行本来的退出码安静退出（dogfood D54，`src/closed-stdout.ts`） |
 | `--list-models [search]` | MMP 自己实现（`src/list-models.ts`，dogfood D48）：Pi 的这条路不报扩展诊断、空列表时打印 Pi 的 `/login` 文案和文档链接 |
-| 子命令：`mmp update / install / remove / uninstall / list / config / auth` | MMP 自己的子命令（第 3 节） |
+| 子命令：`mmp update / install / remove / uninstall / list / config / auth / mcp` | MMP 自己的子命令（第 3 节） |
 
 ## 2. 参数清单
 
@@ -35,12 +35,12 @@ Manifest 里的扩展启动时加载失败，两条路径都和 Pi 一样报错�
 | `--provider`、`--model`、`--thinking`、`--api-key`、`--models` | 是 | |
 | `-c/--continue`、`-r/--resume`、`--session`、`--session-id`、`--fork`、`--session-dir`、`--no-session`、`-n/--name` | 是 | `--session-dir` 和 Pi 一样展开 `~`；没给时依次看 `MMP_SESSION_DIR`（MMP 自己的变量，语义和 Pi 的 `PI_CODING_AGENT_SESSION_DIR` 一样，但从不读取后者——Pi 装置设置的这个变量不会泄漏进 MMP）、设置里的 `sessionDir`。两条运行路径（`piMain` 和 `src/tui/services.ts`）用同一份解析结果：非交互路径调用 Pi 前会清掉进程里的 `PI_CODING_AGENT_SESSION_DIR`，再按 `MMP_SESSION_DIR` 重新赋值 |
 | `-t/--tools`、`-xt/--exclude-tools`、`-nt/--no-tools`、`-nbt/--no-builtin-tools` | 是 | |
-| `-p/--print`、`--mode text/json/rpc` | 是 | benchmark 的标准入口 `mmp --mode json --no-session --no-approve -p "…"`（DEVELOPMENT.md 第 20 节）保持不变。print/json 跑完后 MMP 等 stdout、stderr 写完就 `process.exit`（退出码不变）：Pi 这里只设 `process.exitCode` 再返回，扩展占着定时器/句柄时进程不退出（dogfood D50，和 Pi 不同）；rpc 和其他已经自己退出的路径不受影响 |
+| `-p/--print`、`--mode text/json/rpc` | 是 | benchmark 的标准入口 `mmp --mode json --no-session --no-approve -p "…"`（docs/development.md 第 20 节）保持不变。print/json 跑完后 MMP 等 stdout、stderr 写完就 `process.exit`（退出码不变）：Pi 这里只设 `process.exitCode` 再返回，扩展占着定时器/句柄时进程不退出（dogfood D50，和 Pi 不同）；rpc 和其他已经自己退出的路径不受影响 |
 | `--list-models [search]` | 是 | 输出表格和 Pi 一样。扩展诊断（注册 provider 失败、扩展加载失败）和 `-p` 一样打到 stderr，有错误就退出 1；没有模型时打印 MMP 自己的提示（`/login` 或在 Manifest 里声明 provider 扩展）。不加载 Pi 内置的 llama.cpp 扩展（和交互界面一样）。表格总是写到 stdout，和 `-p`/`--mode` 同用时也是（Pi 那时写到 stderr）；多余或缺值的扩展参数现在和 `-p` 一样报错退出 1 |
 | `--export <file>` | 是 | |
 | `--offline`、`--verbose` | 是 | `--verbose` 让启动信息显示在消息区 |
 | 初始消息、`@文件` | 是 | |
-| `--approve/-a`、`--no-approve/-na` | 名字对齐，作用不同 | 只作用于项目的 `.mmp/mmp.json`，从不交给 Pi（DEVELOPMENT.md 8.2） |
+| `--approve/-a`、`--no-approve/-na` | 名字对齐，作用不同 | 只作用于项目的 `.mmp/mmp.json`，从不交给 Pi（docs/development.md 8.2） |
 | `--no-project`、`--dry-run` | MMP 独有 | |
 | `-h/--help`、`-v/--version` | 是 | `--version` 打印 MMP 版本和锁定的内核版本 |
 | `--use-theme`、`--tui-mode` | **不提供** | 界面已换成 grok 风格：只有全屏，主题由 MMP 管 |

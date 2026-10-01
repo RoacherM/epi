@@ -187,7 +187,7 @@ Pi 加载文件形式的扩展时，会把扩展里的 `@earendil-works/pi-tui` 
 
 MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位读 `~/.mmp/pi/keybindings.json`。`/resume` 只列 `~/.mmp/pi/sessions` 里的会话，看不到 Pi 的会话。
 
-**已知问题，2026-09-29 实测，Pi 0.83.0 和 0.87.1 结果相同。** 探针脚本：`scratchpad/phase0/config-isolation.sh`（放一份损坏的设置文件，看 Pi 报不报错）、`runtime-settings-probe.sh`（项目设置指定 faux 模型 b，看实际用了哪个模型）。
+**已知问题，当前锁定 Pi 版本仍可复现（D62）。** bootstrap 阶段已传 `projectTrusted: false`，但随后的 `startupSettingsManager` 未传该选项，仍读项目设置并用于会话目录解析。 探针脚本：`scratchpad/phase0/config-isolation.sh`（放一份损坏的设置文件，看 Pi 报不报错）、`runtime-settings-probe.sh`（项目设置指定 faux 模型 b，看实际用了哪个模型）。
 
 | 位置 | 不带参数 | `mmp --approve` | `mmp --no-approve` |
 |---|---|---|---|
@@ -316,7 +316,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 
 | 级别 | 内容 | 实现 |
 |---|---|---|
-| 已完成 | `/login`、`/logout`、`/model`、`/new`、`/quit`、`/trust` | `commands.ts`；`runtime.newSession`；`/trust` 复用 `src/trust-prompt.ts`（DEVELOPMENT.md 8.2 节） |
+| 已完成 | `/login`、`/logout`、`/model`、`/new`、`/quit`、`/trust` | `commands.ts`；`runtime.newSession`；`/trust` 复用 `src/trust-prompt.ts`（docs/development.md 8.2 节） |
 | P0 ✓ | 补全列出全部命令、prompt 模板和 `/skill:*` | `slashCompletions`（已完成） |
 | P0 ✓ | `/compact [指令]` | `session.compact` |
 | P0 ✓ | `/resume` | `SessionSelectorComponent`（导出）+ `runtime.switchSession` |
@@ -534,9 +534,9 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | 地方 | 要做的 |
 |---|---|
 | `package.json` | `pi-coding-agent`、`pi-tui`、`pi-ai` 都改成 0.87.x 的精确版本。嵌套安装是 Pi 的 shrinkwrap 决定的，去不掉（3.2 节） |
-| `pi-mcp-adapter` 2.17.0（历史：这一步是 0.87 升级时做的；Pi 0.99 升级已经把 `pi-mcp-adapter` 整个去掉，改用 Pi 原生 MCP，见 [mcp-design.md](mcp-design.md)） | 重跑 DEVELOPMENT.md 里的真实 stdio MCP `search → call` 验收 |
+| `pi-mcp-adapter` 2.17.0（历史：这一步是 0.87 升级时做的；Pi 0.99 升级已经把 `pi-mcp-adapter` 整个去掉，改用 Pi 原生 MCP，见 [mcp-design.md](mcp-design.md)） | 重跑 docs/development.md 里的真实 stdio MCP `search → call` 验收 |
 | 版本字面量 | `MMP_HELP`、各测试、`fixtures/fake-benchmark-harness.mjs`、benchmark 的 `EXPECTED_PI_VERSION` 和变体名 |
-| 文档 | README、DEVELOPMENT.md 里的 0.83 |
+| 文档 | README、docs/development.md 里的 0.83 |
 | 回归 | 对照 0.84 到 0.87 的 CHANGELOG，检查 MMP 用到的 Pi 接口 |
 | ambient 资源 | 五个 `--no-*` 参数各一条测试；`PI_CODING_AGENT_DIR` 仍然生效；两个版本 `pi --help` 输出对比，确认没有新的自动发现来源 |
 | 配置隔离（3.3 节） | 临时项目里放一份 `.pi/settings.json`，写一个能观察到效果的设置；`HOME` 下放一份 `~/.pi/agent/settings.json`。确认 0.83 和 0.87 都不生效；如果 0.83 就已经生效，说明是现有问题，单独报告 |

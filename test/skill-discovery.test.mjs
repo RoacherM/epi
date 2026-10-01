@@ -105,7 +105,7 @@ test("a project's .mmp/skills is ignored when the project is not trusted", (t) =
   writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
   plantSkill(join(f.project, ".mmp", "skills"), "untrusted-project-skill");
 
-  // No --approve, no trust.json: DEVELOPMENT.md §8.2 rule 1 -- undecided projects are not trusted.
+  // No --approve, no trust.json: docs/development.md §8.2 rule 1 -- undecided projects are not trusted.
   const dropdown = skillDropdown(f, []);
   assert.doesNotMatch(dropdown, /untrusted-project-skill/);
 });

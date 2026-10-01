@@ -131,7 +131,7 @@ EPR 对此有回退路径，所以在 0.83.0 上也能跑。
 
 ## 4. 对 MMP 的意义
 
-MMP 的定位是"确定性的 Pi 宿主"：一切来自 Manifest，未声明即不存在，Pi 自己拥有 Auto Compact，MMP 不做自定义 Compact 和自定义 TUI renderer（DEVELOPMENT.md 第 3.1 节、第 3.4 节、非目标列表）。
+MMP 的定位是"确定性的 Pi 宿主"：一切来自 Manifest，未声明即不存在，Pi 自己拥有 Auto Compact，MMP 不做自定义 Compact 和自定义 TUI renderer（docs/development.md 第 3.1 节、第 3.4 节、非目标列表）。
 拿这条边界去对照四个机制：
 
 OCC 没有越界。它不替换 Pi 的压缩算法，只是决定"什么时候"调 `context.compact()`，压缩本身仍是 Pi 原生的。

@@ -7,9 +7,7 @@ coverage/
 .env.*
 !.env.example
 .pi/
-.mmp/*
-# The repo's own project Manifest: dev rules for mmp working on itself (docs/dev-workflow-herdr.md)
-!.mmp/mmp.json
+.mmp/
 
 # Agent-local context
 .agents/

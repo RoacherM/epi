@@ -113,7 +113,7 @@ grok 的顶部状态栏（cwd、上下文占用）在 Pi 里没法固定：heade
    - inline 保留终端原生的滚动和复制，风险小。
 3. **消息区要不要走 patch？** 推荐第一版不走（见第 5 节）。
 4. **皮肤是 MMP 内置，还是作为独立 Extension 在 Manifest 里声明？**
-   - 推断：按 DEVELOPMENT.md 的分层，"Extension owns capability"，应该做成独立 Extension。更正：按 README"资源必须在 Manifest 显式声明"，应该声明了才启用，不默认开启（见 [tui-design.md](tui-design.md) H4）。
+   - 推断：按 docs/development.md 的分层，"Extension owns capability"，应该做成独立 Extension。更正：按 README"资源必须在 Manifest 显式声明"，应该声明了才启用，不默认开启（见 [tui-design.md](tui-design.md) H4）。
    - `setHeader`、`setFooter`、`setEditorComponent` 各只有一个槽位，最后加载的生效。更正：第三方扩展由 Pi 通过 `--extension` 加载，MMP 装配时看不到它们调用哪些 `set*`，所以检测不了冲突，只能写进文档作为已知限制。
 
 ## 7. 四条路线对比
@@ -126,7 +126,7 @@ grok 的顶部状态栏（cwd、上下文占用）在 Pi 里没法固定：heade
 | 第三方扩展 UI | 完全兼容 | 兼容 | 自己实现 `ctx.ui` 才兼容 | 大面积失效，MCP 面板首当其冲 |
 | 跟随 Pi 升级 | 低：接口稳定 | 高：上游已涨到 6,888 行 | 中 | 中 |
 
-路线 C 的时机：路线 A 加全屏模式仍然满足不了（例如要侧栏、多会话 Dashboard、子代理全屏接管）时再考虑。那时 DEVELOPMENT.md 写的"下沉到 createAgentSessionRuntime"就成立了。
+路线 C 的时机：路线 A 加全屏模式仍然满足不了（例如要侧栏、多会话 Dashboard、子代理全屏接管）时再考虑。那时 docs/development.md 写的"下沉到 createAgentSessionRuntime"就成立了。
 
 ## 8. 路线 A 的第一版范围（已被 [tui-design.md](tui-design.md) 取代）
 

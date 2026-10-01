@@ -1,6 +1,6 @@
 # MMP 开发流程
 
-2026-09-30 起执行。下一阶段改用 mmp 在 Herdr 里自己开发自己，见 [dev-workflow-herdr.md](dev-workflow-herdr.md)（草案，当前功能验收后启用，届时替换本文第 1–4 节）。记录的是开发 MMP 时实际在用、并和用户确认过的做法。产品层面的约定见 [DEVELOPMENT.md](../DEVELOPMENT.md)，关键决策见 [decisions.md](decisions.md)。
+2026-09-30 起执行。下一阶段改用 mmp 在 Herdr 里自己开发自己，见 [dev-workflow-herdr.md](dev-workflow-herdr.md)（草案，当前功能验收后启用，届时替换本文第 1–4 节）。记录的是开发 MMP 时实际在用、并和用户确认过的做法。产品层面的约定见 [development.md](development.md)，关键决策见 [decisions.md](decisions.md)。
 
 ## 1. 角色分工
 
@@ -40,7 +40,7 @@
 
 每份任务说明都要包含：
 
-1. **起点**：`git merge --ff-only pi-087-upgrade`（写明必须包含的提交），`ln -s <主工作区>/node_modules node_modules`，不要 `npm install`（确实要加依赖时写明允许，并提醒 node_modules 是链接，只能加不能删）。
+1. **起点**：`git merge --ff-only origin/main`（写明必须包含的提交），`ln -s <主工作区>/node_modules node_modules`，不要 `npm install`（确实要加依赖时写明允许，并提醒 node_modules 是链接，只能加不能删）。
 2. **规格来源**：设计文档的章节，和 Pi 的参考代码位置（`node_modules/@earendil-works/pi-coding-agent/dist/`）。功能对齐 Pi 时，要求在提交说明里写出对照了 Pi 的哪些函数。
 3. **状态清单**：列出这次新增或改动的状态（队列、标志、坐标、缓存），逐条检查所有会重置它、读取它的路径（启动、切换会话、/new、/resume、/reload、中止、退出），并测试交叉场景。
 4. **测试要求**：测试必须在修复前失败、修复后通过；覆盖边界（多行、非首行、多个实例、窄屏 40/80/120 列）；不许为了让测试通过而在测试里插入人为步骤（例如强制多渲染一次）。跑测试的节奏：修改过程中只跑相关的测试文件（`npm run build && node --test test/<相关>.test.mjs`），完整 `npm test`（约 3 分钟）只在交付前跑一遍；遇到偶发失败要查出原因并修掉，不要靠多跑几遍确认。
@@ -68,3 +68,12 @@
 - **对外只有 mmp**：参数、子命令、帮助、报错都是 mmp 自己的；功能优先对齐官方 Pi，只在和 grok 界面或上面几条冲突时不同，并在文档写明理由（[cli-design.md](cli-design.md)）。
 - **Pi 内部接口**：按文件路径引用 Pi 未导出的模块、读 Pi 的私有字段，必须登记在 [pi-internals.md](pi-internals.md) 并有测试（升级门禁靠它发现破坏）。
 - **版本号只有一个来源**：MMP 和 Pi 的版本都只在 `package.json`；测试和文档不写死版本号。
+
+
+## 6. 仓库文件约定
+
+- 根目录 `AGENTS.md` 只作 coding agent 的发现入口，完整开发规则在本文，架构在 [development.md](development.md)。
+- README 面向使用者；开发、设计、验收和调研文档放 `docs/`，测试配置放 `test/fixtures/`。
+- `.mmp/` 是本地活动配置，整目录忽略；自开发模板放 [examples/development](../examples/development/README.md)，每个 worktree 按需手动启用。Herdr 草案不会随 clone 自动加载。
+- `dist/` 是发布包入口，源码构建后必须一起提交；提交前执行 `npm run build`、`git diff --exit-code -- dist`，交付前执行完整 `npm test`。
+- 合并保留分支历史（`--no-ff`）；主开发基线是 `main`，任务说明固定本次基线 SHA。发布版本与源码分支分开：只有发布流程创建的新 Release 才是安装器的升级来源。
