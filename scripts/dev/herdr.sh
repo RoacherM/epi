@@ -2,7 +2,7 @@
 # Usage: P=w9:pX source scripts/dev/herdr.sh; startmmp <worktree> opus; say "text"; scr 40
 #
 # The tool build (a known-good commit, section 2) does the work; MMP_TOOL points at it.
-MMP_TOOL=${MMP_TOOL:-$HOME/Desktop/Projects/sides/mmp-tool}
+MMP_TOOL=${MMP_TOOL:-$HOME/Projects/sides/mmp-tool}
 P=${P:?set P to the Herdr pane id, e.g. P=w9:pX}
 herdr pane get "$P" >/dev/null 2>&1 || { echo "herdr.sh: pane $P not found" >&2; return 1 2>/dev/null || exit 1; }
 
