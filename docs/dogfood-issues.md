@@ -80,6 +80,6 @@
 | D74 | P2 | Alt+Enter 插话（steer）写进了会话文件，但模型收不到，换进程 `-c` 恢复后仍然收不到。Pi 0.99.1 工具版一样。Pi 用会话构造的请求里有这条消息，直接 curl 发给 magpie 正常，怀疑 magpie 网关有自己的会话状态，未抓真实请求、MMP 未完全排除 | `.dev/e2e/2026-10-02-e1f96f8-full.md` F1 | 待查（换一个 provider 复现可区分） |
 | D75 | P2 | Esc 中止后发的第一条消息模型看不到，回答的还是被中止的那条；会话里中止产生一条空的 `stopReason:"error"` 助手消息。0.99.1 一样。疑同 D74 | `.dev/e2e/2026-10-02-e1f96f8-full.md` F2 | 待查 |
 | D76 | P2 | `/compact` 显示 "Context compacted."、压缩条目正常，但下一次请求没变小（69.3K → 72.4K；0.99.1：60.4K → 71.6K）。疑同 D74 | `.dev/e2e/2026-10-02-e1f96f8-full.md` F3 | 待查 |
-| D77 | P2 | 展开的 edit diff 会把一行上下文画两遍：某段改动增减了行数、下一段改动在 6 行以内时出现（"是否连续"拿上一段 `+` 行的新文件行号和下一段 `-` 行的旧文件行号比）。日常编辑会碰到 | S-D（`.dev/tasks/S-D/question.md`、`repro-diff-overlap.mjs`） | 待做（S-D 合并后单独修：保留 Pi 的 `...` 标记，没有标记就算连续） |
+| D77 | P2 | 展开的 edit diff 会把一行上下文画两遍：某段改动增减了行数、下一段改动在 6 行以内时出现（"是否连续"拿上一段 `+` 行的新文件行号和下一段 `-` 行的旧文件行号比）。日常编辑会碰到 | S-D（`.dev/tasks/S-D/question.md`、`repro-diff-overlap.mjs`） | 已修（S-D2，a1eee50；按 Pi 的 `...` 标记判断两段之间是否连续） |
 | D78 | P3 | 展开的 edit diff 最后一段之后的 `… N unchanged lines` 偏小：固定是 Pi 的 4 行上下文减去显示的 3 行，不管后面还有多少行（Pi 的 `details` 里没有文件长度） | S-D | 待定（要先定显示方式，例如不带数字的 `…`） |
 | K4 | P2 | 决策 H3/K4：内置标准能力（`mmp:task`、`mmp:mcp`、`mmp:hooks`）默认开启，可在 Manifest 里关闭；关闭的不读配置、不启动子进程。注意 `mmp:task` 默认开启会改变模型看到的工具（快照、benchmark） | development.md §3.4 | 已修（K4，6b4420e、d1c12a1、d7b1cae：Manifest 的 `"disable"`；快照只变了提示词里 Manifest schema 那一行，工具不变） |
