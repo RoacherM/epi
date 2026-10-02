@@ -1048,6 +1048,8 @@ mmp-full
 - `mmp-rules-skills`：测提示与知识装配的净增益；
 - `mmp-full`：测 Task、MCP、Hooks 的最终效果与成本。
 
+内置能力默认开启（决策 H3/K4）以后，档位由 bundle 的 `mmp.json` 决定：`mmp-core-empty` 和 `mmp-rules-skills` 的 bundle 必须写 `"disable": ["mmp:task", "mmp:mcp", "mmp:hooks"]`，否则模型会多看到 `task`、`task_status`、`task_wait`、`task_cancel`、`todo`，和 K4 之前的基线不可比。2026-10-02 的 bundle 模板在 `.dev/bench/2026-10-02/bundles/`。
+
 所有 variant 必须固定：
 
 - model/provider/thinking；

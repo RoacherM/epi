@@ -2,7 +2,7 @@
 
 状态：2026-09-30 用户确认。方向已定（决策 MCP1）；本文细化接法，和 MCP1 不同的地方见决策 MCP2。实施随 Pi 0.99 升级一起做（决策 P1）。2026-10-02 随 Pi 1.0.0 升级更新（U1）：MCP 问题怎么报（§7）、按服务存的 OAuth 凭据（§2、§6）。
 
-Pi 的引用都指 `@earendil-works/pi-coding-agent` 0.99.1 的 `dist/`，主控逐条读过源码。agy 的调研报告（scratchpad `agy/pi099-mcp/pi-0.99-native-mcp.md`）引用基本属实，但漏了 `createMcpExtension` 的 `loadConfig` 选项（它推荐走 `registerMcpServer`），本文以源码为准。
+Pi 的引用最初按 `@earendil-works/pi-coding-agent` 0.99.1 的 `dist/` 写，主控逐条读过源码；U1（Pi 1.0.0）改过的段落（§2、§6、§7）按 1.0.0，其余段落的行号可能已和 1.0.0 对不上，以 `docs/pi-internals.md` 的登记和测试为准。agy 的调研报告（scratchpad `agy/pi099-mcp/pi-0.99-native-mcp.md`）引用基本属实，但漏了 `createMcpExtension` 的 `loadConfig` 选项（它推荐走 `registerMcpServer`），本文以源码为准。
 
 ## 1. 一句话
 
