@@ -473,3 +473,105 @@ test("real tools execution against temporary files fed to mutating renderers", a
   assertWidths(editExpanded);
   assertWidths(editCollapsed);
 });
+
+// Renders a real Pi edit of a file whose lines read "line 1".."line N", so every unchanged or removed
+// row names its own old line number. Returns the stripped rows.
+async function renderRealEdit(t, edits, lineCount = 40) {
+  const tmp = mkdtempSync(join(tmpdir(), "mmp-multi-hunk-"));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+  const content = Array.from({ length: lineCount }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
+  await createWriteTool(tmp).execute("w", { path: "f.txt", content });
+  const result = await createEditTool(tmp).execute("e", { path: "f.txt", edits });
+  const component = editRenderers.renderResult(result, { expanded: true, isPartial: false }, theme, { cwd: tmp });
+  return component.render(120).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+}
+
+// Walks the old-file rows ("line N") and the "… N unchanged lines" rows between them: no old line
+// may appear twice, and every collapsed count between two shown rows must equal the real gap.
+function assertOldLinesAccountedFor(rows) {
+  let previous = 0;
+  let pendingCollapsed;
+  const seen = new Set();
+  for (const row of rows) {
+    const collapsedMatch = row.match(/^\s*… (\d+) unchanged lines$/);
+    if (collapsedMatch) {
+      assert.equal(pendingCollapsed, undefined, `two collapsed rows in a row: ${JSON.stringify(rows)}`);
+      pendingCollapsed = Number(collapsedMatch[1]);
+      continue;
+    }
+    const oldMatch = row.match(/^\s*\d+ line (\d+)$/);
+    if (!oldMatch) continue; // an added row
+    const lineNum = Number(oldMatch[1]);
+    assert.ok(!seen.has(lineNum), `old line ${lineNum} shown twice: ${JSON.stringify(rows)}`);
+    seen.add(lineNum);
+    assert.equal(lineNum - previous - 1, pendingCollapsed ?? 0, `gap before line ${lineNum} miscounted: ${JSON.stringify(rows)}`);
+    previous = lineNum;
+    pendingCollapsed = undefined;
+  }
+}
+
+test("edit: expanded multi-hunk diffs from the real edit tool keep every hunk and count gaps exactly", async (t) => {
+  const ctx = (n) => `${String(n).padStart(2)} line ${n}`;
+  const collapsed = (n) => `   … ${n} unchanged lines`;
+
+  // Two same-size hunks far apart: Pi elides the middle with "...", the renderer keeps 3 + 3 around it.
+  const far = await renderRealEdit(t, [
+    { oldText: "line 5\n", newText: "NEW 5\n" },
+    { oldText: "line 30\n", newText: "NEW 30\n" },
+  ]);
+  assert.deepEqual(far, [
+    collapsed(1), ctx(2), ctx(3), ctx(4), " 5 line 5", " 5 NEW 5", ctx(6), ctx(7), ctx(8),
+    collapsed(18), ctx(27), ctx(28), ctx(29), "30 line 30", "30 NEW 30", ctx(31), ctx(32), ctx(33),
+    // Trailing count only covers the context rows Pi sent (4 shown by Pi, 3 kept), not the rest of the file.
+    collapsed(1),
+  ]);
+  assertOldLinesAccountedFor(far.slice(0, -1));
+
+  // A short gap (5 lines) between same-size hunks is shown in full.
+  const near = await renderRealEdit(t, [
+    { oldText: "line 5\n", newText: "NEW 5\n" },
+    { oldText: "line 11\n", newText: "NEW 11\n" },
+  ]);
+  assert.deepEqual(near, [
+    collapsed(1), ctx(2), ctx(3), ctx(4), " 5 line 5", " 5 NEW 5",
+    ctx(6), ctx(7), ctx(8), ctx(9), ctx(10),
+    "11 line 11", "11 NEW 11", ctx(12), ctx(13), ctx(14), collapsed(1),
+  ]);
+  assertOldLinesAccountedFor(near.slice(0, -1));
+
+  // A 7-line gap: Pi shows it whole (≤ 2 × 4 context lines); the renderer keeps 3 + 3 and collapses 1.
+  const seven = await renderRealEdit(t, [
+    { oldText: "line 5\n", newText: "NEW 5\n" },
+    { oldText: "line 13\n", newText: "NEW 13\n" },
+  ]);
+  assert.deepEqual(seven, [
+    collapsed(1), ctx(2), ctx(3), ctx(4), " 5 line 5", " 5 NEW 5",
+    ctx(6), ctx(7), ctx(8), collapsed(1), ctx(10), ctx(11), ctx(12),
+    "13 line 13", "13 NEW 13", ctx(14), ctx(15), ctx(16), collapsed(1),
+  ]);
+  assertOldLinesAccountedFor(seven.slice(0, -1));
+
+  // The first hunk grows by two lines, so the new-file numbers of its "+" rows run ahead of the old
+  // numbers; the gap across Pi's "..." is still counted in old-file lines.
+  const grown = await renderRealEdit(t, [
+    { oldText: "line 5\n", newText: "NEW a\nNEW b\nNEW c\n" },
+    { oldText: "line 30\n", newText: "NEW 30\n" },
+  ]);
+  assert.deepEqual(grown, [
+    collapsed(1), ctx(2), ctx(3), ctx(4), " 5 line 5", " 5 NEW a", " 6 NEW b", " 7 NEW c",
+    ctx(6), ctx(7), ctx(8), collapsed(18), ctx(27), ctx(28), ctx(29),
+    "30 line 30", "32 NEW 30", ctx(31), ctx(32), ctx(33), collapsed(1),
+  ]);
+  assertOldLinesAccountedFor(grown.slice(0, -1));
+
+  // Three hunks, the middle one a pure deletion.
+  const three = await renderRealEdit(t, [
+    { oldText: "line 3\n", newText: "NEW 3\n" },
+    { oldText: "line 18\nline 19\n", newText: "" },
+    { oldText: "line 36\n", newText: "NEW 36\n" },
+  ]);
+  assertOldLinesAccountedFor(three.slice(0, -1));
+  assert.deepEqual(three.filter((row) => row.includes("NEW") || /^\s*\d+ line (3|18|19|36)$/.test(row)), [
+    " 3 line 3", " 3 NEW 3", "18 line 18", "19 line 19", "36 line 36", "34 NEW 36",
+  ]);
+});

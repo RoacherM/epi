@@ -8,7 +8,10 @@ interface FinishedBashMessage {
     cancelled: boolean;
     excludeFromContext?: boolean;
 }
-/** grok truncation rule (4.2): up to 5 lines shown in full, otherwise first 2 + an ellipsis + last 3. */
+/**
+ * grok truncation rule (4.2) with a plain ellipsis row; `render` then paints every row, the ellipsis
+ * included, `toolOutput` (the model's bash block paints it `muted`; both kept, 8.4).
+ */
 export declare function truncateBashOutput(lines: string[]): string[];
 export declare class UserBashBlock implements Component {
     private readonly theme;
