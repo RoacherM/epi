@@ -95,6 +95,87 @@ test("mmp mcp add --description and --oauth-client-name are recorded like Pi's p
   assert.match(stdio.stderr, /--oauth-client-name only applies to HTTP servers/);
 });
 
+test("mmp mcp add --header, --bearer-token-env-var and the OAuth client options are recorded like Pi's pi mcp add does", (t) => {
+  const f = fixture(t);
+  const added = run(f, [
+    "add", "remote", "--url", "https://example.test/mcp",
+    "--header", "X-Team=a=b", "--header", "Authorization=replaced", "--header", "X-Empty=",
+    "--bearer-token-env-var", "REMOTE_TOKEN",
+    "--oauth-client-id", "client-1", "--oauth-client-secret", "${REMOTE_SECRET}", "--oauth-callback-port", "8765",
+  ]);
+  assert.equal(added.status, 0, added.stderr);
+  assert.equal(added.stderr, "");
+  const config = JSON.parse(readFileSync(globalMcpPath(f), "utf8"));
+  assert.deepEqual(config.mcpServers.remote, {
+    url: "https://example.test/mcp",
+    // Split at the first "="; --bearer-token-env-var replaces an Authorization --header.
+    headers: { "X-Team": "a=b", Authorization: "Bearer ${REMOTE_TOKEN}", "X-Empty": "" },
+    oauth: { clientId: "client-1", clientSecret: "${REMOTE_SECRET}", callbackPort: 8765 },
+  });
+  // An Authorization header means no OAuth, so no sign-in hint.
+  assert.equal(added.stdout, `Added global MCP server "remote" in ${globalMcpPath(f)}.\nCheck it with: mmp mcp list\n`);
+
+  const lowercase = run(f, ["add", "lower", "--url", "https://example.test/mcp", "--header", "authorization=Basic x"]);
+  assert.equal(lowercase.status, 0, lowercase.stderr);
+  assert.match(lowercase.stdout, /^Check it with: mmp mcp list$/m);
+  const other = run(f, ["add", "other", "--url", "https://example.test/mcp", "--header", "X-Team=a", "--oauth-client-id", "c"]);
+  assert.equal(other.status, 0, other.stderr);
+  assert.match(other.stdout, /^Check it with: mmp mcp list\. If it requires sign-in: mmp mcp login other$/m);
+  const replaced = run(f, ["add", "other", "--url", "https://example.test/other"]);
+  assert.equal(replaced.status, 0, replaced.stderr);
+  assert.match(replaced.stdout, /^Replaced global MCP server "other" in /);
+  assert.deepEqual(JSON.parse(readFileSync(globalMcpPath(f), "utf8")).mcpServers.other, { url: "https://example.test/other" });
+});
+
+test("mmp mcp add --env and --cwd are recorded for a stdio server like Pi's pi mcp add does", (t) => {
+  const f = fixture(t);
+  const added = run(f, ["add", "fixture", "--env", "A=1", "--env", "B=x=y", "--env", "C=", "--cwd", "/srv/tools", "--", "node", fixtureServerPath, "--cwd", "x"]);
+  assert.equal(added.status, 0, added.stderr);
+  assert.equal(added.stderr, "");
+  assert.equal(added.stdout, `Added global MCP server "fixture" in ${globalMcpPath(f)}.\nCheck it with: mmp mcp list\n`);
+  const config = JSON.parse(readFileSync(globalMcpPath(f), "utf8"));
+  assert.deepEqual(config.mcpServers.fixture, {
+    command: "node",
+    // Options after "--" belong to the server's own command.
+    args: [fixtureServerPath, "--cwd", "x"],
+    env: { A: "1", B: "x=y", C: "" },
+    cwd: "/srv/tools",
+  });
+});
+
+test("mmp mcp add refuses bad --header/--env pairs, a bad --oauth-callback-port and transport-specific options on the wrong transport, writing nothing", (t) => {
+  const f = fixture(t);
+  const url = ["--url", "https://example.test/mcp"];
+  const stdio = ["--", "node", fixtureServerPath];
+  const cases = [
+    [[...url, "--header", "NoEquals"], '--header expects KEY=VALUE, got "NoEquals".'],
+    [[...url, "--header", "=value"], '--header expects KEY=VALUE, got "=value".'],
+    [["--env", "NoEquals", ...stdio], '--env expects KEY=VALUE, got "NoEquals".'],
+    [["--env", "=value", ...stdio], '--env expects KEY=VALUE, got "=value".'],
+    [[...url, "--oauth-callback-port", "abc"], 'server "bad": oauth.callbackPort must be a port number'],
+    [[...url, "--oauth-callback-port", "0"], 'server "bad": oauth.callbackPort must be a port number'],
+    [[...url, "--oauth-callback-port", "65536"], 'server "bad": oauth.callbackPort must be a port number'],
+    [[...url, "--oauth-callback-port", "1.5"], 'server "bad": oauth.callbackPort must be a port number'],
+    [[...url, "--header"], "--header needs a value."],
+    [["--cwd"], "--cwd needs a value."],
+    [[...url, "--env", "A=1"], "--env only applies to stdio servers."],
+    [[...url, "--cwd", "/srv"], "--cwd only applies to stdio servers."],
+    [["--header", "A=1", ...stdio], "--header only applies to HTTP servers (--url)."],
+    [["--bearer-token-env-var", "T", ...stdio], "--bearer-token-env-var only applies to HTTP servers (--url)."],
+    [["--oauth-client-id", "c", ...stdio], "--oauth-client-id only applies to HTTP servers (--url)."],
+    [["--oauth-client-secret", "s", ...stdio], "--oauth-client-secret only applies to HTTP servers (--url)."],
+    [["--oauth-callback-port", "8765", ...stdio], "--oauth-callback-port only applies to HTTP servers (--url)."],
+  ];
+  for (const [args, message] of cases) {
+    const result = run(f, ["add", "bad", ...args]);
+    const context = `${args.join(" ")}\n${result.stdout}\n${result.stderr}`;
+    assert.equal(result.status, 2, context);
+    assert.equal(result.stdout, "", context);
+    assert.ok(result.stderr.includes(message), context);
+  }
+  assert.equal(existsSync(globalMcpPath(f)), false);
+});
+
 test("mmp mcp add rejects an invalid exposure before writing anything", (t) => {
   const f = fixture(t);
   const result = run(f, ["add", "fixture", "--exposure", "bogus", "--", "node", fixtureServerPath]);

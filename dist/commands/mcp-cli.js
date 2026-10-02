@@ -178,102 +178,95 @@ function resolveListConfig(ctx, approveOverride, command) {
     }, ctx.cwd);
     return { loaded, untrustedNote };
 }
-function addCommand(args, ctx) {
-    const usage = `Usage: mmp mcp add <server> [options] (--url <url> | -- <command> [args...])\n${HELP_HINT}`;
-    const parsed = parseOptions(args, {
-        local: "flag",
-        ...APPROVE_OPTIONS,
-        url: "value",
-        env: "list",
-        cwd: "value",
-        header: "list",
-        "bearer-token-env-var": "value",
-        "oauth-client-id": "value",
-        "oauth-client-secret": "value",
-        "oauth-callback-port": "value",
-        "oauth-client-name": "value",
-        exposure: "value",
-        description: "value",
-    }, 2);
-    const { positional, values, lists } = parsed;
-    const approveOverride = approveOverrideOf(values);
-    const [name, ...command] = positional;
-    const url = values.get("url");
-    if (!name || (url === undefined) === (command.length === 0)) {
-        throw new MmpArgumentError(usage);
-    }
-    const value = (option) => {
-        const found = values.get(option);
-        return typeof found === "string" ? found : undefined;
+const ADD_OPTIONS = {
+    local: "flag",
+    ...APPROVE_OPTIONS,
+    url: "value",
+    env: "list",
+    cwd: "value",
+    header: "list",
+    "bearer-token-env-var": "value",
+    "oauth-client-id": "value",
+    "oauth-client-secret": "value",
+    "oauth-callback-port": "value",
+    "oauth-client-name": "value",
+    exposure: "value",
+    description: "value",
+};
+const HTTP_ONLY_OPTIONS = [
+    "header",
+    "bearer-token-env-var",
+    "oauth-client-id",
+    "oauth-client-secret",
+    "oauth-callback-port",
+    "oauth-client-name",
+];
+const STDIO_ONLY_OPTIONS = ["env", "cwd"];
+function stringOption(values, option) {
+    const found = values.get(option);
+    return typeof found === "string" ? found : undefined;
+}
+function httpServerConfig(url, { values, lists }) {
+    const value = (option) => stringOption(values, option);
+    const headers = parsePairs("header", lists.get("header"));
+    const bearer = value("bearer-token-env-var");
+    if (bearer !== undefined)
+        headers.Authorization = `Bearer \${${bearer}}`;
+    const port = value("oauth-callback-port");
+    const oauth = {
+        ...(value("oauth-client-id") === undefined ? {} : { clientId: value("oauth-client-id") }),
+        ...(value("oauth-client-secret") === undefined ? {} : { clientSecret: value("oauth-client-secret") }),
+        ...(port === undefined ? {} : { callbackPort: Number(port) }),
+        ...(value("oauth-client-name") === undefined ? {} : { clientName: value("oauth-client-name") }),
     };
-    const httpOnly = [
-        "header",
-        "bearer-token-env-var",
-        "oauth-client-id",
-        "oauth-client-secret",
-        "oauth-callback-port",
-        "oauth-client-name",
-    ];
-    const stdioOnly = ["env", "cwd"];
-    const misplaced = (url === undefined ? httpOnly : stdioOnly).find((option) => values.has(option) || lists.has(option));
+    return {
+        url,
+        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+        ...(Object.keys(oauth).length > 0 ? { oauth } : {}),
+    };
+}
+function stdioServerConfig(command, { values, lists }) {
+    const env = parsePairs("env", lists.get("env"));
+    const cwd = stringOption(values, "cwd");
+    const [executable, ...commandArgs] = command;
+    return {
+        command: executable,
+        ...(commandArgs.length > 0 ? { args: commandArgs } : {}),
+        ...(Object.keys(env).length > 0 ? { env } : {}),
+        ...(cwd === undefined ? {} : { cwd }),
+    };
+}
+/** The flag checks and config object of Pi's `add` (cli.js), validated by Pi's own
+ * validateMcpServerConfig; writes nothing. */
+function buildServerConfig(parsed) {
+    const { positional, values, lists } = parsed;
+    const [name, ...command] = positional;
+    const url = stringOption(values, "url");
+    if (!name || (url === undefined) === (command.length === 0)) {
+        throw new MmpArgumentError(`Usage: mmp mcp add <server> [options] (--url <url> | -- <command> [args...])\n${HELP_HINT}`);
+    }
+    const misplaced = (url === undefined ? HTTP_ONLY_OPTIONS : STDIO_ONLY_OPTIONS).find((option) => values.has(option) || lists.has(option));
     if (misplaced) {
         throw new MmpArgumentError(`--${misplaced} only applies to ${url === undefined ? "HTTP servers (--url)" : "stdio servers"}.`);
     }
-    let config;
-    if (typeof url === "string") {
-        const headers = parsePairs("header", lists.get("header"));
-        const bearer = value("bearer-token-env-var");
-        if (bearer !== undefined)
-            headers.Authorization = `Bearer \${${bearer}}`;
-        const port = value("oauth-callback-port");
-        const oauth = {
-            ...(value("oauth-client-id") === undefined ? {} : { clientId: value("oauth-client-id") }),
-            ...(value("oauth-client-secret") === undefined ? {} : { clientSecret: value("oauth-client-secret") }),
-            ...(port === undefined ? {} : { callbackPort: Number(port) }),
-            ...(value("oauth-client-name") === undefined ? {} : { clientName: value("oauth-client-name") }),
-        };
-        config = {
-            url,
-            ...(Object.keys(headers).length > 0 ? { headers } : {}),
-            ...(Object.keys(oauth).length > 0 ? { oauth } : {}),
-        };
-    }
-    else {
-        const env = parsePairs("env", lists.get("env"));
-        const [executable, ...commandArgs] = command;
-        config = {
-            command: executable,
-            ...(commandArgs.length > 0 ? { args: commandArgs } : {}),
-            ...(Object.keys(env).length > 0 ? { env } : {}),
-            ...(value("cwd") === undefined ? {} : { cwd: value("cwd") }),
-        };
-    }
-    const exposure = value("exposure");
+    const config = url === undefined ? stdioServerConfig(command, parsed) : httpServerConfig(url, parsed);
+    const exposure = stringOption(values, "exposure");
     if (exposure !== undefined)
         config.exposure = exposure;
-    const description = value("description");
+    const description = stringOption(values, "description");
     if (description !== undefined)
         config.description = description;
     const validated = validateMcpServerConfig(name, config);
     if (typeof validated === "string") {
         throw new MmpArgumentError(validated);
     }
-    const local = values.has("local");
-    if (local) {
-        assertLocalAllowed(ctx, approveOverride);
-    }
-    const path = local ? localConfigPath(ctx) : globalConfigPath(ctx);
-    let replaced;
-    try {
-        replaced = addMcpServerConfig(path, name, validated);
-    }
-    catch (addError) {
-        throw new MmpArgumentError(`Could not update ${path}: ${errorMessage(addError)}`);
-    }
-    console.log(`${replaced ? "Replaced" : "Added"} ${local ? "project" : "global"} MCP server "${name}" in ${path}.`);
+    return { name, config: validated };
+}
+/** What to run next, after the "Added/Replaced" line -- Pi's `add` ends with the same hints. */
+function printAddFollowUp(ctx, path, local, name, config) {
     let approveHint = "";
     if (local) {
-        // assertProjectTrustedFor above only gates *this write* (an --approve override is this-run-only,
+        // assertProjectTrustedFor only gates *this write* (an --approve override is this-run-only,
         // never persisted) -- without one of these two hints, a plain future `mmp` or `mmp mcp list`
         // would silently ignore the file just written, which is exactly the "failure must be visible"
         // violation Pi's own cli.js:294-296 hint (a different case: it always creates the project
@@ -287,8 +280,27 @@ function addCommand(args, ctx) {
             approveHint = " --approve";
         }
     }
-    const mayNeedSignIn = "url" in validated && !Object.keys(validated.headers ?? {}).some((header) => header.toLowerCase() === "authorization");
+    const mayNeedSignIn = "url" in config && !Object.keys(config.headers ?? {}).some((header) => header.toLowerCase() === "authorization");
     console.log(`Check it with: mmp mcp list${approveHint}${mayNeedSignIn ? `. If it requires sign-in: mmp mcp login ${name}${approveHint}` : ""}`);
+}
+function addCommand(args, ctx) {
+    const parsed = parseOptions(args, ADD_OPTIONS, 2);
+    const approveOverride = approveOverrideOf(parsed.values);
+    const { name, config } = buildServerConfig(parsed);
+    const local = parsed.values.has("local");
+    if (local) {
+        assertLocalAllowed(ctx, approveOverride);
+    }
+    const path = local ? localConfigPath(ctx) : globalConfigPath(ctx);
+    let replaced;
+    try {
+        replaced = addMcpServerConfig(path, name, config);
+    }
+    catch (addError) {
+        throw new MmpArgumentError(`Could not update ${path}: ${errorMessage(addError)}`);
+    }
+    console.log(`${replaced ? "Replaced" : "Added"} ${local ? "project" : "global"} MCP server "${name}" in ${path}.`);
+    printAddFollowUp(ctx, path, local, name, config);
     return 0;
 }
 function removeCommand(args, ctx) {
