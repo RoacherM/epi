@@ -222,34 +222,57 @@ test("MMP reload re-resolves Rules and Skill roots", async () => {
   }]);
 });
 
-test("failed MMP reload preserves the last valid resource assembly", async () => {
+// Pi re-runs every extension factory on /reload (and /new, session switch, fork) before it emits
+// session_start, so a failed refresh has to keep what an earlier factory run loaded: each reload
+// below starts from a fresh `pi`, as Pi's does. The real-runtime check is in rules-skills.test.mjs.
+test("failed MMP reload after factories re-run keeps the last valid assembly, not the startup one", async () => {
   const { assembly, identity } = fixture();
-  const handlers = new Map();
-  const notifications = [];
-  startMmpRuntime(createMmpRuntimeExtensions(
-    identity,
-    assembly,
+  const reloadedAssembly = {
+    ...assembly,
+    rulesText: "# Reloaded Rules",
+    skills: [{
+      kind: "skill",
+      value: "/fixture/mmp/reloaded-skills",
+      source: "global",
+      declaredIn: "/fixture/mmp/mmp.json",
+    }],
+  };
+  const resolutions = [
+    () => reloadedAssembly,
     () => {
       throw new Error("unknown field \"skillRoots\"");
     },
-  ), {
-    on(event, handler) {
-      handlers.set(event, handler);
-    },
-    registerCommand() {},
-  });
-
-  await handlers.get("session_start")(
-    { type: "session_start", reason: "reload" },
-    {
-      mode: "print",
-      ui: {
-        notify(message, level) {
-          notifications.push({ message, level });
+  ];
+  const extensions = createMmpRuntimeExtensions(
+    identity,
+    assembly,
+    () => resolutions.shift()(),
+  );
+  const notifications = [];
+  async function reload() {
+    const handlers = new Map();
+    startMmpRuntime(extensions, {
+      on(event, handler) {
+        handlers.set(event, handler);
+      },
+      registerCommand() {},
+    });
+    await handlers.get("session_start")(
+      { type: "session_start", reason: "reload" },
+      {
+        mode: "print",
+        ui: {
+          notify(message, level) {
+            notifications.push({ message, level });
+          },
         },
       },
-    },
-  );
+    );
+    return handlers;
+  }
+
+  await reload();
+  const handlers = await reload();
 
   assert.deepEqual(
     await handlers.get("resources_discover")({
@@ -257,12 +280,20 @@ test("failed MMP reload preserves the last valid resource assembly", async () =>
       reason: "reload",
       cwd: "/fixture/work",
     }),
-    { skillPaths: ["/fixture/mmp/skills"] },
+    { skillPaths: ["/fixture/mmp/reloaded-skills"] },
   );
-  assert.deepEqual(notifications, [{
-    message: "MMP Manifest reload failed: unknown field \"skillRoots\"",
-    level: "error",
-  }]);
+  const result = await handlers.get("before_agent_start")({
+    type: "before_agent_start",
+    prompt: "Which Rules apply?",
+    systemPrompt: "PI BASE PROMPT",
+    systemPromptOptions: { cwd: "/fixture/work", skills: [] },
+  });
+  assert.match(result.systemPrompt, /^PI BASE PROMPT\n\n# Reloaded Rules\n\n# MMP Runtime Contract/);
+  assert.match(result.systemPrompt, /reloaded-skills/);
+  assert.deepEqual(notifications, [
+    { message: "MMP reloaded 0 rule files and 1 skill roots.", level: "info" },
+    { message: "MMP Manifest reload failed: unknown field \"skillRoots\"", level: "error" },
+  ]);
 });
 
 test("MMP runtime identity states explicitly when no skills are loaded", async () => {

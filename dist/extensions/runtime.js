@@ -37,15 +37,15 @@ function notifyVerboseStartup(assembly, context) {
     context.ui.notify(`Session: ${sessionFile ?? "ephemeral (--no-session)"} (id ${context.sessionManager.getSessionId()})`);
 }
 export function createMmpRuntimeExtensions(initialIdentity, initialAssembly, resolveAssembly = () => initialAssembly, updateCheck, verbose = false) {
-    // Written by the runtime factory (reset there on every factory run, refreshed on reload) and read
-    // by the system-prompt extension, which Pi always instantiates after it.
+    // The last valid assembly: replaced only by a successful Manifest refresh, read by the runtime
+    // and system-prompt extensions. It lives outside the factories on purpose: Pi re-runs them on
+    // /reload, /new, session switch and fork, and a refresh that then fails must keep the last valid
+    // assembly (docs/development.md §9.3), not fall back to the startup one.
     let activeAssembly = initialAssembly;
     let activeIdentity = initialIdentity;
     const runtime = {
         name: "mmp:runtime",
         factory(pi) {
-            activeAssembly = initialAssembly;
-            activeIdentity = initialIdentity;
             let sessionActive = false;
             function showUpdateNotice(context) {
                 if (updateCheck === undefined || updateCheck.disabled) {
