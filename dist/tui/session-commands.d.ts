@@ -14,9 +14,8 @@ export interface MissingSessionCwdIssue {
 export declare function missingSessionCwdIssue(error: unknown): MissingSessionCwdIssue | undefined;
 /**
  * Mirrors Pi's promptForMissingSessionCwd/showExtensionConfirm (interactive-mode.js ~2073-2079):
- * a Yes/No dialog offering to continue the switch in the current cwd instead. MMP has no dedicated
- * extension-confirm dialog wired to app.ts, so this reuses the same ExtensionSelectorComponent the
- * SDK's own extension `ui.confirm` uses (ext-host.ts), taking the editor slot directly.
+ * a Yes/No dialog offering to continue the switch in the current cwd instead, the same confirm
+ * dialog extensions get from `ui.confirm` (dialogs.ts).
  */
 export declare function confirmMissingSessionCwd(host: CommandHost, issue: MissingSessionCwdIssue): Promise<string | undefined>;
 /** Pi's handleCompactCommand ignores the throw: compact() already emitted a `compaction_end`

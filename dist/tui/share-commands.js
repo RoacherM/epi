@@ -13,38 +13,12 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BorderedLoader, ExtensionEditorComponent, ExtensionSelectorComponent, VERSION as PI_VERSION, } from "@earendil-works/pi-coding-agent";
+import { BorderedLoader, VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import { MMP_VERSION } from "../version.js";
 import { MMP_REPO } from "../update.js";
+import { confirmInEditorSlot, editInEditorSlot } from "./dialogs.js";
 import { errorText } from "./errors.js";
 import { piTui } from "./pi-tui.js";
-// ── small local dialog helpers (same shape as commands.ts, session-tree-commands.ts) ──────────
-function confirm(host, title, message) {
-    return new Promise((resolve) => {
-        let restore = () => { };
-        const selector = new ExtensionSelectorComponent(`${title}\n${message}`, ["Yes", "No"], (choice) => {
-            restore();
-            resolve(choice === "Yes");
-        }, () => {
-            restore();
-            resolve(false);
-        });
-        restore = host.takeEditorSlot(selector);
-    });
-}
-function editorInput(host, title, prefill) {
-    return new Promise((resolve) => {
-        let restore = () => { };
-        const editor = new ExtensionEditorComponent(host.tui, piTui.getKeybindings(), title, prefill, (value) => {
-            restore();
-            resolve(value);
-        }, () => {
-            restore();
-            resolve(undefined);
-        });
-        restore = host.takeEditorSlot(editor);
-    });
-}
 // ── /share ──────────────────────────────────────────────────────────────────
 /** `/share`: export the session to HTML and create a private gist from it with `gh`. Like Pi,
  * there is no confirmation dialog -- only the loader's own Esc-to-cancel, which is what Pi calls
@@ -153,7 +127,7 @@ export function fitIssueBody(title, body) {
  * prefilled "new issue" URL on MMP's own GitHub repo -- never Pi's upload. The URL is always
  * printed (it's the actual deliverable in a headless run); opening a browser is best-effort. */
 export async function runBug(host, args) {
-    const consent = await confirm(host, "Report a bug", "Opens a prefilled GitHub 'new issue' page on MMP's repo. The URL itself carries your " +
+    const consent = await confirmInEditorSlot(host, "Report a bug", "Opens a prefilled GitHub 'new issue' page on MMP's repo. The URL itself carries your " +
         "description, the MMP and pinned Pi versions, and, if you choose, a short summary of this " +
         "session written by the current model -- that's everything the browser (and your OS) sees the " +
         "moment it opens, whether or not you go on to submit it. GitHub itself only gets it if you " +
@@ -162,7 +136,7 @@ export async function runBug(host, args) {
         host.notice("Bug report cancelled.");
         return;
     }
-    const hintInput = await editorInput(host, "Describe the bug (optional)", args.trim() || undefined);
+    const hintInput = await editInEditorSlot(host, "Describe the bug (optional)", args.trim() || undefined);
     if (hintInput === undefined) {
         host.notice("Bug report cancelled.");
         return;
@@ -170,7 +144,7 @@ export async function runBug(host, args) {
     const hint = hintInput.trim();
     const session = host.session();
     let summary;
-    const wantsSummary = await confirm(host, "Include a summary?", `Attach a short summary of this session written by ${session.model?.name ?? "the current model"}?`);
+    const wantsSummary = await confirmInEditorSlot(host, "Include a summary?", `Attach a short summary of this session written by ${session.model?.name ?? "the current model"}?`);
     if (wantsSummary) {
         const loader = new BorderedLoader(host.tui, host.theme, `Writing summary with ${session.model?.name ?? "the current model"}...`);
         const restore = host.takeEditorSlot(loader);

@@ -1,8 +1,7 @@
 // /export, /import (docs/tui-design.md 4.6); registered in builtins.ts.
 // Mirrors Pi's handleExportCommand, handleImportCommand (interactive-mode.js).
-import { ExtensionSelectorComponent } from "@earendil-works/pi-coding-agent";
-
 import type { CommandHost } from "./command-host.js";
+import { confirmInEditorSlot } from "./dialogs.js";
 import { errorText } from "./errors.js";
 import { crossProjectRefusal } from "./project-guard.js";
 
@@ -43,22 +42,7 @@ export async function runImport(host: CommandHost, args: string): Promise<void> 
     host.notice("Usage: /import <path.jsonl>", "error");
     return;
   }
-  const confirmed = await new Promise<boolean>((resolve) => {
-    let restore: () => void = () => {};
-    const selector = new ExtensionSelectorComponent(
-      `Import session\nReplace current session with ${inputPath}?`,
-      ["Yes", "No"],
-      (choice) => {
-        restore();
-        resolve(choice === "Yes");
-      },
-      () => {
-        restore();
-        resolve(false);
-      },
-    );
-    restore = host.takeEditorSlot(selector);
-  });
+  const confirmed = await confirmInEditorSlot(host, "Import session", `Replace current session with ${inputPath}?`);
   if (!confirmed) {
     host.notice("Import cancelled.");
     return;
