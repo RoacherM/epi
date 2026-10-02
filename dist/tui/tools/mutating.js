@@ -32,7 +32,8 @@ function formatCallLine(verb, args, theme, context) {
     const relPath = cwd ? relative(cwd, resolve(cwd, rawPath)) : rawPath;
     return `${theme.bold(verb)} ${relPath}`;
 }
-function parseDiffString(diffStr) {
+/** Exported for test/pi-internals.test.mjs's `edit-diff-format` check (docs/pi-internals.md). */
+export function parseDiffString(diffStr) {
     const rawLines = diffStr.replace(/\r\n/g, "\n").split("\n");
     const lines = [];
     let additions = 0;

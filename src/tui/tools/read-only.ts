@@ -96,9 +96,7 @@ function renderError(
   context: ToolRenderContext,
   theme: Theme,
   output: string,
-  fallback: string,
-  expanded: boolean,
-  label?: string,
+  { fallback, expanded, label }: { fallback: string; expanded: boolean; label?: string },
 ): Component {
   const errorLines = output ? output.split("\n") : [fallback];
   if (!expanded) {
@@ -146,7 +144,7 @@ function renderReadResult(
   const output = textContent(result).replace(/\r/g, "");
 
   if (isErrorResult(result, context)) {
-    return renderError(context, theme, output, "Error reading file", options.expanded, relPath);
+    return renderError(context, theme, output, { fallback: "Error reading file", expanded: options.expanded, label: relPath });
   }
 
   let renderedLines: string[];
@@ -208,7 +206,7 @@ function renderGrepResult(
   const output = textContent(result);
 
   if (isErrorResult(result, context)) {
-    return renderError(context, theme, output, "Error executing grep", options.expanded);
+    return renderError(context, theme, output, { fallback: "Error executing grep", expanded: options.expanded });
   }
 
   const pattern = context.args?.pattern ? `/${context.args.pattern}/` : "[missing pattern]";
@@ -249,7 +247,7 @@ function entryListResult(
     const output = textContent(result);
 
     if (isErrorResult(result, context)) {
-      return renderError(context, theme, output, `Error executing ${toolName}`, options.expanded);
+      return renderError(context, theme, output, { fallback: `Error executing ${toolName}`, expanded: options.expanded });
     }
 
     const entries = parseEntryLines(output, emptyMarker);

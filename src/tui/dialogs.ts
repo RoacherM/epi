@@ -12,7 +12,7 @@ interface EditorSlotHost {
   takeEditorSlot(component: Component): () => void;
 }
 
-export type DialogOptions = { signal?: AbortSignal; timeout?: number } | undefined;
+type DialogOptions = { signal?: AbortSignal; timeout?: number } | undefined;
 
 /** Show a dialog in the editor slot; resolves with `fallback` on cancel, abort, or timeout. `done`
  * restores the editor before resolving, so code running after it in a component callback already
