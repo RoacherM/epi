@@ -9,6 +9,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import type { CommandHost } from "./command-host.js";
 import { errorText } from "./errors.js";
 import { piTui } from "./pi-tui.js";
+import { truncateOutputLines } from "./tools/common.js";
 
 // Matches tools/block.ts: a rail column, then 2 columns of padding before the `◆` bullet; output
 // lines sit two columns further in, under the bullet's text.
@@ -25,10 +26,12 @@ interface FinishedBashMessage {
   excludeFromContext?: boolean;
 }
 
-/** grok truncation rule (4.2): up to 5 lines shown in full, otherwise first 2 + an ellipsis + last 3. */
+/**
+ * grok truncation rule (4.2) with a plain ellipsis row; `render` then paints every row, the ellipsis
+ * included, `toolOutput` (the model's bash block paints it `muted`; both kept, 8.4).
+ */
 export function truncateBashOutput(lines: string[]): string[] {
-  if (lines.length <= 5) return lines;
-  return [...lines.slice(0, 2), `… +${lines.length - 5} lines`, ...lines.slice(-3)];
+  return truncateOutputLines(lines, (text) => text);
 }
 
 export class UserBashBlock implements Component {

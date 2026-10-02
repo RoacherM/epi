@@ -1,4 +1,5 @@
 import { piTui } from "../pi-tui.js";
+import { textContent } from "./common.js";
 // Rail column, then padding so `◆` lines up with assistant text (transcript CONTENT_PAD = 3).
 const CALL_PREFIX = 3;
 // Result rows start under the call text, after `◆ `.
@@ -46,11 +47,7 @@ function fallbackCall(toolName, theme) {
     return new piTui.Text(theme.fg("toolTitle", theme.bold(toolName)), 0, 0);
 }
 function fallbackResult(result, expanded, theme) {
-    const text = (result.content ?? [])
-        .filter((part) => part.type === "text")
-        .map((part) => part.text)
-        .join("\n")
-        .trimEnd();
+    const text = textContent(result).trimEnd();
     const lines = text === "" ? [] : text.split("\n");
     const shown = expanded ? lines : lines.slice(0, FALLBACK_LINES);
     const rows = shown.map((line) => theme.fg("toolOutput", line));
