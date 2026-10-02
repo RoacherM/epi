@@ -106,9 +106,10 @@ export async function refreshUpdateCache(options: {
   return next;
 }
 
-/** Update checks never run for reproducible or offline runs. `--offline` after a bare `--` is a
- * message, not the flag (Pi's own parseArgs, cli/args.js, stops interpreting flags at `--`; bug 9's
- * passthroughHasFlag respects that same boundary). */
+/** Update checks never run for reproducible or offline runs. `environment` is the process
+ * environment after src/pi-env.ts, where PI_OFFLINE can only come from MMP_OFFLINE. `--offline`
+ * after a bare `--` is a message, not the flag (Pi's own parseArgs, cli/args.js, stops interpreting
+ * flags at `--`; bug 9's passthroughHasFlag respects that same boundary). */
 export function updateCheckDisabled(
   environment: NodeJS.ProcessEnv,
   piArguments: readonly string[],

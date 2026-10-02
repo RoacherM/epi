@@ -6,7 +6,7 @@ import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createAgentSessionFromServices, createAgentSessionRuntime, createAgentSessionServices, parseArgs, resolveCliModel, resolveModelScopeWithDiagnostics, SessionManager, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { MmpArgumentError } from "../errors.js";
-import { EXTENSION_LOAD_FAILURE_HINT } from "../pi-output.js";
+import { extensionLoadFailureHint } from "../pi-output.js";
 import { crossProjectRefusal } from "./project-guard.js";
 // pi-internals row `http-dispatcher` (dogfood D38): Pi's own core/http-dispatcher.js, not in the
 // package "exports" map, so imported by file path. The package root already loaded it (through
@@ -235,6 +235,15 @@ export async function createMmpRuntime(options) {
         for (const { path, warning } of extensions.warnings ?? []) {
             diagnostics.push({ type: "warning", message: `Extension package "${path}": ${warning}` });
         }
+        // Pi's buildSessionOptions (main.js, 1.0 #10236): --provider alone is an error, not silently
+        // ignored in favour of another provider's default model. resolveCliModel returns nothing
+        // without a model, so the check has to be made here.
+        if (parsed.provider && !parsed.model) {
+            diagnostics.push({
+                type: "error",
+                message: `--provider requires --model (for example: --provider ${parsed.provider} --model <pattern>)`,
+            });
+        }
         const cli = parsed.provider || parsed.model || parsed.thinking
             ? resolveCliModel({
                 ...(parsed.provider === undefined ? {} : { cliProvider: parsed.provider }),
@@ -309,8 +318,9 @@ export async function createMmpRuntime(options) {
             : [];
         if (errors.length > 0) {
             const lines = errors.map((diagnostic) => diagnostic.message);
-            if (extensions.errors.length > 0)
-                lines.push(EXTENSION_LOAD_FAILURE_HINT);
+            if (extensions.errors.length > 0) {
+                lines.push(extensionLoadFailureHint(extensions.errors.map(({ path }) => path), options.assembly));
+            }
             throw new Error(lines.join("\n"));
         }
         const created = await createAgentSessionFromServices({

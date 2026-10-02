@@ -8,7 +8,7 @@
 //   3. a *new* deep reach added to src/ without a matching row fails here, not silently.
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
@@ -171,6 +171,34 @@ const registry = [
     },
   },
   {
+    id: "pi-env-reads",
+    async check() {
+      const { PI_ENV_RULES, PI_ENV_NOT_READ } = await import(pathToFileURL(join(root, "dist", "pi-env.js")).href);
+      const { names: found, readSites, appNameBuilt } = piEnvUsesInPi();
+      // config.js builds these two from APP_NAME, so they never appear as a literal.
+      const config = await importDeep("config.js");
+      found.add(config.ENV_AGENT_DIR);
+      found.add(config.ENV_SESSION_DIR);
+      for (const constant of readSites.constants) readSites.names.add(config[constant] ?? constant);
+      const classified = new Set([...Object.keys(PI_ENV_RULES), ...PI_ENV_NOT_READ]);
+      const unclassified = [...found].filter((name) => !classified.has(name)).sort();
+      const gone = [...classified].filter((name) => !found.has(name)).sort();
+      // A name can outlive its read in Pi's --help text or a comment; a bridged MMP_* knob would then
+      // do nothing (D63 review 1, F3).
+      const bridgedWithoutRead = Object.entries(PI_ENV_RULES)
+        .filter(([name, rule]) => rule.kind === "bridged" && !readSites.names.has(name))
+        .map(([name]) => name);
+      assert.deepEqual(
+        { unclassified, gone, bridgedWithoutRead, appNameBuilt },
+        { unclassified: [], gone: [], bridgedWithoutRead: [], appNameBuilt: { "pi-coding-agent/config.js": 2 } },
+        "Pi's PI_* names changed: classify each new one in src/pi-env.ts (bridged / mmp-owned / cleared / not read) and " +
+          "docs/cli-design.md §2.1, and drop the ones Pi no longer uses. A bridged name needs a read site " +
+          "(process.env.X, env.X, process.env[\"X\"], getProviderEnvValue(\"X\"), process.env[ENV_X]). A new " +
+          "`${APP_NAME.toUpperCase()}_...` name is invisible to the scan: add it next to ENV_AGENT_DIR/ENV_SESSION_DIR",
+      );
+    },
+  },
+  {
     id: "pi-extension-load-hint",
     async check() {
       const { PI_EXTENSION_LOAD_FAILURE_HINT } = await import(pathToFileURL(join(root, "dist", "pi-output.js")).href);
@@ -189,6 +217,19 @@ const registry = [
         /console\.error\(chalk\.yellow\(EXTENSION_LOAD_FAILURE_HINT\)\)/,
         `${mainPath} no longer writes the hint to stderr in one console.error call`,
       );
+      // K4: the built-in hint reads the failing paths from the error lines written before it.
+      assert.ok(
+        piText.includes('message: `Failed to load extension "${path}": ${error}`'),
+        `${mainPath} changed its load error message; src/pi-output.ts no longer finds the failing paths`,
+      );
+      assert.match(
+        piText,
+        /const prefix = diagnostic\.type === "error" \? "Error: "[^\n]*\n\s*console\.error\(color\(`\$\{prefix\}\$\{diagnostic\.message\}`\)\);/,
+        `${mainPath}'s reportDiagnostics no longer writes each error as one "Error: " line`,
+      );
+      const report = piText.indexOf("reportDiagnostics(startupDiagnostics);");
+      const hint = piText.indexOf("console.error(chalk.yellow(EXTENSION_LOAD_FAILURE_HINT))");
+      assert.ok(report !== -1 && report < hint, `${mainPath} no longer reports the load errors before the hint`);
     },
   },
   {
@@ -484,6 +525,10 @@ const registry = [
       const store = new runtime.McpOAuthCredentialStore();
       assertFunction(store.forServer, "McpOAuthCredentialStore.prototype.forServer");
       assertFunction(store.remove, "McpOAuthCredentialStore.prototype.remove");
+      // Pi 1.0 keys credentials by server name and URL (CHANGELOG #10252); mmp mcp login/logout pass both.
+      for (const method of ["forServer", "remove"]) {
+        assert.equal(store[method].length, 2, `McpOAuthCredentialStore.prototype.${method} no longer takes (name, serverUrl) -- src/commands/mcp-cli.ts's login/logout pass both`);
+      }
     },
   },
   {
@@ -519,16 +564,18 @@ const registry = [
     check() {
       const indexPath = join(piDist, "extensions", "mcp", "index.js");
       const indexText = readFileSync(indexPath, "utf8");
-      const why = "mcpProblemLines (src/extensions/mcp.ts) reads each server's state from these completions";
+      const why = "mcpProblemLines (src/extensions/mcp.ts) reads each server's state from these completions at session_shutdown";
       assert.match(
         indexText,
-        /label: candidate\.entry\.name,\s*description: describeState\(candidate\)/,
-        `${indexPath}'s "/mcp" completions no longer label items with the server name and describe them with describeState() -- ${why}`,
+        /action === "reconnect" \? candidate\.connection !== undefined[\s\S]{0,300}label: candidate\.entry\.name,\s*description: describeState\(candidate\)/,
+        `${indexPath}'s "/mcp" completions for reconnect no longer list each server with a connection, labelled with its name and described with describeState() -- ${why}`,
       );
       for (const [pattern, state] of [
+        [/if \(!isEnabled\(server\)\)\s*return "disabled";/, "disabled (checked first)"],
         [/return withError \? `failed: \$\{firstLine/, "failed: <first error line>"],
         [/return "needs sign-in";/, "needs sign-in"],
-        [/return "connecting…";/, "connecting…"],
+        // A server still connecting is named at session_shutdown only after Pi's startup wait (review 1 finding 2).
+        [/case "connecting":\s*return "connecting…";/, "connecting…"],
       ]) {
         assert.match(indexText, pattern, `${indexPath}'s describeState() no longer returns "${state}" -- ${why}`);
       }
@@ -541,26 +588,75 @@ const registry = [
     },
   },
   {
-    id: "mcp-load-failure-notify",
+    id: "mcp-notifies-outside-ui",
     check() {
       const indexPath = join(piDist, "extensions", "mcp", "index.js");
       const indexText = readFileSync(indexPath, "utf8");
-      const why = "src/extensions/mcp.ts's reportingContext writes this notify to stderr outside the TUI (dogfood D6)";
+      const why = "src/extensions/mcp.ts's reportingContext copies the notifies of Pi's MCP event handlers to stderr when there is no UI (hard rule 3; dogfood D6, F3)";
       const loadFailures = indexText.match(/ctx\.ui\.notify\(`MCP failed to load: \$\{errorMessage\(error\)\}`, "error"\)/g) ?? [];
       assert.equal(loadFailures.length, 2, `${indexPath} no longer reports its startup and mcp_servers_change failures as ctx.ui.notify(\`MCP failed to load: ...\`, "error") -- ${why}`);
       assert.match(
         indexText,
-        /\.then\(\(\) => loadMcpRuntime\(\)\)[\s\S]{0,800}\.catch\(\(error\) => \{[\s\S]{0,200}MCP failed to load/,
-        `${indexPath}'s startup chain no longer ends in a catch that notifies "MCP failed to load" -- ${why}`,
+        /pending = Promise\.all\(enabled\.map\(\(server\) => startConnection\(server, isCurrent, runtime\)\)\)[\s\S]{0,200}\.catch\(\(error\) => \{[\s\S]{0,200}MCP failed to load/,
+        `${indexPath}'s startup chain (session_start) no longer ends in a catch that notifies "MCP failed to load" -- ${why}`,
       );
-      // Dogfood D47 (B1 review F4): any other error-level notify from an event handler would be
-      // printed too, and would hide the per-server lines. Pin how many there are (7 in 0.99.1, the
-      // two above in the pi.on handlers), so a new one anywhere in the file forces a re-review.
-      const review = `review whether it is raised from a pi.on handler, then update this count and docs/pi-internals.md -- ${why}`;
-      assert.equal((indexText.match(/"error"/g) ?? []).length, 7, `${indexPath}'s number of error-level notifies changed: ${review}`);
-      const handlers = indexText.slice(indexText.indexOf("pi.on("), indexText.indexOf('pi.registerCommand("mcp"'));
+      // Pi reports MCP problems only through ctx.ui.notify, and MMP sees only the notifies made with
+      // the ctx of an event handler (command handlers get their own ctx, and are interactive anyway).
+      // Pin the notifies: 3 written in the pi.on handlers (two load failures, the still-connecting
+      // wait), 18 in the whole file in 1.0.0 (the others are in reportProblems/ensureDiscoveryActive,
+      // which handlers call, and in the /mcp command's helpers). A new one anywhere forces a re-review:
+      // is it raised from an event handler (MMP copies it -- fine), or does Pi now report a problem
+      // some other way that print/json would drop?
+      const review = `review how it reaches the user, then update this count and docs/pi-internals.md -- ${why}`;
+      assert.equal((indexText.match(/notify\(/g) ?? []).length, 18, `${indexPath}'s number of notifies changed: ${review}`);
+      const handlers = indexText.slice(indexText.indexOf('pi.on("session_start"'), indexText.indexOf('pi.registerCommand("mcp"'));
       assert.ok(handlers.length > 0, `${indexPath} no longer registers its pi.on handlers before the "/mcp" command -- ${why}`);
-      assert.equal((handlers.match(/"error"/g) ?? []).length, 2, `${indexPath}'s pi.on handlers raise a different number of error-level notifies: ${review}`);
+      assert.deepEqual(
+        handlers.match(/ctx\.ui\.notify\(.*\);/g) ?? [],
+        [
+          'ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error");',
+          'ctx.ui.notify("MCP servers are still connecting; their tools become available once connected.", "info");',
+          'ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error");',
+        ],
+        `${indexPath}'s pi.on handlers raise different notifies: ${review}`,
+      );
+      // MMP recognises one of Pi's notifies by its text (src/extensions/mcp.ts): the unreachable-tools
+      // warning, which -p/json do not copy (it is about reachability, not a failed server; review 1
+      // finding 1).
+      assert.match(
+        indexText,
+        /ctx\.ui\.notify\(`MCP tools are only reachable from the codemode or tool_search tool, but neither is active\$\{reason\}; they cannot be called\.`, "warning"\);/,
+        `${indexPath}'s unreachable-tools warning changed: PI_UNREACHABLE_PREFIX in src/extensions/mcp.ts would stop matching it and -p/json would print it again -- ${why}`,
+      );
+    },
+  },
+  {
+    id: "system-prompt-forced-last",
+    check() {
+      const why = "mmp:system-prompt (src/extensions/runtime.ts) forces the prompt and is pushed last by buildInlineExtensions, so every other before_agent_start section edit, Pi's MCP mcp_servers among them, is already in the text it appends to (U3)";
+      const runnerPath = join(piDist, "core", "extensions", "runner.js");
+      const runnerText = readFileSync(runnerPath, "utf8");
+      const emit = runnerText.slice(runnerText.indexOf("async emitBeforeAgentStart("), runnerText.indexOf("async emitResourcesDiscover("));
+      assert.ok(emit.length > 0, `${runnerPath} no longer has emitBeforeAgentStart followed by emitResourcesDiscover -- ${why}`);
+      assert.match(emit, /for \(const \{ ext, handlers \} of snapshotEventHandlers\(this\.extensions, "before_agent_start"\)\)/, `${runnerPath}'s emitBeforeAgentStart no longer runs handlers in extension order -- ${why}`);
+      assert.match(emit, /get systemPrompt\(\) \{\s*return renderCurrentSystemPrompt\(\);/, `${runnerPath}'s before_agent_start event no longer renders systemPrompt from the current options when read -- ${why}`);
+      assert.match(emit, /if \(result\.systemPrompt !== undefined\) \{\s*currentOptions\.forceSystemPrompt = result\.systemPrompt;/, `${runnerPath} no longer turns a returned systemPrompt into forceSystemPrompt -- ${why}`);
+      const promptPath = join(piDist, "core", "system-prompt.js");
+      assert.match(
+        readFileSync(promptPath, "utf8"),
+        /if \(input\.forceSystemPrompt !== undefined\)\s*return \{ content: input\.forceSystemPrompt \};/,
+        `${promptPath} no longer renders a forced prompt as-is, without sections -- ${why}`,
+      );
+      // Path (Manifest external) extensions first, inline factories after them, on both load passes.
+      const loaderPath = join(piDist, "core", "resource-loader.js");
+      const loaderText = readFileSync(loaderPath, "utf8");
+      assert.match(loaderText, /const inlineExtensions = await this\.loadExtensionFactories\(extensionsResult\.runtime\);\s*extensionsResult\.extensions\.push\(\.\.\.inlineExtensions\.extensions\);/, `${loaderPath}'s loadCurrentExtensionSet no longer appends inline extensions after path extensions -- ${why}`);
+      assert.match(loaderText, /orderedExtensions\.push\(\.\.\.inlineExtensions\.extensions\);/, `${loaderPath}'s loadFinalExtensionSet no longer appends inline extensions after path extensions -- ${why}`);
+      assert.match(loaderText, /for \(const \[index, input\] of this\.extensionFactories\.entries\(\)\)/, `${loaderPath} no longer loads inline factories in array order -- ${why}`);
+      const indexPath = join(piDist, "extensions", "mcp", "index.js");
+      const beforeAgentStart = mcpHandlerSource(readFileSync(indexPath, "utf8"), "before_agent_start");
+      assert.ok(beforeAgentStart !== undefined, `${indexPath} no longer has a before_agent_start handler -- ${why}`);
+      assert.match(beforeAgentStart, /sections\[MCP_SERVERS_SECTION\] = section;/, `${indexPath}'s before_agent_start no longer sets the mcp_servers section -- ${why}`);
     },
   },
   {
@@ -586,21 +682,22 @@ const registry = [
     },
   },
   {
-    id: "mcp-startup-wait-before-agent-start",
+    id: "mcp-report-before-pi-shutdown",
     check() {
       const indexPath = join(piDist, "extensions", "mcp", "index.js");
-      const indexText = readFileSync(indexPath, "utf8");
+      const shutdown = mcpHandlerSource(readFileSync(indexPath, "utf8"), "session_shutdown");
+      const why = "src/extensions/mcp.ts reports failed servers Pi has not reported in a session_shutdown handler registered before Pi's, while Pi still has the servers";
+      assert.ok(shutdown !== undefined, `${indexPath} no longer has a session_shutdown handler -- ${why}`);
       assert.match(
-        indexText,
-        /pi\.on\("before_agent_start", async \(_event, ctx\) => \{\s*const startup = pending;[\s\S]{0,400}setTimeout\(\(\) => resolve\(false\), startupWaitMs\)/,
-        `${indexPath} no longer waits for startup connections in before_agent_start, bounded by startupWaitMs -- src/extensions/mcp.ts's problem report would read server states before they had a chance to connect`,
+        shutdown,
+        /servers = \[\];[\s\S]{0,200}connection\.close\(\)/,
+        `${indexPath}'s session_shutdown handler no longer forgets the servers and closes their connections -- ${why}; re-check when the report must run`,
       );
       const runnerPath = join(piDist, "core", "extensions", "runner.js");
-      const runnerText = readFileSync(runnerPath, "utf8");
       assert.match(
-        runnerText,
-        /snapshotEventHandlers\(this\.extensions, "before_agent_start"\)\) \{\s*for \(const handler of handlers\) \{[\s\S]{0,600}await handler\(event, ctx\)/,
-        `${runnerPath}'s emitBeforeAgentStart no longer awaits handlers one after another -- MMP's handler might run before Pi's startup wait is over`,
+        readFileSync(runnerPath, "utf8"),
+        /async emit\(event\) \{\s*const ctx = this\.createContext\(\);[\s\S]{0,200}for \(const \{ ext, handlers \} of snapshotEventHandlers\(this\.extensions, event\.type\)\) \{\s*for \(const handler of handlers\) \{\s*try \{\s*const handlerResult = await handler\(event, ctx\);/,
+        `${runnerPath}'s emit() no longer awaits one extension's handlers one after another in registration order -- MMP's report might run after Pi's session_shutdown handler has forgotten the servers`,
       );
     },
   },
@@ -655,7 +752,81 @@ const registry = [
       );
     },
   },
+  {
+    id: "login-device-id",
+    async check() {
+      const { mkdtempSync, readFileSync: readFile, rmSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { ModelRuntime, SettingsManager } = await import("@earendil-works/pi-coding-agent");
+      const dir = mkdtempSync(join(tmpdir(), "mmp-pi-internals-device-id-"));
+      try {
+        const text = readFileSync(join(root, "src", "tui", "commands.ts"), "utf8");
+        assert.match(text, /getDeviceId: \(\) => session\.settingsManager\.getOrCreateDeviceId\(\)/, "src/tui/commands.ts no longer passes getDeviceId to modelRuntime.login");
+        // Without the option, "Sign in with ChatGPT" must still fail before it starts (agentHostId
+        // runs before PKCE and the callback server), so this never reaches a network or a browser.
+        // If it stops failing, pi-ai gets the device ID some other way and MMP should follow.
+        const runtime = await ModelRuntime.create({
+          authPath: join(dir, "auth.json"), modelsPath: null, modelsStorePath: join(dir, "models-store.json"), refreshOnCreate: false,
+        });
+        const interaction = {
+          signal: new AbortController().signal,
+          prompt: () => Promise.reject(new Error("no prompt expected")),
+          notify: () => { throw new Error("no notify expected"); },
+        };
+        await assert.rejects(runtime.login("openai", "oauth", interaction), /requires a device ID/,
+          "openai's OAuth login no longer requires LoginOptions.getDeviceId");
+        // The ID lives in the agentDir's global settings.json (MMP's ~/.mmp/pi), not project settings,
+        // and stays the same for every later SettingsManager.
+        const agentDir = join(dir, "agent");
+        const settings = SettingsManager.create(dir, agentDir, { projectTrusted: false });
+        const id = settings.getOrCreateDeviceId();
+        await settings.flush();
+        assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+        assert.equal(JSON.parse(readFile(join(agentDir, "settings.json"), "utf8")).deviceId, id);
+        assert.equal(SettingsManager.create(dir, agentDir, { projectTrusted: false }).getOrCreateDeviceId(), id);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  },
 ];
+
+/** Every `PI_*` name in the Pi runtime code mmp loads: each @earendil-works package's dist/, at the
+ * top level and nested under pi-coding-agent, except pi-coding-agent's single-file `bundle/` and
+ * Bun-binary `bun/` builds, which mmp never imports. Comments count too: cheaper than parsing,
+ * and a name only mentioned still has to be classified. Also returns the names with a read site
+ * (`readSites.names`, plus `readSites.constants` for `process.env[ENV_X]`, resolved by the caller
+ * through config.js) and, per file, how many names Pi builds from `APP_NAME.toUpperCase()`. */
+function piEnvUsesInPi() {
+  const scopeDir = dirname(dirname(piDist));
+  const packageDirs = readdirSync(scopeDir).map((name) => join(scopeDir, name));
+  const nestedScope = join(dirname(piDist), "node_modules", "@earendil-works");
+  if (statSync(nestedScope, { throwIfNoEntry: false })?.isDirectory()) {
+    packageDirs.push(...readdirSync(nestedScope).map((name) => join(nestedScope, name)));
+  }
+  const names = new Set();
+  const readSites = { names: new Set(), constants: new Set() };
+  const appNameBuilt = {};
+  for (const packageDir of packageDirs) {
+    const dist = join(packageDir, "dist");
+    if (!statSync(dist, { throwIfNoEntry: false })?.isDirectory()) continue;
+    for (const file of readdirSync(dist, { recursive: true })) {
+      if (!file.endsWith(".js") || /^(bundle|bun)[\\/]/.test(file)) continue;
+      const text = readFileSync(join(dist, file), "utf8");
+      for (const [name] of text.matchAll(/(?<![A-Za-z0-9_$])PI_[A-Z0-9_]*[A-Z0-9]/g)) {
+        names.add(name);
+      }
+      for (const [, name] of text.matchAll(/\benv(?:\.|\[["'`])(PI_[A-Z0-9_]*[A-Z0-9])\b/g)) readSites.names.add(name);
+      for (const [, name] of text.matchAll(/getProviderEnvValue\(\s*["'`](PI_[A-Z0-9_]*[A-Z0-9])["'`]/g)) {
+        readSites.names.add(name);
+      }
+      for (const [, constant] of text.matchAll(/\benv\[(ENV_[A-Z0-9_]+)\]/g)) readSites.constants.add(constant);
+      const built = text.match(/\bAPP_NAME\.toUpperCase\(\)/g)?.length ?? 0;
+      if (built > 0) appNameBuilt[`${basename(packageDir)}/${file.replaceAll("\\", "/")}`] = built;
+    }
+  }
+  return { names, readSites, appNameBuilt };
+}
 
 /** One `pi.on("<event>", ...)` handler's source in Pi's MCP extension: up to the next `pi.on(`. */
 function mcpHandlerSource(indexText, event) {
@@ -664,66 +835,56 @@ function mcpHandlerSource(indexText, event) {
 }
 
 /** The `mcp-own-reports-in-rpc` row's check, on the text of `extensions/mcp/index.js`, so that the
- * test below can run it on mutated copies too (B7 review N1, N2). */
+ * test below can run it on mutated copies too (B7 review N1, N2; redone for Pi 1.0). */
 function checkMcpOwnReportsInRpc(indexText, indexPath) {
-  const why = "src/extensions/mcp.ts leaves these reports to Pi in rpc and sends only its other lines (dogfood D52)";
+  const why = "src/extensions/mcp.ts leaves these reports to Pi in rpc and adds, at session_shutdown, only the failed servers Pi has not reported, matched line by line (dogfood D52)";
+  // reportProblems(): one `<name>: <describeState()>` line per failed or needs-sign-in server, each
+  // indented by two spaces under "MCP servers need attention:" -- MMP compares its own lines (the
+  // same describeState() text, from the "/mcp" completions) with these.
   assert.match(
     indexText,
-    /if \(state === "needs-auth" \|\| state === "failed"\)[\s\S]{0,200}ctx\.ui\.notify\(`MCP servers need attention:/,
-    `${indexPath}'s reportProblems() no longer notifies failed and needs-sign-in servers -- ${why}`,
+    /if \(state === "needs-auth" \|\| state === "failed"\)\s*lines\.push\(`\$\{server\.entry\.name\}: \$\{describeState\(server\)\}`\);/,
+    `${indexPath}'s reportProblems() no longer lists failed and needs-sign-in servers as "<name>: <describeState()>" -- ${why}`,
+  );
+  assert.ok(
+    indexText.includes('ctx.ui.notify(`MCP servers need attention:\\n${lines.map((line) => `  ${line}`).join("\\n")}\\nRun /mcp to fix.`, "warning");'),
+    `${indexPath}'s reportProblems() no longer notifies "MCP servers need attention:" with each line indented by two spaces -- ${why}`,
   );
   assert.match(
     indexText,
-    /ensureDiscoveryActive\(ctx\);\s*reportProblems\(ctx\);\s*\}\)\s*\.catch/,
-    `${indexPath}'s startup chain no longer ends in reportProblems() -- ${why}`,
+    /pending = Promise\.all\(enabled\.map\(\(server\) => startConnection\(server, isCurrent, runtime\)\)\)\s*\.then\(\(\) => \{\s*if \(isCurrent\(\)\)\s*reportProblems\(ctx\);\s*\}\)/,
+    `${indexPath}'s startup chain no longer ends in reportProblems() -- a failed server would reach an rpc client only when the session ends; ${why}`,
   );
   const change = mcpHandlerSource(indexText, "mcp_servers_change");
   assert.ok(change !== undefined, `${indexPath} no longer has an mcp_servers_change handler -- ${why}`);
   assert.match(
     change,
-    /ensureDiscoveryActive\(ctx\);\s*reportProblems\(ctx, connecting\);/,
-    `${indexPath}'s mcp_servers_change handler no longer ends in reportProblems(ctx, connecting) -- a server registered later that fails would be reported nowhere in rpc; ${why}`,
-  );
-  const handler = mcpHandlerSource(indexText, "before_agent_start");
-  assert.ok(handler !== undefined, `${indexPath} no longer has a before_agent_start handler -- ${why}`);
-  const notice = `${indexPath}'s before_agent_start handler notifies something other than "still connecting" -- MMP takes any notify there to mean its own still-connecting lines are covered; ${why}`;
-  // Every notify, however it is written (split over lines too), and none through a helper: the
-  // handler calls exactly these, in this order (D57; comments and keywords aside).
-  assert.equal((handler.match(/notify\(/g) ?? []).length, 1, notice);
-  const calls = [...handler.replace(/\/\/.*$/gm, "").matchAll(/([A-Za-z_$][\w$.]*)\s*\(/g)]
-    .map((match) => match[1])
-    .filter((name) => !/^(?:if|for|while|switch|catch|return|async|function|await)$/.test(name));
-  assert.deepEqual(
-    calls,
-    ["pi.on", "Promise.race", "startup.then", "Promise", "setTimeout", "resolve", "clearTimeout", "ctx.ui.notify"],
-    notice,
-  );
-  assert.deepEqual(
-    handler.match(/ctx\.ui\.notify\(.*\);/g) ?? [],
-    ['ctx.ui.notify("MCP servers are still connecting; their tools become available once connected.", "info");'],
-    notice,
+    /if \(current !== generation\)\s*return;\s*reportProblems\(ctx, connecting\);/,
+    `${indexPath}'s mcp_servers_change handler no longer ends in reportProblems(ctx, connecting) -- a server registered later that fails would reach an rpc client only when the session ends; ${why}`,
   );
 }
 
-test("the mcp-own-reports-in-rpc check catches B7 review N1/N2's mutations of Pi's MCP extension (D56)", () => {
+test("the mcp-own-reports-in-rpc check catches mutations of Pi's MCP extension MMP's rpc reports depend on (D56)", () => {
   const indexPath = join(piDist, "extensions", "mcp", "index.js");
   const indexText = readFileSync(indexPath, "utf8");
   checkMcpOwnReportsInRpc(indexText, indexPath);
-  // Replaces `from` inside one handler only.
+  const replaced = (from, to) => {
+    assert.ok(indexText.includes(from), `no ${JSON.stringify(from)} to mutate`);
+    return indexText.replace(from, to);
+  };
   const inHandler = (event, from, to) => {
     const handler = mcpHandlerSource(indexText, event);
     assert.ok(handler.includes(from), `${event} handler has no ${JSON.stringify(from)} to mutate`);
     return indexText.replace(handler, handler.replace(from, to));
   };
   const mutations = {
-    "N1: a notify through reportProblems()": inHandler("before_agent_start", "clearTimeout(timer);\n", "clearTimeout(timer);\n reportProblems(ctx);\n"),
-    "N1: a notify through ensureDiscoveryActive()": inHandler("before_agent_start", "clearTimeout(timer);\n", "clearTimeout(timer);\n ensureDiscoveryActive(ctx);\n"),
-    "N1: a notify through any other helper (B8 review m8)": inHandler("before_agent_start", "clearTimeout(timer);\n", "clearTimeout(timer);\n emitChange(ctx);\n"),
-    "N1: a second notify split over lines": inHandler("before_agent_start", "clearTimeout(timer);\n", 'clearTimeout(timer);\n ctx.ui.notify(\n"MCP servers need attention: x",\n"warning");\n'),
-    "N2: no reportProblems(ctx, connecting) after mcp_servers_change": inHandler("mcp_servers_change", "reportProblems(ctx, connecting);", ""),
+    "reportProblems lists servers in another shape": [replaced("lines.push(`${server.entry.name}: ${describeState(server)}`)", "lines.push(`- ${server.entry.name} (${describeState(server)})`)"), /no longer lists failed/],
+    "reportProblems stops indenting its lines": [replaced("lines.map((line) => `  ${line}`)", "lines.map((line) => `- ${line}`)"), /no longer notifies "MCP servers need attention:"/],
+    "reportProblems renames its header": [replaced("`MCP servers need attention:\\n", "`MCP servers have problems:\\n"), /no longer notifies "MCP servers need attention:"/],
+    "no reportProblems at the end of the startup chain": [replaced("if (isCurrent())\n                    reportProblems(ctx);", "if (isCurrent())\n                    emitChange();"), /startup chain no longer ends/],
+    "N2: no reportProblems(ctx, connecting) after mcp_servers_change": [inHandler("mcp_servers_change", "reportProblems(ctx, connecting);", ""), /mcp_servers_change handler no longer ends/],
   };
-  for (const [name, mutated] of Object.entries(mutations)) {
-    const expected = name.startsWith("N2") ? /mcp_servers_change handler no longer ends/ : /before_agent_start handler notifies something other/;
+  for (const [name, [mutated, expected]] of Object.entries(mutations)) {
     assert.throws(() => checkMcpOwnReportsInRpc(mutated, indexPath), expected, `not caught: ${name}`);
   }
 });

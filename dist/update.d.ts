@@ -24,9 +24,10 @@ export declare function refreshUpdateCache(options: {
     now?: Date;
     fetchImpl?: FetchLike;
 }): Promise<UpdateCache>;
-/** Update checks never run for reproducible or offline runs. `--offline` after a bare `--` is a
- * message, not the flag (Pi's own parseArgs, cli/args.js, stops interpreting flags at `--`; bug 9's
- * passthroughHasFlag respects that same boundary). */
+/** Update checks never run for reproducible or offline runs. `environment` is the process
+ * environment after src/pi-env.ts, where PI_OFFLINE can only come from MMP_OFFLINE. `--offline`
+ * after a bare `--` is a message, not the flag (Pi's own parseArgs, cli/args.js, stops interpreting
+ * flags at `--`; bug 9's passthroughHasFlag respects that same boundary). */
 export declare function updateCheckDisabled(environment: NodeJS.ProcessEnv, piArguments: readonly string[]): boolean;
 export declare function updateNotice(cache: UpdateCache | undefined, currentVersion: string): string | undefined;
 /** `mmp update`: runs the installer of the latest release, which verifies the package checksum. */

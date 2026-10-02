@@ -2,12 +2,14 @@
 // the real dist/cli.js against a temp HOME/MMP_HOME, exactly like a real invocation, and the "list"
 // tests connect to a real (local, offline) stdio fixture server -- no network, ever.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+
+import { startOAuthMcpServer } from "./fixtures/mcp-oauth-server.mjs";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const fixtureServerPath = fileURLToPath(new URL("./fixtures/mcp-server.mjs", import.meta.url));
@@ -53,7 +55,7 @@ test("mmp mcp is a subcommand only in first position, never reaching Pi's own `p
   const f = fixture(t);
   const result = spawnSync(process.execPath, [cliPath, "-p", "mcp"], {
     cwd: f.project,
-    env: { ...f.env, PI_OFFLINE: "1" },
+    env: { ...f.env, MMP_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -75,6 +77,22 @@ test("mmp mcp add --url and --exposure are recorded verbatim", (t) => {
   assert.equal(added.status, 0, added.stderr);
   const config = JSON.parse(readFileSync(globalMcpPath(f), "utf8"));
   assert.deepEqual(config.mcpServers.remote, { url: "https://example.test/mcp", exposure: "direct" });
+});
+
+// Options `pi mcp add` gained in Pi 0.99.2 (description) and 1.0 (OAuth client name).
+test("mmp mcp add --description and --oauth-client-name are recorded like Pi's pi mcp add does", (t) => {
+  const f = fixture(t);
+  const added = run(f, ["add", "remote", "--url", "https://example.test/mcp", "--description", "Issue tracker", "--oauth-client-name", "Known Client"]);
+  assert.equal(added.status, 0, added.stderr);
+  const config = JSON.parse(readFileSync(globalMcpPath(f), "utf8"));
+  assert.deepEqual(config.mcpServers.remote, {
+    url: "https://example.test/mcp",
+    oauth: { clientName: "Known Client" },
+    description: "Issue tracker",
+  });
+  const stdio = run(f, ["add", "local", "--oauth-client-name", "x", "--", "node", fixtureServerPath]);
+  assert.equal(stdio.status, 2, stdio.stderr);
+  assert.match(stdio.stderr, /--oauth-client-name only applies to HTTP servers/);
 });
 
 test("mmp mcp add rejects an invalid exposure before writing anything", (t) => {
@@ -252,7 +270,9 @@ test("mmp mcp list outside a project offers only the global mcp.json", (t) => {
   const result = run(f, ["list"]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^No MCP servers configured -- add one to .*mcp\.json with `mmp mcp add <server> \(--url <url> \| -- <command> \[args\.\.\.\]\)`\.$/m);
-  assert.doesNotMatch(result.stdout, /-l/);
+  // The flag in any spelling (`-l`, (-l), [-l], "-l", '-l', a|-l alternative, --local), not a "-l"
+  // inside the printed temp path (mkdtemp's suffix can start with "l").
+  assert.doesNotMatch(result.stdout, /(^|[\s`(\["'|])-l\b|--local\b/);
 });
 
 // Dogfood D4: list/login/logout read the project's .mmp/mcp.json, so they take the same
@@ -337,7 +357,8 @@ test("mmp mcp login/logout on an unconfigured server name fails clearly", (t) =>
   assert.match(logout.stderr, /No MCP server named "nope"/);
 });
 
-test("mmp mcp logout removes stored OAuth credentials for a URL server from <MMP_HOME>/pi/mcp-auth.json", (t) => {
+// Pi 1.0 still removes credentials stored by URL alone (before 1.0), which the server would take over.
+test("mmp mcp logout removes a URL server's credentials stored by URL alone (before Pi 1.0) from <MMP_HOME>/pi/mcp-auth.json", (t) => {
   const f = fixture(t);
   run(f, ["add", "remote", "--url", "https://example.test/mcp"]);
   const authPath = join(f.home, ".mmp", "pi", "mcp-auth.json");
@@ -346,6 +367,73 @@ test("mmp mcp logout removes stored OAuth credentials for a URL server from <MMP
   const result = run(f, ["logout", "remote"]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Signed out of MCP server "remote"/);
-  const stored = JSON.parse(readFileSync(authPath, "utf8"));
-  assert.equal(stored["https://example.test/mcp"], undefined);
+  assert.deepEqual(JSON.parse(readFileSync(authPath, "utf8")), {});
+});
+
+// `run` blocks the event loop, so it cannot be used while this process serves the OAuth fixture.
+function runAsync(f, args, onStdout = () => {}) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [cliPath, "mcp", ...args], { cwd: f.project, env: f.env });
+    const killTimer = setTimeout(() => child.kill(), 30_000);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      onStdout(stdout);
+    });
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("close", (status) => {
+      clearTimeout(killTimer);
+      resolve({ status, stdout, stderr });
+    });
+  });
+}
+
+// Pi 1.0 stores MCP OAuth credentials per server name and URL (CHANGELOG #10252), so two servers
+// with the same URL can sign in with different accounts. A real sign-in through a local OAuth
+// fixture: mmp mcp login prints the authorization URL, the test "opens" it (the fixture redirects
+// straight to the loopback callback), and the token lands under that server only.
+test("mmp mcp login/logout keep OAuth credentials per server, even for two servers with the same URL", async (t) => {
+  const f = fixture(t);
+  const oauth = await startOAuthMcpServer();
+  t.after(() => oauth.close());
+  run(f, ["add", "remote", "--url", oauth.url]);
+  run(f, ["add", "other", "--url", oauth.url]);
+  const authPath = join(f.home, ".mmp", "pi", "mcp-auth.json");
+  const stored = () => JSON.parse(readFileSync(authPath, "utf8"));
+
+  let opened;
+  const login = await runAsync(f, ["login", "remote", "--timeout", "20"], (stdout) => {
+    const url = /in your browser:\n(\S+)/.exec(stdout)?.[1];
+    if (url && !opened) opened = fetch(url).then((response) => response.text());
+  });
+  const context = `stdout:\n${login.stdout}\nstderr:\n${login.stderr}`;
+  assert.ok(opened, `no authorization URL printed\n${context}`);
+  assert.match(await opened, /./, context);
+  assert.equal(login.status, 0, context);
+  assert.match(login.stdout, /Signed in to MCP server "remote" \(1 tools\)\./, context);
+  assert.deepEqual(oauth.issuedTokens, ["token-code-1"], context);
+  // One entry, for "remote" only -- not one keyed by the URL alone, which every server would share.
+  const [entry, ...rest] = Object.entries(stored());
+  assert.equal(rest.length, 0, JSON.stringify(stored()));
+  assert.notEqual(entry[0], oauth.url, JSON.stringify(stored()));
+  assert.ok(entry[0].includes("remote"), JSON.stringify(stored()));
+  assert.equal(entry[1].tokens.access_token, "token-code-1");
+
+  const otherLogout = await runAsync(f, ["logout", "other"]);
+  assert.equal(otherLogout.status, 0, otherLogout.stderr);
+  assert.match(otherLogout.stdout, /No stored credentials for MCP server "other"\./);
+  assert.equal(stored()[entry[0]].tokens.access_token, "token-code-1", "logging out \"other\" touched \"remote\"'s credentials");
+
+  const states = async () => {
+    const list = await runAsync(f, ["list", "--json"]);
+    return Object.fromEntries(JSON.parse(list.stdout).servers.map((server) => [server.name, server.state]));
+  };
+  assert.deepEqual(await states(), { remote: "connected", other: "needs-auth" });
+
+  const logout = await runAsync(f, ["logout", "remote"]);
+  assert.equal(logout.status, 0, logout.stderr);
+  assert.match(logout.stdout, /Signed out of MCP server "remote"\./);
+  assert.equal(stored()[entry[0]], undefined, JSON.stringify(stored()));
+  assert.deepEqual(await states(), { remote: "needs-auth", other: "needs-auth" });
 });

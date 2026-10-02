@@ -3,7 +3,7 @@
 - 项目：MMP（Make My Pi）
 - 状态：自有 TUI、原生 MCP、Rules/Skills、Task/Hooks 和 benchmark adapter 已实现；验收与遗留项见 §21
 - 目标依赖：`@earendil-works/pi-coding-agent`（见 `package.json`）；Node.js `>=22.19.0`
-- 当前验证环境：`package.json` 锁定的 Pi 版本已通过全部契约测试、ambient 隔离测试和离线 MCP 验收；真实模型冒烟和 benchmark adapter 冒烟是 Pi `0.83.0` 时做的，升级后还没重做，之后每次升级也要看是否需要重跑（见 `docs/pi-upgrade-design.md` 第 3 节"模型可见内容快照"）。OMP `17.1.3` 仅作能力边界参考，不是运行依赖
+- 当前验证环境：`package.json` 锁定的 Pi 版本已通过全部契约测试、ambient 隔离测试和离线 MCP 验收；真实模型冒烟和 benchmark adapter 基线在 Pi `1.0.0` 上重做过（2026-10-02，`.dev/e2e/`、`.dev/bench/2026-10-02/report.md`），之后每次升级也要看是否需要重跑（见 `docs/pi-upgrade-design.md` 第 3 节"模型可见内容快照"）。OMP `17.1.3` 仅作能力边界参考，不是运行依赖
 - Pi 升级：设计见 `docs/pi-upgrade-design.md`（版本锁死、升级自动化，已定，见 `docs/decisions.md`）
 - 交互界面：设计见 `docs/tui-design.md`，代码在 `src/tui/`，是 `mmp` 唯一的交互入口（不再启动 Pi 经典交互界面），进度见设计文档第 15 节
 - 开发流程：角色分工、独立合并前审查、任务说明要求、Herdr 实测和对照 grok，见 `docs/dev-workflow.md`；给 agent 的入口见根目录 `AGENTS.md`，硬规则见 `docs/dev-workflow.md`
@@ -12,6 +12,13 @@
 ## 1. 产品定义
 
 MMP（Make My Pi）是在同一 Node.js 进程中使用锁定版本 Pi SDK 的定制 Harness。功能优先对齐 Pi；MMP 拥有 grok-build 风格的交互界面、配置装配、项目信任和能力选择。
+
+定位（决策 H1、H2、H3，2026-10-02 对齐；OMP 对照见 [notes/omp-study.md](notes/omp-study.md)）：
+
+- 跟着官方 Pi 走：用官方 Pi 包、锁定版本、自动升级门禁，**不 fork**（OMP 是硬 fork，手工移植上游，已落后半年）。
+- 先把外围做好（界面、CLI、配置、已有扩展）；harness 能力参照 OMP 的设计以后再补，遇到瓶颈才考虑修改 Pi 的行为（H2）。
+- 配置严格只属于 MMP：不读 Pi，也不读 Claude/Codex/Gemini/Cursor 的配置，不认用户给 Pi 设的 `PI_*` 环境变量（D63），项目配置要信任（H3/K3）。
+- 和 Pi 一样默认不审批；审批分级先不做（H3/K6）。
 
 | 层 | 所有权 | 入口 |
 |---|---|---|
@@ -73,7 +80,7 @@ MMP 不重新实现：
 - MCP 协议栈；
 - 通用 Extension 生命周期。
 
-MMP 可以构造和启动这些公开 runtime primitive，但不能 fork 或复制其内部实现。
+MMP 可以构造和启动这些公开 runtime primitive，但不能 fork 或复制其内部实现。按决策 H2，这条边界暂不重划；遇到瓶颈时再单独评估是否修改 Pi 的行为。
 
 ### 3.2 MMP 必须拥有这些能力
 
@@ -88,7 +95,7 @@ MMP 可以构造和启动这些公开 runtime primitive，但不能 fork 或复�
 
 ### 3.3 当前实现范围
 
-长期 Harness 方向参考 OMP（决策 H1），下面这些能力尚未纳入当前实现；新增能力需单独设计，不作为永久禁止项：
+长期 Harness 方向参考 OMP（决策 H1）。按 H2，harness 路线图暂不启动（先做好外围）；下面是候选能力，新增时需单独设计，不作为永久禁止项。OMP 里值得借鉴的设计（web 搜索/抓取、写后 LSP 诊断、子 agent 结构化结果与 Agent Hub、模型角色、审批分级、设置注册表）见 [notes/omp-study.md](notes/omp-study.md) §7：
 
 - Capability Registry；
 - 多 Harness Discovery Provider；
@@ -103,9 +110,11 @@ MMP 可以构造和启动这些公开 runtime primitive，但不能 fork 或复�
 
 ### 3.4 显式装配边界
 
-Rules 与可选 Extensions 未声明就不加载；Task/MCP/Hooks 未启用时，不读取对应能力配置或启动子进程。固定 `mmp:runtime` 与 §7.1 的三个 Skill 自动发现根目录是明确的例外。
+Rules 与第三方 Extensions 未声明就不加载。固定 `mmp:runtime` 与 §7.1 的三个 Skill 自动发现根目录是明确的例外。
 
-空 Manifest 可以启动，并保留运行时身份和固定 Skill 发现行为；不启用 Task/MCP/Hooks。
+内置的标准能力（`mmp:task`、`mmp:mcp`、`mmp:hooks`）默认开启，Manifest 的 `"disable"` 列出的关闭（决策 H3/K4）。生效的关闭集合是全局与可信项目 `disable` 的并集；未信任项目的 Manifest 不读，其 `disable` 不生效。关闭的能力不读对应配置（`mcp.json`、`hooks.json`、`agents/`）、不启动子进程，也不注册工具或 handler。`mmp:hooks` 只在 `hooks.json` 里有 agent handler 时才读 `agents/`，所以关掉 `mmp:task` 之后，坏的 agent 文件也不会通过 `mmp:hooks` 让启动失败。默认开启的能力在没有配置时对模型不可见：没有 MCP 服务时 `mmp:mcp` 和随它加载的 codemode/tool-search 不增加任何工具或提示词（两者的工具注册为 inactive，`scripts/model-snapshot.mjs` 验证过）；`mmp:task` 会增加 `task` 等工具。开启的能力配置写错仍然 fail-fast，报错附带"改正文件或用 `disable` 关掉"的提示。
+
+空 Manifest（或没有 Manifest）可以启动，保留运行时身份和固定 Skill 发现行为，Task/MCP/Hooks 三个内置能力全部开启。
 
 ## 4. 仓库结构
 
@@ -186,11 +195,8 @@ MMP 不复制这些文件的 schema，也不在 Manifest 中代理其字段。
   "version": 1,
   "rules": ["./RULES.md"],
   "skills": ["./skills"],
-  "extensions": [
-    "mmp:task",
-    "mmp:mcp",
-    "mmp:hooks"
-  ]
+  "extensions": ["npm:some-pi-extension@1.2.3"],
+  "disable": ["mmp:hooks"]
 }
 ```
 
@@ -202,8 +208,11 @@ interface MmpManifestV1 {
   rules?: string[];
   skills?: string[];
   extensions?: string[];
+  disable?: Array<"mmp:task" | "mmp:mcp" | "mmp:hooks">;
 }
 ```
+
+`disable`（决策 H3/K4）：只接受三个内置名字，其他值（包括 `mmp:runtime`、第三方 source）是配置错误，报错带上文件路径。同一个文件里同一个名字既在 `extensions` 又在 `disable` 是配置错误。内置能力仍可写在 `extensions` 里（旧配置有效），但已经多余：没写也是开启的。
 
 Extension source scheme：
 
@@ -245,7 +254,11 @@ Harness Core 只理解资源装配，不理解各 Extension 的内部配置。
 rules       = global + trusted project
 skills      = global + trusted project + discovered
 extensions  = global + trusted project
+disable     = global ∪ trusted project
+built-ins   = (declared in extensions, in order) + (remaining defaults: task, mcp, hooks) − disable
 ```
+
+`disable` 优先于另一个文件的 `extensions`：全局 `extensions` 列了 `mmp:task`、可信项目 `disable` 了它，结果是关闭。
 
 处理顺序：
 
@@ -268,7 +281,7 @@ interface ResolvedResource {
 }
 ```
 
-Extension 自己负责其配置文件的 schema 和 global/project 合并语义。Harness 只向已启用的内置 Extension 传递可信配置根；未启用的 Extension 不读取对应配置文件。
+Extension 自己负责其配置文件的 schema 和 global/project 合并语义。Harness 只向开启的内置 Extension 传递可信配置根；被 `disable` 关掉的不读取对应配置文件。
 
 ### 7.1 Skill 自动发现（docs/decisions.md S1）
 
@@ -398,9 +411,9 @@ mmp --model anthropic/claude-sonnet-4 --thinking high --print "fix this"
 
 `buildPiArgs()` 顺序为 `BASE_PI_RESOURCE_ARGS`、Manifest 的显式外部 `--extension`、已解析的透传参数。不要复制一份缺少 `--system-prompt ""`、`--append-system-prompt ""` 或 `--no-approve` 的隔离参数表。
 
-Rules 与 Skills 不冻结在 Pi argv 中。`mmp:runtime` 在 `before_agent_start` 注入当前 Rules，并通过 `resources_discover` 返回当前 Skill roots。`/reload` 重新解析 Manifest 并加载 Rules/Skills；失败时保留上一份有效装配并显示错误。
+Rules 与 Skills 不冻结在 Pi argv 中。`mmp:runtime` 通过 `resources_discover` 返回当前 Skill roots；当前 Rules 和运行时契约由同一组代码里的 `mmp:system-prompt` 在 `before_agent_start` 追加。它返回的 `systemPrompt` 会被 Pi 固定成最终文本，之后的 `sections` 修改都会丢失，所以它固定排在 inline 扩展的最后（Pi 1.0 的 MCP 在自己的 `before_agent_start` 里写 `<mcp_servers>`；Manifest 外部扩展本来就排在所有 inline 扩展之前），见 [pi-internals.md](pi-internals.md) `system-prompt-forced-last`。`/reload` 重新解析 Manifest 并加载 Rules/Skills；失败时保留上一份有效装配并显示错误。`/new`、切换会话（`/resume`、rpc `switch_session`）和 fork 同样在 `session_start` 时重新解析（按启动目录解析，不是目标会话的 cwd），规则相同：解析成功就换成新装配，失败就显示错误并沿用最近一次成功解析的装配（可能是启动时的，也可能是之后某次 `/reload` 的），不退回启动装配。Rules、运行时契约、`resources_discover` 返回的 Skill roots、`/mmp` 的输出和欢迎页的计数都读这同一份装配。Pi 在这些路径上都会重新执行扩展工厂，所以这份状态放在 `createMmpRuntimeExtensions` 里、工厂之外，工厂重跑时不重置。
 
-Manifest 的 Extension 选择、Hooks/Task 启动配置改变后需要重启。已启用的原生 MCP 通过 `loadConfig` 重新读取配置，`/reload` 可以应用 MCP 服务配置变化；首次在 Manifest 启用 `mmp:mcp` 仍需重启。具体能力边界见 [mcp-design.md](mcp-design.md)。
+Manifest 的 Extension 选择、Hooks/Task 启动配置改变后需要重启。已启用的原生 MCP 通过 `loadConfig` 重新读取配置，`/reload` 可以应用 MCP 服务配置变化；用 `disable` 关闭或重新开启 `mmp:mcp` 仍需重启。具体能力边界见 [mcp-design.md](mcp-design.md)。
 
 ### 9.4 运行约束
 
@@ -433,6 +446,11 @@ interface ResolvedAssembly {
   skills: ResolvedResource[];
   externalExtensions: ResolvedResource[];
   inlineExtensions: Array<{
+    name: "mmp:task" | "mmp:mcp" | "mmp:hooks";
+    source: "global" | "project" | "default"; // "default": 没有 Manifest 列出，默认开启
+    declaredIn?: string;                        // "default" 时没有
+  }>;
+  disabledExtensions: Array<{                   // 每个列出它的文件一条，全局在前
     name: "mmp:task" | "mmp:mcp" | "mmp:hooks";
     source: "global" | "project";
     declaredIn: string;
@@ -487,14 +505,17 @@ const extensionFactories: InlineExtension[] = [
     }
   ],
   "inlineExtensions": [
-    {
-      "name": "mmp:task",
-      "source": "global"
-    }
+    { "name": "mmp:task", "source": "global", "declaredIn": "/Users/byron/.mmp/mmp.json" },
+    { "name": "mmp:mcp", "source": "default" }
+  ],
+  "disabledExtensions": [
+    { "name": "mmp:hooks", "source": "project", "declaredIn": "/repo/.mmp/mmp.json" }
   ],
   "externalExtensions": []
 }
 ```
+
+`inlineExtensions` 是本次开启的内置能力，`disabledExtensions` 是被关掉的和关掉它的文件。运行时清单（`/mmp` 与提示词里的 `declaredResources`）同样有这两项，但 `disabledExtensions` 为空时省略，这样什么都没关时模型看到的清单和 K4 之前一样。
 
 `skills[]` 的每一项在自动发现（7.1 节）时还会带一个 `discovered: "agents" | "mmp" | "project"` 字段；Manifest 声明的 Skill 没有这个字段。
 
@@ -506,6 +527,7 @@ const extensionFactories: InlineExtension[] = [
 - 每项来自 global 还是 project；
 - 项目配置是否被信任和读取；
 - 哪些 Extension 是 inline factory，哪些交给 Pi package resolver；
+- 哪些内置能力开启（声明的还是默认的），哪些被关掉、由哪个文件关掉；
 - 哪个配置错误阻止启动。
 
 禁止输出：
@@ -634,7 +656,7 @@ export function createMmpMcpExtension(source) {
 - `McpServerEntry.source` 就是传给 `loadMcpConfig` 的那个 `agentDir` 拼出来的路径；`/mcp` 面板的写回（启用/停用/改曝光方式）默认调 `updateMcpServerConfig(entry.source, ...)`——只要不传自定义 `updateConfig`，写回自然落在 MMP 自己的文件上，不用额外代码。
 - `credentials` 没有显式传：它的类型是 `McpOAuthCredentialStore` 实例（不是路径），Pi 的默认值走 `getAgentDir()`，MMP 早就把它重定向到 `<MMP_HOME>/pi` 了，结果和显式传一样，省了引入 `oauth.js` 的代价。
 - 一份坏的 `mcp.json`（`loadNativeMcpConfig` 的 `errors` 非空）在 `src/extensions/index.ts` 里同步抛 `MmpConfigError`，不等 Pi 自己那句软提示（`ctx.ui.notify(..., "warning")`，在 `-p` 模式下是空操作）。
-- Manifest 同时声明别的扩展也注册 `/mcp` 时，Pi 自己的处理是把两边都改名成 `/mcp:1`/`/mcp:2`（不报错）；`mmp:mcp` 在 `session_start` 里查这个改名信号，throw 一个错误——在 print 模式下这条错误经由 Pi 的 `onError` 打到 stderr，在 TUI 里额外用 `ctx.ui.notify` 落一条常驻提示（`ctx.shutdown()` 在 print 模式是空操作，在 TUI 里会立刻退出，可能和提示渲染赛跑，所以不调用它）。
+- `mmp:mcp` 开着（默认开）而 Manifest 声明的别的扩展也注册 `/mcp` 时，Pi 自己的处理是把两边都改名成 `/mcp:1`/`/mcp:2`（不报错）；`mmp:mcp` 在 `session_start` 里查这个改名信号，throw 一个错误，告诉用户要留另一个就加 `"disable": ["mmp:mcp"]`，否则删掉另一个——在 print 模式下这条错误经由 Pi 的 `onError` 打到 stderr，在 TUI 里经由 `onError` 落一条常驻提示（`ctx.shutdown()` 在 print 模式是空操作，在 TUI 里会立刻退出，可能和提示渲染赛跑，所以不调用它）。
 
 `mmp mcp add|remove|list|login|logout`（`src/commands/mcp-cli.ts`，docs/mcp-design.md §6）复用同一批 Pi 代码（`config.js` 的 `addMcpServerConfig`/`removeMcpServerConfig`/`getMcpToolExposure`、`core/mcp-servers.js` 的 `validateMcpServerConfig`、`runtime.js` 的 `McpServerConnection`/`McpOAuthCredentialStore`/`signInMcpServer`，全部登记进 [docs/pi-internals.md](pi-internals.md)），但参数解析和信任判断是 MMP 自己的——Pi 的 `runMcpCommand` 写死 `.pi/mcp.json` 和 Pi 自己的项目信任存储，不能直接用。
 
@@ -642,7 +664,7 @@ MMP 不拥有 transport、OAuth、connection lifecycle、tool discovery/call、r
 
 ## 14. Hooks Extension
 
-`mmp:hooks` 已实现为 Pi `InlineExtension`。它只在 Manifest 显式声明 `"mmp:hooks"` 时装配：
+`mmp:hooks` 已实现为 Pi `InlineExtension`。它默认装配，Manifest 的 `"disable": ["mmp:hooks"]` 关掉它（决策 H3/K4，§3.4）；没有 `hooks.json` 时什么都不做：
 
 ```text
 ~/.mmp/hooks.json
@@ -930,6 +952,7 @@ MMP SDK Host 启动
 - 替换 pi-tui 底层渲染器（MMP 自有交互应用已实现）；
 - 自定义 Compact；
 - 自定义 MCP Runtime；
+- 审批分级（H3/K6：和 Pi 一样默认不审批，分级以后再定）；
 - 通过 shell 或全局 `pi` binary 启动主 runtime；
 - 100% 复刻 Pi CLI 的 resource override 行为。
 
@@ -1025,6 +1048,8 @@ mmp-full
 - `mmp-rules-skills`：测提示与知识装配的净增益；
 - `mmp-full`：测 Task、MCP、Hooks 的最终效果与成本。
 
+内置能力默认开启（决策 H3/K4）以后，档位由 bundle 的 `mmp.json` 决定：`mmp-core-empty` 和 `mmp-rules-skills` 的 bundle 必须写 `"disable": ["mmp:task", "mmp:mcp", "mmp:hooks"]`，否则模型会多看到 `task`、`task_status`、`task_wait`、`task_cancel`、`todo`，和 K4 之前的基线不可比。2026-10-02 的 bundle 模板在 `.dev/bench/2026-10-02/bundles/`。
+
 所有 variant 必须固定：
 
 - model/provider/thinking；
@@ -1102,7 +1127,7 @@ Benchmark 不是阶段 A/B 的实现内容，但阶段 A 的 JSON mode、stdout/
 - `reports/benchmark-adapter/mmp-full-smoke-2026-08-02/metadata.json`；
 - `reports/benchmark-adapter/pi-baseline-smoke-2026-08-02/metadata.json`。
 
-两者均使用依赖中的 Pi `0.83.0` 和 resolved model `openrouter/openai/gpt-4o-mini`，分别返回 `BENCHMARK_ADAPTER_OK` 与 `BASELINE_ADAPTER_OK`。升级到 Pi `0.87.1` 后 system prompt 的格式变了（改为 `<tools>`、`<rules>`、`<docs>`、`<cwd>` 分段），这两个冒烟和基线都要重跑；重跑会调用真实模型、产生费用，还没做。
+两者均使用依赖中的 Pi `0.83.0` 和 resolved model `openrouter/openai/gpt-4o-mini`，分别返回 `BENCHMARK_ADAPTER_OK` 与 `BASELINE_ADAPTER_OK`。Pi `1.0.0` 升级后（2026-10-02）重跑：四个 variant × 两个带评分的小编程任务 × 3 次，新（Pi 1.0.0）旧（Pi 0.99.1 工具版）各一组，48 次全部通过评分，时间、token、工具调用没有系统性退化；方法、bundle 和结果见 `.dev/bench/2026-10-02/report.md`（原始输出在 `reports/benchmark-adapter/2026-10-02*/`）。这不是 §20.5 的九项正式 benchmark。
 
 ## 21. 当前验证与遗留项
 

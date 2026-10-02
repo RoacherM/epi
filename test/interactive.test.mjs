@@ -63,13 +63,14 @@ test("a plain interactive run takes MMP's TUI path with no environment variable 
 });
 
 test("no source file reads MMP_TUI any more: the interactive/piMain split is the only switch", () => {
+  // The whole name only: MMP_TUI_ESC_TIMEOUT (src/pi-env.ts) is a different variable.
   const srcRoot = fileURLToPath(new URL("../src", import.meta.url));
   const offenders = [];
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) walk(path);
-      else if (entry.name.endsWith(".ts") && readFileSync(path, "utf8").includes("MMP_TUI")) offenders.push(path);
+      else if (entry.name.endsWith(".ts") && /\bMMP_TUI\b/.test(readFileSync(path, "utf8"))) offenders.push(path);
     }
   };
   walk(srcRoot);
@@ -127,7 +128,7 @@ async function startOnFakeTerminal(t, args) {
   mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
   const child = spawn(process.execPath, ["--import", fakeTty, cli, "--no-project", ...args], {
     cwd: root,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
     stdio: ["pipe", "pipe", "pipe"],
   });
   let stdout = "";

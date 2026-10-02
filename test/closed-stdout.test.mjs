@@ -27,7 +27,7 @@ function makeHome(t) {
     PATH: process.env.PATH,
     HOME: home,
     MMP_HOME: join(home, ".mmp"),
-    PI_OFFLINE: "1",
+    MMP_OFFLINE: "1",
     MMP_FAUX_SHUTDOWN_MARK: marks.shutdown,
     MMP_FAUX_LATER_LOG: marks.later,
   };

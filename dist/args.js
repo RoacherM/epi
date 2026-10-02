@@ -58,7 +58,7 @@ function findUnsupportedFlagReason(argument) {
  * it.
  */
 export const MMP_FLAG_TABLE = [
-    { flags: ["--provider"], arity: "value", handler: "forward", help: "--provider <name>              Provider name" },
+    { flags: ["--provider"], arity: "value", handler: "forward", help: "--provider <name>              Provider to search for --model (requires --model)" },
     { flags: ["--model"], arity: "value", handler: "forward", help: "--model <pattern>               Model pattern or ID (\"provider/id\", optional \":<thinking>\")" },
     { flags: ["--thinking"], arity: "value", handler: "forward", help: "--thinking <level>              Thinking level: off, minimal, low, medium, high, xhigh, max" },
     { flags: ["--api-key"], arity: "value", handler: "forward", help: "--api-key <key>                 API key (defaults to env vars)" },
@@ -256,6 +256,13 @@ registers fails by name before startup.
 Environment:
   MMP_HOME                   Absolute MMP configuration root (default: ~/.mmp)
   MMP_DISABLE_UPDATE_CHECK   Do not check for new MMP releases
+  MMP_OFFLINE                Disable startup network operations; any value turns network
+                             use off (MMP_OFFLINE=0 too), so use 1
+  MMP_SESSION_DIR            Session storage directory (overridden by --session-dir)
+  MMP_TELEMETRY, MMP_CACHE_RETENTION, MMP_OAUTH_CALLBACK_HOST, MMP_HYPERLINKS,
+  MMP_IMAGE_PROTOCOL, MMP_TRUE_COLOR, MMP_TUI_ESC_TIMEOUT
+                             Same as Pi's PI_* variable of that name; Pi's own PI_*
+                             variables are ignored
 `;
 }
 //# sourceMappingURL=args.js.map

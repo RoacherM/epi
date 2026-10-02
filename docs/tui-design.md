@@ -1,6 +1,6 @@
 # MMP TUI 设计（v2 草案：自建交互层）
 
-日期：2026-09-29。状态：草案，待评审，还没写代码。
+日期：2026-09-29 起草；状态：已实现（`src/tui/`，是 mmp 唯一的交互入口），进度见第 15 节，使用中发现的问题见 [dogfood-issues.md](dogfood-issues.md)。
 
 一句话目标：MMP 保留 Pi 的第 1 到 3 层（模型调用、agent 循环、会话与扩展运行时），自己写第 4 层交互界面，界面和交互按 grok-build 设计。
 
@@ -155,7 +155,7 @@ Pi 的 `main.ts` 在创建交互界面前做了 30 步，SDK 笔记 1.4 节逐�
 resourceLoaderOptions: {
   noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
   additionalExtensionPaths: <Manifest 声明的外部扩展>,
-  extensionFactories: <mmp:runtime / mmp:task / mmp:mcp / mmp:hooks>,
+  extensionFactories: <mmp:runtime / mmp:task / mmp:mcp / mmp:hooks / mmp:system-prompt（固定最后）>,
 }
 agentDir: ~/.mmp/pi（显式传入，同时保留 PI_CODING_AGENT_DIR 环境变量，因为 Pi 内部还有直接读它的地方）
 ```
@@ -346,7 +346,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 | `/scoped-models` | `showModelsSelector` | `ScopedModelsSelectorComponent`（**未在包的 `exports` 字段里**，和 `KeybindingsManager` 一样从 Pi 安装目录按文件路径直接 import） | 用公开的 `modelRuntime.refresh()` 打开前刷新一次模型目录，不是 Pi 内部 `refreshModelCatalogs` 那种带实时状态文字、可超时中止的后台刷新 |
 | `/share` | `shareSession` | `BorderedLoader`（导出）+ `session.exportToHtml` | 不做 Radius 上传（Pi 自己的托管服务，MMP 没有对应身份）；成功后打印原始 gist URL，不是 Pi 的 `getShareViewerUrl` 预览页（没导出）。Pi 本来就没有确认对话框，只有 loader 的 Esc 取消，这点照抄 |
 | `/bug` | 不对应 Pi 的 `/bug`（那个上传给 Pi 开发者） | `session.summarizeForBugReport`（导出）、`BorderedLoader` | 同意 → 描述（可选）→ 是否附加当前模型写的摘要 → 在 MMP 自己仓库开一个预填标题/正文的 `issues/new` 链接，打印出来并尝试用系统默认方式打开；正文按 URL 长度上限截断并注明 |
-| `/changelog` | 不对应 Pi 的 `/changelog`（那个读 Pi 自带的更新日志文件） | 复用 `src/update.ts` 的仓库常量（新增 `MMP_REPO` 导出） | 读 GitHub Releases 列表（`/releases`），不是 `mmp update` 用的 `/releases/latest`；离线（`PI_OFFLINE`）时给出明确提示，不发请求 |
+| `/changelog` | 不对应 Pi 的 `/changelog`（那个读 Pi 自带的更新日志文件） | 复用 `src/update.ts` 的仓库常量（新增 `MMP_REPO` 导出） | 读 GitHub Releases 列表（`/releases`），不是 `mmp update` 用的 `/releases/latest`；离线（`MMP_OFFLINE` 或 `--offline`）时给出明确提示，不发请求 |
 | `/settings` | `showSettingsSelector` | pi-tui `SettingsList`（导出）+ `getSettingsListTheme`、`DynamicBorder`（导出） | 不复用 `SettingsSelectorComponent`：它在构造函数里建好全部 34 项，没有过滤参数，`SettingsList.items` 是私有字段。MMP 用同一个 `SettingsList` 建自己的列表，id、标签、说明、取值照抄 Pi 0.99.1，顺序也和 Pi 一致；`HTTP_IDLE_TIMEOUT_CHOICES`、`formatHttpIdleTimeoutMs`、`CACHE_WARMING_MODES` 没导出，复制过来。`test/tui-settings.test.mjs` 用 Pi 真的 `SettingsSelectorComponent`（只走公开的输入和渲染）核对顺序、标签、说明和取值，Pi 新增一项而这里既没列出也没登记为隐藏时测试失败。界面那一半（Pi 的 `applyRuntimeSettings` + `setupAutocompleteProvider`）在 `app.ts` 的 `applyRuntimeSettings`：第一帧之前、每次 `bind()`、`/reload` 之后、`/settings` 改动之后都跑一遍（`CommandHost.applySettings()`）。写入只到 `~/.mmp/pi/settings.json`（`SettingsManager` 以 `projectTrusted: false` 创建） |
 
 **`/settings` 的项（2026-10-01 主控定，任务 D21）**

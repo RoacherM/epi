@@ -223,10 +223,17 @@ function blockReason(decision: HookDecision): string {
 export function createHooksInlineExtension(
   options: HooksExtensionOptions,
 ): InlineExtension {
-  const agents = loadTaskAgents({
-    globalAgentsDir: join(options.mmpHome, "agents"),
-    projectAgentsDir: options.projectAgentsDir,
-  });
+  // Agent files are only read for a hooks.json that has an agent handler: mmp:hooks is on by default
+  // (decision H3/K4), and with no such hook it must not fail on, or even read, agents/ -- which
+  // also keeps a broken agent file from failing a run whose mmp:task is disabled.
+  const usesAgents = options.hooks.some((hook) =>
+    hook.handlers.some((handler) => handler.type === "agent"));
+  const agents = usesAgents
+    ? loadTaskAgents({
+        globalAgentsDir: join(options.mmpHome, "agents"),
+        projectAgentsDir: options.projectAgentsDir,
+      })
+    : [];
   const agentNames = new Set(agents.map((agent) => agent.name));
   for (const hook of options.hooks) {
     for (const handler of hook.handlers) {

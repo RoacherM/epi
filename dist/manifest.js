@@ -6,12 +6,16 @@ const MANIFEST_KEYS = {
     rules: true,
     skills: true,
     extensions: true,
+    disable: true,
 };
-const BUILT_IN_EXTENSIONS = {
+export const BUILT_IN_EXTENSIONS = {
     "mmp:task": true,
     "mmp:mcp": true,
     "mmp:hooks": true,
 };
+/** Built-in capabilities in the order they load when no Manifest names them (decision H3/K4: on
+ * by default, turned off with `"disable"`). */
+export const BUILT_IN_EXTENSION_NAMES = ["mmp:task", "mmp:mcp", "mmp:hooks"];
 function isJsonObject(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -55,12 +59,14 @@ function loadManifest(manifestPath) {
     const rules = parseStringList(parsed.rules, "rules", manifestPath);
     const skills = parseStringList(parsed.skills, "skills", manifestPath);
     const extensions = parseStringList(parsed.extensions, "extensions", manifestPath);
+    const disable = parseStringList(parsed.disable, "disable", manifestPath);
     return {
         manifest: {
             version: 1,
             ...(rules === undefined ? {} : { rules }),
             ...(skills === undefined ? {} : { skills }),
             ...(extensions === undefined ? {} : { extensions }),
+            ...(disable === undefined ? {} : { disable }),
         },
         loaded: true,
     };
@@ -94,6 +100,7 @@ export function resolveManifest(manifestPath, source) {
     const skills = [];
     const inlineExtensions = [];
     const externalExtensions = [];
+    const disabledExtensions = [];
     const seenRules = new Set();
     const seenSkills = new Set();
     const seenExtensions = new Set();
@@ -143,6 +150,23 @@ export function resolveManifest(manifestPath, source) {
             });
         }
     }
+    const disableList = manifest.disable ?? [];
+    disableList.forEach((name, index) => {
+        if (BUILT_IN_EXTENSIONS[name] !== true) {
+            throw new MmpConfigError(`${manifestPath}: disable[${index}]: ${JSON.stringify(name)} is not a built-in capability ` +
+                `(only ${BUILT_IN_EXTENSION_NAMES.join(", ")} can be disabled)`);
+        }
+        if (seenExtensions.has(name)) {
+            throw new MmpConfigError(`${manifestPath}: ${JSON.stringify(name)} is listed in both "extensions" and "disable"; keep one`);
+        }
+        if (!disabledExtensions.some((entry) => entry.name === name)) {
+            disabledExtensions.push({
+                name: name,
+                source,
+                declaredIn: manifestPath,
+            });
+        }
+    });
     return {
         path: manifestPath,
         loaded,
@@ -150,6 +174,7 @@ export function resolveManifest(manifestPath, source) {
         skills,
         inlineExtensions,
         externalExtensions,
+        disabledExtensions,
     };
 }
 //# sourceMappingURL=manifest.js.map

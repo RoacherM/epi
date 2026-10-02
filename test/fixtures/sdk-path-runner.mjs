@@ -3,6 +3,8 @@
 // Usage: MMP_SDK_RUNNER='<json {args?, prompt?, dumpTools?}>' node sdk-path-runner.mjs
 // (MMP_HOME/HOME set by caller). `args` replaces the default `--no-project` entirely (not appended
 // to it), so tests that need real project discovery (e.g. --approve) can pass their own.
+// First, like dist/cli.js: MMP_* -> PI_* before any Pi module loads (src/pi-env.ts).
+import "../../dist/isolate-pi-env.js";
 import { MmpPreflightError } from "../../dist/errors.js";
 import { prepareMmpRun } from "../../dist/host.js";
 import { createRuntimeFromPrepared } from "../../dist/tui/start.js";

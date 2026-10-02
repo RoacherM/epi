@@ -189,7 +189,7 @@ test("mmp -- --help sends \"--help\" as a message instead of printing help", (t)
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
   const result = spawnSync(process.execPath, [cliPath.pathname, "--no-project", "-p", "--", "--help"], {
     cwd: projectRoot,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
     input: "",
     encoding: "utf8",
     timeout: 30_000,
@@ -275,6 +275,7 @@ test("dry-run is JSON-only and does not create MMP_HOME", (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, "");
   assert.equal(existsSync(mmpHome), false);
+  const defaultBuiltIns = ["mmp:task", "mmp:mcp", "mmp:hooks"].map((name) => ({ name, source: "default" }));
   assert.deepEqual(JSON.parse(result.stdout), {
     mmpVersion: MMP_VERSION,
     piVersion: PI_VERSION,
@@ -317,14 +318,16 @@ test("dry-run is JSON-only and does not create MMP_HOME", (t) => {
       declaredResources: {
         rules: [],
         skillRoots: [],
-        inlineExtensions: [],
+        // No Manifest: the three built-ins are on by default (decision H3/K4), with no declaredIn.
+        inlineExtensions: defaultBuiltIns,
         externalExtensions: [],
       },
     },
     piResourceArgs: [...BASE_PI_RESOURCE_ARGS],
     rules: [],
     skills: [],
-    inlineExtensions: [],
+    inlineExtensions: defaultBuiltIns,
+    disabledExtensions: [],
     externalExtensions: [],
   });
 });

@@ -22,10 +22,10 @@ function fixture(t) {
     root,
     home,
     project,
-    // PI_OFFLINE (like Pi's own offline mode) skips mmp install's real npm/git existence check
+    // MMP_OFFLINE (Pi's offline mode, under MMP's own name: src/pi-env.ts) skips mmp install's real npm/git existence check
     // (manifest-cli.ts's defaultCheckSourceExists), so these tests' fictitious "npm:some-extension"
     // sources don't need live network or a real published package.
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
   };
 }
 
@@ -138,7 +138,7 @@ test("mmp install rejects a local source that does not exist, before writing any
 // was non-empty, never that the package or repo actually exists, so a typo silently wrote a Manifest
 // entry that would only fail much later, the next time `mmp` starts and tries to load it. Fixed with
 // a real existence check (manifest-cli.ts's defaultCheckSourceExists: `npm view`/`git ls-remote`).
-// `runNoOffline` drops the PI_OFFLINE that `fixture()`'s other tests rely on (bug 6's own skip,
+// `runNoOffline` drops the MMP_OFFLINE that `fixture()`'s other tests rely on (bug 6's own skip,
 // tested separately below).
 function runNoOffline(f, args, extraEnv = {}) {
   return spawnSync(process.execPath, [cliPath, ...args], {
@@ -169,21 +169,38 @@ test("mmp install rejects an npm: source that doesn't resolve, before writing an
   assert.equal(existsSync(globalManifestPath(f)), false);
 });
 
-// PI_OFFLINE mirrors Pi's own offline mode (package-manager.js's isOfflineModeEnabled): every
+// MMP_OFFLINE is Pi's own offline mode (package-manager.js's isOfflineModeEnabled): every
 // network-backed resolution Pi does is skipped, and so is this same kind of check. Reuses the exact
 // spec that fails fast above (with real, non-offline checking) to prove the skip is real -- it only
 // succeeds because the check never ran, not because the (impossible) name somehow resolved.
-test("mmp install skips the npm/git existence check under PI_OFFLINE, like Pi's own offline mode", (t) => {
+test("mmp install skips the npm/git existence check under MMP_OFFLINE, like Pi's own offline mode", (t) => {
   const f = fixture(t);
-  const result = run(f, ["install", "npm:Not A Valid Name!!!"]); // fixture() already sets PI_OFFLINE=1
+  const result = run(f, ["install", "npm:Not A Valid Name!!!"]); // fixture() already sets MMP_OFFLINE=1
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(readFileSync(globalManifestPath(f), "utf8")).extensions, ["npm:Not A Valid Name!!!"]);
 });
 
+// Dogfood D63: a Pi user's own PI_OFFLINE must not make mmp offline (src/pi-env.ts clears it at
+// startup). The fake npm records that the existence check still ran.
+test("PI_OFFLINE alone (a Pi user's setting) does not skip mmp install's existence check", (t) => {
+  const f = fixture(t);
+  const argsOut = join(f.root, "npm-args.json");
+  const result = runWithFakeCommand(f, ["install", "npm:some-extension"], {
+    PI_OFFLINE: "1",
+    FAKE_CMD_ARGS_OUT: argsOut,
+    FAKE_CMD_EXIT_CODE: "1",
+    FAKE_CMD_STDERR: "npm error code E404",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /npm package not found/);
+  assert.deepEqual(JSON.parse(readFileSync(argsOut, "utf8")), ["view", "--", "some-extension", "version"]);
+  assert.equal(existsSync(globalManifestPath(f)), false);
+});
+
 // Bug 4 (review round 2): --offline is an MMP flag (docs/cli-design.md §2), and `mmp install
-// --offline` used to be rejected as an unknown option even though PI_OFFLINE already skips this same
+// --offline` used to be rejected as an unknown option even though MMP_OFFLINE already skips this same
 // check. Reuses the exact spec that fails fast above to prove the skip is real.
-test("mmp install --offline skips the npm/git existence check, honouring the flag like PI_OFFLINE", (t) => {
+test("mmp install --offline skips the npm/git existence check, honouring the flag like MMP_OFFLINE", (t) => {
   const f = fixture(t);
   const result = runNoOffline(f, ["install", "npm:Not A Valid Name!!!", "--offline"]);
   assert.equal(result.status, 0, result.stderr);

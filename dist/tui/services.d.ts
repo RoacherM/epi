@@ -1,4 +1,5 @@
 import { type AgentSessionRuntime, type InlineExtension, SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { ResolvedAssembly } from "../assembly.js";
 import { type ProjectIdentity } from "./project-guard.js";
 export interface MmpSessionOptions {
     cwd: string;
@@ -7,6 +8,8 @@ export interface MmpSessionOptions {
     piArgs: readonly string[];
     extensionFactories: InlineExtension[];
     externalExtensionPaths: string[];
+    /** Names the file to turn a built-in off in, when one fails to load (`extensionLoadFailureHint`). */
+    assembly: Pick<ResolvedAssembly, "globalManifest" | "inlineExtensions">;
     /** The project this process assembled its manifest from; --session/--fork targets from another
      * project are refused up front, the same way a later /resume would be (project-guard.ts). */
     projectIdentity: ProjectIdentity;

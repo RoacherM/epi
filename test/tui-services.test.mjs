@@ -25,7 +25,7 @@ function fixture(t) {
   writeFileSync(join(home, ".mmp", "SYSTEM.md"), "AMBIENT-SYSTEM\n");
   mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
   writeFileSync(join(home, ".mmp", "pi", "APPEND_SYSTEM.md"), "AMBIENT-APPEND\n");
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" };
+  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
   return { root, home, project, env, agentDir: join(home, ".mmp", "pi") };
 }
 

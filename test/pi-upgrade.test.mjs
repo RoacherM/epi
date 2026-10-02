@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   bumpPatch,
   computeReportHash,
+  describeNotableJump,
   extractChangelogEntries,
   extractFailingTests,
   isNewerVersion,
@@ -361,6 +362,33 @@ test("runPiUpgrade: a large minor-version jump is flagged in the report as notab
     const registry = fakeRegistry({ latestPi: "0.99.1" });
     const result = runPiUpgrade({ cwd, registry, exec: fakeExec(true).exec, now: () => NOW });
     assert.match(result.report, /12 minor versions at once/);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("describeNotableJump: a major bump is reported as a major version, never as a minor count", () => {
+  assert.equal(describeNotableJump("0.99.1", "1.0.0"), "Major version upgrade (0.99.1 → 1.0.0)");
+  assert.equal(describeNotableJump("1.4.2", "2.0.0"), "Major version upgrade (1.4.2 → 2.0.0)");
+  assert.equal(describeNotableJump("0.99.1", "2.1.0"), "2 major versions at once (0.99.1 → 2.1.0)");
+  assert.equal(describeNotableJump("1.0.0", "1.3.0"), "3 minor versions at once");
+  assert.equal(describeNotableJump("1.0.0", "1.2.5"), undefined);
+  assert.equal(describeNotableJump("0.99.1", "0.99.2"), undefined);
+  assert.equal(describeNotableJump("not-a-version", "1.0.0"), undefined);
+});
+
+test("describeNotableJump: a major downgrade is not a notable jump (minors restart across a major)", () => {
+  assert.equal(describeNotableJump("1.0.0", "0.99.1"), undefined);
+  assert.equal(describeNotableJump("2.0.0", "1.40.0"), undefined);
+});
+
+test("runPiUpgrade: a major-version bump (0.99.1 -> 1.0.0) says so instead of '901 minor versions'", () => {
+  const cwd = makeCwd({ piVersion: "0.99.1" });
+  try {
+    const registry = fakeRegistry({ latestPi: "1.0.0" });
+    const result = runPiUpgrade({ cwd, registry, exec: fakeExec(true).exec, now: () => NOW });
+    assert.match(result.report, /\*\*Major version upgrade \(0\.99\.1 → 1\.0\.0\)\*\*/);
+    assert.doesNotMatch(result.report, /minor versions/);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

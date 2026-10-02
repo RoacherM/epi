@@ -34,7 +34,7 @@ function runApp(t, extensions, steps, { settings, env: extraEnv } = {}) {
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({ steps }),
       ...extraEnv,
     },
@@ -253,7 +253,7 @@ test("/import during compaction does not send the queued message into the outgoi
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TEST_COMPACT_LOG: logPath,
       MMP_TUI_HARNESS: JSON.stringify({
         args: ["--no-project"],

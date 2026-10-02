@@ -52,7 +52,7 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 | ambient 资源隔离 | Pi 新增的自动发现来源 | 手工从 CHANGELOG 找到 `AGENTS.override.md` 补进测试；`SYSTEM.md` / `APPEND_SYSTEM.md` 一直没被覆盖，今天才发现并修好 | 已改进（2026-09-30）：埋设的资源清单改为在测试里直接从安装好的 Pi 读取（`test/fixtures/pi-ambient-sources.mjs` 读 `trust-manager.js` 的 `TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES` 和 `resource-loader.js` 的 context-file 候选名单），不再手写；`test/ambient-isolation.test.mjs` 用它埋设。Pi 新增一种来源，测试就会自动覆盖；读取的位置本身登记在 `docs/pi-internals.md` |
 | 配置隔离 | 项目 `.pi/settings.json`、`~/.pi/agent` 被读取 | 实测：启动阶段总会读项目设置；`--approve` 时运行阶段也生效（已修复） | 运行阶段已是正式测试（`test/ambient-isolation.test.mjs`）。启动阶段的读取还挡不住，只能在报告里记录 |
 | MCP 离线验收 | 原生 MCP（`createMcpExtension`）和新 Pi 不兼容 | 0.87 升级时发现 pi-mcp-adapter 和新 pi-ai 不兼容（`complete` 被删掉）；0.99 升级把 MCP 整个换成 Pi 原生实现，去掉了 adapter 这层，见 [mcp-design.md](mcp-design.md) | `test/mcp.test.mjs`，用 faux provider 按剧本调用一个真实 stdio fixture server |
-| 模型可见内容快照 | system prompt 和工具 schema 的变化 | 0.87 把 system prompt 改成了 `<tools>`、`<rules>` 这样的分段格式，没有任何测试发现 | 已实现（2026-09-30，`scripts/model-snapshot.mjs` + `test/snapshots/model-visible.json`）。用固定的离线装配（rules+skills+三个内置 Extension，全部能离线加载）跑一次 faux 模型，截获它实际收到的 system prompt 和工具声明；路径、cwd、MMP/Pi 版本号都做了归一化，两次运行逐字节相同。只报告、不判失败：`--diff` 恒定退出码 0，没变化打印 `NO MODEL-VISIBLE CHANGES`，变了打印统一 diff，提示需要重跑 benchmark 基线 |
+| 模型可见内容快照 | system prompt 和工具 schema 的变化 | 0.87 把 system prompt 改成了 `<tools>`、`<rules>` 这样的分段格式，没有任何测试发现 | 已实现（2026-09-30，`scripts/model-snapshot.mjs` + `test/snapshots/model-visible.json`）。用固定的离线装配（rules+skills+三个内置 Extension，全部能离线加载）跑一次 faux 模型，截获它实际收到的 system prompt 和工具声明；路径、cwd、MMP/Pi 版本号都做了归一化，两次运行逐字节相同。只报告、不判失败：`--diff` 恒定退出码 0，没变化打印 `NO MODEL-VISIBLE CHANGES`，变了打印统一 diff（没变的那一节只打印 `tools: unchanged` / `systemPrompt: unchanged`，不打印空 patch：Pi 1.0 的门禁报告里空的 tools 表头被误读成工具变了），提示需要重跑 benchmark 基线。局限：装配里没有 MCP server，所以 `codemode`/`tool_search` 工具和 `mcp_servers` 段不在快照里（Pi 1.0 升级时这部分变化是另外手工对比的） |
 | 启动契约 | `piMain` 路径和 SDK 路径给模型的内容不一致（新 TUI 之后才有两条路径） | — | 新增，随新 TUI 一起做（tui-design 3.1 节） |
 | Pi 接口清单 | MMP 用到的 Pi 符号被删掉或改名 | — | 已实现（2026-09-30，`test/pi-interface-inventory.test.mjs`）。用 TypeScript 编译器 API 静态收集 `src/**/*.ts` 里所有从 `pi-coding-agent`/`pi-tui`/`pi-ai` import 的名字（含 `import type`/内联 `type`），值导入对已安装包的运行时导出断言存在，类型导入对其 `.d.ts` 的导出断言存在。门禁不通过时报告具体符号和引用它的文件 |
 | Pi 内部依赖清单 | MMP 按文件路径深导入的 Pi 内部模块、私有字段/方法、或 Pi 自己嵌套安装的依赖，被移动/改名/删除 | — | 已实现（2026-09-30，`test/pi-internals.test.mjs` + `docs/pi-internals.md`）。见第 6 节：每处深耦合登记为文档里的一行，测试对每行做实际检查；还会扫描 `src/`/`test/fixtures/`/`scripts/` 里新出现的 `join(piDist, ...)` 深路径，没登记的直接判失败 |
@@ -140,7 +140,7 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 **什么时候不检查**
 
 - 非交互模式（print、json、rpc）和 benchmark 一律不检查，保证运行结果可复现，也不产生网络请求；
-- 设置了 `--offline` 或 `PI_OFFLINE`；
+- 设置了 `--offline` 或 `MMP_OFFLINE`；
 - 设置了 `MMP_DISABLE_UPDATE_CHECK=1`；
 - 设置了 `CI` 环境变量。
 

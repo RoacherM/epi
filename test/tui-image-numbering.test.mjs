@@ -49,7 +49,7 @@ function setup(t, extensions, settings, clipboardBytes = ONE_PIXEL_PNG) {
     PATH: process.env.PATH,
     HOME: home,
     MMP_HOME: join(home, ".mmp"),
-    PI_OFFLINE: "1",
+    MMP_OFFLINE: "1",
     MMP_TEST_CLIPBOARD_FILE: clipboardFile,
   };
   // Asynchronous, so the app-driven tests below can run side by side.

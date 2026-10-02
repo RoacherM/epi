@@ -19,6 +19,7 @@ import test from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import { createMmpMcpExtension, loadNativeMcpConfig } from "../dist/extensions/mcp.js";
+import { startOAuthMcpServer } from "./fixtures/mcp-oauth-server.mjs";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const fixtureServerPath = fileURLToPath(new URL("./fixtures/mcp-server.mjs", import.meta.url));
@@ -261,7 +262,7 @@ test("a Manifest that declares another extension registering \"/mcp\" alongside 
   const result = spawnSync(
     process.execPath,
     [cliPath, "--no-project", "--model", "mmp-faux/echo", "-p", "hi"],
-    { encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, PI_OFFLINE: "1" } },
+    { encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" } },
   );
   // Pi's own per-handler try/catch (core/extensions/runner.js's emit()) reports a session_start
   // throw through onError rather than crashing the process -- verified empirically that
@@ -279,29 +280,49 @@ test("a Manifest that declares another extension registering \"/mcp\" alongside 
 // ── F3 (Fable milestone review, hard rule 3): a server that fails to connect, or needs sign-in, ──
 // ── is silent in -p and --mode json without this fix (ctx.ui.notify is a no-op there) ───────────
 
-function runNonTuiMcp(t, mode, mcpConfig, { nodeArgs = [], env = {} } = {}) {
+const echoDriver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
+// Answers after 1.5 s, like a real model: background MCP connections settle before the run ends.
+const delayedDriver = fileURLToPath(new URL("./fixtures/faux-delayed-echo.mjs", import.meta.url));
+
+function nonTuiMcpCommand(t, mode, mcpConfig, { nodeArgs = [], env = {}, cliArgs = [], delayed = false } = {}) {
   const root = createFixture(t);
   const mmpHome = join(root, "home");
   mkdirSync(mmpHome, { recursive: true });
-  const driver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
-  writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", driver] });
+  writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", delayed ? delayedDriver : echoDriver] });
   if (mcpConfig !== undefined) writeJson(join(mmpHome, "mcp.json"), mcpConfig);
 
-  const args =
-    mode === "json"
-      ? [cliPath, "--no-project", "--model", "mmp-faux/echo", "--mode", "json", "hi"]
-      : [cliPath, "--no-project", "--model", "mmp-faux/echo", "-p", "hi"];
-  const result = spawnSync(process.execPath, [...nodeArgs, ...args], {
-    encoding: "utf8",
-    env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, PI_OFFLINE: "1", ...env },
-    timeout: 30_000,
-  });
-  return result;
+  const model = delayed ? "mmp-faux/delayed" : "mmp-faux/echo";
+  const modeArgs = mode === "json" ? ["--mode", "json", "hi"] : ["-p", "hi"];
+  return {
+    args: [...nodeArgs, cliPath, "--no-project", "--model", model, ...cliArgs, ...modeArgs],
+    env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1", ...env },
+  };
+}
+
+function runNonTuiMcp(t, mode, mcpConfig, options) {
+  const { args, env } = nonTuiMcpCommand(t, mode, mcpConfig, options);
+  return spawnSync(process.execPath, args, { encoding: "utf8", env, timeout: 30_000 });
+}
+
+// For a test whose MCP server runs in this process (spawnSync would block it from answering).
+async function runNonTuiMcpAsync(t, mode, mcpConfig, options) {
+  const { args, env } = nonTuiMcpCommand(t, mode, mcpConfig, options);
+  const child = spawn(process.execPath, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+  const killTimer = setTimeout(() => child.kill(), 30_000);
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => (stdout += chunk));
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  const status = await new Promise((resolve) => child.on("close", resolve));
+  clearTimeout(killTimer);
+  return { status, stdout, stderr };
 }
 
 // Dogfood D42: Pi loads extensions/mcp/runtime.js (the MCP client, transports, OAuth) only once a
 // session has an enabled server (index.js's loadMcpRuntime); mmp:mcp's transport tracking (D3) must
-// not load it any earlier. A module-load hook logs whether runtime.js was loaded at all.
+// not load it any earlier. A module-load hook logs whether runtime.js was loaded at all. The one
+// server has direct tools: since Pi 0.99.2 only those hold up the first prompt, and a codemode
+// server may not even have started connecting when the faux model's instant reply ends the run.
 const moduleLoadLog = fileURLToPath(new URL("./fixtures/module-load-log.mjs", import.meta.url));
 for (const [label, mcpConfig, loaded] of [
   ["no mcp.json", undefined, false],
@@ -318,7 +339,7 @@ for (const [label, mcpConfig, loaded] of [
     if (config === "fixture") {
       const fixture = fixtureServerArgs();
       marker = fixture.marker;
-      config = { mcpServers: { fixture: { command: process.execPath, args: fixture.args } } };
+      config = { mcpServers: { fixture: { command: process.execPath, args: fixture.args, exposure: "direct" } } };
     }
     const result = runNonTuiMcp(t, "print", config, {
       nodeArgs: ["--import", moduleLoadLog],
@@ -339,44 +360,197 @@ for (const [label, mcpConfig, loaded] of [
   });
 }
 
+// Since Pi 0.99.2 the codemode and tool_search descriptions name no server; Pi's MCP extension lists
+// codemode and deferred servers in a `mcp_servers` prompt section from its before_agent_start. MMP's
+// forced prompt (Rules + runtime contract) must be built after that, or the model never learns which
+// servers exist (docs/pi-internals.md "system-prompt-forced-last").
+test("codemode and deferred servers reach the model in Pi's <mcp_servers> section, ahead of MMP's Rules and runtime contract", (t) => {
+  const root = createFixture(t);
+  const mmpHome = join(root, "home");
+  mkdirSync(mmpHome, { recursive: true });
+  const probe = fileURLToPath(new URL("./fixtures/faux-skill-probe.mjs", import.meta.url));
+  const external = fileURLToPath(new URL("./fixtures/prompt-section-extension.mjs", import.meta.url));
+  writeFileSync(join(mmpHome, "RULES.md"), "# U3 fixture rules\n");
+  writeJson(join(mmpHome, "mmp.json"), { version: 1, rules: ["./RULES.md"], extensions: ["mmp:mcp", external, probe] });
+  writeJson(join(mmpHome, "mcp.json"), {
+    mcpServers: {
+      fixture: { command: process.execPath, args: fixtureServerArgs().args },
+      "deferred-one": { command: process.execPath, args: fixtureServerArgs().args, exposure: "deferred" },
+    },
+  });
+  const result = spawnSync(
+    process.execPath,
+    [cliPath, "--no-project", "--model", "mmp-faux/model-a", "-p", "hi"],
+    { encoding: "utf8", timeout: 30_000, env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" } },
+  );
+  const context = `status=${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+  assert.equal(result.status, 0, context);
+  const prompt = result.stdout;
+  const section = prompt.match(/<mcp_servers>\n([\s\S]*?)\n<\/mcp_servers>/);
+  assert.ok(section, `no <mcp_servers> section in the system prompt\n${context}`);
+  assert.match(section[1], /^- mcp__deferred_one \(tool_search\)/m, context);
+  assert.match(section[1], /^- mcp__fixture \(codemode\)/m, context);
+  // A Manifest extension's section edit lands too: Pi runs external extensions before inline ones.
+  const externalSection = prompt.indexOf("<mmp_test_external>\nexternal section text\n</mmp_test_external>");
+  assert.ok(externalSection >= 0, `a Manifest extension's section is missing\n${context}`);
+  const rules = prompt.indexOf("# U3 fixture rules");
+  const contract = prompt.indexOf("# MMP Runtime Contract");
+  assert.ok(section.index < rules && externalSection < rules && rules < contract, `expected Pi's sections, then Rules, then the runtime contract\n${context}`);
+});
+
+// Pi's own report of a failed or needs-sign-in server (reportProblems() in extensions/mcp/index.js),
+// as an rpc client gets it.
+const BROKEN_LINE = "  broken: failed: spawn /nonexistent/x ENOENT";
+const PI_BROKEN = `MCP servers need attention:\n${BROKEN_LINE}\nRun /mcp to fix.`;
+// "/mcp" does not exist outside the TUI: MMP says what to run in the shell instead (hard rule 4).
+const LIST_HINT = 'From the shell: run "mmp mcp list" to see why.';
+// Pi's report as MMP copies it to stderr in print/json: Pi's text, then MMP's shell hint.
+const BROKEN_ATTENTION = `${PI_BROKEN}\n${LIST_HINT}\n`;
+// MMP's own report at session_shutdown, for what Pi has not reported: Pi's shape, MMP's shell hint.
+const MMP_BROKEN = `MCP servers need attention:\n${BROKEN_LINE}\n${LIST_HINT}`;
+const MMP_HUNG = `MCP servers need attention:\n  hung: still connecting\n${LIST_HINT}`;
+const STILL_CONNECTING = "MCP servers are still connecting; their tools become available once connected.\n";
+const hungServer = (fixtureArgs, exposure) => ({
+  command: process.execPath,
+  args: fixtureArgs,
+  env: { MMP_FIXTURE_HANG_INITIALIZE: "1" },
+  timeout: 30,
+  ...(exposure === undefined ? {} : { exposure }),
+});
+
+function assertCleanStdout(mode, result, context) {
+  if (mode === "print") {
+    assert.equal(result.stdout, "ECHO:hi\n", context);
+  } else {
+    const events = result.stdout.trim().split("\n").map((line) => JSON.parse(line)); // valid JSON events only
+    assert.ok(events.some((event) => event.type === "agent_end"), context);
+    assert.doesNotMatch(
+      result.stdout,
+      /need attention|MCP failed to load|still connecting|ENOENT/,
+      "an MCP report leaked into stdout, which json consumers read\n" + context,
+    );
+  }
+}
+
 for (const mode of ["print", "json"]) {
-  test(`${mode} mode: a server that fails to start prints its name and error to stderr, exit 0, stdout untouched (F3)`, (t) => {
-    const result = runNonTuiMcp(t, mode, { mcpServers: { broken: { command: "/nonexistent/x" } } });
+  // Direct tools: Pi's first prompt waits for the server, so the failure is known before the reply.
+  test(`${mode} mode: a server that fails to start prints Pi's report with its name and error to stderr, exit 0, stdout untouched (F3)`, (t) => {
+    const result = runNonTuiMcp(t, mode, { mcpServers: { broken: { command: "/nonexistent/x", exposure: "direct" } } });
     const context = `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
     assert.equal(result.status, 0, context);
-    assert.match(result.stderr, /broken: failed/, context);
-    assert.match(result.stderr, /ENOENT|nonexistent/, "expected the actual connection error, not just the server name\n" + context);
-    // Never Pi's own zero-server text (it names .pi/mcp.json, a path MMP never reads).
-    assert.doesNotMatch(result.stderr, /\.pi[\\/]mcp\.json/, context);
-    if (mode === "print") {
-      assert.equal(result.stdout, "ECHO:hi\n", context);
-    } else {
-      for (const line of result.stdout.trim().split("\n")) JSON.parse(line); // stdout is clean, valid JSON events only
-      assert.doesNotMatch(result.stdout, /broken|ENOENT/, "the failure leaked into stdout, which json consumers read\n" + context);
-    }
+    assert.equal(result.stderr, BROKEN_ATTENTION, context);
+    assertCleanStdout(mode, result, context);
   });
 
-  test(`${mode} mode: a working server produces no stderr diagnostic (no false alarm) (F3)`, (t) => {
+  // Dogfood D40: since Pi 0.99.2 a codemode server connects in the background and may not have
+  // connected when the first prompt starts (or even when this instant run ends) -- normal, not a
+  // problem to report.
+  for (const exposure of ["codemode", "direct"]) {
+    test(`${mode} mode: a working ${exposure} server produces no stderr diagnostic (no false alarm) (F3, D40)`, (t) => {
+      const { args: fixtureArgs, marker } = fixtureServerArgs();
+      const result = runNonTuiMcp(t, mode, {
+        mcpServers: { fixture: { command: process.execPath, args: fixtureArgs, exposure, env: { MMP_FIXTURE_VALUE: "fixture-ok" } } },
+      });
+      const context = `marker=${marker}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+      assert.equal(result.status, 0, context);
+      assert.equal(result.stderr, "", context);
+      assertCleanStdout(mode, result, context);
+    });
+  }
+
+  // Review 1 finding 1: with --no-tools (or a --tools list without codemode) Pi warns that MCP tools
+  // cannot be called. That is about tool reachability, which the user just chose, not a failed
+  // server, so -p/json do not copy it to stderr (the TUI and rpc still show it, as Pi does).
+  test(`${mode} mode: --no-tools with a working server does not print Pi's unreachable-tools warning`, (t) => {
+    const { args: fixtureArgs } = fixtureServerArgs();
+    const result = runNonTuiMcp(t, mode, { mcpServers: { fixture: { command: process.execPath, args: fixtureArgs } } }, {
+      cliArgs: ["--no-tools"],
+    });
+    const context = `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+    assert.equal(result.status, 0, context);
+    assert.equal(result.stderr, "", context);
+    assertCleanStdout(mode, result, context);
+  });
+
+  // Review 1 finding 4: with a model that takes as long as a real one, an unused broken server with
+  // the default (codemode) exposure has failed before the run ends, and Pi's report reaches stderr.
+  test(`${mode} mode: an unused broken codemode server is reported when the model takes a realistic time`, (t) => {
+    const result = runNonTuiMcp(t, mode, { mcpServers: { broken: { command: "/nonexistent/x" } } }, { delayed: true });
+    const context = `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+    assert.equal(result.status, 0, context);
+    assert.equal(result.stderr, BROKEN_ATTENTION, context);
+    assertCleanStdout(mode, result, context);
+  });
+
+  // Review 1 finding 3: a server that needs a sign-in gets the exact mmp command for it.
+  test(`${mode} mode: a server that needs sign-in is reported with "mmp mcp login <server>"`, async (t) => {
+    const oauth = await startOAuthMcpServer();
+    t.after(() => oauth.close());
+    const result = await runNonTuiMcpAsync(t, mode, { mcpServers: { remote: { url: oauth.url, exposure: "direct" } } });
+    const context = `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+    assert.equal(result.status, 0, context);
+    assert.equal(
+      result.stderr,
+      'MCP servers need attention:\n  remote: needs sign-in\nRun /mcp to fix.\n' +
+        'From the shell: run "mmp mcp list" to see why, or "mmp mcp login remote" to sign in.\n',
+      context,
+    );
+    assertCleanStdout(mode, result, context);
+  });
+
+  // Review 1 finding 2: a server still connecting is named at the end of a run that lasted longer
+  // than Pi's startup wait (here shortened to 0.5 s; the model answers after 1.5 s) -- by then it is
+  // not just connecting in the background. A short run does not name it (D40, the hang tests below).
+  test(`${mode} mode: a codemode server still connecting after a run longer than the startup wait is named`, (t) => {
     const { args: fixtureArgs, marker } = fixtureServerArgs();
-    const result = runNonTuiMcp(t, mode, {
-      mcpServers: { fixture: { command: process.execPath, args: fixtureArgs, env: { MMP_FIXTURE_VALUE: "fixture-ok" } } },
+    const result = runNonTuiMcp(t, mode, { mcpServers: { hung: hungServer(fixtureArgs) } }, {
+      delayed: true,
+      env: { MMP_TEST_MCP_STARTUP_WAIT_MS: "500" },
     });
     const context = `marker=${marker}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
     assert.equal(result.status, 0, context);
-    assert.equal(result.stderr, "", context);
+    assert.equal(result.stderr, `${MMP_HUNG}\n`, context);
+    assertCleanStdout(mode, result, context);
+  });
+
+  // Pi's reportProblems() waits for every startup connection, so a hung server holds back the report
+  // of one that already failed past the end of the run; MMP reports it at session_shutdown instead.
+  test(`${mode} mode: a failed server is reported even while a hung one holds Pi's own report back`, (t) => {
+    const { args: fixtureArgs, marker } = fixtureServerArgs();
+    const result = runNonTuiMcp(t, mode, {
+      mcpServers: { broken: { command: "/nonexistent/x", exposure: "direct" }, hung: hungServer(fixtureArgs) },
+    });
+    const context = `marker=${marker}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+    assert.equal(result.status, 0, context);
+    assert.equal(result.stderr, `${MMP_BROKEN}\n`, context);
+    assertCleanStdout(mode, result, context);
   });
 }
 
-test("zero configured MCP servers: -p writes nothing to stderr and does not wait", (t) => {
-  const started = Date.now();
-  const result = runNonTuiMcp(t, "print", undefined);
-  const context = `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+// A failed codemode server the run actually needs: Pi's tool_call handler waits for the server a
+// script names, the script's call fails, and Pi's report reaches stderr.
+test("print mode: a failed codemode server that a codemode script uses is reported on stderr", (t) => {
+  const root = createFixture(t);
+  const mmpHome = join(root, "home");
+  mkdirSync(mmpHome, { recursive: true });
+  const driver = fileURLToPath(new URL("./fixtures/faux-codemode-call.mjs", import.meta.url));
+  writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", driver] });
+  writeJson(join(mmpHome, "mcp.json"), { mcpServers: { broken: { command: "/nonexistent/x" } } });
+  const result = spawnSync(process.execPath, [cliPath, "--no-project", "--model", "mmp-faux/codemode-call", "-p", "go"], {
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH,
+      HOME: root,
+      MMP_HOME: mmpHome,
+      MMP_OFFLINE: "1",
+      MMP_TEST_CODEMODE_SCRIPT: "return await tools.mcp__broken__echo({ text: 'x' });",
+    },
+    timeout: 30_000,
+  });
+  const context = `status=${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
   assert.equal(result.status, 0, context);
-  assert.equal(result.stdout, "ECHO:hi\n", context);
-  // Also never Pi's own zero-server text, which names .pi/mcp.json, a path MMP never reads.
-  assert.equal(result.stderr, "", context);
-  // Pi's startup wait is 10 s; with nothing to connect there must be nothing to wait for.
-  assert.ok(Date.now() - started < 8_000, `took ${Date.now() - started} ms\n${context}`);
+  assert.equal(result.stdout, "DONE\n", context);
+  assert.equal(result.stderr, BROKEN_ATTENTION, context);
 });
 
 // A server that never answers "initialize" must not hold up the first prompt past Pi's own startup
@@ -384,42 +558,37 @@ test("zero configured MCP servers: -p writes nothing to stderr and does not wait
 // up the exit either (dogfood D3): Pi's McpServerConnection.close() does not reach a connect still
 // in flight, so the pending "initialize" request used to keep the process alive until the server's
 // request timeout (Pi's default 60 s; same in plain Pi). mmp:mcp now closes that transport at
-// session_shutdown. The timeout here is 30 s so "exits in < 15 s" can only pass with the fix.
+// session_shutdown. The timeout here is 30 s so "exits in < 15 s" can only pass with the fix. Only
+// a server with direct tools is waited for (Pi 0.99.2), and only that wait running out is reported
+// -- in Pi's own words, then by MMP naming the server at the end (review 1 finding 2); a hung
+// codemode server in a short run is just still connecting in the background (D40).
 for (const mode of ["print", "json"]) {
-  test(`${mode} mode: a server that never answers initialize is reported as still connecting and holds up neither the prompt nor the exit`, (t) => {
-    const { args: fixtureArgs, marker } = fixtureServerArgs();
-    const started = Date.now();
-    const result = runNonTuiMcp(t, mode, {
-      mcpServers: {
-        hung: { command: process.execPath, args: fixtureArgs, env: { MMP_FIXTURE_HANG_INITIALIZE: "1" }, timeout: 30 },
-      },
+  for (const [exposure, stderr, bound] of [
+    ["direct", `${STILL_CONNECTING}${MMP_HUNG}\n`, 20_000],
+    ["codemode", "", 8_000],
+  ]) {
+    test(`${mode} mode: a ${exposure} server that never answers initialize ${stderr ? "is reported as still connecting" : "is not reported"} and holds up neither the prompt nor the exit`, (t) => {
+      const { args: fixtureArgs, marker } = fixtureServerArgs();
+      const started = Date.now();
+      const result = runNonTuiMcp(t, mode, { mcpServers: { hung: hungServer(fixtureArgs, exposure) } });
+      const elapsed = Date.now() - started;
+      const context = `marker=${marker}\nelapsed=${elapsed} ms\nstatus=${result.status} signal=${result.signal}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+      assert.equal(result.status, 0, context);
+      assertCleanStdout(mode, result, context);
+      assert.equal(result.stderr, stderr, context);
+      // direct: ~10 s startup bound + ~0.5 s stdin-close grace; before the D3 fix this was the 30 s timeout.
+      assert.ok(elapsed < bound, `process waited too long for the hung server\n${context}`);
+      const leftover = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" });
+      assert.equal(leftover.stdout.trim(), "", `hung fixture server still running after exit\n${context}`);
     });
-    const elapsed = Date.now() - started;
-    const context = `marker=${marker}\nelapsed=${elapsed} ms\nstatus=${result.status} signal=${result.signal}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
-    assert.equal(result.status, 0, context);
-    if (mode === "print") {
-      assert.equal(result.stdout, "ECHO:hi\n", context);
-    } else {
-      const events = result.stdout.trim().split("\n").map((line) => JSON.parse(line));
-      assert.ok(events.some((event) => event.type === "agent_end"), context);
-      assert.match(result.stdout, /ECHO:hi/, context);
-    }
-    assert.equal(
-      result.stderr,
-      "mcp: hung is still connecting; its tools become available once connected\n",
-      context,
-    );
-    // ~10 s startup bound + ~0.5 s stdin-close grace; before the fix this was the 30 s timeout.
-    assert.ok(elapsed < 20_000, `process waited for the hung server's request timeout\n${context}`);
-    const leftover = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" });
-    assert.equal(leftover.stdout.trim(), "", `hung fixture server still running after exit\n${context}`);
-  });
+  }
 }
 
 // Dogfood D6: when Pi's MCP startup chain throws after reading the config (here: every
 // McpServerConnection constructor, via a module hook on Pi's extensions/mcp/runtime.js), Pi only
 // calls ctx.ui.notify("MCP failed to load: ...") -- a no-op in print/json mode -- and no server gets
-// a connection. MMP used to call each server "still connecting" and drop the real error.
+// a connection. MMP used to call each server "still connecting" and drop the real error. Direct
+// tools, so Pi's first prompt waits for the startup chain and the failure is known before the reply.
 for (const mode of ["print", "json"]) {
   test(`${mode} mode: a failure in Pi's MCP startup is reported once on stderr, not as servers still connecting (D6)`, (t) => {
     const root = createFixture(t);
@@ -429,7 +598,10 @@ for (const mode of ["print", "json"]) {
     const hooks = fileURLToPath(new URL("./fixtures/mcp-connection-throws.mjs", import.meta.url));
     writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", driver] });
     writeJson(join(mmpHome, "mcp.json"), {
-      mcpServers: { one: { command: "node", args: [fixtureServerPath] }, two: { command: "node", args: [fixtureServerPath] } },
+      mcpServers: {
+        one: { command: "node", args: [fixtureServerPath], exposure: "direct" },
+        two: { command: "node", args: [fixtureServerPath], exposure: "direct" },
+      },
     });
     const modeArgs = mode === "json" ? ["--mode", "json", "hi"] : ["-p", "hi"];
     const result = spawnSync(
@@ -437,24 +609,19 @@ for (const mode of ["print", "json"]) {
       ["--import", hooks, cliPath, "--no-project", "--model", "mmp-faux/echo", ...modeArgs],
       {
         encoding: "utf8",
-        env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, PI_OFFLINE: "1" },
+        env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" },
         timeout: 30_000,
       },
     );
     const context = `status=${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
     assert.equal(result.status, 0, context);
     assert.equal(result.stderr, "MCP failed to load: simulated: McpServerConnection is unavailable\n", context);
-    if (mode === "print") {
-      assert.equal(result.stdout, "ECHO:hi\n", context);
-    } else {
-      for (const line of result.stdout.trim().split("\n")) JSON.parse(line);
-      assert.doesNotMatch(result.stdout, /MCP failed to load/, context);
-    }
+    assertCleanStdout(mode, result, context);
   });
 }
 
 // Runs one "hi" prompt in `--mode rpc` and ends the session once the turn is over.
-async function runRpcMcp(t, mcpConfig, { nodeArgs = [], extensions = [] } = {}) {
+async function runRpcMcp(t, mcpConfig, { nodeArgs = [], extensions = [], cliArgs = [] } = {}) {
   const root = createFixture(t);
   const mmpHome = join(root, "home");
   mkdirSync(mmpHome, { recursive: true });
@@ -463,8 +630,8 @@ async function runRpcMcp(t, mcpConfig, { nodeArgs = [], extensions = [] } = {}) 
   if (mcpConfig !== undefined) writeJson(join(mmpHome, "mcp.json"), mcpConfig);
   const child = spawn(
     process.execPath,
-    [...nodeArgs, cliPath, "--no-project", "--model", "mmp-faux/echo", "--mode", "rpc"],
-    { env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, PI_OFFLINE: "1" }, stdio: ["pipe", "pipe", "pipe"] },
+    [...nodeArgs, cliPath, "--no-project", "--model", "mmp-faux/echo", ...cliArgs, "--mode", "rpc"],
+    { env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" }, stdio: ["pipe", "pipe", "pipe"] },
   );
   const killTimer = setTimeout(() => child.kill(), 30_000);
   let stdout = "";
@@ -492,55 +659,72 @@ async function runRpcMcp(t, mcpConfig, { nodeArgs = [], extensions = [] } = {}) 
 // extension_ui_request, so writing the failure to stderr as well reported it twice.
 test("rpc mode: a failure in Pi's MCP startup reaches the client once, not stderr too (D6, D47)", async (t) => {
   const hooks = fileURLToPath(new URL("./fixtures/mcp-connection-throws.mjs", import.meta.url));
-  const { stderr, notifies, context } = await runRpcMcp(t, { mcpServers: { one: { command: "node", args: [fixtureServerPath] } } }, { nodeArgs: ["--import", hooks] });
-  const failures = notifies.filter(([message]) => /MCP failed to load/.test(message));
-  assert.deepEqual(failures, [["MCP failed to load: simulated: McpServerConnection is unavailable", "error"]], context);
-  // No "still connecting" lines either: the client already has the real error.
+  const { stderr, notifies, context } = await runRpcMcp(
+    t,
+    { mcpServers: { one: { command: "node", args: [fixtureServerPath], exposure: "direct" } } },
+    { nodeArgs: ["--import", hooks] },
+  );
+  assert.deepEqual(notifies, [["MCP failed to load: simulated: McpServerConnection is unavailable", "error"]], context);
   assert.equal(stderr, "", context);
 });
 
 // Dogfood D52: Pi's own reportProblems() also reaches an rpc client, so MMP's per-server line on
 // stderr reported a failed server a second time.
 test("rpc mode: a server that fails to start is reported to the client once, not on stderr too (D52)", async (t) => {
-  const { stderr, notifies, context } = await runRpcMcp(t, { mcpServers: { broken: { command: "/nonexistent/x" } } });
-  const reports = notifies.filter(([message]) => /broken/.test(message));
-  assert.equal(reports.length, 1, context);
-  assert.match(reports[0][0], /^MCP servers need attention:\n {2}broken: failed/, context);
-  assert.equal(reports[0][1], "warning", context);
+  const { stderr, notifies, context } = await runRpcMcp(t, { mcpServers: { broken: { command: "/nonexistent/x", exposure: "direct" } } });
+  assert.deepEqual(notifies, [[PI_BROKEN, "warning"]], context);
   assert.equal(stderr, "", context);
 });
 
-// Pi says "still connecting" itself once its 10 s startup wait runs out.
-test("rpc mode: a server still connecting after Pi's startup wait is reported to the client once (D52)", async (t) => {
+// The report Pi's hung server holds back goes to the client too, once, at session_shutdown.
+test("rpc mode: a failed server is reported to the client once even while a hung one holds Pi's own report back", async (t) => {
   const { args: fixtureArgs } = fixtureServerArgs();
   const { stderr, notifies, context } = await runRpcMcp(t, {
-    mcpServers: { hung: { command: process.execPath, args: fixtureArgs, env: { MMP_FIXTURE_HANG_INITIALIZE: "1" }, timeout: 30 } },
+    mcpServers: { broken: { command: "/nonexistent/x", exposure: "direct" }, hung: hungServer(fixtureArgs) },
   });
+  assert.deepEqual(notifies, [[MMP_BROKEN, "warning"]], context);
+  assert.equal(stderr, "", context);
+});
+
+// Pi says "still connecting" itself once its 10 s wait for servers with direct tools runs out, without
+// naming the server; MMP names it when the session ends (review 1 finding 2).
+test("rpc mode: a direct server still connecting after Pi's startup wait is reported to the client once (D52)", async (t) => {
+  const { args: fixtureArgs } = fixtureServerArgs();
+  const { stderr, notifies, context } = await runRpcMcp(t, { mcpServers: { hung: hungServer(fixtureArgs, "direct") } });
+  assert.deepEqual(notifies, [[STILL_CONNECTING.trimEnd(), "info"], [MMP_HUNG, "warning"]], context);
+  assert.equal(stderr, "", context);
+});
+
+// Review 1 finding 1: -p/json drop Pi's unreachable-tools warning, but an rpc client gets it, as Pi
+// sends it (MMP's filter applies only to the stderr copy).
+test("rpc mode: --no-tools with a working server still sends Pi's unreachable-tools warning to the client", async (t) => {
+  const { args: fixtureArgs } = fixtureServerArgs();
+  const { stderr, notifies, context } = await runRpcMcp(
+    t,
+    { mcpServers: { fixture: { command: process.execPath, args: fixtureArgs } } },
+    { cliArgs: ["--no-tools"] },
+  );
   assert.deepEqual(
-    notifies.filter(([message]) => /still connecting/.test(message)),
-    [["MCP servers are still connecting; their tools become available once connected.", "info"]],
+    notifies,
+    [["MCP tools are only reachable from the codemode or tool_search tool, but neither is active; they cannot be called.", "warning"]],
     context,
   );
   assert.equal(stderr, "", context);
 });
 
-// A server registered after startup (here: by the first prompt) is outside Pi's startup wait, so Pi
-// says nothing about it still connecting: that line is MMP's own, and it goes to the client like
-// Pi's, not to stderr.
-test("rpc mode: a later-registered server still connecting is reported to the client by MMP (D52)", async (t) => {
+// A server registered after startup (here: by the first prompt) connects in the background, like
+// every server whose tools are not waited for; Pi 1.0 says nothing about it still connecting, and
+// MMP no longer does either (it used to, before Pi 0.99.2's background connects; D40, D52).
+test("rpc mode: a later-registered server still connecting is not reported (D40)", async (t) => {
   const { args: fixtureArgs } = fixtureServerArgs();
   const root = createFixture(t);
   const late = join(root, "late-server.mjs");
   writeFileSync(late, `export default function (pi) {
-  pi.on("before_agent_start", () => pi.registerMcpServer("late", ${JSON.stringify({ command: process.execPath, args: fixtureArgs, env: { MMP_FIXTURE_HANG_INITIALIZE: "1" }, timeout: 30 })}));
+  pi.on("before_agent_start", () => pi.registerMcpServer("late", ${JSON.stringify(hungServer(fixtureArgs))}));
 }
 `);
   const { stderr, notifies, context } = await runRpcMcp(t, undefined, { extensions: [late] });
-  assert.deepEqual(
-    notifies.filter(([message]) => /still connecting/.test(message)),
-    [["mcp: late is still connecting; its tools become available once connected", "info"]],
-    context,
-  );
+  assert.deepEqual(notifies, [], context);
   assert.equal(stderr, "", context);
 });
 
@@ -585,7 +769,7 @@ test("declared MCP servers: codemode call, direct call, env expansion, and child
         MMP_HOME: mmpHome,
         MMP_MCP_FIXTURE_VALUE: "fixture-ok",
         // Offline: a model-catalog refresh landing mid-run occasionally dropped the faux provider.
-        PI_OFFLINE: "1",
+        MMP_OFFLINE: "1",
       },
     },
   );
@@ -632,7 +816,7 @@ function runTuiApp(t, extensions, steps, mcpConfig) {
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({ steps }),
     },
     encoding: "utf8",

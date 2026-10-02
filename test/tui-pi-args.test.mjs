@@ -23,7 +23,7 @@ function fixture(t) {
   mkdirSync(join(home, ".mmp"), { recursive: true });
   mkdirSync(project, { recursive: true });
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" };
+  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
   return { root, home, project, env };
 }
 
@@ -54,7 +54,8 @@ test("--exclude-tools bash,edit,write leaves only the tools not named", (t) => {
   const f = fixture(t);
   const result = runSdkPath(f, { args: ["--no-project", "--exclude-tools", "bash,edit,write"], dumpTools: true });
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), ["read"]);
+  // mmp:task is on by default (decision H3/K4) and its tools are not named, so they stay.
+  assert.deepEqual(JSON.parse(result.stdout), ["read", "task", "task_status", "task_wait", "task_cancel", "todo"]);
 });
 
 test("without tool flags, the default built-in tools are all enabled", (t) => {
@@ -148,7 +149,7 @@ function runHarness(t, extensions, args, steps) {
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({ args, steps }),
     },
     encoding: "utf8",
@@ -181,7 +182,7 @@ test('mmp @file.txt inlines the file into the first prompt (docs/cli-design.md �
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({
         args: ["--no-project", "@note.txt", "hello"],
         steps: [["waitReady"], ["waitFor", { regex: "ECHO:.*note\\.txt.*the file's own content.*hello", flags: "s" }, { all: true }], ["mark", "afterStartup"], ["key", "ctrl+d"]],
@@ -236,4 +237,23 @@ test("an initial CLI message does not wipe out text the startup gate had just re
   // tui-startup-typeahead.test.mjs's own first test -- there is nothing to assert about EXIT.
   assert.match(out, /❯ typed-text\s/);
   assert.doesNotMatch(out, /❯ {2,}[│┃]/);
+});
+
+// Pi 1.0 (#10236): `--provider` without `--model` used to be ignored silently and the default model
+// of another provider ran. Pi's buildSessionOptions (main.js) now fails with an error; MMP's own copy
+// of that logic (services.ts) must too, so the TUI stops at startup like -p does.
+test("--provider without --model stops the TUI with Pi's error, like -p", (t) => {
+  const f = fixture(t);
+  const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+  const fakeTty = fileURLToPath(new URL("./fixtures/fake-tty.mjs", import.meta.url));
+  const expected = /--provider requires --model \(for example: --provider mmp-faux --model <pattern>\)/;
+  for (const args of [["--import", fakeTty, cli, "--no-project", "--provider", "mmp-faux"], [cli, "--no-project", "--provider", "mmp-faux", "-p", "hi"]]) {
+    const result = spawnSync(process.execPath, args, { cwd: f.project, env: f.env, input: "", encoding: "utf8", timeout: 30_000 });
+    assert.equal(result.status, 1, `${args.join(" ")}\n${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, expected);
+    assert.doesNotMatch(result.stdout, /ECHO:/);
+  }
+  // --help says so too, in Pi 1.0's wording.
+  const help = spawnSync(process.execPath, [cli, "--help"], { cwd: f.project, env: f.env, encoding: "utf8", timeout: 30_000 });
+  assert.match(help.stdout, /--provider <name> +Provider to search for --model \(requires --model\)/);
 });

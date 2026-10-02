@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 
 import { MmpConfigError } from "./errors.js";
 import {
+  BUILT_IN_EXTENSION_NAMES,
   resolveManifest,
+  type BuiltInExtensionName,
+  type ResolvedDisabledExtension,
   type ResolvedInlineExtension,
   type ResolvedResource,
 } from "./manifest.js";
@@ -34,8 +37,24 @@ export interface ResolvedAssembly {
   rules: ResolvedResource[];
   rulesText: string;
   skills: ResolvedResource[];
+  /** Built-ins that load this run: those a Manifest lists in `"extensions"` (declaration order),
+   * then the remaining defaults, minus every disabled one. */
   inlineExtensions: ResolvedInlineExtension[];
   externalExtensions: ResolvedResource[];
+  /** Every `"disable"` entry, one per file that lists it (global first). */
+  disabledExtensions: ResolvedDisabledExtension[];
+}
+
+/** How to turn a loaded built-in off (decision H3/K4), for messages about something it broke. A
+ * built-in listed in `"extensions"` must leave that list too: the same name in both is an error. */
+export function builtInOffInstruction(
+  name: BuiltInExtensionName,
+  assembly: Pick<ResolvedAssembly, "globalManifest" | "inlineExtensions">,
+): string {
+  const declaredIn = assembly.inlineExtensions.find((extension) => extension.name === name)?.declaredIn;
+  return declaredIn === undefined
+    ? `add "disable": ["${name}"] to ${assembly.globalManifest}`
+    : `remove "${name}" from "extensions" in ${declaredIn} and list it in "disable"`;
 }
 
 function mergeUnique<T>(
@@ -103,10 +122,20 @@ export function resolveAssembly(
     [globalManifest.skills, projectSkills, discoveredSkills],
     (resource) => resource.value,
   );
-  const inlineExtensions = mergeUnique(
-    [globalManifest.inlineExtensions, projectInlineExtensions],
-    (extension) => extension.name,
+  // Built-ins are on by default (decision H3/K4). `disable` is the union of global + trusted
+  // project, and wins over an `extensions` entry in the other file.
+  const disabledExtensions = mergeUnique(
+    [globalManifest.disabledExtensions, project.manifest?.disabledExtensions ?? []],
+    (extension) => `${extension.name}\0${extension.declaredIn}`,
   );
+  const disabledNames = new Set(disabledExtensions.map((extension) => extension.name));
+  const defaultInlineExtensions: ResolvedInlineExtension[] = BUILT_IN_EXTENSION_NAMES.map(
+    (name) => ({ name, source: "default" }),
+  );
+  const inlineExtensions = mergeUnique(
+    [globalManifest.inlineExtensions, projectInlineExtensions, defaultInlineExtensions],
+    (extension) => extension.name,
+  ).filter((extension) => !disabledNames.has(extension.name));
   const externalExtensions = mergeUnique(
     [globalManifest.externalExtensions, projectExternalExtensions],
     (resource) => resource.value,
@@ -123,5 +152,6 @@ export function resolveAssembly(
     skills,
     inlineExtensions,
     externalExtensions,
+    disabledExtensions,
   };
 }

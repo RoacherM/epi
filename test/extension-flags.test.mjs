@@ -23,7 +23,7 @@ function fixture(t) {
   mkdirSync(join(home, ".mmp"), { recursive: true });
   mkdirSync(project, { recursive: true });
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [flagExtension] }));
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" };
+  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
   return { root, home, project, env };
 }
 
@@ -118,7 +118,7 @@ test("mmp --help has no Extension options section when nothing registers a flag"
   mkdirSync(join(home, ".mmp"), { recursive: true });
   const result = spawnSync(process.execPath, [cliPath, "--help"], {
     cwd: root,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
     encoding: "utf8",
     input: "",
     timeout: 30_000,

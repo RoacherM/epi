@@ -190,7 +190,7 @@ test("-p (non-interactive, non-TTY) never shows the trust prompt and ignores the
 
   const result = spawnSync(process.execPath, [cliPath.pathname, "-p", "hi"], {
     cwd: fixture.nestedCwd,
-    env: { PATH: process.env.PATH, HOME: fixture.mmpHome, MMP_HOME: fixture.mmpHome, PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: fixture.mmpHome, MMP_HOME: fixture.mmpHome, MMP_OFFLINE: "1" },
     input: "",
     encoding: "utf8",
     timeout: 60_000,

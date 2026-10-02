@@ -115,7 +115,8 @@ async function shareViaGist(host, filePath) {
 }
 // ── /bug ────────────────────────────────────────────────────────────────────
 /** Best-effort: the URL is always printed first, so a failed or unavailable opener loses nothing.
- * Gated on PI_OFFLINE (the same env var the whole test suite sets) so tests never pop a real
+ * Gated on PI_OFFLINE (set from MMP_OFFLINE, which the whole test suite sets, or by --offline;
+ * src/pi-env.ts) so tests never pop a real
  * browser tab; `.on("error", ...)` swallows a missing `open`/`xdg-open`/`start` instead of letting
  * an unhandled child 'error' event hit app.ts's uncaughtException handler. */
 function openInBrowser(url) {

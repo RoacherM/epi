@@ -5,7 +5,7 @@ import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { MMP_PACKAGE_VERSION as MMP_VERSION } from "./fixtures/mmp-package-version.mjs";
-import { createMmpRuntimeExtension } from "../dist/extensions/runtime.js";
+import { createMmpRuntimeExtensions } from "../dist/extensions/runtime.js";
 import { renderMmpStartupPage } from "../dist/startup-page.js";
 
 function escapeRegExp(text) {
@@ -130,7 +130,7 @@ test("narrow startup page remains within the terminal width", () => {
 
 test("runtime extension installs the startup page only in TUI mode", async () => {
   const handlers = new Map();
-  const extension = createMmpRuntimeExtension(identity, assembly);
+  const extension = createMmpRuntimeExtensions(identity, assembly).runtime;
   extension.factory({
     on(event, handler) {
       handlers.set(event, handler);
