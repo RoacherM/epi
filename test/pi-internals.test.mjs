@@ -8,7 +8,7 @@
 //   3. a *new* deep reach added to src/ without a matching row fails here, not silently.
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
@@ -174,19 +174,27 @@ const registry = [
     id: "pi-env-reads",
     async check() {
       const { PI_ENV_RULES, PI_ENV_NOT_READ } = await import(pathToFileURL(join(root, "dist", "pi-env.js")).href);
-      const found = piEnvNamesInPi();
+      const { names: found, readSites, appNameBuilt } = piEnvUsesInPi();
       // config.js builds these two from APP_NAME, so they never appear as a literal.
-      const { ENV_AGENT_DIR, ENV_SESSION_DIR } = await importDeep("config.js");
-      found.add(ENV_AGENT_DIR);
-      found.add(ENV_SESSION_DIR);
+      const config = await importDeep("config.js");
+      found.add(config.ENV_AGENT_DIR);
+      found.add(config.ENV_SESSION_DIR);
+      for (const constant of readSites.constants) readSites.names.add(config[constant] ?? constant);
       const classified = new Set([...Object.keys(PI_ENV_RULES), ...PI_ENV_NOT_READ]);
       const unclassified = [...found].filter((name) => !classified.has(name)).sort();
       const gone = [...classified].filter((name) => !found.has(name)).sort();
+      // A name can outlive its read in Pi's --help text or a comment; a bridged MMP_* knob would then
+      // do nothing (D63 review 1, F3).
+      const bridgedWithoutRead = Object.entries(PI_ENV_RULES)
+        .filter(([name, rule]) => rule.kind === "bridged" && !readSites.names.has(name))
+        .map(([name]) => name);
       assert.deepEqual(
-        { unclassified, gone },
-        { unclassified: [], gone: [] },
+        { unclassified, gone, bridgedWithoutRead, appNameBuilt },
+        { unclassified: [], gone: [], bridgedWithoutRead: [], appNameBuilt: { "pi-coding-agent/config.js": 2 } },
         "Pi's PI_* names changed: classify each new one in src/pi-env.ts (bridged / mmp-owned / cleared / not read) and " +
-          "docs/cli-design.md §2.1, and drop the ones Pi no longer uses",
+          "docs/cli-design.md §2.1, and drop the ones Pi no longer uses. A bridged name needs a read site " +
+          "(process.env.X, env.X, process.env[\"X\"], getProviderEnvValue(\"X\"), process.env[ENV_X]). A new " +
+          "`${APP_NAME.toUpperCase()}_...` name is invisible to the scan: add it next to ENV_AGENT_DIR/ENV_SESSION_DIR",
       );
     },
   },
@@ -707,8 +715,10 @@ const registry = [
 /** Every `PI_*` name in the Pi runtime code mmp loads: each @earendil-works package's dist/, at the
  * top level and nested under pi-coding-agent, except pi-coding-agent's single-file `bundle/` and
  * Bun-binary `bun/` builds, which mmp never imports. Comments count too: cheaper than parsing,
- * and a name only mentioned still has to be classified. */
-function piEnvNamesInPi() {
+ * and a name only mentioned still has to be classified. Also returns the names with a read site
+ * (`readSites.names`, plus `readSites.constants` for `process.env[ENV_X]`, resolved by the caller
+ * through config.js) and, per file, how many names Pi builds from `APP_NAME.toUpperCase()`. */
+function piEnvUsesInPi() {
   const scopeDir = dirname(dirname(piDist));
   const packageDirs = readdirSync(scopeDir).map((name) => join(scopeDir, name));
   const nestedScope = join(dirname(piDist), "node_modules", "@earendil-works");
@@ -716,17 +726,27 @@ function piEnvNamesInPi() {
     packageDirs.push(...readdirSync(nestedScope).map((name) => join(nestedScope, name)));
   }
   const names = new Set();
+  const readSites = { names: new Set(), constants: new Set() };
+  const appNameBuilt = {};
   for (const packageDir of packageDirs) {
     const dist = join(packageDir, "dist");
     if (!statSync(dist, { throwIfNoEntry: false })?.isDirectory()) continue;
     for (const file of readdirSync(dist, { recursive: true })) {
       if (!file.endsWith(".js") || /^(bundle|bun)[\\/]/.test(file)) continue;
-      for (const [name] of readFileSync(join(dist, file), "utf8").matchAll(/(?<![A-Za-z0-9_$])PI_[A-Z0-9_]*[A-Z0-9]/g)) {
+      const text = readFileSync(join(dist, file), "utf8");
+      for (const [name] of text.matchAll(/(?<![A-Za-z0-9_$])PI_[A-Z0-9_]*[A-Z0-9]/g)) {
         names.add(name);
       }
+      for (const [, name] of text.matchAll(/\benv(?:\.|\[["'`])(PI_[A-Z0-9_]*[A-Z0-9])\b/g)) readSites.names.add(name);
+      for (const [, name] of text.matchAll(/getProviderEnvValue\(\s*["'`](PI_[A-Z0-9_]*[A-Z0-9])["'`]/g)) {
+        readSites.names.add(name);
+      }
+      for (const [, constant] of text.matchAll(/\benv\[(ENV_[A-Z0-9_]+)\]/g)) readSites.constants.add(constant);
+      const built = text.match(/\bAPP_NAME\.toUpperCase\(\)/g)?.length ?? 0;
+      if (built > 0) appNameBuilt[`${basename(packageDir)}/${file.replaceAll("\\", "/")}`] = built;
     }
   }
-  return names;
+  return { names, readSites, appNameBuilt };
 }
 
 /** One `pi.on("<event>", ...)` handler's source in Pi's MCP extension: up to the next `pi.on(`. */

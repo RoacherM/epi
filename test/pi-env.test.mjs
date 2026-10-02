@@ -29,7 +29,8 @@ function fixture(t, extensions) {
 }
 
 /** `mmp -p hi` with the probe's faux model. Runs without MMP_OFFLINE are deliberately online, so
- * network-guard.mjs refuses (and records) any connection; every test asserts there was none. */
+ * network-guard.mjs refuses (and records) the main thread's fetch and TCP/TLS connects; every test
+ * asserts there was none. */
 function runProbe(t, env) {
   const f = fixture(t, [probeExtension]);
   const probeOut = join(f.root, "probe.json");
@@ -56,6 +57,48 @@ function runProbe(t, env) {
   assert.equal(existsSync(guardOut) ? readFileSync(guardOut, "utf8") : "", "", "a connection was attempted");
   return { ...JSON.parse(readFileSync(probeOut, "utf8")), fixture: f };
 }
+
+// The online runs above are only as offline as the guard. http's agent hands net.connect
+// `path: null` for TCP, which an `!== undefined` check once took for a pipe (D63 review 1).
+// 192.0.2.1 is TEST-NET-1: no DNS lookup, and nothing answers if the guard lets it through.
+test("network-guard refuses http.get and https.get, and still allows a Unix socket", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "mmp-network-guard-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const guardOut = join(root, "network.txt");
+  const script = `
+    import http from "node:http";
+    import https from "node:https";
+    const outcome = (request) => new Promise((resolve) => {
+      try {
+        const req = request(() => resolve("response"));
+        req.on("error", (error) => resolve(error.message));
+        req.setTimeout(5000, () => req.destroy(new Error("timeout")));
+      } catch (error) {
+        resolve(error.message);
+      }
+    });
+    const server = http.createServer((req, res) => res.end("ok"));
+    await new Promise((resolve) => server.listen(${JSON.stringify(join(root, "local.sock"))}, resolve));
+    console.log(JSON.stringify({
+      http: await outcome((cb) => http.get("http://192.0.2.1/", cb)),
+      https: await outcome((cb) => https.get("https://192.0.2.1/", cb)),
+      unixSocket: await outcome((cb) => http.get({ socketPath: server.address(), path: "/" }, cb)),
+    }));
+    server.close();
+  `;
+  const result = spawnSync(process.execPath, ["--import", networkGuard, "--input-type=module", "-e", script], {
+    env: { PATH: process.env.PATH, MMP_NETWORK_GUARD_OUT: guardOut },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    http: "network-guard: connect 192.0.2.1:80 refused",
+    https: "network-guard: connect 192.0.2.1:443 refused",
+    unixSocket: "response",
+  });
+  assert.equal(readFileSync(guardOut, "utf8"), "connect 192.0.2.1:80\nconnect 192.0.2.1:443\n");
+});
 
 test("PI_OFFLINE alone (a Pi user's setting) leaves mmp online", (t) => {
   const probe = runProbe(t, { PI_OFFLINE: "1" });

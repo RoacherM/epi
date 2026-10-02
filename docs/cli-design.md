@@ -54,7 +54,7 @@ Manifest 里的扩展启动时加载失败，两条路径都和 Pi 一样报错�
 
 | Pi 的变量 | MMP 的处理 | 说明 |
 |---|---|---|
-| `PI_OFFLINE` | `MMP_OFFLINE` | 关掉启动时的联网（模型目录刷新、`mmp install` 的来源检查、更新检查、`/changelog`）。`--offline` 照旧 |
+| `PI_OFFLINE` | `MMP_OFFLINE` | 关掉启动时的联网（模型目录刷新、`mmp install` 的来源检查、更新检查、`/changelog`）。设成任何值都算关掉联网（`MMP_OFFLINE=0` 也是），用 `1`：值原样交给 Pi，Pi 和 MMP 的多数读取处只看变量有没有设置，只有少数认 `1`/`true`/`yes`。`--offline` 照旧 |
 | `PI_CODING_AGENT_SESSION_DIR` | `MMP_SESSION_DIR` | 会话目录（§2 参数表） |
 | `PI_TELEMETRY` | `MMP_TELEMETRY` | 覆盖 `enableInstallTelemetry` 设置；MMP 里影响的是发给 OpenRouter 等 provider 的归属请求头（`core/provider-attribution.js`） |
 | `PI_CACHE_RETENTION` | `MMP_CACHE_RETENTION` | `long` 时请求 provider 的长缓存（pi-ai 的各 API 实现） |
