@@ -483,7 +483,7 @@ async function withCapturedStderr(fn) {
 // doesn't resolve against the session cwd) used to block the turn with `{action: "handled"}` and
 // an `ui.notify` call that Pi's own print/json modes silently drop (noOpUIContext.notify in Pi's
 // core/extensions/runner.js) -- an empty reply with no visible reason anywhere. The fix keeps the
-// same fail-closed "handled" result (README "Hooks": user_prompt maps fail-closed) but also writes
+// same fail-closed "handled" result (docs/guide/hooks.md: user_prompt maps fail-closed) but also writes
 // to stderr outside the TUI, and names the failing hook + the underlying spawn error in the message.
 for (const mode of ["print", "json"]) {
   test(`a user_prompt hook spawn failure shows on stderr in ${mode} mode and still blocks the turn`, async (t) => {

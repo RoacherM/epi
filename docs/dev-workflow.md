@@ -74,7 +74,7 @@
 ## 6. 仓库文件约定
 
 - 根目录 `AGENTS.md` 只作 coding agent 的发现入口，完整开发规则在本文，架构在 [development.md](development.md)。
-- README 面向使用者；开发、设计、验收和调研文档放 `docs/`，测试配置放 `test/fixtures/`。
+- README 只说明这个仓库是什么（定位、要点、快速开始、文档索引），不放细节；使用参考放 `docs/guide/`；开发、设计、验收和调研文档放 `docs/`，测试配置放 `test/fixtures/`。
 - `.mmp/` 是本地活动配置，整目录忽略；自开发模板放 [examples/development](../examples/development/README.md)，每个 worktree 按需手动启用。Herdr 草案不会随 clone 自动加载。
 - `dist/` 是发布包入口，源码构建后必须一起提交；提交前执行 `npm run build`、`git diff --exit-code -- dist`，交付前执行完整 `npm test`。
 - 合并保留分支历史（`--no-ff`）；主开发基线是 `main`，任务说明固定本次基线 SHA。发布版本与源码分支分开：只有发布流程创建的新 Release 才是安装器的升级来源。
