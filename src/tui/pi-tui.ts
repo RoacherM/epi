@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
 import type * as PiTuiModule from "@earendil-works/pi-tui";
 
@@ -28,4 +28,3 @@ if (runtimeVersion !== typesVersion) {
 }
 
 export const piTui = (await import(pathToFileURL(piTuiEntry).href)) as typeof PiTuiModule;
-export const piTuiLocation = fileURLToPath(pathToFileURL(piTuiEntry));

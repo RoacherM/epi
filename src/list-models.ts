@@ -25,7 +25,7 @@ type Diagnostic = { type: "error" | "warning" | "info"; message: string };
 type ParsedPiArgs = ReturnType<typeof parseArgs>;
 type ListedModel = { provider: string; id: string; contextWindow: number; maxTokens: number; reasoning: boolean; input: readonly string[] };
 
-export const NO_MODELS_MESSAGE = `No models available. ${PROVIDER_LOGIN_HELP}`;
+const NO_MODELS_MESSAGE = `No models available. ${PROVIDER_LOGIN_HELP}`;
 
 /** Whether piMain would take its `--list-models` branch for these args: it checks `--export` first
  * (and `--help`/`--version`, which MMP already handles before reaching here). */
@@ -53,7 +53,7 @@ function formatTokenCount(count: number): string {
 }
 
 /** Pi's cli/list-models.js table: sorted by provider then id, space-padded columns. */
-export function formatModelTable(models: readonly ListedModel[]): string {
+function formatModelTable(models: readonly ListedModel[]): string {
   const sorted = [...models].sort((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
   const header = ["provider", "model", "context", "max-out", "thinking", "images"];
   const rows = sorted.map((model) => [

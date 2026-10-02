@@ -23,7 +23,7 @@ export interface ProjectIdentity {
  * `identity`, or `undefined` when it's safe. A `targetCwd` that no longer exists is left to the
  * caller's next step, which reports it (Pi's MissingSessionCwdError); any other error propagates.
  */
-export function refusalForCwd(targetCwd: string, identity: ProjectIdentity): string | undefined {
+function refusalForCwd(targetCwd: string, identity: ProjectIdentity): string | undefined {
   if (!existsSync(targetCwd)) return undefined;
   const targetRoot = findNearestProjectManifest(targetCwd, identity.globalManifestPath)?.root;
   return targetRoot === identity.root

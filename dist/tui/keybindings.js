@@ -8,7 +8,7 @@ const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-cod
 const { KeybindingsManager: PiKeybindingsManager } = (await import(pathToFileURL(join(piDist, "core", "keybindings.js")).href));
 /** Where MMP's default keys differ from Pi's. Decision K1 keeps Ctrl+P for the command palette, so
  * model cycling ships unbound; a keybindings.json entry for these ids still binds them. */
-export const MMP_DEFAULT_KEYS = {
+const MMP_DEFAULT_KEYS = {
     "app.model.cycleForward": [],
     "app.model.cycleBackward": [],
 };

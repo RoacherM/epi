@@ -15,7 +15,7 @@ const { KeybindingsManager: PiKeybindingsManager } = (await import(
 
 /** Where MMP's default keys differ from Pi's. Decision K1 keeps Ctrl+P for the command palette, so
  * model cycling ships unbound; a keybindings.json entry for these ids still binds them. */
-export const MMP_DEFAULT_KEYS: Record<string, never[]> = {
+const MMP_DEFAULT_KEYS: Record<string, never[]> = {
   "app.model.cycleForward": [],
   "app.model.cycleBackward": [],
 };

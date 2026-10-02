@@ -1,5 +1,4 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-export declare const FLASH_MS = 400;
 export interface FlashState {
     until: number;
     tone: "success" | "error";

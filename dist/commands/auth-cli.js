@@ -6,6 +6,8 @@
 // models paths already resolve under `~/.mmp/pi`, never `~/.pi/agent`.
 import { ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
 import { MmpArgumentError } from "../errors.js";
+const AUTH_KINDS = ["print-api-key", "print-bearer-token", "check"];
+const DURATION_UNIT_MS = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 };
 /** Mirrors Pi's getAuthCredential (dist/cli/auth-command.js, not exported): an API key credential
  * carries it directly; an OAuth bearer token is embedded in the resolved Authorization header. */
 function extractCredential(auth) {
@@ -14,7 +16,7 @@ function extractCredential(auth) {
     const authorization = Object.entries(auth?.auth.headers ?? {}).find(([name]) => name.toLowerCase() === "authorization")?.[1];
     return typeof authorization === "string" ? /^Bearer\s+(.+)$/i.exec(authorization)?.[1] : undefined;
 }
-export function renderAuthHelp() {
+function renderAuthHelp() {
     return `Usage:
   mmp auth print-api-key --provider <provider> [--model <model>]
   mmp auth print-bearer-token --provider <provider> [--model <model>] [--min-expiry <duration>]
@@ -25,11 +27,17 @@ credentials by default; --no-refresh prevents this. --credentials emits the cred
 includes it in JSON output.
 `;
 }
+/** `--min-expiry`'s value (`30m`, `1h`, `500ms`, ...) in milliseconds. */
+function parseMinExpiry(value) {
+    const match = value ? /^(\d+)(ms|s|m|h)$/i.exec(value) : undefined;
+    if (!match) {
+        throw new MmpArgumentError("--min-expiry must use a duration such as 30m or 1h");
+    }
+    return Number(match[1]) * DURATION_UNIT_MS[match[2].toLowerCase()];
+}
 function parseAuthArgv(argv) {
     const commandToken = argv[0];
-    const kind = commandToken === "print-api-key" ? "print-api-key" :
-        commandToken === "print-bearer-token" ? "print-bearer-token" :
-            commandToken === "check" ? "check" : undefined;
+    const kind = AUTH_KINDS.find((candidate) => candidate === commandToken);
     if (kind === undefined) {
         throw new MmpArgumentError(`Unknown auth command ${JSON.stringify(commandToken ?? "")}. Use "mmp auth print-api-key", "mmp auth print-bearer-token", or "mmp auth check".`);
     }
@@ -53,14 +61,7 @@ function parseAuthArgv(argv) {
             if (kind !== "print-bearer-token") {
                 throw new MmpArgumentError("--min-expiry is only supported by print-bearer-token");
             }
-            const value = argv[++index];
-            const match = value ? /^(\d+)(ms|s|m|h)$/i.exec(value) : undefined;
-            if (!match) {
-                throw new MmpArgumentError("--min-expiry must use a duration such as 30m or 1h");
-            }
-            const amount = Number(match[1]);
-            const unit = match[2].toLowerCase();
-            minExpiryMs = amount * (unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000);
+            minExpiryMs = parseMinExpiry(argv[++index]);
             continue;
         }
         if (argument === "--json" || argument === "--credentials" || argument === "--no-refresh") {
