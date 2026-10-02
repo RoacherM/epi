@@ -192,7 +192,7 @@ function hasDuplicateMcpCommand(pi) {
  * auditability, matching the design.
  */
 export function createMmpMcpExtension(source, turnOff = 'add "disable": ["mmp:mcp"] to the global mmp.json') {
-    const { mmpHome, resolveAssembly } = source;
+    const { mmpHome } = source;
     const loadConfig = (ctx) => loadNativeMcpConfig(source, ctx.cwd);
     const logPath = join(mmpHome, "pi", "mcp.log");
     const transports = trackingTransportFactory();

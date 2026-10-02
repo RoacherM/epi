@@ -66,8 +66,8 @@ const { detectSupportedImageMimeType } = (await import(pathToFileURL(join(piDist
   detectSupportedImageMimeType(buffer: Buffer): string | null;
 };
 
-export const MIN_PASTE_LINES = 4;
-export const MAX_PASTE_BYTES = 10 * 1024;
+const MIN_PASTE_LINES = 4;
+const MAX_PASTE_BYTES = 10 * 1024;
 
 const TEXT_CHIP_SOURCE = String.raw`\[Pasted: (?:\d+ lines|\d+(?:\.\d+)? KB)\]`;
 const IMAGE_CHIP_SOURCE = String.raw`\[Image #(\d+)\]`;
@@ -75,7 +75,7 @@ const CHIP_REGEX_G = new RegExp(`${TEXT_CHIP_SOURCE}|${IMAGE_CHIP_SOURCE}`, "g")
 const TEXT_CHIP_REGEX_G = new RegExp(TEXT_CHIP_SOURCE, "g");
 const IMAGE_CHIP_SINGLE = new RegExp(`^${IMAGE_CHIP_SOURCE}$`);
 /** Every `[Image #N]` label in a text; group 1 is N. For `replace`/`matchAll` only (it's global). */
-export const IMAGE_LABEL_G = new RegExp(IMAGE_CHIP_SOURCE, "g");
+const IMAGE_LABEL_G = new RegExp(IMAGE_CHIP_SOURCE, "g");
 
 /** The numbers of the `[Image #N]` labels in `text`, in order. */
 export function imageLabelNumbers(text: string): number[] {
@@ -86,11 +86,6 @@ export function imageLabelNumbers(text: string): number[] {
 // the image object itself, which Pi hands through its steering/follow-up queue unchanged, so a
 // restored draft gets each image back under its own label, whatever else the text holds.
 const sentLabels = new WeakMap<ImageContent, number>();
-
-/** The `[Image #N]` number `image` was sent under, if it came from the editor. */
-export function sentImageLabel(image: ImageContent): number | undefined {
-  return sentLabels.get(image);
-}
 
 /** Images from a stored user message (/fork, /tree), tagged with the labels they were sent under,
  * or none when that can't be known. The editor attaches an image once per label that had data, in
@@ -235,10 +230,6 @@ export function sniffImageFile(path: string): { bytes: Buffer; mimeType: string 
   const bytes = readFileSync(path);
   const mimeType = detectSupportedImageMimeType(bytes.subarray(0, 4100));
   return mimeType ? { bytes, mimeType } : undefined;
-}
-
-function fit(text: string, width: number): string {
-  return piTui.truncateToWidth(text, Math.max(0, width), "…");
 }
 
 function chipMatches(text: string, regex: RegExp): ChipMatch[] {
@@ -386,7 +377,7 @@ export class ChipEditor {
   }
 
   /** Text that was sent, back into a draft (a prompt that failed, Esc/Alt+Up queue restore, /fork,
-   * /tree): each image comes back under the label it was sent under (`sentImageLabel`), whatever
+   * /tree): each image comes back under the label it was sent under (`sentLabels`), whatever
    * the position of that label in the text. An image with no label in the text (an extension's
    * queued message) is added as a new chip at the end. Labels left without an image stay as
    * text, drawn as unattached. Returns the text to put in the editor. */
@@ -480,7 +471,7 @@ export class ChipEditor {
     const cursor = this.inner.getCursor();
     const inside = this.findChip(cursor.line, (start, end) => cursor.col >= start && cursor.col < end);
     if (inside !== undefined) return this.chipInfo(cursor.line, inside);
-    const atEnd = this.findChip(cursor.line, (start, end) => cursor.col === end);
+    const atEnd = this.findChip(cursor.line, (_start, end) => cursor.col === end);
     if (atEnd !== undefined && IMAGE_CHIP_SINGLE.test(atEnd.text)) return this.chipInfo(cursor.line, atEnd);
     return undefined;
   }
@@ -494,7 +485,7 @@ export class ChipEditor {
     if (strict !== undefined) return strict;
     const cursor = this.inner.getCursor();
     if (this.lastPastedChip?.line !== cursor.line || this.lastPastedChip.col !== cursor.col) return undefined;
-    const match = this.findChip(cursor.line, (start, end) => cursor.col === end);
+    const match = this.findChip(cursor.line, (_start, end) => cursor.col === end);
     return match && this.chipInfo(cursor.line, match);
   }
 
@@ -640,7 +631,7 @@ export class ChipEditor {
       // chipAtCursor() alone no longer treats as "on the chip" for text (docs/tui-design.md 4.3's
       // Enter row) -- match inclusively instead. Can't reuse chipForPopup(): it reads
       // this.lastPastedChip, which was just cleared above (`justPasted` is the local copy).
-      const match = this.findChip(cursor.line, (start, end) => cursor.col === end);
+      const match = this.findChip(cursor.line, (_start, end) => cursor.col === end);
       const chip = match && this.chipInfo(cursor.line, match);
       if (chip?.kind === "text") {
         this.expandTextChip(chip);
@@ -913,8 +904,4 @@ export class ChipEditor {
     this.synced = { text: "", cursor: 0, slots: [] };
     this.lastPastedChip = undefined;
   }
-}
-
-export function fitPopupLine(text: string, width: number): string {
-  return fit(text, width);
 }

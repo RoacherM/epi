@@ -1,13 +1,7 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AutocompleteProvider, EditorOptions, EditorTheme, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-export declare const MIN_PASTE_LINES = 4;
-export declare const MAX_PASTE_BYTES: number;
-/** Every `[Image #N]` label in a text; group 1 is N. For `replace`/`matchAll` only (it's global). */
-export declare const IMAGE_LABEL_G: RegExp;
 /** The numbers of the `[Image #N]` labels in `text`, in order. */
 export declare function imageLabelNumbers(text: string): number[];
-/** The `[Image #N]` number `image` was sent under, if it came from the editor. */
-export declare function sentImageLabel(image: ImageContent): number | undefined;
 /** Images from a stored user message (/fork, /tree), tagged with the labels they were sent under,
  * or none when that can't be known. The editor attaches an image once per label that had data, in
  * the order the labels first appear, and Pi keeps that order; so when the text has exactly as many
@@ -122,7 +116,7 @@ export declare class ChipEditor {
      * a submit from app.ts): like Enter, the new draft starts without the old chips' data. */
     clearDraft(): void;
     /** Text that was sent, back into a draft (a prompt that failed, Esc/Alt+Up queue restore, /fork,
-     * /tree): each image comes back under the label it was sent under (`sentImageLabel`), whatever
+     * /tree): each image comes back under the label it was sent under (`sentLabels`), whatever
      * the position of that label in the text. An image with no label in the text (an extension's
      * queued message) is added as a new chip at the end. Labels left without an image stay as
      * text, drawn as unattached. Returns the text to put in the editor. */
@@ -238,6 +232,5 @@ export declare class ChipEditor {
     /** Submit starts a new draft, and Pi clears its undo stack, so nothing can bring these back. */
     private resetChips;
 }
-export declare function fitPopupLine(text: string, width: number): string;
 export {};
 //# sourceMappingURL=paste-chips.d.ts.map

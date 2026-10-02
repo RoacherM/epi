@@ -8,7 +8,10 @@ import { ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
 
 import { MmpArgumentError } from "../errors.js";
 
-type AuthKind = "print-api-key" | "print-bearer-token" | "check";
+const AUTH_KINDS = ["print-api-key", "print-bearer-token", "check"] as const;
+type AuthKind = (typeof AUTH_KINDS)[number];
+
+const DURATION_UNIT_MS: Record<string, number> = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 };
 
 interface ParsedAuthArgs {
   kind: AuthKind;
@@ -34,7 +37,7 @@ function extractCredential(auth: ModelAuthLike | undefined): string | undefined 
   return typeof authorization === "string" ? /^Bearer\s+(.+)$/i.exec(authorization)?.[1] : undefined;
 }
 
-export function renderAuthHelp(): string {
+function renderAuthHelp(): string {
   return `Usage:
   mmp auth print-api-key --provider <provider> [--model <model>]
   mmp auth print-bearer-token --provider <provider> [--model <model>] [--min-expiry <duration>]
@@ -46,12 +49,18 @@ includes it in JSON output.
 `;
 }
 
+/** `--min-expiry`'s value (`30m`, `1h`, `500ms`, ...) in milliseconds. */
+function parseMinExpiry(value: string | undefined): number {
+  const match = value ? /^(\d+)(ms|s|m|h)$/i.exec(value) : undefined;
+  if (!match) {
+    throw new MmpArgumentError("--min-expiry must use a duration such as 30m or 1h");
+  }
+  return Number(match[1]) * DURATION_UNIT_MS[match[2]!.toLowerCase()]!;
+}
+
 function parseAuthArgv(argv: readonly string[]): ParsedAuthArgs {
   const commandToken = argv[0];
-  const kind: AuthKind | undefined =
-    commandToken === "print-api-key" ? "print-api-key" :
-      commandToken === "print-bearer-token" ? "print-bearer-token" :
-        commandToken === "check" ? "check" : undefined;
+  const kind = AUTH_KINDS.find((candidate) => candidate === commandToken);
   if (kind === undefined) {
     throw new MmpArgumentError(
       `Unknown auth command ${JSON.stringify(commandToken ?? "")}. Use "mmp auth print-api-key", "mmp auth print-bearer-token", or "mmp auth check".`,
@@ -79,14 +88,7 @@ function parseAuthArgv(argv: readonly string[]): ParsedAuthArgs {
       if (kind !== "print-bearer-token") {
         throw new MmpArgumentError("--min-expiry is only supported by print-bearer-token");
       }
-      const value = argv[++index];
-      const match = value ? /^(\d+)(ms|s|m|h)$/i.exec(value) : undefined;
-      if (!match) {
-        throw new MmpArgumentError("--min-expiry must use a duration such as 30m or 1h");
-      }
-      const amount = Number(match[1]);
-      const unit = match[2]!.toLowerCase();
-      minExpiryMs = amount * (unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000);
+      minExpiryMs = parseMinExpiry(argv[++index]);
       continue;
     }
     if (argument === "--json" || argument === "--credentials" || argument === "--no-refresh") {
