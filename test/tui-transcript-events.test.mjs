@@ -1,6 +1,6 @@
 // Transcript.handle() paths the other transcript tests don't reach: streaming tool output, events
-// arriving without the message_start that normally precedes them, and nested (codemode) tool calls
-// next to the terminate-batch turn rule.
+// arriving without the message_start that normally precedes them, nested (codemode) tool calls
+// next to the terminate-batch turn rule, custom messages, and which message decides the footer label.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -16,7 +16,7 @@ function transcriptWithTools() {
   return new Transcript({ requestRender() {} }, theme, {
     messages: [],
     sessionManager: { getCwd: () => "/tmp" },
-    extensionRunner: { getMarkdownTransformers: () => [] },
+    extensionRunner: { getMarkdownTransformers: () => [], getMessageRenderer: () => undefined },
     getToolDefinition: () => undefined,
     getAllTools: () => [],
   });
@@ -99,4 +99,47 @@ test("a successful retry adds no notice, and an assistant message_start clears a
   transcript.handle({ type: "message_start", message: user("STEER") });
   const output = rendered(transcript);
   assert.doesNotMatch(output, /Retry|Worked for|Stopped after/, output);
+});
+
+test("a stop pending when a follow-up arrives carries to that follow-up even when its reply ends normally", () => {
+  const transcript = transcriptWithTools();
+  transcript.handle({ type: "agent_start" });
+  transcript.handle({ type: "message_start", message: user("go") });
+  const first = assistantMessage([{ type: "text", text: "REPLY-ONE" }]);
+  transcript.handle({ type: "message_start", message: first });
+  transcript.handle({ type: "message_end", message: first });
+  transcript.markStopped();
+  transcript.handle({ type: "message_start", message: user("FOLLOW-UP") });
+  // A "stop" reply, unlike the aborted one in tui-transcript.test.mjs: only the carried-over stop
+  // can make this footer read "Stopped after".
+  const second = assistantMessage([{ type: "text", text: "REPLY-TWO" }]);
+  transcript.handle({ type: "message_start", message: second });
+  transcript.handle({ type: "message_end", message: second });
+  transcript.handle({ type: "agent_end", messages: [second] });
+  transcript.handle({ type: "agent_settled" });
+  const output = rendered(transcript);
+  assert.deepEqual(output.match(/Worked for|Stopped after/g), ["Worked for", "Stopped after"], output);
+  assert.match(output, /REPLY-ONE[\s\S]*Worked for[\s\S]*FOLLOW-UP[\s\S]*REPLY-TWO[\s\S]*Stopped after/);
+});
+
+test("the footer label follows the last assistant message of agent_end", () => {
+  const footer = (messages) => {
+    const transcript = transcriptWithTools();
+    transcript.handle({ type: "agent_start" });
+    transcript.handle({ type: "agent_end", messages });
+    transcript.handle({ type: "agent_settled" });
+    return rendered(transcript).match(/Worked for|Stopped after/g);
+  };
+  const toolUse = assistantMessage([], { stopReason: "toolUse" });
+  const aborted = assistantMessage([], { stopReason: "aborted" });
+  const stopped = assistantMessage([], { stopReason: "stop" });
+  assert.deepEqual(footer([toolUse, user("x"), aborted]), ["Stopped after"]);
+  assert.deepEqual(footer([aborted, user("x"), stopped]), ["Worked for"]);
+  assert.deepEqual(footer([user("x")]), ["Worked for"]);
+});
+
+test("a custom message_end draws the message", () => {
+  const transcript = transcriptWithTools();
+  transcript.handle({ type: "message_end", message: { role: "custom", customType: "note", content: "CUSTOM-TEXT", display: true, timestamp: Date.now() } });
+  assert.match(rendered(transcript), /CUSTOM-TEXT/);
 });
