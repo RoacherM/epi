@@ -407,7 +407,7 @@ mmp --model anthropic/claude-sonnet-4 --thinking high --print "fix this"
 
 `buildPiArgs()` 顺序为 `BASE_PI_RESOURCE_ARGS`、Manifest 的显式外部 `--extension`、已解析的透传参数。不要复制一份缺少 `--system-prompt ""`、`--append-system-prompt ""` 或 `--no-approve` 的隔离参数表。
 
-Rules 与 Skills 不冻结在 Pi argv 中。`mmp:runtime` 在 `before_agent_start` 注入当前 Rules，并通过 `resources_discover` 返回当前 Skill roots。`/reload` 重新解析 Manifest 并加载 Rules/Skills；失败时保留上一份有效装配并显示错误。
+Rules 与 Skills 不冻结在 Pi argv 中。`mmp:runtime` 通过 `resources_discover` 返回当前 Skill roots；当前 Rules 和运行时契约由同一组代码里的 `mmp:system-prompt` 在 `before_agent_start` 追加。它返回的 `systemPrompt` 会被 Pi 固定成最终文本，之后的 `sections` 修改都会丢失，所以它固定排在 inline 扩展的最后（Pi 1.0 的 MCP 在自己的 `before_agent_start` 里写 `<mcp_servers>`；Manifest 外部扩展本来就排在所有 inline 扩展之前），见 [pi-internals.md](pi-internals.md) `system-prompt-forced-last`。`/reload` 重新解析 Manifest 并加载 Rules/Skills；失败时保留上一份有效装配并显示错误。
 
 Manifest 的 Extension 选择、Hooks/Task 启动配置改变后需要重启。已启用的原生 MCP 通过 `loadConfig` 重新读取配置，`/reload` 可以应用 MCP 服务配置变化；首次在 Manifest 启用 `mmp:mcp` 仍需重启。具体能力边界见 [mcp-design.md](mcp-design.md)。
 

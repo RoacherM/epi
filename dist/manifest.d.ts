@@ -1,3 +1,4 @@
+export declare const BUILT_IN_EXTENSIONS: Readonly<Record<BuiltInExtensionName, true>>;
 export type ResourceSource = "global" | "project";
 export type ResourceKind = "rule" | "skill" | "extension";
 export type BuiltInExtensionName = "mmp:task" | "mmp:mcp" | "mmp:hooks";
