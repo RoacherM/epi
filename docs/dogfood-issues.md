@@ -73,4 +73,5 @@
 | D67 | P2 | rpc `switch_session` 没有跨项目保护：Pi 在目标会话的 cwd 重建服务，MMP 的 piMain/rpc 路径没有 `crossProjectRefusal`（TUI 有，`src/tui/project-guard.ts`），所以 rpc 客户端能切到别的项目的会话，在那里用启动项目的 Rules 跑工具。U5 之前就这样 | U5 review-1 F2 | 待做 |
 | D68 | P3 | `MMP_HOME` 不是 `~/.mmp` 而 cwd 在真实 home 下时，`mmp list` 会把真实的 `~/.mmp/mmp.json` 当成项目 Manifest（显示 not trusted，没读取）。真实使用时 `MMP_HOME` 就是 `~/.mmp` 不受影响；测试要用临时 cwd | K4 report | 待查 |
 | D69 | P3 | 用户在 mmp 的 bash 工具里启动 `pi` 时，它继承 `PI_CODING_AGENT_DIR=<MMP_HOME>/pi`，用的是 MMP 的 Pi 状态（规则 1 的反方向）。D63 之前就这样，D63 只是让它更早设置。可选修法：给 bash 工具/hooks 的子进程去掉 `PI_CODING_AGENT_DIR` | D63 review-1 F5 | 待定 |
+| D70 | P3 | 启动时的项目信任提示画在普通屏幕上（TUI 还没进 alternate screen），退出后留在 shell 提示符上方。8b950a1 也这样，不是 Pi 1.0 引入的。可选：选完后清掉这几行 | `.dev/e2e/2026-10-02-2cc5c8d.md` S3 | 待定 |
 | K4 | P2 | 决策 H3/K4：内置标准能力（`mmp:task`、`mmp:mcp`、`mmp:hooks`）默认开启，可在 Manifest 里关闭；关闭的不读配置、不启动子进程。注意 `mmp:task` 默认开启会改变模型看到的工具（快照、benchmark） | development.md §3.4 | 已修（K4，6b4420e、d1c12a1、d7b1cae：Manifest 的 `"disable"`；快照只变了提示词里 Manifest schema 那一行，工具不变） |
