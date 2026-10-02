@@ -125,7 +125,7 @@ export type SourceExistenceChecker = (source: ParsedInstallSource) => Promise<vo
 /** Mirrors Pi's own NETWORK_TIMEOUT_MS (package-manager.js's getLatestNpmVersion): without a
  * timeout, a dead host or a private/blocked repo hangs the command for as long as the OS takes to
  * give up (routinely a minute or more), and there's no way to answer a credential prompt anyway. */
-export const NETWORK_CHECK_TIMEOUT_MS = 10_000;
+const NETWORK_CHECK_TIMEOUT_MS = 10_000;
 
 interface CommandCheckResult {
   ok: boolean;
@@ -176,7 +176,7 @@ function assertNotFlagLike(value: string, label: string): void {
   }
 }
 
-export async function defaultCheckSourceExists(
+async function defaultCheckSourceExists(
   source: ParsedInstallSource,
   options?: { offline?: boolean; timeoutMs?: number },
 ): Promise<void> {
@@ -363,9 +363,7 @@ export function isHelpRequested(argv: readonly string[]): boolean {
 }
 
 /** Mirrors Pi's `printPackageCommandHelp("install")` (dist/package-manager-cli.js), in MMP's own
- * words: a Manifest instead of settings.json, no --approve/--no-approve (parseSourceArgs doesn't
- * accept them -- project trust for `mmp install -l` is decided once, at `mmp --approve`/`/trust`,
- * not per command). */
+ * words: a Manifest instead of settings.json. */
 function renderInstallHelp(): string {
   return `Usage:
   mmp install <source> [-l] [--approve|--no-approve] [--offline]
@@ -373,7 +371,7 @@ function renderInstallHelp(): string {
 Add an extension source to the Manifest.
 
 Options:
-  -l                 Write the project Manifest (.mmp/mmp.json) instead of the global one (~/.mmp/mmp.json)
+  -l, --local        Write the project Manifest (.mmp/mmp.json) instead of the global one (~/.mmp/mmp.json)
   -a, --approve      Trust the project Manifest for this -l write, even if the project isn't
                       otherwise trusted (this run only; does not persist -- use mmp --approve or
                       /trust to persist it)
@@ -397,7 +395,7 @@ Remove an extension source from the Manifest.
 Alias: mmp ${commandName === "remove" ? "uninstall" : "remove"} <source> [-l] [--approve|--no-approve]
 
 Options:
-  -l                 Remove from the project Manifest (.mmp/mmp.json) instead of the global one (~/.mmp/mmp.json)
+  -l, --local        Remove from the project Manifest (.mmp/mmp.json) instead of the global one (~/.mmp/mmp.json)
   -a, --approve      Trust the project Manifest for this -l write, even if the project isn't
                       otherwise trusted (this run only; does not persist)
   -na, --no-approve  Refuse an -l write even if the project is otherwise trusted
@@ -426,36 +424,41 @@ Without -l, edits the global Manifest (~/.mmp/mmp.json). Saved changes are re-va
 invalid result is discarded and the previous Manifest kept.
 
 Options:
-  -l                 Edit the project Manifest (.mmp/mmp.json) instead of the global one
+  -l, --local        Edit the project Manifest (.mmp/mmp.json) instead of the global one
   -a, --approve      Trust the project Manifest for this -l edit, even if the project isn't
                       otherwise trusted (this run only; does not persist)
   -na, --no-approve  Refuse an -l edit even if the project is otherwise trusted
 `;
 }
 
+/** Pulls out the flags install/remove/config share: `-l`/`--local`, and `-a`/`--approve` vs
+ * `-na`/`--no-approve` (the last one wins). Same spellings as Pi's package-manager-cli.js parsers.
+ * Everything else is returned in order for the command to handle. */
+function parseScopeFlags(
+  argv: readonly string[],
+): { local: boolean; approveOverride: boolean | undefined; rest: string[] } {
+  let local = false;
+  let approveOverride: boolean | undefined;
+  const rest: string[] = [];
+  for (const argument of argv) {
+    if (argument === "-l" || argument === "--local") local = true;
+    else if (argument === "-a" || argument === "--approve") approveOverride = true;
+    else if (argument === "-na" || argument === "--no-approve") approveOverride = false;
+    else rest.push(argument);
+  }
+  return { local, approveOverride, rest };
+}
+
 function parseSourceArgs(
   argv: readonly string[],
   commandName: string,
 ): { source: string; local: boolean; approveOverride: boolean | undefined; offline: boolean } {
+  const { local, approveOverride, rest } = parseScopeFlags(argv);
   let source: string | undefined;
-  let local = false;
-  let approveOverride: boolean | undefined;
   // Only `install` acts on this (its own existence check, below); accepted here too so `remove`
   // doesn't need a separate parser for the one flag it ignores.
   let offline = false;
-  for (const argument of argv) {
-    if (argument === "-l") {
-      local = true;
-      continue;
-    }
-    if (argument === "-a" || argument === "--approve") {
-      approveOverride = true;
-      continue;
-    }
-    if (argument === "-na" || argument === "--no-approve") {
-      approveOverride = false;
-      continue;
-    }
+  for (const argument of rest) {
     if (argument === "--offline") {
       offline = true;
       continue;
@@ -603,22 +606,9 @@ export async function runConfigCommand(argv: readonly string[]): Promise<number>
     process.stdout.write(renderConfigHelp());
     return 0;
   }
-  let local = false;
-  let approveOverride: boolean | undefined;
-  for (const argument of argv) {
-    if (argument === "-l") {
-      local = true;
-      continue;
-    }
-    if (argument === "-a" || argument === "--approve") {
-      approveOverride = true;
-      continue;
-    }
-    if (argument === "-na" || argument === "--no-approve") {
-      approveOverride = false;
-      continue;
-    }
-    throw new MmpArgumentError(`Unknown option for mmp config: ${argument}`);
+  const { local, approveOverride, rest } = parseScopeFlags(argv);
+  if (rest.length > 0) {
+    throw new MmpArgumentError(`Unknown option for mmp config: ${rest[0]}`);
   }
   if (local) assertProjectTrustedFor(process.cwd(), approveOverride);
   const target = local ? projectTarget(process.cwd()) : globalTarget();
