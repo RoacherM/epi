@@ -13,6 +13,13 @@
 
 MMP（Make My Pi）是在同一 Node.js 进程中使用锁定版本 Pi SDK 的定制 Harness。功能优先对齐 Pi；MMP 拥有 grok-build 风格的交互界面、配置装配、项目信任和能力选择。
 
+定位（决策 H1、H2、H3，2026-10-02 对齐；OMP 对照见 [notes/omp-study.md](notes/omp-study.md)）：
+
+- 跟着官方 Pi 走：用官方 Pi 包、锁定版本、自动升级门禁，**不 fork**（OMP 是硬 fork，手工移植上游，已落后半年）。
+- 先把外围做好（界面、CLI、配置、已有扩展）；harness 能力参照 OMP 的设计以后再补，遇到瓶颈才考虑修改 Pi 的行为（H2）。
+- 配置严格只属于 MMP：不读 Pi，也不读 Claude/Codex/Gemini/Cursor 的配置，不认用户给 Pi 设的 `PI_*` 环境变量（D63），项目配置要信任（H3/K3）。
+- 和 Pi 一样默认不审批；审批分级先不做（H3/K6）。
+
 | 层 | 所有权 | 入口 |
 |---|---|---|
 | Pi | 模型、Agent Loop、认证、Session、基础工具、Auto Compact、TUI 组件和 MCP runtime | 锁定的 Pi SDK |
@@ -73,7 +80,7 @@ MMP 不重新实现：
 - MCP 协议栈；
 - 通用 Extension 生命周期。
 
-MMP 可以构造和启动这些公开 runtime primitive，但不能 fork 或复制其内部实现。
+MMP 可以构造和启动这些公开 runtime primitive，但不能 fork 或复制其内部实现。按决策 H2，这条边界暂不重划；遇到瓶颈时再单独评估是否修改 Pi 的行为。
 
 ### 3.2 MMP 必须拥有这些能力
 
@@ -88,7 +95,7 @@ MMP 可以构造和启动这些公开 runtime primitive，但不能 fork 或复�
 
 ### 3.3 当前实现范围
 
-长期 Harness 方向参考 OMP（决策 H1），下面这些能力尚未纳入当前实现；新增能力需单独设计，不作为永久禁止项：
+长期 Harness 方向参考 OMP（决策 H1）。按 H2，harness 路线图暂不启动（先做好外围）；下面是候选能力，新增时需单独设计，不作为永久禁止项。OMP 里值得借鉴的设计（web 搜索/抓取、写后 LSP 诊断、子 agent 结构化结果与 Agent Hub、模型角色、审批分级、设置注册表）见 [notes/omp-study.md](notes/omp-study.md) §7：
 
 - Capability Registry；
 - 多 Harness Discovery Provider；
@@ -104,6 +111,8 @@ MMP 可以构造和启动这些公开 runtime primitive，但不能 fork 或复�
 ### 3.4 显式装配边界
 
 Rules 与可选 Extensions 未声明就不加载；Task/MCP/Hooks 未启用时，不读取对应能力配置或启动子进程。固定 `mmp:runtime` 与 §7.1 的三个 Skill 自动发现根目录是明确的例外。
+
+**已定、待实现（决策 H3/K4）：** 内置的标准能力（`mmp:task`、`mmp:mcp`、`mmp:hooks`）改为默认开启，可在 Manifest 里关闭；关闭的能力仍然不读配置、不启动子进程。实现前以上一段为准（任务 K4，见 `docs/dogfood-issues.md`）。
 
 空 Manifest 可以启动，并保留运行时身份和固定 Skill 发现行为；不启用 Task/MCP/Hooks。
 
@@ -930,6 +939,7 @@ MMP SDK Host 启动
 - 替换 pi-tui 底层渲染器（MMP 自有交互应用已实现）；
 - 自定义 Compact；
 - 自定义 MCP Runtime；
+- 审批分级（H3/K6：和 Pi 一样默认不审批，分级以后再定）；
 - 通过 shell 或全局 `pi` binary 启动主 runtime；
 - 100% 复刻 Pi CLI 的 resource override 行为。
 
