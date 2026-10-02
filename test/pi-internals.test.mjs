@@ -579,14 +579,43 @@ const registry = [
         ],
         `${indexPath}'s pi.on handlers raise different notifies: ${review}`,
       );
-      // MMP recognises two of Pi's notifies by their text (src/extensions/mcp.ts): the still-connecting
-      // one above (then names the servers at session_shutdown), and the unreachable-tools warning,
-      // which -p/json do not copy (it is about reachability, not a failed server; review 1 finding 1).
+      // MMP recognises one of Pi's notifies by its text (src/extensions/mcp.ts): the unreachable-tools
+      // warning, which -p/json do not copy (it is about reachability, not a failed server; review 1
+      // finding 1).
       assert.match(
         indexText,
         /ctx\.ui\.notify\(`MCP tools are only reachable from the codemode or tool_search tool, but neither is active\$\{reason\}; they cannot be called\.`, "warning"\);/,
         `${indexPath}'s unreachable-tools warning changed: PI_UNREACHABLE_PREFIX in src/extensions/mcp.ts would stop matching it and -p/json would print it again -- ${why}`,
       );
+    },
+  },
+  {
+    id: "system-prompt-forced-last",
+    check() {
+      const why = "mmp:system-prompt (src/extensions/runtime.ts) forces the prompt and is pushed last by buildInlineExtensions, so every other before_agent_start section edit, Pi's MCP mcp_servers among them, is already in the text it appends to (U3)";
+      const runnerPath = join(piDist, "core", "extensions", "runner.js");
+      const runnerText = readFileSync(runnerPath, "utf8");
+      const emit = runnerText.slice(runnerText.indexOf("async emitBeforeAgentStart("), runnerText.indexOf("async emitResourcesDiscover("));
+      assert.ok(emit.length > 0, `${runnerPath} no longer has emitBeforeAgentStart followed by emitResourcesDiscover -- ${why}`);
+      assert.match(emit, /for \(const \{ ext, handlers \} of snapshotEventHandlers\(this\.extensions, "before_agent_start"\)\)/, `${runnerPath}'s emitBeforeAgentStart no longer runs handlers in extension order -- ${why}`);
+      assert.match(emit, /get systemPrompt\(\) \{\s*return renderCurrentSystemPrompt\(\);/, `${runnerPath}'s before_agent_start event no longer renders systemPrompt from the current options when read -- ${why}`);
+      assert.match(emit, /if \(result\.systemPrompt !== undefined\) \{\s*currentOptions\.forceSystemPrompt = result\.systemPrompt;/, `${runnerPath} no longer turns a returned systemPrompt into forceSystemPrompt -- ${why}`);
+      const promptPath = join(piDist, "core", "system-prompt.js");
+      assert.match(
+        readFileSync(promptPath, "utf8"),
+        /if \(input\.forceSystemPrompt !== undefined\)\s*return \{ content: input\.forceSystemPrompt \};/,
+        `${promptPath} no longer renders a forced prompt as-is, without sections -- ${why}`,
+      );
+      // Path (Manifest external) extensions first, inline factories after them, on both load passes.
+      const loaderPath = join(piDist, "core", "resource-loader.js");
+      const loaderText = readFileSync(loaderPath, "utf8");
+      assert.match(loaderText, /const inlineExtensions = await this\.loadExtensionFactories\(extensionsResult\.runtime\);\s*extensionsResult\.extensions\.push\(\.\.\.inlineExtensions\.extensions\);/, `${loaderPath}'s loadCurrentExtensionSet no longer appends inline extensions after path extensions -- ${why}`);
+      assert.match(loaderText, /orderedExtensions\.push\(\.\.\.inlineExtensions\.extensions\);/, `${loaderPath}'s loadFinalExtensionSet no longer appends inline extensions after path extensions -- ${why}`);
+      assert.match(loaderText, /for \(const \[index, input\] of this\.extensionFactories\.entries\(\)\)/, `${loaderPath} no longer loads inline factories in array order -- ${why}`);
+      const indexPath = join(piDist, "extensions", "mcp", "index.js");
+      const beforeAgentStart = mcpHandlerSource(readFileSync(indexPath, "utf8"), "before_agent_start");
+      assert.ok(beforeAgentStart !== undefined, `${indexPath} no longer has a before_agent_start handler -- ${why}`);
+      assert.match(beforeAgentStart, /sections\[MCP_SERVERS_SECTION\] = section;/, `${indexPath}'s before_agent_start no longer sets the mcp_servers section -- ${why}`);
     },
   },
   {

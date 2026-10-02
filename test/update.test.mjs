@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { parseMmpArgs } from "../dist/args.js";
-import { createMmpRuntimeExtension } from "../dist/extensions/runtime.js";
+import { createMmpRuntimeExtensions } from "../dist/extensions/runtime.js";
 import {
   isNewerVersion,
   readUpdateCache,
@@ -172,7 +172,7 @@ test("mmp update <source> clears the whole cache and says so, instead of claimin
 
 function startRuntime(updateCheck, mode) {
   const handlers = new Map();
-  createMmpRuntimeExtension({}, {}, undefined, updateCheck).factory({
+  createMmpRuntimeExtensions({}, {}, undefined, updateCheck).runtime.factory({
     on(event, handler) { handlers.set(event, handler); },
     registerCommand() {},
     sendMessage() {},

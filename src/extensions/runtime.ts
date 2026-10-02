@@ -69,18 +69,30 @@ function notifyVerboseStartup(assembly: ResolvedAssembly, context: ExtensionCont
   );
 }
 
-export function createMmpRuntimeExtension(
+export interface MmpRuntimeExtensions {
+  /** Identity, Skill roots, `/mmp`, startup page; first in the inline list. */
+  runtime: InlineExtension;
+  /** Appends Rules and the runtime contract in before_agent_start; must be last in the inline list. */
+  systemPrompt: InlineExtension;
+}
+
+export function createMmpRuntimeExtensions(
   initialIdentity: MmpRuntimeIdentity,
   initialAssembly: ResolvedAssembly,
   resolveAssembly: () => ResolvedAssembly = () => initialAssembly,
   updateCheck?: UpdateCheckOptions,
   verbose = false,
-): InlineExtension {
-  return {
+): MmpRuntimeExtensions {
+  // Written by the runtime factory (reset there on every factory run, refreshed on reload) and read
+  // by the system-prompt extension, which Pi always instantiates after it.
+  let activeAssembly = initialAssembly;
+  let activeIdentity = initialIdentity;
+
+  const runtime: InlineExtension = {
     name: "mmp:runtime",
     factory(pi) {
-      let activeAssembly = initialAssembly;
-      let activeIdentity = initialIdentity;
+      activeAssembly = initialAssembly;
+      activeIdentity = initialIdentity;
       let sessionActive = false;
 
       function showUpdateNotice(context: ExtensionContext): void {
@@ -178,18 +190,6 @@ export function createMmpRuntimeExtension(
         skillPaths: activeAssembly.skills.map((skill) => skill.value),
       }));
 
-      pi.on("before_agent_start", (event) => {
-        const loadedSkills = normalizeLoadedSkills(
-          event.systemPromptOptions.skills,
-        );
-        const promptParts = [event.systemPrompt];
-        if (activeAssembly.rulesText.length > 0) {
-          promptParts.push(activeAssembly.rulesText);
-        }
-        promptParts.push(renderMmpRuntimePrompt(activeIdentity, loadedSkills));
-        return { systemPrompt: promptParts.join("\n\n") };
-      });
-
       pi.registerCommand("mmp", {
         description: "Show the authoritative MMP runtime and resource inventory",
         handler: async (_args, context) => {
@@ -207,4 +207,26 @@ export function createMmpRuntimeExtension(
       });
     },
   };
+
+  // Returning `systemPrompt` makes Pi force the prompt text (core/extensions/runner.js
+  // emitBeforeAgentStart), so `sections` edits by any later before_agent_start handler -- Pi's MCP
+  // `mcp_servers` list among them -- never reach the model. Hence a separate extension placed last.
+  const systemPrompt: InlineExtension = {
+    name: "mmp:system-prompt",
+    factory(pi) {
+      pi.on("before_agent_start", (event) => {
+        const loadedSkills = normalizeLoadedSkills(
+          event.systemPromptOptions.skills,
+        );
+        const promptParts = [event.systemPrompt];
+        if (activeAssembly.rulesText.length > 0) {
+          promptParts.push(activeAssembly.rulesText);
+        }
+        promptParts.push(renderMmpRuntimePrompt(activeIdentity, loadedSkills));
+        return { systemPrompt: promptParts.join("\n\n") };
+      });
+    },
+  };
+
+  return { runtime, systemPrompt };
 }

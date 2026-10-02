@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 
 import { MMP_PACKAGE_VERSION as MMP_VERSION } from "./fixtures/mmp-package-version.mjs";
 import { buildInlineExtensions } from "../dist/extensions/index.js";
-import { createMmpRuntimeExtension } from "../dist/extensions/runtime.js";
+import { createMmpRuntimeExtensions } from "../dist/extensions/runtime.js";
+import { BUILT_IN_EXTENSIONS } from "../dist/manifest.js";
 import { createMmpRuntimeIdentity } from "../dist/runtime-identity.js";
 
 function fixture() {
@@ -35,6 +39,12 @@ function fixture() {
   return { assembly, identity };
 }
 
+/** Runs both MMP runtime factories in their inline-list order against one fake `pi`. */
+function startMmpRuntime(extensions, pi) {
+  extensions.runtime.factory(pi);
+  extensions.systemPrompt.factory(pi);
+}
+
 const loadedSkill = {
   name: "fixture-skill",
   description: "A fixture skill loaded by MMP.",
@@ -42,7 +52,7 @@ const loadedSkill = {
   disableModelInvocation: false,
 };
 
-test("MMP runtime identity is always installed before manifest extensions", () => {
+test("MMP runtime identity is always installed, with the prompt-forcing extension after it", () => {
   const { assembly, identity } = fixture();
   const extensions = buildInlineExtensions(
     assembly,
@@ -52,7 +62,35 @@ test("MMP runtime identity is always installed before manifest extensions", () =
 
   assert.deepEqual(extensions.map((extension) => extension.name), [
     "mmp:runtime",
+    "mmp:system-prompt",
   ]);
+});
+
+// Its before_agent_start returns `systemPrompt`, which Pi forces: section edits by any later handler
+// (Pi's MCP `mcp_servers`) would be dropped. Every built-in is declared, so a new one -- or any push
+// after the loop -- that lands after it fails here.
+test("the prompt-forcing extension is last in the inline list with every built-in extension declared", (t) => {
+  const { assembly, identity } = fixture();
+  const mmpHome = mkdtempSync(join(tmpdir(), "mmp-inline-order-"));
+  t.after(() => rmSync(mmpHome, { recursive: true, force: true }));
+  const declared = Object.keys(BUILT_IN_EXTENSIONS);
+  const extensions = buildInlineExtensions(
+    {
+      ...assembly,
+      agentDir: join(mmpHome, "pi"),
+      inlineExtensions: declared.map((name) => ({ name, source: "global", declaredIn: join(mmpHome, "mmp.json") })),
+    },
+    mmpHome,
+    identity,
+  );
+
+  const names = extensions.map((extension) => extension.name);
+  assert.equal(names[0], "mmp:runtime", names.join(", "));
+  assert.equal(names.at(-1), "mmp:system-prompt", names.join(", "));
+  assert.equal(names.filter((name) => name === "mmp:system-prompt").length, 1, names.join(", "));
+  for (const name of declared) {
+    assert.ok(names.includes(name), `${name} was not built: ${names.join(", ")}`);
+  }
 });
 
 test("MMP runtime identity injects authoritative loaded skills", async () => {
@@ -60,9 +98,7 @@ test("MMP runtime identity injects authoritative loaded skills", async () => {
   const handlers = new Map();
   const commands = new Map();
   const messages = [];
-  const extension = createMmpRuntimeExtension(identity, assembly);
-
-  extension.factory({
+  startMmpRuntime(createMmpRuntimeExtensions(identity, assembly), {
     on(event, handler) {
       handlers.set(event, handler);
     },
@@ -138,11 +174,11 @@ test("MMP reload re-resolves Rules and Skill roots", async () => {
       declaredIn: "/fixture/mmp/mmp.json",
     }],
   };
-  createMmpRuntimeExtension(
+  startMmpRuntime(createMmpRuntimeExtensions(
     identity,
     assembly,
     () => reloadedAssembly,
-  ).factory({
+  ), {
     on(event, handler) {
       handlers.set(event, handler);
     },
@@ -190,13 +226,13 @@ test("failed MMP reload preserves the last valid resource assembly", async () =>
   const { assembly, identity } = fixture();
   const handlers = new Map();
   const notifications = [];
-  createMmpRuntimeExtension(
+  startMmpRuntime(createMmpRuntimeExtensions(
     identity,
     assembly,
     () => {
       throw new Error("unknown field \"skillRoots\"");
     },
-  ).factory({
+  ), {
     on(event, handler) {
       handlers.set(event, handler);
     },
@@ -232,7 +268,7 @@ test("failed MMP reload preserves the last valid resource assembly", async () =>
 test("MMP runtime identity states explicitly when no skills are loaded", async () => {
   const { assembly, identity } = fixture();
   let beforeAgentStart;
-  createMmpRuntimeExtension(identity, assembly).factory({
+  startMmpRuntime(createMmpRuntimeExtensions(identity, assembly), {
     on(event, handler) {
       if (event === "before_agent_start") beforeAgentStart = handler;
     },
