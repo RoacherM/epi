@@ -49,7 +49,7 @@ function defaultTransportFactory() {
  * the request timer alive until the request timeout (60 s by default) -- `mmp -p` printed its
  * answer and then sat there. Closing the transport rejects the pending `initialize`
  * (pi-mcp client.js `handleTransportClose` -> `markClosed`), and Pi's connection, already marked
- * closed by then, settles as "closed". Same upstream as of Pi 0.99.2.
+ * closed by then, settles as "closed". Same upstream as of Pi 1.0.0.
  */
 function trackingTransportFactory() {
     const open = new Set();
@@ -105,31 +105,54 @@ export function emptyStateMessage(mmpHome, cwd) {
     return (`No MCP servers configured -- add one to ${join(mmpHome, "mcp.json")} with ` +
         `\`mmp mcp add <server> (--url <url> | -- <command> [args...])\`${local}.`);
 }
+/** The first line of Pi's `reportProblems()` notify (`extensions/mcp/index.js`), whose next lines are
+ * `  <server>: <state>`, one per failed or needs-sign-in server, then `Run /mcp to fix.`. MMP's own
+ * report at session_shutdown uses the same header and lines, so a run shows one kind of message
+ * either way, but ends in `cliHint()` instead: `/mcp` does not exist outside the TUI. */
+const ATTENTION_HEADER = "MCP servers need attention:";
+/** Pi's notify when the first prompt's wait for servers with direct tools ran out (`extensions/mcp/index.js`'s
+ * `waitForDirectServers`). It names no server; MMP's session_shutdown report then does. */
+const PI_STILL_CONNECTING = "MCP servers are still connecting; their tools become available once connected.";
+/** Start of Pi's warning that MCP tools cannot be called because neither codemode nor tool_search is
+ * active (`ensureDiscoveryActive`): about tool reachability -- e.g. `-p --no-tools`, which asked for
+ * exactly that -- not a server that failed, so it is not copied to stderr (docs/mcp-design.md §7). */
+const PI_UNREACHABLE_PREFIX = "MCP tools are only reachable from the codemode or tool_search tool";
 /**
- * One stderr line per enabled MCP server that needs attention, read from Pi's own per-server state
- * without waiting for anything. The state comes from the "/mcp" command's own completions for
- * `reconnect ` (`extensions/mcp/index.js`): one item per server that has a connection, labelled with
- * its name and described by Pi's private `describeState()` -- `failed: <first error line>`,
- * `needs sign-in`, `connecting…`, `connected · N tools`. Healthy servers produce nothing (no false
- * alarm). A server still connecting -- or one without a connection yet because Pi's MCP runtime has
- * not even loaded -- gets a "still connecting" line. Config errors are not reported here: those
- * already fail eagerly before Pi starts (`buildInlineExtensions` throwing `MmpConfigError`,
- * docs/mcp-design.md §2). `connectingOnly` leaves out the failed / needs-sign-in lines, for a mode
- * where Pi's own `reportProblems()` already reaches the user.
+ * Pi's default `startupWaitMs` (createMcpExtension), passed explicitly because the session_shutdown
+ * report uses the same bound: a server still connecting is named only once Pi's own wait ran out or
+ * the session lasted longer than this. Test seam: MMP_TEST_MCP_STARTUP_WAIT_MS shortens both.
  */
-async function mcpProblemLines(completions, enabledServerNames, connectingOnly) {
-    const states = new Map(((await completions("reconnect ")) ?? []).map((item) => [item.label, item.description ?? ""]));
-    const lines = [];
-    for (const name of new Set([...enabledServerNames, ...states.keys()])) {
-        const state = states.get(name);
-        if (state === undefined || state.startsWith("connecting")) {
-            lines.push(`mcp: ${name} is still connecting; its tools become available once connected`);
-        }
-        else if (!connectingOnly && (state.startsWith("failed") || state.startsWith("needs sign-in"))) {
-            lines.push(`${name}: ${state}`);
-        }
-    }
-    return lines;
+function mcpStartupWaitMs() {
+    const override = Number(process.env.MMP_TEST_MCP_STARTUP_WAIT_MS);
+    return Number.isFinite(override) && override > 0 ? override : 10_000;
+}
+/** What to run instead of `/mcp`, which outside the TUI does not exist: mmp's own CLI (hard rule 4).
+ * Names the server when exactly one needs a sign-in. */
+function cliHint(lines) {
+    const signIn = lines.flatMap((line) => {
+        const match = /^ {2}(.+?): needs sign-in/.exec(line);
+        return match ? [match[1]] : [];
+    });
+    const login = signIn.length === 0 ? "" : `, or "mmp mcp login ${signIn.length === 1 ? signIn[0] : "<server>"}" to sign in`;
+    return `From the shell: run "mmp mcp list" to see why${login}.`;
+}
+/**
+ * `  <server>: <state>` for every enabled server that failed or needs a sign-in, read from Pi's own
+ * per-server state without waiting for anything. The state comes from the "/mcp" command's own
+ * completions for `reconnect ` (`extensions/mcp/index.js`): one item per server that has a
+ * connection, labelled with its name and described by Pi's private `describeState()` -- the same
+ * text Pi's `reportProblems()` puts after the name (`failed: <first error line>`, `needs sign-in`;
+ * `connected · N tools` and `disabled` are not problems). `connecting…` becomes
+ * `  <server>: still connecting` with `includeConnecting` only. A server without a connection yet has
+ * not been tried, so it is not a problem either.
+ */
+async function mcpProblemLines(completions, { includeConnecting }) {
+    return ((await completions("reconnect ")) ?? []).flatMap((item) => {
+        const state = item.description ?? "";
+        if (state.startsWith("failed") || state.startsWith("needs sign-in"))
+            return [`  ${item.label}: ${state}`];
+        return includeConnecting && state.startsWith("connecting") ? [`  ${item.label}: still connecting`] : [];
+    });
 }
 const DUPLICATE_MCP_COMMAND_MESSAGE = "Another extension in the Manifest also registers \"/mcp\" alongside mmp:mcp. Pi's builtin-" +
     "replace mechanism does not apply to MMP's inline extensions, so both would silently rename to " +
@@ -144,7 +167,7 @@ function hasDuplicateMcpCommand(pi) {
 }
 /**
  * `mmp:mcp`: `createMcpExtension` (connections, OAuth, tool registration, `/mcp`) wired to MMP's own
- * config source, plus three MMP-only behaviors:
+ * config source, plus four MMP-only behaviors:
  *   - `/mcp` with zero configured servers shows MMP's own message instead of Pi's (which names
  *     `.pi/mcp.json`, a path MMP never reads) -- done by wrapping the `pi` passed into Pi's factory
  *     so only the "mcp" registration is intercepted; every other call passes through untouched.
@@ -152,6 +175,9 @@ function hasDuplicateMcpCommand(pi) {
  *     `session_start` instead of silently producing "/mcp:1"/"/mcp:2".
  *   - a server still connecting when the session shuts down is closed instead of holding the
  *     process open until its request timeout (dogfood D3, `trackingTransportFactory`).
+ *   - outside the TUI, Pi's own MCP notifies reach stderr when there is no UI, and a failed or
+ *     needs-sign-in server Pi had not reported by the end of the session is reported then
+ *     (hard rule 3; docs/mcp-design.md §7).
  *
  * `credentials` is intentionally left to Pi's default rather than passed explicitly: its type is
  * `McpOAuthCredentialStore` (a class instance with a private `AuthStorageBackend`, not a path --
@@ -168,36 +194,36 @@ export function createMmpMcpExtension(source) {
     const loadConfig = (ctx) => loadNativeMcpConfig(source, ctx.cwd);
     const logPath = join(mmpHome, "pi", "mcp.log");
     const transports = trackingTransportFactory();
-    const piFactory = createMcpExtension({ loadConfig, logPath, createTransport: transports.createTransport });
+    const startupWaitMs = mcpStartupWaitMs();
+    const piFactory = createMcpExtension({ loadConfig, logPath, createTransport: transports.createTransport, startupWaitMs });
     return {
         name: "mmp:mcp",
         factory: async (pi) => {
-            // F3 (Fable milestone review, hard rule 3): captured so before_agent_start below can read
-            // each server's state, in non-TUI modes, to surface a connection failure, a pending sign-in,
-            // or a server still connecting that Pi's own ctx.ui.notify would otherwise drop silently
-            // (verified empirically: ctx.ui.notify is a no-op in print/json mode -- modes/print-mode.js's
-            // bindExtensions passes no uiContext).
+            // F3 (Fable milestone review, hard rule 3): captured so the session_shutdown report below can
+            // read each server's state.
             let piMcpCompletions;
-            // Dogfood D6: when anything in Pi's startup chain throws after the config is read (loading
-            // extensions/mcp/runtime.js, constructing a connection), Pi's only report is
-            // ctx.ui.notify("MCP failed to load: ...", "error") -- a no-op in print/json mode -- and no
-            // server ever gets a connection, so before_agent_start below would call each one "still
-            // connecting". Every handler Pi's MCP extension registers gets a ctx whose ui.notify also
-            // writes error-level messages to stderr when there's no UI to show them (print/json: the TUI
-            // shows them, and rpc sends them to the client as an extension_ui_request), once per message
-            // and session; outside the TUI, `loadFailed` then replaces the per-server lines. Only error-level
-            // notifies are taken: in Pi 0.99.1 the only ones raised from event handlers (not /mcp command
-            // handlers, which get their own ctx) are the two "MCP failed to load" calls in
-            // extensions/mcp/index.js; its warnings (servers needing attention) are covered by
-            // mcpProblemLines instead.
-            let loadFailed = false;
-            const reportedFailures = new Set();
-            let reportedThisSession = false;
-            // Dogfood D52: set when Pi's own before_agent_start handler notifies. In Pi 0.99.1 its only
-            // notify there is "MCP servers are still connecting; ...", sent once its startup wait runs out.
-            let piReportedStillConnecting = false;
+            // Hard rule 3 outside the TUI. Pi reports MCP problems only through ctx.ui.notify from its
+            // event handlers -- "MCP failed to load: ..." (dogfood D6), "MCP servers need attention: ..."
+            // (reportProblems(): failed and needs-sign-in servers, F3) and "MCP servers are still
+            // connecting; ..." (the first prompt's wait for servers with direct tools ran out) -- and
+            // ctx.ui.notify is a no-op in print/json mode (modes/print-mode.js's bindExtensions passes no
+            // uiContext). So every handler Pi's MCP extension registers gets a ctx whose ui.notify also
+            // writes the message, as is, to stderr when there is no UI (once per message and session);
+            // after Pi's "Run /mcp to fix." block, one MMP line says what to run in the shell instead.
+            // The unreachable-tools warning is not copied (PI_UNREACHABLE_PREFIX). The TUI shows them
+            // itself, and rpc sends them to its client as extension_ui_request (D47, D52), so neither
+            // gets a copy. Messages are Pi's own, so -p tells the same story as the TUI; stdout is never
+            // touched.
+            const writtenToStderr = new Set();
+            // Every `  <server>: <state>` line Pi's reportProblems() has notified this session, in any
+            // mode, so the session_shutdown report below adds only what Pi has not said.
+            const piAttentionLines = new Set();
+            // Whether Pi said PI_STILL_CONNECTING this session, and when the session started: the
+            // session_shutdown report names servers still connecting only after either.
+            let piSaidStillConnecting = false;
+            let sessionStartedAt = Date.now();
             const bindTo = (owner, value) => typeof value === "function" ? value.bind(owner) : value;
-            const reportingContext = (ctx, event) => new Proxy(ctx, {
+            const reportingContext = (ctx) => new Proxy(ctx, {
                 get(target, prop) {
                     if (prop !== "ui")
                         return bindTo(target, Reflect.get(target, prop, target));
@@ -207,14 +233,18 @@ export function createMmpMcpExtension(source) {
                             if (uiProp !== "notify")
                                 return bindTo(uiTarget, Reflect.get(uiTarget, uiProp, uiTarget));
                             return (message, type) => {
-                                if (event === "before_agent_start")
-                                    piReportedStillConnecting = true;
-                                if (type === "error" && target.mode !== "tui") {
-                                    loadFailed = true;
-                                    if (!target.hasUI && !reportedFailures.has(message)) {
-                                        reportedFailures.add(message);
-                                        process.stderr.write(`${message}\n`);
-                                    }
+                                const attentionLines = message.startsWith(ATTENTION_HEADER) ? message.split("\n").slice(1) : [];
+                                for (const line of attentionLines)
+                                    piAttentionLines.add(line);
+                                if (message === PI_STILL_CONNECTING)
+                                    piSaidStillConnecting = true;
+                                if (!target.hasUI &&
+                                    target.mode !== "tui" &&
+                                    !message.startsWith(PI_UNREACHABLE_PREFIX) &&
+                                    !writtenToStderr.has(message)) {
+                                    writtenToStderr.add(message);
+                                    const hint = attentionLines.length > 0 ? `\n${cliHint(attentionLines)}` : "";
+                                    process.stderr.write(`${message}${hint}\n`);
                                 }
                                 return uiTarget.notify(message, type);
                             };
@@ -224,15 +254,43 @@ export function createMmpMcpExtension(source) {
             });
             // Registered before piFactory so the reset runs before Pi's own session_start starts connecting.
             pi.on("session_start", () => {
-                loadFailed = false;
-                reportedFailures.clear();
-                reportedThisSession = false;
-                piReportedStillConnecting = false;
+                writtenToStderr.clear();
+                piAttentionLines.clear();
+                piSaidStillConnecting = false;
+                sessionStartedAt = Date.now();
+            });
+            // Since Pi 0.99.2 only servers with direct tools hold up the first prompt; the others connect
+            // in the background, and Pi's reportProblems() runs once *every* startup connection settled
+            // (extensions/mcp/index.js's session_start). A -p run can end before that -- one hung server
+            // holds the report back for its whole request timeout -- and Pi's session_shutdown then drops
+            // it, so a server that had already failed was never reported. Registered before piFactory, so
+            // it runs before Pi's own session_shutdown handler forgets the servers: outside the TUI (which
+            // shows /mcp, and keeps running), each failed or needs-sign-in server Pi has not reported yet
+            // is reported now, in Pi's own shape -- on stderr without a UI, to the rpc client with one --
+            // ending in what to run in the shell rather than Pi's "/mcp". A server still connecting is
+            // named too, but only once Pi's own still-connecting notify was seen (a direct server's wait
+            // ran out; Pi names no server) or the session ran longer than startupWaitMs: since 0.99.2 a
+            // server whose tools are not declared to the model connects in the background, so in a short
+            // run still connecting is normal (dogfood D40; docs/mcp-design.md §7).
+            pi.on("session_shutdown", async (_event, ctx) => {
+                if (ctx.mode === "tui" || piMcpCompletions === undefined)
+                    return;
+                const includeConnecting = piSaidStillConnecting || Date.now() - sessionStartedAt > startupWaitMs;
+                const lines = (await mcpProblemLines(piMcpCompletions, { includeConnecting })).filter((line) => !piAttentionLines.has(line));
+                if (lines.length === 0)
+                    return;
+                const message = `${ATTENTION_HEADER}\n${lines.join("\n")}\n${cliHint(lines)}`;
+                if (ctx.hasUI) {
+                    ctx.ui.notify(message, "warning");
+                }
+                else {
+                    process.stderr.write(`${message}\n`);
+                }
             });
             const wrappedPi = new Proxy(pi, {
                 get(target, prop, _receiver) {
                     if (prop === "on") {
-                        return (event, handler) => target.on(event, (piEvent, ctx) => handler(piEvent, reportingContext(ctx, event)));
+                        return (event, handler) => target.on(event, (piEvent, ctx) => handler(piEvent, reportingContext(ctx)));
                     }
                     if (prop === "registerCommand") {
                         return (name, commandOptions) => {
@@ -288,46 +346,6 @@ export function createMmpMcpExtension(source) {
                     // of this changes the exit code in print mode (documented in docs/mcp-design.md §4, not
                     // silently assumed).
                     throw new Error(DUPLICATE_MCP_COMMAND_MESSAGE);
-                }
-            });
-            // F3: in the TUI, a connection failure or pending sign-in is already visible (Pi's own
-            // reportProblems() reaches a real ctx.ui.notify there, and /mcp's panel shows it too). In
-            // print and json mode ctx.ui.notify is a no-op, so MMP writes the problem servers to stderr
-            // itself; stdout is never touched, since -p and --mode json consumers read it.
-            //
-            // When: at the first before_agent_start of a session, *after* Pi's own handler for the same
-            // event. Pi's handler (registered inside piFactory above, so it runs first: the runner awaits
-            // one extension's handlers in registration order) waits for the startup connections, bounded
-            // by createMcpExtension's startupWaitMs (Pi's default, 10 s, since MMP passes none). So by
-            // the time this runs, every server has either settled or is still connecting past Pi's bound,
-            // and reading the state is instant -- MMP adds no wait of its own. Doing the check at
-            // session_start instead would wait before the prompt starts, and then Pi's own timer would
-            // start from zero on top of that, doubling the bound for a hung server. Nothing is left
-            // running after this handler returns, so a server that settles later cannot print anything.
-            //
-            // Dogfood D52: in rpc (a UI, but not the TUI) Pi's own notifies do reach the client, so each
-            // problem is reported there once, like the D47 failures above: failed and needs-sign-in servers
-            // come from Pi's reportProblems(), and servers still connecting after Pi's startup wait from
-            // Pi's own before_agent_start notify. MMP adds only what Pi says nothing about -- servers still
-            // connecting when Pi's startup wait did finish (registered later, through mcp_servers_change) --
-            // and sends it through the same client channel, not stderr.
-            pi.on("before_agent_start", async (_event, ctx) => {
-                if (ctx.mode === "tui" || reportedThisSession || loadFailed || piMcpCompletions === undefined)
-                    return;
-                reportedThisSession = true;
-                if (ctx.hasUI && piReportedStillConnecting)
-                    return;
-                const configured = loadConfig(ctx).servers.filter((entry) => entry.config.enabled !== false);
-                const registered = pi.getMcpServers().filter((server) => server.config.enabled !== false);
-                const enabledServerNames = [...configured, ...registered].map((server) => server.name);
-                const lines = await mcpProblemLines(piMcpCompletions, enabledServerNames, ctx.hasUI);
-                if (lines.length === 0)
-                    return;
-                if (ctx.hasUI) {
-                    ctx.ui.notify(lines.join("\n"), "info");
-                }
-                else {
-                    process.stderr.write(`${lines.join("\n")}\n`);
                 }
             });
         },
