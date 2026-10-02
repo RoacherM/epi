@@ -118,7 +118,8 @@ async function chooseProvider(host: CommandHost, options: LoginOption[], search:
 async function startLogin(host: CommandHost, option: LoginOption, onBack?: () => Promise<void>): Promise<void> {
   const method = option.method as { login?: unknown; name?: string } | undefined;
   if (option.authType === "api_key" && method?.login === undefined) {
-    host.notice(`${option.name}: ${method?.name ?? "authentication"} is configured outside MMP (environment or models.json).`, "warning");
+    await showAmbientAuth(host, option, method?.name);
+    await onBack?.();
     return;
   }
   const session = host.session();
@@ -130,7 +131,11 @@ async function startLogin(host: CommandHost, option: LoginOption, onBack?: () =>
       signal: dialog.signal,
       prompt: (prompt: AuthPrompt) => authPrompt(host, dialog, prompt),
       notify: (event: AuthEvent) => authNotify(dialog, event),
-    } as never);
+    } as never, {
+      // Pi's loginProvider: "Sign in with ChatGPT" refuses to start without it. Stored in MMP's own
+      // settings (<agentDir>/settings.json), created on first use.
+      getDeviceId: () => session.settingsManager.getOrCreateDeviceId(),
+    });
     restoreEditor();
   } catch (error) {
     restoreEditor();
@@ -161,6 +166,20 @@ async function startLogin(host: CommandHost, option: LoginOption, onBack?: () =>
   } else {
     host.notice(`${done}.`);
   }
+}
+
+/** Pi 1.0's showAmbientAuthDialog: an API-key method without `login()` takes its credentials from
+ * outside (environment, models.json), so there is nothing to enter; Esc closes the dialog. */
+function showAmbientAuth(host: CommandHost, option: LoginOption, methodName: string | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    let restore: () => void = () => {};
+    const dialog = new LoginDialogComponent(host.tui, option.id, () => {
+      restore();
+      resolve();
+    }, option.name, `${option.name} setup`);
+    dialog.showInfo(`${methodName ?? "Authentication"} is configured outside MMP (environment or models.json).`, [], true);
+    restore = host.takeEditorSlot(dialog);
+  });
 }
 
 function authPrompt(host: CommandHost, dialog: LoginDialogComponent, prompt: AuthPrompt): Promise<string> {

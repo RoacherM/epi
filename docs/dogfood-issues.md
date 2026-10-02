@@ -4,7 +4,7 @@
 
 | 编号 | 级别 | 现象 | 复现 | 状态 |
 |---|---|---|---|---|
-| D1 | P3 | 扩展用 `pi.registerProvider` 注册模型时漏写 `cost`，发请求时只报 `Cannot read properties of undefined (reading 'tiers')`，看不出是哪个扩展、哪个模型、缺哪个字段 | 在 `~/.mmp/extensions/` 写一个不带 `cost` 的 provider 扩展，`mmp --provider <它> -p hi </dev/null` | 已修（合并 B1：注册时指出扩展、provider/模型和缺的字段；比 Pi 严格，见 pi-internals） |
+| D1 | P3 | 扩展用 `pi.registerProvider` 注册模型时漏写 `cost`，发请求时只报 `Cannot read properties of undefined (reading 'tiers')`，看不出是哪个扩展、哪个模型、缺哪个字段 | 在 `~/.mmp/extensions/` 写一个不带 `cost` 的 provider 扩展，`mmp --provider <它> --model <它的模型 id> -p hi </dev/null`（Pi 1.0 起 `--provider` 必须配 `--model`） | 已修（合并 B1：注册时指出扩展、provider/模型和缺的字段；比 Pi 严格，见 pi-internals） |
 | D2 | P2 | 完整测试要约 3 分钟，拖慢每个开发任务。最慢的是界面测试（每个 10–14 秒，例如 Esc 放回排队消息 14.3 秒、`/login` 流程 13.9 秒），推测大多在等固定延时或超时，而不是等界面状态出现 | `node --test --test-reporter=tap test/*.test.mjs`，按每个测试的 `duration_ms` 排序 | 已修（合并 D2：完整测试 3 分钟 → 约 44 秒） |
 | D3 | P2 | `-p` 时有一个 MCP 服务卡在连接（不回 `initialize`），第一条消息 10 秒后照常发出，但进程要等到那个服务的请求超时（默认 60 秒）才退出；等进程退出的 benchmark 会多等这么久。Pi 自己也一样（连接中的请求 `close()` 取消不了） | 测试夹具 `MMP_FIXTURE_HANG_INITIALIZE=1`，`mmp -p hi </dev/null` 计时 | 已修（合并 D3：会话关闭时关掉还在连接的 MCP 传输；`-p` 61 秒 → 11 秒，json 60 → 10 秒，TUI 退出 31 → 5 秒） |
 | D4 | P3 | `mmp mcp list` 不支持 `--approve`（`mmp install -l` 支持），不信任的项目只能先 `/trust`；空配置提示 "Add them to … then run `mmp mcp add`" 语序别扭 | 在不信任的项目里 `mmp mcp list --approve` → Unknown option | 已修（合并 B1：`mmp mcp list/login/logout --approve`，空配置提示改写） |
