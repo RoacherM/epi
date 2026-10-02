@@ -21,7 +21,7 @@
 自己改自己有个风险：改坏了就没法用它来修。所以分两份：
 
 ```
-工具版（tool）   ~/Desktop/Projects/sides/mmp-tool  ← 最近一次验收通过的提交（git worktree，detached）
+工具版（tool）   ~/Projects/sides/mmp-tool  ← 最近一次验收通过的提交（git worktree，detached）
                  用它干活：编码、审查都跑 `node <tool>/dist/cli.js`
 开发版（dev）    .claude/worktrees/<任务>/           ← 正在改的代码
                  只用来跑测试和 Herdr 验收，不用来干活
@@ -55,7 +55,7 @@ fi
 启动命令（主控在 pane 里执行，`--approve` 只让这一次信任 worktree 的 `.mmp/mmp.json`，不写进信任记录）：
 
 ```bash
-cd <worktree> && node ~/Desktop/Projects/sides/mmp-tool/dist/cli.js --approve \
+cd <worktree> && node ~/Projects/sides/mmp-tool/dist/cli.js --approve \
   --provider magpie --model claude/claude-opus-5-5 --thinking high
 ```
 
