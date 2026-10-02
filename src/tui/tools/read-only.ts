@@ -9,37 +9,8 @@ import {
 import type { Component } from "@earendil-works/pi-tui";
 
 import { piTui } from "../pi-tui.js";
+import { createOrUpdateLines, isErrorResult, textContent } from "./common.js";
 import type { ToolRenderContext, ToolRenderers } from "./types.js";
-
-class LinesComponent implements Component {
-  private lines: string[];
-
-  constructor(lines: string[]) {
-    this.lines = lines.flatMap((line) => line.split("\n"));
-  }
-
-  setLines(lines: string[]): void {
-    this.lines = lines.flatMap((line) => line.split("\n"));
-  }
-
-  getLines(): string[] {
-    return this.lines;
-  }
-
-  invalidate(): void {}
-
-  render(width: number): string[] {
-    return this.lines.map((line) => piTui.truncateToWidth(line, width));
-  }
-}
-
-function createOrUpdateLines(context: ToolRenderContext, lines: string[]): Component {
-  if (context.lastComponent instanceof LinesComponent) {
-    context.lastComponent.setLines(lines);
-    return context.lastComponent;
-  }
-  return new LinesComponent(lines);
-}
 
 function formatRelativePath(filePath: string | undefined, cwd: string): string {
   if (!filePath || filePath === ".") return ".";
@@ -52,14 +23,6 @@ function formatRelativePath(filePath: string | undefined, cwd: string): string {
     return normalized;
   }
   return normalized.replace(/^\.\//, "") || ".";
-}
-
-function getTextContent(result: AgentToolResult<any>): string {
-  if (!result || !Array.isArray(result.content)) return "";
-  return result.content
-    .filter((part): part is { type: "text"; text: string } => part?.type === "text" && typeof part?.text === "string")
-    .map((part) => part.text)
-    .join("\n");
 }
 
 function replaceTabs(text: string): string {
@@ -76,9 +39,9 @@ function trimTrailingEmptyLines(lines: string[]): string[] {
   return lines.slice(0, end);
 }
 
-function parseEntryLines(output: string, emptyMarkers: string[]): string[] {
+function parseEntryLines(output: string, emptyMarker: string): string[] {
   const trimmed = output.replace(/\r/g, "").trim();
-  if (!trimmed || emptyMarkers.some((marker) => trimmed.startsWith(marker))) {
+  if (!trimmed || trimmed.startsWith(emptyMarker)) {
     return [];
   }
   return trimmed
@@ -125,6 +88,36 @@ function parseGrepOutput(output: string): {
   return { lines: rawLines, matchCount, fileCount: files.size };
 }
 
+/**
+ * Error result shared by all four tools: the first line collapsed (after `label: ` when given),
+ * every line expanded, each painted `error`.
+ */
+function renderError(
+  context: ToolRenderContext,
+  theme: Theme,
+  output: string,
+  { fallback, expanded, label }: { fallback: string; expanded: boolean; label?: string },
+): Component {
+  const errorLines = output ? output.split("\n") : [fallback];
+  if (!expanded) {
+    const first = theme.fg("error", errorLines[0] ?? "error");
+    return createOrUpdateLines(context, [label === undefined ? first : `${theme.fg("accent", label)}: ${first}`]);
+  }
+  return createOrUpdateLines(
+    context,
+    errorLines.map((line) => theme.fg("error", line)),
+  );
+}
+
+/** Expanded grep/find/ls listing: the first 10 rows, then a count of the rest. */
+function firstTen(lines: string[], theme: Theme): string[] {
+  const display = lines.slice(0, 10).map((line) => theme.fg("toolOutput", line));
+  if (lines.length > 10) {
+    display.push(theme.fg("muted", `… ${lines.length - 10} more`));
+  }
+  return display;
+}
+
 // -----------------------------------------------------------------------------
 // read renderer
 // -----------------------------------------------------------------------------
@@ -148,19 +141,10 @@ function renderReadResult(
 ): Component {
   const rawPath = String(context.args?.path ?? context.args?.file_path ?? "");
   const relPath = formatRelativePath(rawPath, context.cwd);
-  const isError = Boolean(context.isError || (result as { isError?: boolean }).isError);
-  const output = getTextContent(result).replace(/\r/g, "");
+  const output = textContent(result).replace(/\r/g, "");
 
-  if (isError) {
-    const errorLines = output ? output.split("\n") : ["Error reading file"];
-    if (!options.expanded) {
-      const summary = `${theme.fg("accent", relPath)}: ${theme.fg("error", errorLines[0] ?? "error")}`;
-      return createOrUpdateLines(context, [summary]);
-    }
-    return createOrUpdateLines(
-      context,
-      errorLines.map((line) => theme.fg("error", line)),
-    );
+  if (isErrorResult(result, context)) {
+    return renderError(context, theme, output, { fallback: "Error reading file", expanded: options.expanded, label: relPath });
   }
 
   let renderedLines: string[];
@@ -219,18 +203,10 @@ function renderGrepResult(
   theme: Theme,
   context: ToolRenderContext,
 ): Component {
-  const isError = Boolean(context.isError || (result as { isError?: boolean }).isError);
-  const output = getTextContent(result);
+  const output = textContent(result);
 
-  if (isError) {
-    const errorLines = output ? output.split("\n") : ["Error executing grep"];
-    if (!options.expanded) {
-      return createOrUpdateLines(context, [theme.fg("error", errorLines[0] ?? "error")]);
-    }
-    return createOrUpdateLines(
-      context,
-      errorLines.map((line) => theme.fg("error", line)),
-    );
+  if (isErrorResult(result, context)) {
+    return renderError(context, theme, output, { fallback: "Error executing grep", expanded: options.expanded });
   }
 
   const pattern = context.args?.pattern ? `/${context.args.pattern}/` : "[missing pattern]";
@@ -246,11 +222,7 @@ function renderGrepResult(
     return createOrUpdateLines(context, [theme.fg("muted", "No matches found")]);
   }
 
-  const display = lines.slice(0, 10).map((l) => theme.fg("toolOutput", l));
-  if (lines.length > 10) {
-    display.push(theme.fg("muted", `… ${lines.length - 10} more`));
-  }
-  return createOrUpdateLines(context, display);
+  return createOrUpdateLines(context, firstTen(lines, theme));
 }
 
 export const grepRenderers: ToolRenderers = {
@@ -259,8 +231,40 @@ export const grepRenderers: ToolRenderers = {
 };
 
 // -----------------------------------------------------------------------------
-// find renderer
+// find and ls renderers
 // -----------------------------------------------------------------------------
+
+/**
+ * find and ls results: collapsed is `<label> (N entries)`, expanded lists the entries, and Pi's
+ * empty-result message comes back as the muted `emptyMarker`.
+ */
+function entryListResult(
+  toolName: string,
+  emptyMarker: string,
+  labelOf: (context: ToolRenderContext) => string,
+): NonNullable<ToolRenderers["renderResult"]> {
+  return (result, options, theme, context) => {
+    const output = textContent(result);
+
+    if (isErrorResult(result, context)) {
+      return renderError(context, theme, output, { fallback: `Error executing ${toolName}`, expanded: options.expanded });
+    }
+
+    const entries = parseEntryLines(output, emptyMarker);
+    const count = entries.length;
+
+    if (!options.expanded) {
+      const entryText = `(${count} ${count === 1 ? "entry" : "entries"})`;
+      const line = `${theme.fg("accent", labelOf(context))} ${theme.fg("muted", entryText)}`;
+      return createOrUpdateLines(context, [line]);
+    }
+
+    if (entries.length === 0) {
+      return createOrUpdateLines(context, [theme.fg("muted", emptyMarker)]);
+    }
+    return createOrUpdateLines(context, firstTen(entries, theme));
+  };
+}
 
 function renderFindCall(args: any, theme: Theme, context: ToolRenderContext): Component {
   const pattern = args?.pattern ?? "";
@@ -271,55 +275,10 @@ function renderFindCall(args: any, theme: Theme, context: ToolRenderContext): Co
   return createOrUpdateLines(context, [callText]);
 }
 
-function renderFindResult(
-  result: AgentToolResult<any>,
-  options: { expanded: boolean; isPartial: boolean },
-  theme: Theme,
-  context: ToolRenderContext,
-): Component {
-  const isError = Boolean(context.isError || (result as { isError?: boolean }).isError);
-  const output = getTextContent(result);
-
-  if (isError) {
-    const errorLines = output ? output.split("\n") : ["Error executing find"];
-    if (!options.expanded) {
-      return createOrUpdateLines(context, [theme.fg("error", errorLines[0] ?? "error")]);
-    }
-    return createOrUpdateLines(
-      context,
-      errorLines.map((line) => theme.fg("error", line)),
-    );
-  }
-
-  const pattern = context.args?.pattern ?? "";
-  const entries = parseEntryLines(output, ["No files found matching pattern"]);
-  const count = entries.length;
-
-  if (!options.expanded) {
-    const entryText = `(${count} ${count === 1 ? "entry" : "entries"})`;
-    const line = `${theme.fg("accent", pattern)} ${theme.fg("muted", entryText)}`;
-    return createOrUpdateLines(context, [line]);
-  }
-
-  if (entries.length === 0) {
-    return createOrUpdateLines(context, [theme.fg("muted", "No files found matching pattern")]);
-  }
-
-  const display = entries.slice(0, 10).map((e) => theme.fg("toolOutput", e));
-  if (entries.length > 10) {
-    display.push(theme.fg("muted", `… ${entries.length - 10} more`));
-  }
-  return createOrUpdateLines(context, display);
-}
-
 export const findRenderers: ToolRenderers = {
   renderCall: renderFindCall,
-  renderResult: renderFindResult,
+  renderResult: entryListResult("find", "No files found matching pattern", (context) => context.args?.pattern ?? ""),
 };
-
-// -----------------------------------------------------------------------------
-// ls renderer
-// -----------------------------------------------------------------------------
 
 function renderLsCall(args: any, theme: Theme, context: ToolRenderContext): Component {
   const relPath = formatRelativePath(args?.path ?? ".", context.cwd);
@@ -327,50 +286,9 @@ function renderLsCall(args: any, theme: Theme, context: ToolRenderContext): Comp
   return createOrUpdateLines(context, [callText]);
 }
 
-function renderLsResult(
-  result: AgentToolResult<any>,
-  options: { expanded: boolean; isPartial: boolean },
-  theme: Theme,
-  context: ToolRenderContext,
-): Component {
-  const isError = Boolean(context.isError || (result as { isError?: boolean }).isError);
-  const output = getTextContent(result);
-
-  if (isError) {
-    const errorLines = output ? output.split("\n") : ["Error executing ls"];
-    if (!options.expanded) {
-      return createOrUpdateLines(context, [theme.fg("error", errorLines[0] ?? "error")]);
-    }
-    return createOrUpdateLines(
-      context,
-      errorLines.map((line) => theme.fg("error", line)),
-    );
-  }
-
-  const relPath = formatRelativePath(context.args?.path ?? ".", context.cwd);
-  const entries = parseEntryLines(output, ["(empty directory)"]);
-  const count = entries.length;
-
-  if (!options.expanded) {
-    const entryText = `(${count} ${count === 1 ? "entry" : "entries"})`;
-    const line = `${theme.fg("accent", relPath)} ${theme.fg("muted", entryText)}`;
-    return createOrUpdateLines(context, [line]);
-  }
-
-  if (entries.length === 0) {
-    return createOrUpdateLines(context, [theme.fg("muted", "(empty directory)")]);
-  }
-
-  const display = entries.slice(0, 10).map((e) => theme.fg("toolOutput", e));
-  if (entries.length > 10) {
-    display.push(theme.fg("muted", `… ${entries.length - 10} more`));
-  }
-  return createOrUpdateLines(context, display);
-}
-
 export const lsRenderers: ToolRenderers = {
   renderCall: renderLsCall,
-  renderResult: renderLsResult,
+  renderResult: entryListResult("ls", "(empty directory)", (context) => formatRelativePath(context.args?.path ?? ".", context.cwd)),
 };
 
 // -----------------------------------------------------------------------------

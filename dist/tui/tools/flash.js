@@ -1,4 +1,4 @@
-export const FLASH_MS = 400;
+const FLASH_MS = 400;
 export function createFlashState() {
     return { until: 0, tone: "success", timer: undefined };
 }

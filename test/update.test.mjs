@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { parseMmpArgs } from "../dist/args.js";
 import { createMmpRuntimeExtensions } from "../dist/extensions/runtime.js";
 import { isolatePiEnvironment } from "../dist/pi-env.js";
 import {
@@ -117,13 +116,29 @@ test("mmp update runs the installer of the latest release", async () => {
   assert.match(script, /installer v0\.1\.5/);
 });
 
-test("update is an MMP subcommand only in first position", () => {
-  assert.equal(parseMmpArgs(["update"]).update, true);
-  assert.equal(parseMmpArgs(["-p", "update"]).update, false);
-  assert.deepEqual(parseMmpArgs(["-p", "update"]).passthrough, ["-p", "update"]);
+test("update is an MMP subcommand only in first position", (t) => {
+  const home = tempHome(t);
+  const fauxEcho = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
+  const run = (args) => spawnSync(process.execPath, [cliPath, ...args], {
+    cwd: home,
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
+    input: "",
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+
   // `mmp update [--self|--extensions|--models|--all] [<source>]` (docs/cli-design.md §3): args
-  // after "update" are handed to runMmpUpdateCommand's own parser, not rejected here.
-  assert.deepEqual(parseMmpArgs(["update", "--extensions", "npm:foo"]).passthrough, ["--extensions", "npm:foo"]);
+  // after "update" are handed to runMmpUpdateCommand's own parser, not MMP's flag table (which
+  // would reject --bogus as an unknown flag, not as an `mmp update` option).
+  const subcommand = run(["update", "--bogus"]);
+  assert.equal(subcommand.status, 2, subcommand.stderr);
+  assert.equal(subcommand.stderr, "mmp: Unknown option for mmp update: --bogus\n");
+
+  const prompt = run(["--no-project", "-p", "update"]);
+  assert.equal(prompt.status, 0, prompt.stderr);
+  assert.match(prompt.stdout, /ECHO:update/);
 });
 
 test("mmp update's own argument parser accepts --self/--extensions/--models/--all and a bare source", async () => {

@@ -5,36 +5,8 @@ import { relative, resolve } from "node:path";
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 
-import { piTui } from "../pi-tui.js";
+import { isErrorResult, LinesComponent, textContent, truncateOutputLines } from "./common.js";
 import type { ToolRenderContext, ToolRenderers } from "./types.js";
-
-
-/** Component that renders lines truncated to the given viewport width. */
-class TruncatedLinesComponent implements Component {
-  private readonly lines: string[];
-
-  constructor(lines: string[] | string) {
-    if (typeof lines === "string") {
-      this.lines = lines ? lines.split("\n") : [];
-    } else {
-      this.lines = lines.flatMap((l) => l.split("\n"));
-    }
-  }
-
-  render(width: number): string[] {
-    return this.lines.map((line) => piTui.truncateToWidth(line, width));
-  }
-
-  invalidate(): void {}
-}
-
-function extractText(result: AgentToolResult<any>): string {
-  if (!result || !Array.isArray(result.content)) return "";
-  return result.content
-    .filter((c: any) => c && c.type === "text" && typeof c.text === "string")
-    .map((c: any) => c.text)
-    .join("\n");
-}
 
 function parseBashOutput(rawText: string, isError: boolean): { exitCode: number; lines: string[] } {
   let text = rawText.replace(/\r\n/g, "\n");
@@ -77,6 +49,8 @@ interface DiffLine {
   kind: "add" | "remove" | "context";
   lineNum: number;
   text: string;
+  /** Pi's "..." skip marker sits directly above this row: unchanged lines were left out here. */
+  afterSkip: boolean;
 }
 
 interface ParsedDiff {
@@ -85,11 +59,13 @@ interface ParsedDiff {
   removals: number;
 }
 
-function parseDiffString(diffStr: string): ParsedDiff {
+/** Exported for test/pi-internals.test.mjs's `edit-diff-format` check (docs/pi-internals.md). */
+export function parseDiffString(diffStr: string): ParsedDiff {
   const rawLines = diffStr.replace(/\r\n/g, "\n").split("\n");
   const lines: DiffLine[] = [];
   let additions = 0;
   let removals = 0;
+  let afterSkip = false;
 
   for (const rawLine of rawLines) {
     if (!rawLine || rawLine.startsWith("---") || rawLine.startsWith("+++")) {
@@ -97,6 +73,7 @@ function parseDiffString(diffStr: string): ParsedDiff {
     }
 
     if (/^\s*\.\.\.\s*$/.test(rawLine)) {
+      afterSkip = true;
       continue;
     }
 
@@ -113,13 +90,14 @@ function parseDiffString(diffStr: string): ParsedDiff {
 
     if (prefix === "+") {
       additions++;
-      lines.push({ kind: "add", lineNum, text });
+      lines.push({ kind: "add", lineNum, text, afterSkip });
     } else if (prefix === "-") {
       removals++;
-      lines.push({ kind: "remove", lineNum, text });
+      lines.push({ kind: "remove", lineNum, text, afterSkip });
     } else {
-      lines.push({ kind: "context", lineNum, text });
+      lines.push({ kind: "context", lineNum, text, afterSkip });
     }
+    afterSkip = false;
   }
 
   return { lines, additions, removals };
@@ -142,121 +120,91 @@ type FormattedItem =
   | { kind: "line"; diffLine: DiffLine }
   | { kind: "collapsed"; count: number };
 
-function collapseDiffContext(diffLines: DiffLine[]): FormattedItem[] {
-  if (diffLines.length === 0) return [];
+/** A run of consecutive add/remove rows, by index into the diff and by its first/last line number. */
+interface Hunk {
+  startIdx: number;
+  endIdx: number;
+  firstLineNum: number;
+  lastLineNum: number;
+}
 
-  const changeIndices: number[] = [];
-  for (let i = 0; i < diffLines.length; i++) {
-    const line = diffLines[i];
-    if (line && (line.kind === "add" || line.kind === "remove")) {
-      changeIndices.push(i);
-    }
-  }
+function lineItems(lines: DiffLine[]): FormattedItem[] {
+  return lines.map((diffLine) => ({ kind: "line", diffLine }));
+}
 
-  if (changeIndices.length === 0) {
-    if (diffLines.length <= 3) {
-      return diffLines.map((diffLine) => ({ kind: "line", diffLine }));
-    }
-    return [{ kind: "collapsed", count: diffLines.length }];
-  }
-
-  const hunks: Array<{ startIdx: number; endIdx: number; firstLineNum: number; lastLineNum: number }> = [];
-  let hunkStart = changeIndices[0]!;
-  let hunkEnd = hunkStart;
-
-  for (let i = 1; i < changeIndices.length; i++) {
-    const idx = changeIndices[i]!;
-    if (idx === hunkEnd + 1) {
-      hunkEnd = idx;
+function findHunks(diffLines: DiffLine[]): Hunk[] {
+  const hunks: Hunk[] = [];
+  diffLines.forEach((line, idx) => {
+    if (line.kind === "context") return;
+    const last = hunks[hunks.length - 1];
+    if (last && last.endIdx === idx - 1) {
+      last.endIdx = idx;
+      last.lastLineNum = line.lineNum;
     } else {
-      const firstLine = diffLines[hunkStart]!;
-      const lastLine = diffLines[hunkEnd]!;
-      hunks.push({
-        startIdx: hunkStart,
-        endIdx: hunkEnd,
-        firstLineNum: firstLine.lineNum,
-        lastLineNum: lastLine.lineNum,
-      });
-      hunkStart = idx;
-      hunkEnd = idx;
+      hunks.push({ startIdx: idx, endIdx: idx, firstLineNum: line.lineNum, lastLineNum: line.lineNum });
     }
-  }
-  const firstLine = diffLines[hunkStart]!;
-  const lastLine = diffLines[hunkEnd]!;
-  hunks.push({
-    startIdx: hunkStart,
-    endIdx: hunkEnd,
-    firstLineNum: firstLine.lineNum,
-    lastLineNum: lastLine.lineNum,
   });
+  return hunks;
+}
 
-  const result: FormattedItem[] = [];
+/** Up to 3 context rows before the first hunk, after a count of every file line above them. */
+function leadingContext(diffLines: DiffLine[], firstHunk: Hunk): FormattedItem[] {
+  const kept = diffLines.slice(0, firstHunk.startIdx).slice(-3);
+  const firstShown = kept[0]?.lineNum ?? firstHunk.firstLineNum;
+  const skipped = firstShown - 1;
+  return [...(skipped > 0 ? [{ kind: "collapsed", count: skipped } as const] : []), ...lineItems(kept)];
+}
 
-  // Leading context: up to 3 context lines before first change hunk
-  const firstHunk = hunks[0]!;
-  const leading = diffLines.slice(0, firstHunk.startIdx);
-  const leadingKept = leading.slice(-3);
-  if (leadingKept.length > 0) {
-    const skipped = leadingKept[0]!.lineNum - 1;
-    if (skipped > 0) {
-      result.push({ kind: "collapsed", count: skipped });
-    }
-    for (const line of leadingKept) {
-      result.push({ kind: "line", diffLine: line });
-    }
-  } else if (firstHunk.firstLineNum > 1) {
-    result.push({ kind: "collapsed", count: firstHunk.firstLineNum - 1 });
-  }
+/**
+ * Context between two hunks: all of it when it is short (≤6) and Pi sent it whole, otherwise 3 rows
+ * after the earlier hunk, a count of the rest, and 3 rows before the later one.
+ * Pi sent it whole exactly when no "..." marker splits it. Hunk line numbers can't tell: "+" rows carry
+ * new-file numbers and the rest old-file numbers, which drift apart once a hunk changes the line count.
+ */
+function contextBetween(diffLines: DiffLine[], hunk: Hunk, next: Hunk): FormattedItem[] {
+  const between = diffLines.slice(hunk.endIdx + 1, next.startIdx);
+  const skipIdx = between.findIndex((line) => line.afterSkip);
+  const consecutive = skipIdx === -1;
+  if (between.length <= 6 && consecutive) return lineItems(between);
 
-  // Hunks and in-between context
-  for (let h = 0; h < hunks.length; h++) {
-    const curHunk = hunks[h]!;
-    for (let i = curHunk.startIdx; i <= curHunk.endIdx; i++) {
-      const line = diffLines[i]!;
-      result.push({ kind: "line", diffLine: line });
-    }
+  // Keep each side of the marker apart, so rows from before it never repeat after it.
+  const keptAfter = (consecutive ? between : between.slice(0, skipIdx)).slice(0, 3);
+  const keptBefore = (consecutive ? between : between.slice(skipIdx)).slice(-3);
+  const lastKept = keptAfter[keptAfter.length - 1]?.lineNum ?? hunk.lastLineNum;
+  const firstNext = keptBefore[0]?.lineNum ?? next.firstLineNum;
+  const collapsed = firstNext - lastKept - 1;
+  return [
+    ...lineItems(keptAfter),
+    ...(collapsed > 0 ? [{ kind: "collapsed", count: collapsed } as const] : []),
+    ...lineItems(keptBefore),
+  ];
+}
 
-    if (h < hunks.length - 1) {
-      const nextHunk = hunks[h + 1]!;
-      const between = diffLines.slice(curHunk.endIdx + 1, nextHunk.startIdx);
-      const consecutive =
-        nextHunk.firstLineNum - curHunk.lastLineNum - 1 === between.length;
-
-      if (between.length <= 6 && consecutive) {
-        for (const line of between) {
-          result.push({ kind: "line", diffLine: line });
-        }
-      } else {
-        const keptAfter = between.slice(0, 3);
-        const keptBefore = between.slice(-3);
-        for (const line of keptAfter) {
-          result.push({ kind: "line", diffLine: line });
-        }
-        const lastKept = keptAfter[keptAfter.length - 1]?.lineNum ?? curHunk.lastLineNum;
-        const firstNext = keptBefore[0]?.lineNum ?? nextHunk.firstLineNum;
-        const collapsed = firstNext - lastKept - 1;
-        if (collapsed > 0) {
-          result.push({ kind: "collapsed", count: collapsed });
-        }
-        for (const line of keptBefore) {
-          result.push({ kind: "line", diffLine: line });
-        }
-      }
-    }
-  }
-
-  // Trailing context: up to 3 context lines after last change hunk
-  const lastHunk = hunks[hunks.length - 1]!;
+/** Up to 3 context rows after the last hunk, then a count of the remaining context rows Pi sent. */
+function trailingContext(diffLines: DiffLine[], lastHunk: Hunk): FormattedItem[] {
   const trailing = diffLines.slice(lastHunk.endIdx + 1);
-  const trailingKept = trailing.slice(0, 3);
-  for (const line of trailingKept) {
-    result.push({ kind: "line", diffLine: line });
-  }
-  if (trailing.length > 3) {
-    result.push({ kind: "collapsed", count: trailing.length - 3 });
+  return [
+    ...lineItems(trailing.slice(0, 3)),
+    ...(trailing.length > 3 ? [{ kind: "collapsed", count: trailing.length - 3 } as const] : []),
+  ];
+}
+
+function collapseDiffContext(diffLines: DiffLine[]): FormattedItem[] {
+  const hunks = findHunks(diffLines);
+  const firstHunk = hunks[0];
+  const lastHunk = hunks[hunks.length - 1];
+  if (firstHunk === undefined || lastHunk === undefined) {
+    return diffLines.length <= 3 ? lineItems(diffLines) : [{ kind: "collapsed", count: diffLines.length }];
   }
 
-  return result;
+  const items = leadingContext(diffLines, firstHunk);
+  hunks.forEach((hunk, h) => {
+    items.push(...lineItems(diffLines.slice(hunk.startIdx, hunk.endIdx + 1)));
+    const next = hunks[h + 1];
+    if (next !== undefined) items.push(...contextBetween(diffLines, hunk, next));
+  });
+  items.push(...trailingContext(diffLines, lastHunk));
+  return items;
 }
 
 function renderDiffExpanded(items: FormattedItem[], theme: Theme): string[] {
@@ -286,19 +234,21 @@ function renderDiffExpanded(items: FormattedItem[], theme: Theme): string[] {
   });
 }
 
+/** edit and write errors: the first line collapsed, the whole text expanded, painted once as `error`. */
+function renderError(result: AgentToolResult<any>, expanded: boolean, theme: Theme): Component {
+  const errorText = textContent(result) || "Error";
+  const firstLine = errorText.split("\n")[0] ?? "Error";
+  return new LinesComponent(expanded ? theme.fg("error", errorText) : theme.fg("error", firstLine));
+}
+
 function renderUnifiedDiffResult(
   result: AgentToolResult<any>,
   options: { expanded: boolean; isPartial: boolean },
   theme: Theme,
   context: ToolRenderContext,
 ): Component {
-  const isError = Boolean(context?.isError || (result as any)?.isError);
-  if (isError) {
-    const errorText = extractText(result) || "Error";
-    const firstLine = errorText.split("\n")[0] ?? "Error";
-    return new TruncatedLinesComponent(
-      options.expanded ? theme.fg("error", errorText) : theme.fg("error", firstLine),
-    );
+  if (isErrorResult(result, context)) {
+    return renderError(result, options.expanded, theme);
   }
 
   const details = result.details as { diff?: string } | undefined;
@@ -307,12 +257,12 @@ function renderUnifiedDiffResult(
 
   if (!options.expanded) {
     const summary = formatDiffSummary(parsed.additions, parsed.removals, theme);
-    return new TruncatedLinesComponent(summary);
+    return new LinesComponent(summary);
   }
 
   const items = collapseDiffContext(parsed.lines);
   const lines = renderDiffExpanded(items, theme);
-  return new TruncatedLinesComponent(lines);
+  return new LinesComponent(lines);
 }
 
 function renderWriteNewFileResult(
@@ -326,7 +276,7 @@ function renderWriteNewFileResult(
 
   if (!options.expanded) {
     const label = `${lineCount} ${lineCount === 1 ? "line" : "lines"}`;
-    return new TruncatedLinesComponent(theme.fg("muted", label));
+    return new LinesComponent(theme.fg("muted", label));
   }
 
   const displayLines = lines.slice(0, 10);
@@ -335,47 +285,38 @@ function renderWriteNewFileResult(
     const gutter = String(idx + 1).padStart(gutterWidth, " ");
     return theme.fg("toolDiffAdded", `${gutter} ${line}`);
   });
-  return new TruncatedLinesComponent(rendered);
+  return new LinesComponent(rendered);
 }
 
 export const bashRenderers: ToolRenderers = {
   renderCall(args, theme) {
     const fullCommand = typeof args?.command === "string" ? args.command : "";
     const firstLine = fullCommand.split("\n")[0] ?? "";
-    return new TruncatedLinesComponent(`$ ${theme.fg("bashMode", firstLine)}`);
+    return new LinesComponent(`$ ${theme.fg("bashMode", firstLine)}`);
   },
   renderResult(result, options, theme, context) {
-    const isError = Boolean(context?.isError || (result as any)?.isError);
-    const raw = extractText(result);
-    const { exitCode, lines } = parseBashOutput(raw, isError);
+    const { exitCode, lines } = parseBashOutput(textContent(result), isErrorResult(result, context));
 
     if (options.isPartial) {
       const partialLines = lines.length <= 3 ? lines : lines.slice(-3);
-      return new TruncatedLinesComponent(partialLines.map((l) => theme.fg("toolOutput", l)));
+      return new LinesComponent(partialLines.map((l) => theme.fg("toolOutput", l)));
     }
 
     if (!options.expanded) {
       const statusText = exitCode === 0
         ? theme.fg("muted", "exit 0")
         : theme.fg("error", `exit ${exitCode}`);
-      return new TruncatedLinesComponent(statusText);
+      return new LinesComponent(statusText);
     }
 
-    if (lines.length <= 5) {
-      return new TruncatedLinesComponent(lines.map((l) => theme.fg("toolOutput", l)));
-    }
-
-    const skipped = lines.length - 5;
-    const firstTwo = lines.slice(0, 2).map((l) => theme.fg("toolOutput", l));
-    const ellipsisLine = theme.fg("muted", `… +${skipped} lines`);
-    const lastThree = lines.slice(-3).map((l) => theme.fg("toolOutput", l));
-    return new TruncatedLinesComponent([...firstTwo, ellipsisLine, ...lastThree]);
+    const painted = lines.map((l) => theme.fg("toolOutput", l));
+    return new LinesComponent(truncateOutputLines(painted, (text) => theme.fg("muted", text)));
   },
 };
 
 export const editRenderers: ToolRenderers = {
   renderCall(args, theme, context) {
-    return new TruncatedLinesComponent(formatCallLine("edit", args, theme, context));
+    return new LinesComponent(formatCallLine("edit", args, theme, context));
   },
   renderResult(result, options, theme, context) {
     return renderUnifiedDiffResult(result, options, theme, context);
@@ -384,16 +325,11 @@ export const editRenderers: ToolRenderers = {
 
 export const writeRenderers: ToolRenderers = {
   renderCall(args, theme, context) {
-    return new TruncatedLinesComponent(formatCallLine("write", args, theme, context));
+    return new LinesComponent(formatCallLine("write", args, theme, context));
   },
   renderResult(result, options, theme, context) {
-    const isError = Boolean(context?.isError || (result as any)?.isError);
-    if (isError) {
-      const errorText = extractText(result) || "Error";
-      const firstLine = errorText.split("\n")[0] ?? "Error";
-      return new TruncatedLinesComponent(
-        options.expanded ? theme.fg("error", errorText) : theme.fg("error", firstLine),
-      );
+    if (isErrorResult(result, context)) {
+      return renderError(result, options.expanded, theme);
     }
 
     // Pi's write tool always returns `details: undefined` (write.js): it has no prior file

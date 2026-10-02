@@ -1,1 +1,1 @@
-{"version":3,"file":"keybindings.d.ts","sourceRoot":"","sources":["../../src/tui/keybindings.ts"],"names":[],"mappings":"AAMA,OAAO,KAAK,EAAE,kBAAkB,EAAE,MAAM,iCAAiC,CAAC;AAS1E;2FAC2F;AAC3F,eAAO,MAAM,gBAAgB,EAAE,MAAM,CAAC,MAAM,EAAE,KAAK,EAAE,CAGpD,CAAC;AAQF;;;GAGG;AACH,wBAAgB,kBAAkB,CAAC,QAAQ,EAAE,MAAM,GAAG,kBAAkB,CAWvE"}
+{"version":3,"file":"keybindings.d.ts","sourceRoot":"","sources":["../../src/tui/keybindings.ts"],"names":[],"mappings":"AAMA,OAAO,KAAK,EAAE,kBAAkB,EAAE,MAAM,iCAAiC,CAAC;AAsB1E;;;GAGG;AACH,wBAAgB,kBAAkB,CAAC,QAAQ,EAAE,MAAM,GAAG,kBAAkB,CAWvE"}

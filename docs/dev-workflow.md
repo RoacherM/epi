@@ -1,14 +1,15 @@
 # MMP 开发流程
 
-2026-09-30 起执行。下一阶段改用 mmp 在 Herdr 里自己开发自己，见 [dev-workflow-herdr.md](dev-workflow-herdr.md)（草案，当前功能验收后启用，届时替换本文第 1–4 节）。记录的是开发 MMP 时实际在用、并和用户确认过的做法。产品层面的约定见 [development.md](development.md)，关键决策见 [decisions.md](decisions.md)。
+2026-09-30 起执行；2026-10-01 起改由 mmp 在 Herdr 里自己开发自己，流程见 [dev-workflow-herdr.md](dev-workflow-herdr.md)，代码规范、合并前检查和审查清单见 [code-quality.md](code-quality.md)。本文第 1–4 节是改用 Herdr 之前的做法，保留作参考；第 5–6 节仍然有效。记录的是开发 MMP 时实际在用、并和用户确认过的做法。产品层面的约定见 [development.md](development.md)，关键决策见 [decisions.md](decisions.md)。
 
 ## 1. 角色分工
 
 | 角色 | 谁 | 做什么 |
 |---|---|---|
 | 主控 | 主会话（Opus） | 和用户讨论需求、写设计文档、拆任务、审查 diff、合并、在 Herdr 里实测、向用户汇报 |
-| 编码 | Opus subagent（`model: "opus"`，用户 2026-10-01 定为默认：Opus 5.5、high、fast） | 在独立 git worktree 里实现一个边界清楚的任务，自带测试，提交后交回 |
-| 审查 | Fable（`model: "fable"`，只读） | 合并前审查每个分支；复查修改；不改仓库文件，复现脚本放 scratchpad |
+| 编码 | Herdr 里的 mmp（magpie opus-5.5，high），见 [code-quality.md](code-quality.md) 第 1 节 | 在独立 git worktree 里实现一个边界清楚的任务，自带测试，提交后交回 |
+| 初审 | Herdr 里的 mmp（magpie sonnet-5.5，high），每次新会话 | 合并前审查每个分支；复查修改；不改仓库文件，复现放临时副本 |
+| 终审 | Fable（`model: "fable"`，只读） | 大节点审查，主控打审查包 |
 | 调研 | agy CLI（`agy -p`） | 调研、整理资料、写调研文档（写在 scratchpad）；主控核对引用后再用 |
 
 每次合并后，在 memory 的 `subagent-quality-log.md` 里记一行：任务、作者、合并前退回几轮、合并后查出的 bug（P1 行为错误或安全问题 / P2 / P3 测试或整洁）。汇报时附上当前统计。
@@ -19,7 +20,7 @@
 设计文档（docs/，先和用户确认）
   → 拆任务：每个任务改的文件尽量不重叠
   → subagent 在独立 worktree 实现（见第 3 节）
-  → Fable 合并前审查 ──不通过──▶ 退回原作者修改
+  → 初审（code-quality.md 第 4 节）──不通过──▶ 退回原作者修改
   → 通过 → 主控合并（--no-ff），跑完整测试
   → Herdr 实测：真实终端 + 真实模型（第 4 节）
   → 更新质量记录，向用户汇报：做了什么、怎么验证的、文件在哪、还没做什么

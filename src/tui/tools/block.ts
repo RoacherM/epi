@@ -4,6 +4,7 @@ import type { AgentToolResult, Theme, ToolDefinition } from "@earendil-works/pi-
 import type { Component } from "@earendil-works/pi-tui";
 
 import { piTui } from "../pi-tui.js";
+import { textContent } from "./common.js";
 import type { ToolRenderContext, ToolRenderers } from "./types.js";
 
 // Rail column, then padding so `◆` lines up with assistant text (transcript CONTENT_PAD = 3).
@@ -56,11 +57,7 @@ function fallbackCall(toolName: string, theme: Theme): Component {
 }
 
 function fallbackResult(result: AgentToolResult<unknown>, expanded: boolean, theme: Theme): Component {
-  const text = (result.content ?? [])
-    .filter((part): part is { type: "text"; text: string } => part.type === "text")
-    .map((part) => part.text)
-    .join("\n")
-    .trimEnd();
+  const text = textContent(result).trimEnd();
   const lines = text === "" ? [] : text.split("\n");
   const shown = expanded ? lines : lines.slice(0, FALLBACK_LINES);
   const rows = shown.map((line) => theme.fg("toolOutput", line));

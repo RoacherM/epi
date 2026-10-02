@@ -14,7 +14,7 @@ import { createAgentSessionServices, parseArgs, SettingsManager, } from "@earend
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 import { PROVIDER_LOGIN_HELP } from "./pi-output.js";
 import { configureHttp } from "./tui/services.js";
-export const NO_MODELS_MESSAGE = `No models available. ${PROVIDER_LOGIN_HELP}`;
+const NO_MODELS_MESSAGE = `No models available. ${PROVIDER_LOGIN_HELP}`;
 /** Whether piMain would take its `--list-models` branch for these args: it checks `--export` first
  * (and `--help`/`--version`, which MMP already handles before reaching here). */
 export function isListModelsRun(piArgs) {
@@ -38,7 +38,7 @@ function formatTokenCount(count) {
     return count.toString();
 }
 /** Pi's cli/list-models.js table: sorted by provider then id, space-padded columns. */
-export function formatModelTable(models) {
+function formatModelTable(models) {
     const sorted = [...models].sort((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
     const header = ["provider", "model", "context", "max-out", "thinking", "images"];
     const rows = sorted.map((model) => [

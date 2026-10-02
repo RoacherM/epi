@@ -3,7 +3,7 @@
 // dist/cli/initial-message.js -- neither exported), used by the TUI's initial message.
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -60,6 +60,20 @@ test("~ and relative paths both resolve", async (t) => {
   writeFileSync(join(dir, "sub.txt"), "nested");
   const { text } = await processFileArguments(["./sub.txt"], dir);
   assert.match(text, /nested/);
+
+  // `~/` expands against os.homedir(), which follows $HOME: point it at a temp dir (never the real
+  // home) and resolve from a different cwd, so only the expansion can find the file.
+  const home = tempDir(t);
+  const savedHome = process.env.HOME;
+  t.after(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+  process.env.HOME = home;
+  assert.equal(homedir(), home);
+  writeFileSync(join(home, "in-home.txt"), "from home");
+  const fromHome = await processFileArguments(["~/in-home.txt"], dir);
+  assert.match(fromHome.text, /<file name="[^"]*in-home\.txt">\nfrom home\n<\/file>/);
 });
 
 test("buildTuiInitialMessages prepends @file text to only the first message", async (t) => {

@@ -1,6 +1,6 @@
 # 用 mmp 开发 mmp（Herdr 自举流程）
 
-状态：2026-09-30 用户确认。当前功能（Pi 0.99 + 原生 MCP）验收后启用；启用后替换 [dev-workflow.md](dev-workflow.md) 第 1–4 节，第 5 节（不可违反的约定）不变。
+状态：2026-09-30 用户确认，2026-10-01 起启用，替换 [dev-workflow.md](dev-workflow.md) 第 1–4 节；第 5 节（不可违反的约定）不变。代码规范、合并前检查、审查清单和 code smell 扫描见 [code-quality.md](code-quality.md)。
 
 目标：开发和审查都由 Herdr 里运行的 mmp 完成，mmp 在给自己干活的过程中暴露问题，再按优先级修掉。主控只管进度、文档和质量把关。
 
@@ -9,8 +9,8 @@
 | 角色 | 谁 | 在哪 | 做什么 |
 |---|---|---|---|
 | 主控 | Claude Code 主会话 | 用户的会话 | 拆任务、写任务说明、盯进度、合并、同步文档、分拣 mmp 问题、向用户汇报 |
-| 编码 | mmp，`magpie` 的 `claude/claude-opus-5-5`，thinking `high`（用户 2026-10-01 定为默认；`sonnet-5-5` 只在用户要求时用） | Herdr pane，cwd 是任务的 worktree | 按任务说明实现、写测试、提交 |
-| 初审 | mmp，`claude/claude-opus-5-5`，thinking `high` | 另一个 pane，同一 worktree，只读 | 每个任务合并前审查：复现、分级、写审查报告 |
+| 编码 | mmp，`magpie` 的 `claude/claude-opus-5-5`，thinking `high`（用户 2026-10-01 定为默认） | Herdr pane，cwd 是任务的 worktree | 按任务说明实现、写测试、提交 |
+| 初审 | mmp，`claude/claude-sonnet-5-5`，thinking `high`（`startmmp <worktree> sonnet`，用户 2026-10-02 定），每次新会话 | 另一个 pane，同一 worktree，只读 | 每个任务合并前审查：复现、分级、写审查报告（清单见 code-quality.md 第 4 节） |
 | 终审 | Fable（主控的只读 subagent） | 主控会话 | 大节点审查：主控把一个阶段的改动打成审查包交给它（见第 5 节） |
 | 调研 | agy（`agy -p`）或 mmp | — | 同现在；写进 scratchpad，主控核对后再用 |
 
@@ -59,7 +59,7 @@ cd <worktree> && node ~/Desktop/Projects/sides/mmp-tool/dist/cli.js --approve \
   --provider magpie --model claude/claude-opus-5-5 --thinking high
 ```
 
-编码和审查都用这个命令（`startmmp <worktree> opus`）。每个任务用一个新会话，不复用上一个任务的上下文。
+编码用 `startmmp <worktree> opus`，审查用 `startmmp <worktree> sonnet`。每个任务、每轮审查都用新会话，不复用上一个的上下文。
 
 ## 4. 任务交接：用文件，不靠读屏
 
@@ -93,7 +93,7 @@ cd <worktree> && node ~/Desktop/Projects/sides/mmp-tool/dist/cli.js --approve \
 
 ## 5. 质量把关
 
-- **初审**：每个任务合并前都要，由 mmp（opus）做。
+- **初审**：每个任务合并前都要，由 mmp（sonnet-5.5）做，清单见 [code-quality.md](code-quality.md) 第 4 节。
 - **终审（Fable）**：只在大节点做（用户 2026-09-30 定），不逐个任务审。大节点指一个阶段的功能做完、准备验收的时候，例如"Pi 0.99 + MCP"、"/settings"这样一组任务全部合并后，或者工具版要跨大版本升级前。
 - **审查包**：主控在 `.dev/milestones/<名字>/pack.md` 里打包，交给 Fable：
 

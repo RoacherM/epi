@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 const piEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
 const piTuiEntry = createRequire(piEntry).resolve("@earendil-works/pi-tui");
 const topLevelEntry = createRequire(import.meta.url).resolve("@earendil-works/pi-tui");
@@ -20,5 +20,4 @@ if (runtimeVersion !== typesVersion) {
         `MMP's types come from ${typesVersion} (${topLevelEntry})`);
 }
 export const piTui = (await import(pathToFileURL(piTuiEntry).href));
-export const piTuiLocation = fileURLToPath(pathToFileURL(piTuiEntry));
 //# sourceMappingURL=pi-tui.js.map

@@ -20,7 +20,7 @@ mmp --model openai/gpt-4o-mini
 
 ## 交互界面
 
-`mmp` 唯一的交互入口是它自己按 grok-build 设计写的第 4 层界面（设计见 [docs/tui-design.md](../tui-design.md)），不再启动 Pi 自带的经典交互界面。全屏布局、MMP 启动页、`/login`、`/logout`、`/model`、`/new`、`/resume`、`/compact`、`/reload`、`/trust`、对话和流式输出、工具调用、`!` bash、`--verbose` 启动提示、`@file` 首条消息、Esc 中止、Ctrl+C / Ctrl+D 退出、扩展的对话框和面板（`select`、`custom` 等）均已支持；未接线的内置命令在补全里标 `(not yet)`，输入后会提示尚未支持。`--help` 和 `--list-models` 也由 MMP 自己实现；`--print`、`--mode json/rpc`、`--export` 和其余非 TTY 运行仍使用内部 Pi CLI；`mmp update/install/remove/uninstall/list/config/auth` 是 MMP 自己的子命令（见 [子命令](#子命令)）。
+`mmp` 唯一的交互入口是它自己按 grok-build 设计写的第 4 层界面（设计见 [docs/tui-design.md](../tui-design.md)），不再启动 Pi 自带的经典交互界面。全屏布局、MMP 启动页、`/login`、`/logout`、`/model`、`/new`、`/resume`、`/compact`、`/reload`、`/trust`、对话和流式输出、工具调用、`!` bash、`--verbose` 启动提示、`@file` 首条消息、Esc 中止、Ctrl+C / Ctrl+D 退出、扩展的对话框和面板（`select`、`custom` 等）均已支持。不是内置命令、也没有扩展注册的 `/xxx` 会作为普通文字发给模型（和 Pi 一致）。`--help` 和 `--list-models` 也由 MMP 自己实现；`--print`、`--mode json/rpc`、`--export` 和其余非 TTY 运行仍使用内部 Pi CLI；`mmp update/install/remove/uninstall/list/config/auth` 是 MMP 自己的子命令（见 [子命令](#子命令)）。
 
 交互启动时，MMP 启动页会直接显示 `MMP on Pi` 身份、Manifest 状态、核心 JSON 配置方法和 `/mmp`、`/login` 等入口。每次 Agent 运行还会把同一份 runtime identity 注入模型上下文：当前 `MMP_HOME`/`agentDir`、Manifest 来源以及实际加载的 Rules、Skills 和 Extensions 都可核验；上游 Pi 文档中的 ambient 资源目录不会被误认为当前能力。
 
@@ -62,7 +62,7 @@ mmp auth print-api-key|print-bearer-token|check                # 打印或检查
 mmp mcp add|remove|list|login|logout                            # 配置、检查 MCP 服务，OAuth 登录/登出
 ```
 
-`-l` 把 `install`/`remove`/`config` 的目标从全局 `~/.mmp/mmp.json` 换成当前目录的 `.mmp/mmp.json`；目标项目未被信任时三者都会拒绝，报同一句 "not trusted" 提示，除非带 `--approve`（仅本次生效，和 Pi 自己的项目级 package 命令一样，见 `package-manager-cli.js`）。`mmp install` 写入前会校验来源是否真实存在：`npm:` 用 `npm view <spec> version` 确认包（和版本）能解析，`git:` 用 `git ls-remote` 确认仓库可达（10 秒超时；命令缺失或返回非零都会带上原始报错说明原因；`--offline` 和 `MMP_OFFLINE` 一样跳过这项检查），本地路径确认文件存在；`git:` 只接受 Pi 自己会接受的形状（host/path、显式协议 URL、scp 语法，可选 `@ref`），校验失败不写入，并说明原因。写入后需要重启 `mmp` 才生效；扩展包本身不会被预先下载进 `.pi/` 或 Pi 的 `settings.json`——它们和其它 Manifest 声明的 Extension 一样，在下次 `mmp` 启动时按 `--extension npm:x`/`git:x` 的方式加载，缓存在 `~/.mmp/pi/tmp/extensions` 下；`mmp update --extensions` 清空这份缓存，让声明的来源在下次启动时重新拉取。`mmp config` 的编辑结果如果校验失败，会保留编辑前的文件内容并报错。
+`-l`（或 `--local`）把 `install`/`remove`/`config` 的目标从全局 `~/.mmp/mmp.json` 换成当前目录的 `.mmp/mmp.json`；目标项目未被信任时三者都会拒绝，报同一句 "not trusted" 提示，除非带 `--approve`（仅本次生效，和 Pi 自己的项目级 package 命令一样，见 `package-manager-cli.js`）。`mmp install` 写入前会校验来源是否真实存在：`npm:` 用 `npm view <spec> version` 确认包（和版本）能解析，`git:` 用 `git ls-remote` 确认仓库可达（10 秒超时；命令缺失或返回非零都会带上原始报错说明原因；`--offline` 和 `MMP_OFFLINE` 一样跳过这项检查），本地路径确认文件存在；`git:` 只接受 Pi 自己会接受的形状（host/path、显式协议 URL、scp 语法，可选 `@ref`），校验失败不写入，并说明原因。写入后需要重启 `mmp` 才生效；扩展包本身不会被预先下载进 `.pi/` 或 Pi 的 `settings.json`——它们和其它 Manifest 声明的 Extension 一样，在下次 `mmp` 启动时按 `--extension npm:x`/`git:x` 的方式加载，缓存在 `~/.mmp/pi/tmp/extensions` 下；`mmp update --extensions` 清空这份缓存，让声明的来源在下次启动时重新拉取。`mmp config` 的编辑结果如果校验失败，会保留编辑前的文件内容并报错。
 
 ## 升级
 

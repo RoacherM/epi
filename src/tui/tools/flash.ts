@@ -3,7 +3,7 @@
 // normal. Shared by tool blocks (tools/group.ts) and thinking blocks (assistant-block.ts).
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
-export const FLASH_MS = 400;
+const FLASH_MS = 400;
 
 export interface FlashState {
   until: number;

@@ -28,14 +28,6 @@ export type ParsedInstallSource = {
  * has nothing to test against without live network. `runInstallCommand`'s `checkSourceExists` option
  * lets tests substitute a fake result instead of shelling out at all. */
 export type SourceExistenceChecker = (source: ParsedInstallSource) => Promise<void>;
-/** Mirrors Pi's own NETWORK_TIMEOUT_MS (package-manager.js's getLatestNpmVersion): without a
- * timeout, a dead host or a private/blocked repo hangs the command for as long as the OS takes to
- * give up (routinely a minute or more), and there's no way to answer a credential prompt anyway. */
-export declare const NETWORK_CHECK_TIMEOUT_MS = 10000;
-export declare function defaultCheckSourceExists(source: ParsedInstallSource, options?: {
-    offline?: boolean;
-    timeoutMs?: number;
-}): Promise<void>;
 /** `-h`/`--help` anywhere in argv, matching Pi's own subcommand help check (dist/main.js's
  * `isAuthCommandHelp`, dist/package-manager-cli.js's `rest.includes("-h") || rest.includes("--help")`)
  * -- MMP's own `mmp auth --help` (auth-cli.ts) already works this way. */

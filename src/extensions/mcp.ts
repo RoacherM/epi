@@ -252,7 +252,7 @@ export function createMmpMcpExtension(
   source: McpConfigSource,
   turnOff = 'add "disable": ["mmp:mcp"] to the global mmp.json',
 ): InlineExtension {
-  const { mmpHome, resolveAssembly } = source;
+  const { mmpHome } = source;
   const loadConfig = (ctx: ExtensionContext) => loadNativeMcpConfig(source, ctx.cwd);
   const logPath = join(mmpHome, "pi", "mcp.log");
   const transports = trackingTransportFactory();

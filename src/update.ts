@@ -14,9 +14,9 @@ const RELEASES_API = `https://api.github.com/repos/${MMP_REPO}/releases/latest`;
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 3_000;
 
-export const UPDATE_COMMAND = "mmp update";
+const UPDATE_COMMAND = "mmp update";
 
-export function installerUrl(version: string): string {
+function installerUrl(version: string): string {
   return `https://github.com/${MMP_REPO}/releases/download/v${version}/install.sh`;
 }
 
@@ -52,7 +52,7 @@ export function isNewerVersion(candidate: string, current: string): boolean {
   return false;
 }
 
-export async function fetchLatestVersion(fetchImpl: FetchLike = fetch): Promise<string> {
+async function fetchLatestVersion(fetchImpl: FetchLike = fetch): Promise<string> {
   const response = await fetchImpl(RELEASES_API, {
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: { accept: "application/vnd.github+json" },
@@ -249,7 +249,7 @@ export function clearExtensionPackageCache(agentDir: string): boolean {
 
 /** Mirrors Pi's refreshModelCatalogs (dist/package-manager-cli.js, not exported): a network,
  * force refresh of the model catalog cached at `<agentDir>/models.json`. */
-export async function refreshModelCatalog(agentDir: string): Promise<void> {
+async function refreshModelCatalog(agentDir: string): Promise<void> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {

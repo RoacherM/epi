@@ -70,6 +70,39 @@ test("mmp install -l writes the project Manifest instead of the global one", (t)
   assert.deepEqual(manifest, { version: 1, extensions: ["npm:proj-extension"] });
 });
 
+// `--local` is the long form of `-l`, as in Pi's package-manager-cli.js (`arg === "-l" || arg === "--local"`).
+test("mmp install and remove accept --local as the long form of -l", (t) => {
+  const f = fixture(t);
+  const installed = run(f, ["install", "npm:proj-extension", "--local", "--approve"]);
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.equal(existsSync(globalManifestPath(f)), false);
+  assert.deepEqual(JSON.parse(readFileSync(projectManifestPath(f), "utf8")).extensions, ["npm:proj-extension"]);
+
+  const refused = run(f, ["uninstall", "npm:proj-extension", "--local"]);
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /not trusted -- not read/);
+
+  const removed = run(f, ["remove", "npm:proj-extension", "--local", "-a"]);
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.match(removed.stdout, /Removed npm:proj-extension from .*\.mmp[/\\]mmp\.json/);
+  assert.deepEqual(JSON.parse(readFileSync(projectManifestPath(f), "utf8")).extensions, []);
+  assert.equal(existsSync(globalManifestPath(f)), false);
+});
+
+test("mmp config accepts --local as the long form of -l", (t) => {
+  const f = fixture(t);
+  const refused = run(f, ["config", "--local"], { EDITOR: "true" });
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /not trusted -- not read/);
+  assert.equal(existsSync(projectManifestPath(f)), false);
+
+  const saved = run(f, ["config", "--local", "--approve"], { EDITOR: "true" });
+  assert.equal(saved.status, 0, saved.stderr);
+  assert.match(saved.stdout, /Saved .*project.*\.mmp[/\\]mmp\.json/);
+  assert.equal(existsSync(projectManifestPath(f)), true);
+  assert.equal(existsSync(globalManifestPath(f)), false);
+});
+
 // Bug 5 (docs/development.md §8.2 rule 1): install/remove/config -l used to read and write an untrusted
 // project .mmp/mmp.json unconditionally. The rule is that a project's .mmp/mmp.json is only read
 // once the project is trusted, full stop -- not because resolveManifest executes anything (it just
@@ -94,6 +127,18 @@ test("mmp install -l --no-approve refuses even though nothing else was decided y
   assert.match(result.stderr, /refused by --no-approve/);
   assert.doesNotMatch(result.stderr, /mmp --approve/);
   assert.equal(existsSync(projectManifestPath(f)), false);
+});
+
+test("mmp install -l takes the last of --approve and --no-approve, like Pi", (t) => {
+  const f = fixture(t);
+  const refused = run(f, ["install", "npm:proj-extension", "-l", "--approve", "--no-approve"]);
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /refused by --no-approve/);
+  assert.equal(existsSync(projectManifestPath(f)), false);
+
+  const accepted = run(f, ["install", "npm:proj-extension", "-l", "--no-approve", "--approve"]);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(projectManifestPath(f), "utf8")).extensions, ["npm:proj-extension"]);
 });
 
 test("mmp remove -l and mmp config -l also refuse an untrusted project without --approve", (t) => {
@@ -514,6 +559,7 @@ test("mmp install|remove|uninstall|list|config --help (and -h) print usage inste
     assert.equal(result.status, 0, `${argv.join(" ")}: ${result.stderr}`);
     assert.match(result.stdout, expect, argv.join(" "));
     assert.equal(result.stderr, "", argv.join(" "));
+    if (argv[0] !== "list") assert.match(result.stdout, /^ {2}-l, --local {8}\S/m, argv.join(" "));
   }
   // No Manifest was ever written by any of these.
   assert.equal(existsSync(globalManifestPath(f)), false);

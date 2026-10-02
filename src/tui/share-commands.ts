@@ -14,55 +14,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  BorderedLoader,
-  ExtensionEditorComponent,
-  ExtensionSelectorComponent,
-  VERSION as PI_VERSION,
-} from "@earendil-works/pi-coding-agent";
+import { BorderedLoader, VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 
-import { MMP_VERSION } from "../host.js";
+import { MMP_VERSION } from "../version.js";
 import { MMP_REPO } from "../update.js";
 import type { CommandHost } from "./command-host.js";
+import { confirmInEditorSlot, editInEditorSlot } from "./dialogs.js";
 import { errorText } from "./errors.js";
 import { piTui } from "./pi-tui.js";
-
-// ── small local dialog helpers (same shape as commands.ts, session-tree-commands.ts) ──────────
-
-function confirm(host: CommandHost, title: string, message: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    let restore: () => void = () => {};
-    const selector = new ExtensionSelectorComponent(`${title}\n${message}`, ["Yes", "No"], (choice) => {
-      restore();
-      resolve(choice === "Yes");
-    }, () => {
-      restore();
-      resolve(false);
-    });
-    restore = host.takeEditorSlot(selector);
-  });
-}
-
-function editorInput(host: CommandHost, title: string, prefill: string | undefined): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    let restore: () => void = () => {};
-    const editor = new ExtensionEditorComponent(
-      host.tui,
-      piTui.getKeybindings() as never,
-      title,
-      prefill,
-      (value) => {
-        restore();
-        resolve(value);
-      },
-      () => {
-        restore();
-        resolve(undefined);
-      },
-    );
-    restore = host.takeEditorSlot(editor);
-  });
-}
 
 // ── /share ──────────────────────────────────────────────────────────────────
 
@@ -174,7 +133,7 @@ export function fitIssueBody(title: string, body: string): string {
  * prefilled "new issue" URL on MMP's own GitHub repo -- never Pi's upload. The URL is always
  * printed (it's the actual deliverable in a headless run); opening a browser is best-effort. */
 export async function runBug(host: CommandHost, args: string): Promise<void> {
-  const consent = await confirm(
+  const consent = await confirmInEditorSlot(
     host,
     "Report a bug",
     "Opens a prefilled GitHub 'new issue' page on MMP's repo. The URL itself carries your " +
@@ -187,7 +146,7 @@ export async function runBug(host: CommandHost, args: string): Promise<void> {
     host.notice("Bug report cancelled.");
     return;
   }
-  const hintInput = await editorInput(host, "Describe the bug (optional)", args.trim() || undefined);
+  const hintInput = await editInEditorSlot(host, "Describe the bug (optional)", args.trim() || undefined);
   if (hintInput === undefined) {
     host.notice("Bug report cancelled.");
     return;
@@ -196,7 +155,7 @@ export async function runBug(host: CommandHost, args: string): Promise<void> {
 
   const session = host.session();
   let summary: string | undefined;
-  const wantsSummary = await confirm(
+  const wantsSummary = await confirmInEditorSlot(
     host,
     "Include a summary?",
     `Attach a short summary of this session written by ${session.model?.name ?? "the current model"}?`,

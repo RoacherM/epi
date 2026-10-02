@@ -1,8 +1,9 @@
 // /compact, /resume, /thinking, /copy (and the app.message.copy key), /reload
 // (docs/tui-design.md 4.6); registered in builtins.ts and keys.ts.
 // The flows follow Pi's interactive mode, built from the components Pi exports.
-import { ExtensionSelectorComponent, SessionManager, SessionSelectorComponent, ThinkingSelectorComponent, } from "@earendil-works/pi-coding-agent";
+import { SessionManager, SessionSelectorComponent, ThinkingSelectorComponent, } from "@earendil-works/pi-coding-agent";
 import { writeClipboardText } from "./clipboard.js";
+import { confirmInEditorSlot } from "./dialogs.js";
 import { errorText } from "./errors.js";
 import { piTui } from "./pi-tui.js";
 import { crossProjectRefusal } from "./project-guard.js";
@@ -25,22 +26,11 @@ function formatMissingSessionCwdPrompt(issue) {
 }
 /**
  * Mirrors Pi's promptForMissingSessionCwd/showExtensionConfirm (interactive-mode.js ~2073-2079):
- * a Yes/No dialog offering to continue the switch in the current cwd instead. MMP has no dedicated
- * extension-confirm dialog wired to app.ts, so this reuses the same ExtensionSelectorComponent the
- * SDK's own extension `ui.confirm` uses (ext-host.ts), taking the editor slot directly.
+ * a Yes/No dialog offering to continue the switch in the current cwd instead, the same confirm
+ * dialog extensions get from `ui.confirm` (dialogs.ts).
  */
 export async function confirmMissingSessionCwd(host, issue) {
-    const confirmed = await new Promise((resolve) => {
-        let restore = () => { };
-        const selector = new ExtensionSelectorComponent(`Session cwd not found\n${formatMissingSessionCwdPrompt(issue)}`, ["Yes", "No"], (choice) => {
-            restore();
-            resolve(choice === "Yes");
-        }, () => {
-            restore();
-            resolve(false);
-        });
-        restore = host.takeEditorSlot(selector);
-    });
+    const confirmed = await confirmInEditorSlot(host, "Session cwd not found", formatMissingSessionCwdPrompt(issue));
     return confirmed ? issue.fallbackCwd : undefined;
 }
 /** Pi's handleCompactCommand ignores the throw: compact() already emitted a `compaction_end`

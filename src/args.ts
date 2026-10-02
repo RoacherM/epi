@@ -121,23 +121,11 @@ export interface MmpArgs {
   dryRun: boolean;
   noProject: boolean;
   version: boolean;
-  update: boolean;
   projectTrustOverride: boolean | undefined;
   passthrough: string[];
 }
 
 export function parseMmpArgs(argv: readonly string[]): MmpArgs {
-  if (argv[0] === "update") {
-    return {
-      dryRun: false,
-      noProject: false,
-      version: false,
-      update: true,
-      projectTrustOverride: undefined,
-      passthrough: argv.slice(1),
-    };
-  }
-
   const passthrough: string[] = [];
   let dryRun = false;
   let noProject = false;
@@ -236,7 +224,6 @@ export function parseMmpArgs(argv: readonly string[]): MmpArgs {
     dryRun,
     noProject,
     version,
-    update: false,
     projectTrustOverride,
     passthrough,
   };

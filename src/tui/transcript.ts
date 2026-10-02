@@ -165,27 +165,7 @@ export class Transcript {
   handle(event: AgentSessionEvent): void {
     switch (event.type) {
       case "message_start":
-        if (event.message.role === "user") {
-          // Pi delivers a queued follow-up inside the same run (agent-loop.js's runLoop drains
-          // getFollowUpMessages when the agent would stop, then emits turn_start + this user
-          // message_start) or, when it was queued after the loop's last poll, through
-          // agent.continue() (another agent_start, then this message_start). This user message is
-          // the one boundary both paths share: close the previous turn's footer above it. That turn
-          // finished on its own, so a stop pending here (Esc after its reply ended, while
-          // prepareNextTurn still compacts) belongs to the new turn, not to its label.
-          if (this.turnStartedAt !== undefined && this.finishedReply !== undefined) {
-            const stopPending = this.turnAborted;
-            this.turnAborted = false;
-            this.turnFooter([this.finishedReply]);
-            this.turnStartedAt = Date.now();
-            this.turnAborted = stopPending;
-          }
-          this.addFinishedMessage(event.message);
-        } else if (event.message.role === "assistant") {
-          this.finishedReply = undefined;
-          this.toolBatch = undefined;
-          this.streaming = this.assistant(event.message, true);
-        }
+        this.messageStarted(event.message);
         break;
       case "message_update":
         if (event.message.role === "assistant") {
@@ -195,16 +175,7 @@ export class Transcript {
         }
         break;
       case "message_end":
-        if (event.message.role === "assistant") {
-          (this.streaming ?? this.assistant(event.message, false)).updateContent(event.message, false);
-          this.syncToolCalls(event.message, true);
-          this.streaming = undefined;
-          const hasToolCalls = event.message.content.some((part) => part.type === "toolCall");
-          this.finishedReply = hasToolCalls ? undefined : event.message;
-          this.toolBatch = hasToolCalls ? { reply: event.message, terminates: undefined } : undefined;
-        } else if (event.message.role === "custom") {
-          this.addFinishedMessage(event.message);
-        }
+        this.messageEnded(event.message);
         break;
       case "agent_start":
         // `??=`, not `=`: `agent.continue()` (a retry, a compaction continuation) re-emits
@@ -228,14 +199,7 @@ export class Transcript {
         this.turnFooter(this.lastTurnMessages);
         break;
       case "auto_retry_end":
-        if (!event.success) {
-          this.notice(`Retry failed: ${event.finalError ?? "unknown error"}`, "error");
-          // Esc during the retry backoff sleep (AgentSession.abortRetry, called from the general
-          // abort path) surfaces here as `finalError: "Retry cancelled"` (agent-session.js's
-          // _finishCancelledRetry) -- the only signal this event carries that the *user* stopped
-          // it, as opposed to the retries simply running out.
-          if (event.finalError === "Retry cancelled") this.turnAborted = true;
-        }
+        if (!event.success) this.retryFailed(event.finalError);
         break;
       case "tool_execution_start":
         // Nested calls (from codemode scripts) render inside their parent's own block (Pi's
@@ -254,25 +218,10 @@ export class Transcript {
         break;
       case "tool_execution_end":
         if (event.parentToolCallId !== undefined) break;
-        this.tool(event.toolName, event.toolCallId).updateResult({ ...event.result, isError: event.isError }, false);
-        // Pi also stops, and drains follow-ups, after a batch whose every tool returned `terminate:
-        // true` (agent-loop.js shouldTerminateToolBatch; each of the batch's calls ends here once).
-        if (this.toolBatch !== undefined) {
-          this.toolBatch.terminates = (this.toolBatch.terminates ?? true) && event.result?.terminate === true;
-          this.finishedReply = this.toolBatch.terminates ? this.toolBatch.reply : undefined;
-        }
+        this.toolEnded(event);
         break;
       case "compaction_end":
-        // event.errorMessage already reads e.g. "Compaction failed: ..." or "Auto-compaction
-        // failed: ..." (agent-session.js); Pi's own interactive mode shows it verbatim too.
-        if (event.errorMessage !== undefined) this.notice(event.errorMessage, "error");
-        // Pi's own Esc-during-compaction notice (interactive-mode.js ~2883-2889): "Compaction
-        // cancelled" for a manual /compact the user stopped, "Auto-compaction cancelled" (a lower
-        // key, since nothing the user asked for was lost) for one the agent started on its own.
-        else if (event.aborted) this.notice(event.reason === "manual" ? "Compaction cancelled" : "Auto-compaction cancelled", event.reason === "manual" ? "error" : "info");
-        else this.notice("Context compacted.");
-        // `aborted` is also set when an extension's session_before_compact cancels it, so it can't
-        // mean the user stopped the run; markStopped() carries that (dogfood D17).
+        this.compactionEnded(event);
         break;
       case "auto_retry_start":
         this.notice(`Retrying (${event.attempt}/${event.maxAttempts}) in ${Math.round(event.delayMs / 1000)}s: ${event.errorMessage}`, "warning");
@@ -281,6 +230,75 @@ export class Transcript {
         break;
     }
     this.tui.requestRender();
+  }
+
+  private messageStarted(message: AgentMessage): void {
+    if (message.role === "user") {
+      // Pi delivers a queued follow-up inside the same run (agent-loop.js's runLoop drains
+      // getFollowUpMessages when the agent would stop, then emits turn_start + this user
+      // message_start) or, when it was queued after the loop's last poll, through
+      // agent.continue() (another agent_start, then this message_start). This user message is
+      // the one boundary both paths share: close the previous turn's footer above it. That turn
+      // finished on its own, so a stop pending here (Esc after its reply ended, while
+      // prepareNextTurn still compacts) belongs to the new turn, not to its label.
+      if (this.turnStartedAt !== undefined && this.finishedReply !== undefined) {
+        const stopPending = this.turnAborted;
+        this.turnAborted = false;
+        this.turnFooter([this.finishedReply]);
+        this.turnStartedAt = Date.now();
+        this.turnAborted = stopPending;
+      }
+      this.addFinishedMessage(message);
+    } else if (message.role === "assistant") {
+      this.finishedReply = undefined;
+      this.toolBatch = undefined;
+      this.streaming = this.assistant(message, true);
+    }
+  }
+
+  private messageEnded(message: AgentMessage): void {
+    if (message.role === "assistant") {
+      (this.streaming ?? this.assistant(message, false)).updateContent(message, false);
+      this.syncToolCalls(message, true);
+      this.streaming = undefined;
+      const hasToolCalls = message.content.some((part) => part.type === "toolCall");
+      this.finishedReply = hasToolCalls ? undefined : message;
+      this.toolBatch = hasToolCalls ? { reply: message, terminates: undefined } : undefined;
+    } else if (message.role === "custom") {
+      this.addFinishedMessage(message);
+    }
+  }
+
+  private retryFailed(finalError: string | undefined): void {
+    this.notice(`Retry failed: ${finalError ?? "unknown error"}`, "error");
+    // Esc during the retry backoff sleep (AgentSession.abortRetry, called from the general
+    // abort path) surfaces here as `finalError: "Retry cancelled"` (agent-session.js's
+    // _finishCancelledRetry) -- the only signal this event carries that the *user* stopped
+    // it, as opposed to the retries simply running out.
+    if (finalError === "Retry cancelled") this.turnAborted = true;
+  }
+
+  private toolEnded(event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>): void {
+    this.tool(event.toolName, event.toolCallId).updateResult({ ...event.result, isError: event.isError }, false);
+    // Pi also stops, and drains follow-ups, after a batch whose every tool returned `terminate:
+    // true` (agent-loop.js shouldTerminateToolBatch; each of the batch's calls ends here once).
+    if (this.toolBatch !== undefined) {
+      this.toolBatch.terminates = (this.toolBatch.terminates ?? true) && event.result?.terminate === true;
+      this.finishedReply = this.toolBatch.terminates ? this.toolBatch.reply : undefined;
+    }
+  }
+
+  private compactionEnded(event: Extract<AgentSessionEvent, { type: "compaction_end" }>): void {
+    // event.errorMessage already reads e.g. "Compaction failed: ..." or "Auto-compaction
+    // failed: ..." (agent-session.js); Pi's own interactive mode shows it verbatim too.
+    if (event.errorMessage !== undefined) this.notice(event.errorMessage, "error");
+    // Pi's own Esc-during-compaction notice (interactive-mode.js ~2883-2889): "Compaction
+    // cancelled" for a manual /compact the user stopped, "Auto-compaction cancelled" (a lower
+    // key, since nothing the user asked for was lost) for one the agent started on its own.
+    else if (event.aborted) this.notice(event.reason === "manual" ? "Compaction cancelled" : "Auto-compaction cancelled", event.reason === "manual" ? "error" : "info");
+    else this.notice("Context compacted.");
+    // `aborted` is also set when an extension's session_before_compact cancels it, so it can't
+    // mean the user stopped the run; markStopped() carries that (dogfood D17).
   }
 
   /**
@@ -322,7 +340,7 @@ export class Transcript {
   private turnFooter(messages: readonly { role: string; stopReason?: string }[]): void {
     if (this.turnStartedAt === undefined) return;
     const duration = Date.now() - this.turnStartedAt;
-    const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+    const lastAssistant = messages.findLast((message) => message.role === "assistant");
     const aborted = this.turnAborted || lastAssistant?.stopReason === "aborted";
     this.turnStartedAt = undefined;
     this.lastTurnMessages = [];

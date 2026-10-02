@@ -14,7 +14,7 @@ import { findNearestProjectManifest } from "../project.js";
  * `identity`, or `undefined` when it's safe. A `targetCwd` that no longer exists is left to the
  * caller's next step, which reports it (Pi's MissingSessionCwdError); any other error propagates.
  */
-export function refusalForCwd(targetCwd, identity) {
+function refusalForCwd(targetCwd, identity) {
     if (!existsSync(targetCwd))
         return undefined;
     const targetRoot = findNearestProjectManifest(targetCwd, identity.globalManifestPath)?.root;

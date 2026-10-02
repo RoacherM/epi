@@ -10,8 +10,8 @@ export const MMP_REPO = "RoacherM/mmp";
 const RELEASES_API = `https://api.github.com/repos/${MMP_REPO}/releases/latest`;
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 3_000;
-export const UPDATE_COMMAND = "mmp update";
-export function installerUrl(version) {
+const UPDATE_COMMAND = "mmp update";
+function installerUrl(version) {
     return `https://github.com/${MMP_REPO}/releases/download/v${version}/install.sh`;
 }
 function parseVersion(version) {
@@ -31,7 +31,7 @@ export function isNewerVersion(candidate, current) {
     }
     return false;
 }
-export async function fetchLatestVersion(fetchImpl = fetch) {
+async function fetchLatestVersion(fetchImpl = fetch) {
     const response = await fetchImpl(RELEASES_API, {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         headers: { accept: "application/vnd.github+json" },
@@ -200,7 +200,7 @@ export function clearExtensionPackageCache(agentDir) {
 }
 /** Mirrors Pi's refreshModelCatalogs (dist/package-manager-cli.js, not exported): a network,
  * force refresh of the model catalog cached at `<agentDir>/models.json`. */
-export async function refreshModelCatalog(agentDir) {
+async function refreshModelCatalog(agentDir) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
     try {

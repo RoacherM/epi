@@ -55,6 +55,24 @@ test("/trust saves a decision and notices it needs a restart", (t) => {
   assert.equal(trustDecision, true);
 });
 
+test("/trust asks under its own title and gives the editor back once a choice is made", (t) => {
+  const { screens } = runAppInProject(t, [
+    ["waitReady"],
+    ["type", "/trust"],
+    ["key", "enter"],
+    ["wait", 300],
+    ["screen", "dialog"],
+    ["key", "enter"], // first option: "Trust"
+    ["wait", 300],
+    ["type", "hello-after"],
+    ["wait", 300],
+    ["screen", "afterType"],
+    ["detach"], // Ctrl+D would not quit: the editor holds "hello-after"
+  ]);
+  assert.match(screens.dialog.join("\n"), /Trust project folder\?/);
+  assert.match(screens.afterType.join("\n"), /hello-after/);
+});
+
 test("/trust: Do not trust persists root=false", (t) => {
   const { output, trustDecision } = runAppInProject(t, [
     ["waitReady"],

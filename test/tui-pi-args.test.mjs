@@ -257,3 +257,52 @@ test("--provider without --model stops the TUI with Pi's error, like -p", (t) =>
   const help = spawnSync(process.execPath, [cli, "--help"], { cwd: f.project, env: f.env, encoding: "utf8", timeout: 30_000 });
   assert.match(help.stdout, /--provider <name> +Provider to search for --model \(requires --model\)/);
 });
+
+// --thinking and the --model <pattern>:<level> shorthand on the TUI path (services.ts, mirroring
+// Pi's buildSessionOptions in main.js): an explicit --thinking beats the shorthand, a scoped
+// model's own level and a resumed session's stored level.
+const fauxReasoningEcho = fileURLToPath(new URL("./fixtures/faux-reasoning-echo.mjs", import.meta.url));
+
+function reasoningFixture(t) {
+  const f = fixture(t);
+  writeFileSync(join(f.home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxReasoningEcho] }));
+  return f;
+}
+
+function startedModel(f, args) {
+  const result = runSdkPath(f, { args: ["--no-project", ...args], dumpModel: true });
+  assert.equal(result.status, 0, result.stderr);
+  const { model, thinkingLevel } = JSON.parse(result.stdout);
+  return { model: `${model.provider}/${model.id}`, thinkingLevel, stderr: result.stderr };
+}
+
+for (const [args, expected] of [
+  [["--model", "mmp-faux/thinker-b", "--thinking", "high"], "high"],
+  [["--model", "mmp-faux/thinker-b:low"], "low"],
+  [["--model", "mmp-faux/thinker-b:low", "--thinking", "high"], "high"],
+  [["--models", "mmp-faux/thinker-b:low"], "low"],
+  [["--models", "mmp-faux/thinker-b:low", "--thinking", "high"], "high"],
+]) {
+  test(`${args.join(" ")} starts mmp-faux/thinker-b at thinking ${expected}`, (t) => {
+    const started = startedModel(reasoningFixture(t), args);
+    assert.deepEqual({ model: started.model, thinkingLevel: started.thinkingLevel }, { model: "mmp-faux/thinker-b", thinkingLevel: expected });
+  });
+}
+
+test("--continue keeps the session's stored thinking level; --continue --thinking replaces it", (t) => {
+  const f = reasoningFixture(t);
+  const seeded = runSdkPath(f, { args: ["--no-project", "--model", "mmp-faux/thinker-b", "--thinking", "low"], prompt: "hi" });
+  assert.equal(seeded.status, 0, seeded.stderr);
+  assert.match(seeded.stdout, /OK/);
+  assert.equal(startedModel(f, ["--continue"]).thinkingLevel, "low");
+  const overridden = startedModel(f, ["--continue", "--thinking", "high"]);
+  assert.deepEqual({ model: overridden.model, thinkingLevel: overridden.thinkingLevel }, { model: "mmp-faux/thinker-b", thinkingLevel: "high" });
+});
+
+test("an invalid --thinking level is reported on stderr and does not stop startup", (t) => {
+  const f = reasoningFixture(t);
+  const valid = startedModel(f, ["--model", "mmp-faux/thinker-b"]);
+  const started = startedModel(f, ["--model", "mmp-faux/thinker-b", "--thinking", "bogus"]);
+  assert.match(started.stderr, /^mmp: .*bogus/m);
+  assert.equal(started.thinkingLevel, valid.thinkingLevel);
+});

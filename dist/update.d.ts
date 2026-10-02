@@ -1,6 +1,4 @@
 export declare const MMP_REPO = "RoacherM/mmp";
-export declare const UPDATE_COMMAND = "mmp update";
-export declare function installerUrl(version: string): string;
 export interface UpdateCache {
     checkedAt: string;
     latestVersion?: string;
@@ -16,7 +14,6 @@ type FetchLike = (url: string, init: {
     text(): Promise<string>;
 }>;
 export declare function isNewerVersion(candidate: string, current: string): boolean;
-export declare function fetchLatestVersion(fetchImpl?: FetchLike): Promise<string>;
 export declare function readUpdateCache(mmpHome: string): UpdateCache | undefined;
 /** Checks at most once per day; a failed check is recorded in the cache instead of thrown. */
 export declare function refreshUpdateCache(options: {
@@ -64,9 +61,6 @@ export declare function parseUpdateArgs(argv: readonly string[]): UpdateCommandA
  * at the latest matching version -- the next time `mmp` runs.
  */
 export declare function clearExtensionPackageCache(agentDir: string): boolean;
-/** Mirrors Pi's refreshModelCatalogs (dist/package-manager-cli.js, not exported): a network,
- * force refresh of the model catalog cached at `<agentDir>/models.json`. */
-export declare function refreshModelCatalog(agentDir: string): Promise<void>;
 /** `mmp update` dispatcher: `--self`/bare (the pre-existing behaviour) updates MMP's own pinned
  * release; `--extensions`/`<source>` clears the extension package cache; `--models` refreshes the
  * model catalog; `--all` does all three. Returns the process exit code. */

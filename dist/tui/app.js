@@ -14,6 +14,7 @@ import { ChipEditor, unattachedImageLabels } from "./paste-chips.js";
 import { pastePreview } from "./paste-preview.js";
 import { piTui } from "./pi-tui.js";
 import { crossProjectRefusal } from "./project-guard.js";
+import { imagesFor } from "./queued-messages.js";
 import { configureHttp } from "./services.js";
 import { showHardwareCursor } from "./settings-command.js";
 import { confirmMissingSessionCwd, missingSessionCwdIssue, runResume } from "./session-commands.js";
@@ -789,38 +790,6 @@ export async function runTuiApp(options) {
         return command !== undefined &&
             session.extensionRunner.getRegisteredCommands().some((registered) => registered.invocationName === command);
     }
-    /** A queued AgentMessage's own text content joined into one string -- matches exactly what
-     * AgentSession._queueSteer/_queueFollowUp push onto the plain-text `_steeringMessages`/
-     * `_followUpMessages` arrays, since both are built from the same `text` variable in the same call
-     * (agent-session.js). Used to pair a peeked AgentMessage back to its text entry by content, not
-     * position (item 3): `session.sendCustomMessage` (agent-session.js ~1496) enqueues an extension's
-     * custom message straight into the Agent's own queue with no corresponding text-array entry at
-     * all, so a positional pairing could silently attach *its* images to the wrong queued text. */
-    function queuedMessageText(message) {
-        const content = message !== null && typeof message === "object" && "content" in message ? message.content : undefined;
-        if (typeof content === "string")
-            return content;
-        if (!Array.isArray(content))
-            return "";
-        return content.filter((part) => part.type === "text").map((part) => part.text ?? "").join("");
-    }
-    function queuedMessageImages(message) {
-        const content = message !== null && typeof message === "object" && "content" in message ? message.content : undefined;
-        return Array.isArray(content) ? content.filter((part) => part.type === "image") : [];
-    }
-    /** Pairs each of `texts` with the first not-yet-claimed `peeked` message whose own text content
-     * equals it (see queuedMessageText), consuming that message so two identical queued texts don't
-     * both draw images from the same one. */
-    function imagesFor(texts, peeked) {
-        const available = [...peeked];
-        return texts.map((text) => {
-            const index = available.findIndex((message) => queuedMessageText(message) === text);
-            if (index === -1)
-                return [];
-            const [message] = available.splice(index, 1);
-            return queuedMessageImages(message);
-        });
-    }
     /** Pi's clearAllQueues (interactive-mode.js ~3729): the session's own steering/follow-up queue
      * plus app.ts's own compaction queue, combined and cleared -- with images recovered (item 6:
      * images used to be silently dropped on restore).
@@ -968,23 +937,18 @@ export async function runTuiApp(options) {
         editor.clearDraft();
         const [, command, commandArgs = ""] = /^\/(\S+)\s*([\s\S]*)$/.exec(trimmed) ?? [];
         const builtin = command === undefined ? undefined : findBuiltin(command);
-        if (builtin?.kind === "run") {
+        if (builtin !== undefined) {
             try {
-                await builtin.command.run(commandHost, commandArgs);
+                await builtin.run(commandHost, commandArgs);
             }
             catch (error) {
                 transcript.notice(`/${command} failed: ${errorText(error)}`, "error");
             }
             return;
         }
-        // A planned or excluded built-in name may still be an extension's command.
+        // Not a built-in; an extension command skips the compaction queue and the unattached-image warning below.
         const isExtensionCommand = command !== undefined &&
             session.extensionRunner.getRegisteredCommands().some((registered) => registered.invocationName === command);
-        if (builtin !== undefined && !isExtensionCommand) {
-            transcript.notice(builtin.message, "warning");
-            editor.setText(editor.restoreDraftImages(text, images));
-            return;
-        }
         if (await runUserBash(commandHost, trimmed))
             return;
         if (session.isCompacting) {
