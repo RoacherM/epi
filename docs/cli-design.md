@@ -44,7 +44,7 @@ Manifest 里的扩展启动时加载失败，两条路径都和 Pi 一样报错�
 | `--no-project`、`--dry-run` | MMP 独有 | |
 | `-h/--help`、`-v/--version` | 是 | `--version` 打印 MMP 版本和锁定的内核版本 |
 | `--use-theme`、`--tui-mode` | **不提供** | 界面已换成 grok 风格：只有全屏，主题由 MMP 管 |
-| `-e/--extension`、`--skill`、`--prompt-template`、`--theme`、`--system-prompt`、`--append-system-prompt`、`--no-extensions`、`--no-skills`、`--no-prompt-templates`、`--no-themes`、`--no-context-files` | **不提供** | 资源不能通过这些 flag 传入；传入时报错并提示改 Manifest。Skills 除 Manifest 声明外还会从三个固定目录自动发现（docs/decisions.md S1，README "Manifest"），同样不经过这些 flag |
+| `-e/--extension`、`--skill`、`--prompt-template`、`--theme`、`--system-prompt`、`--append-system-prompt`、`--no-extensions`、`--no-skills`、`--no-prompt-templates`、`--no-themes`、`--no-context-files` | **不提供** | 资源不能通过这些 flag 传入；传入时报错并提示改 Manifest。Skills 除 Manifest 声明外还会从三个固定目录自动发现（docs/decisions.md S1，[docs/guide/configuration.md](guide/configuration.md) "Manifest"），同样不经过这些 flag |
 
 ### 2.1 环境变量：Pi 的 `PI_*` 不进 MMP（dogfood D63）
 
