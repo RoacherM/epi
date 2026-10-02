@@ -682,6 +682,43 @@ const registry = [
       );
     },
   },
+  {
+    id: "login-device-id",
+    async check() {
+      const { mkdtempSync, readFileSync: readFile, rmSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { ModelRuntime, SettingsManager } = await import("@earendil-works/pi-coding-agent");
+      const dir = mkdtempSync(join(tmpdir(), "mmp-pi-internals-device-id-"));
+      try {
+        const text = readFileSync(join(root, "src", "tui", "commands.ts"), "utf8");
+        assert.match(text, /getDeviceId: \(\) => session\.settingsManager\.getOrCreateDeviceId\(\)/, "src/tui/commands.ts no longer passes getDeviceId to modelRuntime.login");
+        // Without the option, "Sign in with ChatGPT" must still fail before it starts (agentHostId
+        // runs before PKCE and the callback server), so this never reaches a network or a browser.
+        // If it stops failing, pi-ai gets the device ID some other way and MMP should follow.
+        const runtime = await ModelRuntime.create({
+          authPath: join(dir, "auth.json"), modelsPath: null, modelsStorePath: join(dir, "models-store.json"), refreshOnCreate: false,
+        });
+        const interaction = {
+          signal: new AbortController().signal,
+          prompt: () => Promise.reject(new Error("no prompt expected")),
+          notify: () => { throw new Error("no notify expected"); },
+        };
+        await assert.rejects(runtime.login("openai", "oauth", interaction), /requires a device ID/,
+          "openai's OAuth login no longer requires LoginOptions.getDeviceId");
+        // The ID lives in the agentDir's global settings.json (MMP's ~/.mmp/pi), not project settings,
+        // and stays the same for every later SettingsManager.
+        const agentDir = join(dir, "agent");
+        const settings = SettingsManager.create(dir, agentDir, { projectTrusted: false });
+        const id = settings.getOrCreateDeviceId();
+        await settings.flush();
+        assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+        assert.equal(JSON.parse(readFile(join(agentDir, "settings.json"), "utf8")).deviceId, id);
+        assert.equal(SettingsManager.create(dir, agentDir, { projectTrusted: false }).getOrCreateDeviceId(), id);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  },
 ];
 
 /** One `pi.on("<event>", ...)` handler's source in Pi's MCP extension: up to the next `pi.on(`. */

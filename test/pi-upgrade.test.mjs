@@ -377,6 +377,11 @@ test("describeNotableJump: a major bump is reported as a major version, never as
   assert.equal(describeNotableJump("not-a-version", "1.0.0"), undefined);
 });
 
+test("describeNotableJump: a major downgrade is not a notable jump (minors restart across a major)", () => {
+  assert.equal(describeNotableJump("1.0.0", "0.99.1"), undefined);
+  assert.equal(describeNotableJump("2.0.0", "1.40.0"), undefined);
+});
+
 test("runPiUpgrade: a major-version bump (0.99.1 -> 1.0.0) says so instead of '901 minor versions'", () => {
   const cwd = makeCwd({ piVersion: "0.99.1" });
   try {

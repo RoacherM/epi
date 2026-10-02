@@ -310,6 +310,8 @@ export function describeNotableJump(oldVersion, newVersion) {
   if (semver.valid(oldVersion) === null || semver.valid(newVersion) === null) return undefined;
   const fromMajor = semver.major(oldVersion);
   const toMajor = semver.major(newVersion);
+  // runPiUpgrade never gets here for a downgrade (it stops on !isNewerVersion), but this is exported.
+  if (toMajor < fromMajor) return undefined;
   if (toMajor > fromMajor) {
     const count = toMajor - fromMajor;
     const what = count === 1 ? "Major version upgrade" : `${count} major versions at once`;
