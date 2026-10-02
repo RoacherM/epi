@@ -33,7 +33,7 @@ function homeWithoutProviders(t) {
   const home = join(root, "home");
   mkdirSync(join(home, ".mmp"), { recursive: true });
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [] }));
-  return { root, env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" } };
+  return { root, env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" } };
 }
 
 function assertNoPiGuidance(output, context) {

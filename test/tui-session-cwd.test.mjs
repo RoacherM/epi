@@ -40,7 +40,7 @@ function fixture(t) {
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxPwd] }));
   const sessionFile = join(root, "sub-session.jsonl");
   writeSessionFile(sessionFile, sub);
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" };
+  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
   return { root, home, launchCwd, sub, sessionFile, env };
 }
 

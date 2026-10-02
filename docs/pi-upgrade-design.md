@@ -140,7 +140,7 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 **什么时候不检查**
 
 - 非交互模式（print、json、rpc）和 benchmark 一律不检查，保证运行结果可复现，也不产生网络请求；
-- 设置了 `--offline` 或 `PI_OFFLINE`；
+- 设置了 `--offline` 或 `MMP_OFFLINE`；
 - 设置了 `MMP_DISABLE_UPDATE_CHECK=1`；
 - 设置了 `CI` 环境变量。
 

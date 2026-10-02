@@ -27,7 +27,7 @@ function runProbe(t, extraArgs, { withMcp = false } = {}) {
   // No credentials: the run stops at "No API key", after session_start has fired.
   const result = spawnSync(process.execPath, [cliPath, "--no-project", ...extraArgs, "-p", "hi"], {
     cwd: project,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_AMBIENT_PROBE_OUT: probeOut, PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_AMBIENT_PROBE_OUT: probeOut, MMP_OFFLINE: "1" },
     input: "",
     encoding: "utf8",
     timeout: 60_000,
@@ -86,7 +86,7 @@ test("a skill discovered from ~/.agents/skills is visible to the model on the pi
 
   const result = spawnSync(process.execPath, [cliPath, "--no-project", "--model", "mmp-faux/model-a", "-p", "hi"], {
     cwd: project,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
     input: "",
     encoding: "utf8",
     timeout: 60_000,
@@ -119,7 +119,7 @@ for (const [name, extraArgs] of [
     const result = spawnSync(process.execPath, [cliPath, "--no-project", ...extraArgs, "-p", "hi"], {
       cwd: project,
       // Offline: a model-catalog refresh landing mid-run occasionally dropped the faux provider (1 in ~20 runs).
-      env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
+      env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
       input: "",
       encoding: "utf8",
       timeout: 60_000,

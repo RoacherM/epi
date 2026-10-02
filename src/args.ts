@@ -318,5 +318,11 @@ registers fails by name before startup.
 Environment:
   MMP_HOME                   Absolute MMP configuration root (default: ~/.mmp)
   MMP_DISABLE_UPDATE_CHECK   Do not check for new MMP releases
+  MMP_OFFLINE                Disable startup network operations when set to 1/true/yes
+  MMP_SESSION_DIR            Session storage directory (overridden by --session-dir)
+  MMP_TELEMETRY, MMP_CACHE_RETENTION, MMP_OAUTH_CALLBACK_HOST, MMP_HYPERLINKS,
+  MMP_IMAGE_PROTOCOL, MMP_TRUE_COLOR, MMP_TUI_ESC_TIMEOUT
+                             Same as Pi's PI_* variable of that name; Pi's own PI_*
+                             variables are ignored
 `;
 }

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// First: clears the user's PI_* variables before any Pi module reads them (src/pi-env.ts).
+import "./isolate-pi-env.js";
 import { reportRunFailure } from "./errors.js";
 import { runMmp } from "./host.js";
 

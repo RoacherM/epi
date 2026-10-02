@@ -262,7 +262,7 @@ test("a Manifest that declares another extension registering \"/mcp\" alongside 
   const result = spawnSync(
     process.execPath,
     [cliPath, "--no-project", "--model", "mmp-faux/echo", "-p", "hi"],
-    { encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, PI_OFFLINE: "1" } },
+    { encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" } },
   );
   // Pi's own per-handler try/catch (core/extensions/runner.js's emit()) reports a session_start
   // throw through onError rather than crashing the process -- verified empirically that
@@ -295,7 +295,7 @@ function nonTuiMcpCommand(t, mode, mcpConfig, { nodeArgs = [], env = {}, cliArgs
   const modeArgs = mode === "json" ? ["--mode", "json", "hi"] : ["-p", "hi"];
   return {
     args: [...nodeArgs, cliPath, "--no-project", "--model", model, ...cliArgs, ...modeArgs],
-    env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, PI_OFFLINE: "1", ...env },
+    env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1", ...env },
   };
 }
 
@@ -504,7 +504,7 @@ test("print mode: a failed codemode server that a codemode script uses is report
       PATH: process.env.PATH,
       HOME: root,
       MMP_HOME: mmpHome,
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TEST_CODEMODE_SCRIPT: "return await tools.mcp__broken__echo({ text: 'x' });",
     },
     timeout: 30_000,
@@ -571,7 +571,7 @@ for (const mode of ["print", "json"]) {
       ["--import", hooks, cliPath, "--no-project", "--model", "mmp-faux/echo", ...modeArgs],
       {
         encoding: "utf8",
-        env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, PI_OFFLINE: "1" },
+        env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" },
         timeout: 30_000,
       },
     );
@@ -593,7 +593,7 @@ async function runRpcMcp(t, mcpConfig, { nodeArgs = [], extensions = [], cliArgs
   const child = spawn(
     process.execPath,
     [...nodeArgs, cliPath, "--no-project", "--model", "mmp-faux/echo", ...cliArgs, "--mode", "rpc"],
-    { env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, PI_OFFLINE: "1" }, stdio: ["pipe", "pipe", "pipe"] },
+    { env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" }, stdio: ["pipe", "pipe", "pipe"] },
   );
   const killTimer = setTimeout(() => child.kill(), 30_000);
   let stdout = "";
@@ -731,7 +731,7 @@ test("declared MCP servers: codemode call, direct call, env expansion, and child
         MMP_HOME: mmpHome,
         MMP_MCP_FIXTURE_VALUE: "fixture-ok",
         // Offline: a model-catalog refresh landing mid-run occasionally dropped the faux provider.
-        PI_OFFLINE: "1",
+        MMP_OFFLINE: "1",
       },
     },
   );
@@ -778,7 +778,7 @@ function runTuiApp(t, extensions, steps, mcpConfig) {
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({ steps }),
     },
     encoding: "utf8",

@@ -43,7 +43,7 @@ function skillDropdown(f, args) {
       PATH: process.env.PATH,
       HOME: f.home,
       MMP_HOME: f.mmpHome,
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({
         args,
         steps: [
@@ -63,7 +63,7 @@ function skillDropdown(f, args) {
 function dryRun(f, args) {
   const result = spawnSync(process.execPath, [cliPath, ...args, "--dry-run"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -141,7 +141,7 @@ test("mmp list reports discovered skill roots with provenance", (t) => {
 
   const result = spawnSync(process.execPath, [cliPath, "list"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -157,7 +157,7 @@ test("mmp list reports no discovered skill roots when none exist", (t) => {
 
   const result = spawnSync(process.execPath, [cliPath, "list"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -180,7 +180,7 @@ test("/reload picks up a skill created after startup", (t) => {
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: mmpHome,
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({
         steps: [
           ["waitReady"],
@@ -218,7 +218,7 @@ test("a trusted project's .mmp/skills symlinked to a folder inside Pi's state di
 
   const result = spawnSync(process.execPath, [cliPath, "--approve", "--dry-run"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -238,7 +238,7 @@ test("~/.agents/skills symlinked into Pi's own agent skills dir is rejected", (t
 
   const result = spawnSync(process.execPath, [cliPath, "--no-project", "--dry-run"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -255,7 +255,7 @@ test("MMP's own <MMP_HOME>/skills symlinked to a folder inside Pi's state dir is
 
   const result = spawnSync(process.execPath, [cliPath, "--no-project", "--dry-run"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -268,7 +268,7 @@ test("MMP's own <MMP_HOME>/skills symlinked to a folder inside Pi's state dir is
 function rejectedDryRun(f, args) {
   const result = spawnSync(process.execPath, [cliPath, ...args, "--dry-run"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });

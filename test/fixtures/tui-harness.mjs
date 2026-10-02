@@ -24,6 +24,8 @@
 // `progress` is every setProgress call in order ("on"/"off").
 // `rawOsc133` counts the raw OSC 133 (`\x1b]133;`) sequences in what the app wrote: pi-tui strips
 // the prompt-zone markers before painting, and `output` has every OSC stripped, so a leak shows only here.
+// First, like dist/cli.js: MMP_* -> PI_* before any Pi module loads (src/pi-env.ts).
+import "../../dist/isolate-pi-env.js";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

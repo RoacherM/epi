@@ -27,7 +27,7 @@ function fixture(t, settings) {
     mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
     writeFileSync(join(home, ".mmp", "pi", "settings.json"), JSON.stringify(settings));
   }
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" };
+  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
   return { root, home, project, env };
 }
 

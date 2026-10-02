@@ -8,6 +8,7 @@ import test from "node:test";
 
 import { parseMmpArgs } from "../dist/args.js";
 import { createMmpRuntimeExtension } from "../dist/extensions/runtime.js";
+import { isolatePiEnvironment } from "../dist/pi-env.js";
 import {
   isNewerVersion,
   readUpdateCache,
@@ -18,6 +19,12 @@ import {
 } from "../dist/update.js";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+
+function isolated(env) {
+  const copy = { HOME: "/home/test", ...env };
+  isolatePiEnvironment(copy);
+  return copy;
+}
 
 function tempHome(t) {
   const home = mkdtempSync(join(tmpdir(), "mmp-update-"));
@@ -65,7 +72,10 @@ test("update check runs at most once per day and records failures instead of thr
 test("update checks are disabled for offline, CI, and explicitly disabled runs", () => {
   assert.equal(updateCheckDisabled({}, []), false);
   assert.equal(updateCheckDisabled({ MMP_DISABLE_UPDATE_CHECK: "1" }, []), true);
-  assert.equal(updateCheckDisabled({ PI_OFFLINE: "1" }, []), true);
+  // Called with the environment src/pi-env.ts has already processed: MMP_OFFLINE counts, a Pi
+  // user's own PI_OFFLINE does not (dogfood D63).
+  assert.equal(updateCheckDisabled(isolated({ MMP_OFFLINE: "1" }), []), true);
+  assert.equal(updateCheckDisabled(isolated({ PI_OFFLINE: "1" }), []), false);
   assert.equal(updateCheckDisabled({ CI: "true" }, []), true);
   assert.equal(updateCheckDisabled({}, ["--offline"]), true);
 });
@@ -213,7 +223,7 @@ export default function (pi) {
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [probe] }));
   spawnSync(process.execPath, [cliPath, "--no-project", "-p", "hi"], {
     cwd: project,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
     input: "",
     encoding: "utf8",
     timeout: 60_000,

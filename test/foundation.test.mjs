@@ -189,7 +189,7 @@ test("mmp -- --help sends \"--help\" as a message instead of printing help", (t)
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
   const result = spawnSync(process.execPath, [cliPath.pathname, "--no-project", "-p", "--", "--help"], {
     cwd: projectRoot,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
     input: "",
     encoding: "utf8",
     timeout: 30_000,

@@ -171,6 +171,26 @@ const registry = [
     },
   },
   {
+    id: "pi-env-reads",
+    async check() {
+      const { PI_ENV_RULES, PI_ENV_NOT_READ } = await import(pathToFileURL(join(root, "dist", "pi-env.js")).href);
+      const found = piEnvNamesInPi();
+      // config.js builds these two from APP_NAME, so they never appear as a literal.
+      const { ENV_AGENT_DIR, ENV_SESSION_DIR } = await importDeep("config.js");
+      found.add(ENV_AGENT_DIR);
+      found.add(ENV_SESSION_DIR);
+      const classified = new Set([...Object.keys(PI_ENV_RULES), ...PI_ENV_NOT_READ]);
+      const unclassified = [...found].filter((name) => !classified.has(name)).sort();
+      const gone = [...classified].filter((name) => !found.has(name)).sort();
+      assert.deepEqual(
+        { unclassified, gone },
+        { unclassified: [], gone: [] },
+        "Pi's PI_* names changed: classify each new one in src/pi-env.ts (bridged / mmp-owned / cleared / not read) and " +
+          "docs/cli-design.md §2.1, and drop the ones Pi no longer uses",
+      );
+    },
+  },
+  {
     id: "pi-extension-load-hint",
     async check() {
       const { PI_EXTENSION_LOAD_FAILURE_HINT } = await import(pathToFileURL(join(root, "dist", "pi-output.js")).href);
@@ -683,6 +703,31 @@ const registry = [
     },
   },
 ];
+
+/** Every `PI_*` name in the Pi runtime code mmp loads: each @earendil-works package's dist/, at the
+ * top level and nested under pi-coding-agent, except pi-coding-agent's single-file `bundle/` and
+ * Bun-binary `bun/` builds, which mmp never imports. Comments count too: cheaper than parsing,
+ * and a name only mentioned still has to be classified. */
+function piEnvNamesInPi() {
+  const scopeDir = dirname(dirname(piDist));
+  const packageDirs = readdirSync(scopeDir).map((name) => join(scopeDir, name));
+  const nestedScope = join(dirname(piDist), "node_modules", "@earendil-works");
+  if (statSync(nestedScope, { throwIfNoEntry: false })?.isDirectory()) {
+    packageDirs.push(...readdirSync(nestedScope).map((name) => join(nestedScope, name)));
+  }
+  const names = new Set();
+  for (const packageDir of packageDirs) {
+    const dist = join(packageDir, "dist");
+    if (!statSync(dist, { throwIfNoEntry: false })?.isDirectory()) continue;
+    for (const file of readdirSync(dist, { recursive: true })) {
+      if (!file.endsWith(".js") || /^(bundle|bun)[\\/]/.test(file)) continue;
+      for (const [name] of readFileSync(join(dist, file), "utf8").matchAll(/(?<![A-Za-z0-9_$])PI_[A-Z0-9_]*[A-Z0-9]/g)) {
+        names.add(name);
+      }
+    }
+  }
+  return names;
+}
 
 /** One `pi.on("<event>", ...)` handler's source in Pi's MCP extension: up to the next `pi.on(`. */
 function mcpHandlerSource(indexText, event) {

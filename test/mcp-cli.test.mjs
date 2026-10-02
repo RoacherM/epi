@@ -55,7 +55,7 @@ test("mmp mcp is a subcommand only in first position, never reaching Pi's own `p
   const f = fixture(t);
   const result = spawnSync(process.execPath, [cliPath, "-p", "mcp"], {
     cwd: f.project,
-    env: { ...f.env, PI_OFFLINE: "1" },
+    env: { ...f.env, MMP_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
