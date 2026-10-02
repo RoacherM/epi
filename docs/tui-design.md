@@ -535,7 +535,7 @@ MMP 新写的文件也都在 `~/.mmp/pi` 下：`themes/mmp-grok-*.json`，键位
 |---|---|
 | `package.json` | `pi-coding-agent`、`pi-tui`、`pi-ai` 都改成 0.87.x 的精确版本。嵌套安装是 Pi 的 shrinkwrap 决定的，去不掉（3.2 节） |
 | `pi-mcp-adapter` 2.17.0（历史：这一步是 0.87 升级时做的；Pi 0.99 升级已经把 `pi-mcp-adapter` 整个去掉，改用 Pi 原生 MCP，见 [mcp-design.md](mcp-design.md)） | 重跑 docs/development.md 里的真实 stdio MCP `search → call` 验收 |
-| 版本字面量 | `MMP_HELP`、各测试、`fixtures/fake-benchmark-harness.mjs`、benchmark 的 `EXPECTED_PI_VERSION` 和变体名 |
+| 版本字面量 | 各测试、`fixtures/fake-benchmark-harness.mjs`、benchmark 的 `EXPECTED_PI_VERSION` 和变体名 |
 | 文档 | README、docs/development.md 里的 0.83 |
 | 回归 | 对照 0.84 到 0.87 的 CHANGELOG，检查 MMP 用到的 Pi 接口 |
 | ambient 资源 | 五个 `--no-*` 参数各一条测试；`PI_CODING_AGENT_DIR` 仍然生效；两个版本 `pi --help` 输出对比，确认没有新的自动发现来源 |
