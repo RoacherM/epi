@@ -86,6 +86,11 @@ function failedRefreshFixture(t) {
 test("a failed /reload or /new keeps the last valid Rules and Skill roots, not the startup ones", (t) => {
   const { root, home, mmpHome, manifest, manifestPath } = failedRefreshFixture(t);
   const seen = (text) => ["waitFor", text, { timeoutMs: 5000 }];
+  // The complete reply to this turn: drawn after the turn's own prompt line, so neither the TUI
+  // redrawing an earlier reply nor a half-streamed line satisfies it.
+  const replyTo = (turn) => ["waitFor", {
+    regex: `❯ ${turn}\\s[\\s\\S]*SEEN rules=RULES-V(ONE|TWO|THREE) skills=(none|probe-skill-two)\\b`,
+  }, { timeoutMs: 5000 }];
   const steps = [
     ["waitReady"],
     ["type", "one"], ["key", "enter"], seen("SEEN rules=RULES-VONE skills=none"),
@@ -94,12 +99,12 @@ test("a failed /reload or /new keeps the last valid Rules and Skill roots, not t
     ["type", "two"], ["key", "enter"], seen("SEEN rules=RULES-VTWO skills=probe-skill-two"),
     ["writeFile", { path: manifestPath, content: '{"version":1,"bogusField":true}' }],
     ["type", "/reload"], ["key", "enter"], ["waitFor", "MMP Manifest reload failed"], ["mark", "failedReload"],
-    ["type", "three"], ["key", "enter"], ["waitFor", "SEEN rules="], ["wait", 300], ["mark", "afterFailedReload"],
+    ["type", "three"], ["key", "enter"], replyTo("three"), ["mark", "afterFailedReload"],
     ["type", "/mmp"], ["key", "enter"], ["waitFor", "loadedSkills"], ["wait", 300], ["mark", "mmpReport"],
     // /new runs the factories again and refreshes the (still broken) Manifest once more.
     ["type", "/new"], ["key", "enter"], ["waitFor", "MMP Manifest reload failed"], ["wait", 300],
     ["screen", "newPage"],
-    ["type", "four"], ["key", "enter"], ["waitFor", "SEEN rules="], ["wait", 300], ["mark", "afterFailedNew"],
+    ["type", "four"], ["key", "enter"], replyTo("four"), ["mark", "afterFailedNew"],
     // Once the Manifest is valid again, the next refresh replaces the kept assembly.
     ["writeFile", { path: manifestPath, content: manifest(["./R3.md"], []) }],
     ["type", "/reload"], ["key", "enter"], ["waitFor", "MMP reloaded 1 rule files and 0 skill roots."],
@@ -122,9 +127,11 @@ test("a failed /reload or /new keeps the last valid Rules and Skill roots, not t
   assert.equal(result.status, 0, result.stderr);
   const { marks, screens } = JSON.parse(result.stdout);
   const since = (mark, previous) => marks[mark].slice(marks[previous].length);
+  // The TUI redraws earlier replies inside a window, so only the last SEEN line is the new turn's.
+  const lastSeen = (mark, previous) => since(mark, previous).match(/SEEN rules=\S+ skills=\S+/g)?.at(-1);
 
   assert.match(marks.failedReload, /MMP Manifest reload failed: .*bogusField/);
-  assert.match(since("afterFailedReload", "failedReload"), /SEEN rules=RULES-VTWO skills=probe-skill-two/);
+  assert.equal(lastSeen("afterFailedReload", "failedReload"), "SEEN rules=RULES-VTWO skills=probe-skill-two");
   // /mmp reports the kept assembly: the second Manifest's Rules file and Skill root.
   const report = since("mmpReport", "afterFailedReload");
   assert.match(report, /R2\.md/);
@@ -132,7 +139,7 @@ test("a failed /reload or /new keeps the last valid Rules and Skill roots, not t
   assert.doesNotMatch(report, /R1\.md/);
   // The startup page /new draws counts the kept Skill root (the startup Manifest had none).
   assert.match(screens.newPage.join("\n"), /rules 1 · roots 1\b/);
-  assert.match(since("afterFailedNew", "mmpReport"), /SEEN rules=RULES-VTWO skills=probe-skill-two/);
+  assert.equal(lastSeen("afterFailedNew", "mmpReport"), "SEEN rules=RULES-VTWO skills=probe-skill-two");
 });
 
 // The same rule for an rpc client's session switch and fork, where Pi also re-runs the factories.
