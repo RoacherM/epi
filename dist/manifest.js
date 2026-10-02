@@ -7,7 +7,7 @@ const MANIFEST_KEYS = {
     skills: true,
     extensions: true,
 };
-const BUILT_IN_EXTENSIONS = {
+export const BUILT_IN_EXTENSIONS = {
     "mmp:task": true,
     "mmp:mcp": true,
     "mmp:hooks": true,

@@ -360,6 +360,44 @@ for (const [label, mcpConfig, loaded] of [
   });
 }
 
+// Since Pi 0.99.2 the codemode and tool_search descriptions name no server; Pi's MCP extension lists
+// codemode and deferred servers in a `mcp_servers` prompt section from its before_agent_start. MMP's
+// forced prompt (Rules + runtime contract) must be built after that, or the model never learns which
+// servers exist (docs/pi-internals.md "system-prompt-forced-last").
+test("codemode and deferred servers reach the model in Pi's <mcp_servers> section, ahead of MMP's Rules and runtime contract", (t) => {
+  const root = createFixture(t);
+  const mmpHome = join(root, "home");
+  mkdirSync(mmpHome, { recursive: true });
+  const probe = fileURLToPath(new URL("./fixtures/faux-skill-probe.mjs", import.meta.url));
+  const external = fileURLToPath(new URL("./fixtures/prompt-section-extension.mjs", import.meta.url));
+  writeFileSync(join(mmpHome, "RULES.md"), "# U3 fixture rules\n");
+  writeJson(join(mmpHome, "mmp.json"), { version: 1, rules: ["./RULES.md"], extensions: ["mmp:mcp", external, probe] });
+  writeJson(join(mmpHome, "mcp.json"), {
+    mcpServers: {
+      fixture: { command: process.execPath, args: fixtureServerArgs().args },
+      "deferred-one": { command: process.execPath, args: fixtureServerArgs().args, exposure: "deferred" },
+    },
+  });
+  const result = spawnSync(
+    process.execPath,
+    [cliPath, "--no-project", "--model", "mmp-faux/model-a", "-p", "hi"],
+    { encoding: "utf8", timeout: 30_000, env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" } },
+  );
+  const context = `status=${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
+  assert.equal(result.status, 0, context);
+  const prompt = result.stdout;
+  const section = prompt.match(/<mcp_servers>\n([\s\S]*?)\n<\/mcp_servers>/);
+  assert.ok(section, `no <mcp_servers> section in the system prompt\n${context}`);
+  assert.match(section[1], /^- mcp__deferred_one \(tool_search\)/m, context);
+  assert.match(section[1], /^- mcp__fixture \(codemode\)/m, context);
+  // A Manifest extension's section edit lands too: Pi runs external extensions before inline ones.
+  const externalSection = prompt.indexOf("<mmp_test_external>\nexternal section text\n</mmp_test_external>");
+  assert.ok(externalSection >= 0, `a Manifest extension's section is missing\n${context}`);
+  const rules = prompt.indexOf("# U3 fixture rules");
+  const contract = prompt.indexOf("# MMP Runtime Contract");
+  assert.ok(section.index < rules && externalSection < rules && rules < contract, `expected Pi's sections, then Rules, then the runtime contract\n${context}`);
+});
+
 // Pi's own report of a failed or needs-sign-in server (reportProblems() in extensions/mcp/index.js),
 // as an rpc client gets it.
 const BROKEN_LINE = "  broken: failed: spawn /nonexistent/x ENOENT";

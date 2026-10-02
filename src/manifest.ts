@@ -15,7 +15,7 @@ const MANIFEST_KEYS: Readonly<Record<string, true>> = {
   extensions: true,
 };
 
-const BUILT_IN_EXTENSIONS: Readonly<Record<BuiltInExtensionName, true>> = {
+export const BUILT_IN_EXTENSIONS: Readonly<Record<BuiltInExtensionName, true>> = {
   "mmp:task": true,
   "mmp:mcp": true,
   "mmp:hooks": true,

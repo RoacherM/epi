@@ -11,7 +11,7 @@ import { MmpConfigError } from "../errors.js";
 import { resolveEffectiveHooks } from "../hooks-config.js";
 import { createHooksInlineExtension } from "./hooks.js";
 import { createTaskInlineExtension } from "./task.js";
-import { createMmpRuntimeExtension } from "./runtime.js";
+import { createMmpRuntimeExtensions } from "./runtime.js";
 import type { MmpRuntimeIdentity } from "../runtime-identity.js";
 import { createMmpMcpExtension, loadNativeMcpConfig } from "./mcp.js";
 import type { UpdateCheckOptions } from "./runtime.js";
@@ -24,9 +24,8 @@ export function buildInlineExtensions(
   updateCheck?: UpdateCheckOptions,
   verbose = false,
 ): InlineExtension[] {
-  const extensions: InlineExtension[] = [
-    createMmpRuntimeExtension(runtimeIdentity, assembly, resolveAssembly, updateCheck, verbose),
-  ];
+  const mmpRuntime = createMmpRuntimeExtensions(runtimeIdentity, assembly, resolveAssembly, updateCheck, verbose);
+  const extensions: InlineExtension[] = [mmpRuntime.runtime];
   for (const extension of assembly.inlineExtensions) {
     switch (extension.name) {
       case "mmp:task":
@@ -91,5 +90,9 @@ export function buildInlineExtensions(
       }
     }
   }
+  // Last, so Pi's own before_agent_start section edits (MCP's `mcp_servers`) land before MMP forces
+  // the prompt (docs/pi-internals.md "system-prompt-forced-last"). Manifest external extensions
+  // need no special place: Pi runs them before every inline one, so their section edits land too.
+  extensions.push(mmpRuntime.systemPrompt);
   return extensions;
 }

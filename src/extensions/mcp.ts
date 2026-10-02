@@ -159,10 +159,6 @@ type McpArgumentCompletions = NonNullable<RegisteredCommand["getArgumentCompleti
  * either way, but ends in `cliHint()` instead: `/mcp` does not exist outside the TUI. */
 const ATTENTION_HEADER = "MCP servers need attention:";
 
-/** Pi's notify when the first prompt's wait for servers with direct tools ran out (`extensions/mcp/index.js`'s
- * `waitForDirectServers`). It names no server; MMP's session_shutdown report then does. */
-const PI_STILL_CONNECTING = "MCP servers are still connecting; their tools become available once connected.";
-
 /** Start of Pi's warning that MCP tools cannot be called because neither codemode nor tool_search is
  * active (`ensureDiscoveryActive`): about tool reachability -- e.g. `-p --no-tools`, which asked for
  * exactly that -- not a server that failed, so it is not copied to stderr (docs/mcp-design.md §7). */
@@ -170,8 +166,8 @@ const PI_UNREACHABLE_PREFIX = "MCP tools are only reachable from the codemode or
 
 /**
  * Pi's default `startupWaitMs` (createMcpExtension), passed explicitly because the session_shutdown
- * report uses the same bound: a server still connecting is named only once Pi's own wait ran out or
- * the session lasted longer than this. Test seam: MMP_TEST_MCP_STARTUP_WAIT_MS shortens both.
+ * report uses the same bound: a server still connecting is named only once the session lasted longer
+ * than this. Test seam: MMP_TEST_MCP_STARTUP_WAIT_MS shortens both.
  */
 function mcpStartupWaitMs(): number {
   const override = Number(process.env.MMP_TEST_MCP_STARTUP_WAIT_MS);
@@ -279,9 +275,8 @@ export function createMmpMcpExtension(source: McpConfigSource): InlineExtension 
       // Every `  <server>: <state>` line Pi's reportProblems() has notified this session, in any
       // mode, so the session_shutdown report below adds only what Pi has not said.
       const piAttentionLines = new Set<string>();
-      // Whether Pi said PI_STILL_CONNECTING this session, and when the session started: the
-      // session_shutdown report names servers still connecting only after either.
-      let piSaidStillConnecting = false;
+      // When the session started: the session_shutdown report names servers still connecting only
+      // once it ran longer than startupWaitMs.
       let sessionStartedAt = Date.now();
       const bindTo = (owner: object, value: unknown) =>
         typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(owner) : value;
@@ -296,7 +291,6 @@ export function createMmpMcpExtension(source: McpConfigSource): InlineExtension 
                 return (message: string, type?: "info" | "warning" | "error") => {
                   const attentionLines = message.startsWith(ATTENTION_HEADER) ? message.split("\n").slice(1) : [];
                   for (const line of attentionLines) piAttentionLines.add(line);
-                  if (message === PI_STILL_CONNECTING) piSaidStillConnecting = true;
                   if (
                     !target.hasUI &&
                     target.mode !== "tui" &&
@@ -317,7 +311,6 @@ export function createMmpMcpExtension(source: McpConfigSource): InlineExtension 
       pi.on("session_start", () => {
         writtenToStderr.clear();
         piAttentionLines.clear();
-        piSaidStillConnecting = false;
         sessionStartedAt = Date.now();
       });
 
@@ -330,13 +323,13 @@ export function createMmpMcpExtension(source: McpConfigSource): InlineExtension 
       // shows /mcp, and keeps running), each failed or needs-sign-in server Pi has not reported yet
       // is reported now, in Pi's own shape -- on stderr without a UI, to the rpc client with one --
       // ending in what to run in the shell rather than Pi's "/mcp". A server still connecting is
-      // named too, but only once Pi's own still-connecting notify was seen (a direct server's wait
-      // ran out; Pi names no server) or the session ran longer than startupWaitMs: since 0.99.2 a
-      // server whose tools are not declared to the model connects in the background, so in a short
-      // run still connecting is normal (dogfood D40; docs/mcp-design.md §7).
+      // named too, but only once the session ran longer than startupWaitMs (which also covers Pi's
+      // own still-connecting notify: its wait starts after session_start): since 0.99.2 a server
+      // whose tools are not declared to the model connects in the background, so in a short run
+      // still connecting is normal (dogfood D40; docs/mcp-design.md §7).
       pi.on("session_shutdown", async (_event, ctx) => {
         if (ctx.mode === "tui" || piMcpCompletions === undefined) return;
-        const includeConnecting = piSaidStillConnecting || Date.now() - sessionStartedAt > startupWaitMs;
+        const includeConnecting = Date.now() - sessionStartedAt > startupWaitMs;
         const lines = (await mcpProblemLines(piMcpCompletions, { includeConnecting })).filter(
           (line) => !piAttentionLines.has(line),
         );

@@ -4,7 +4,7 @@
 
 | 编号 | 级别 | 现象 | 复现 | 状态 |
 |---|---|---|---|---|
-| D1 | P3 | 扩展用 `pi.registerProvider` 注册模型时漏写 `cost`，发请求时只报 `Cannot read properties of undefined (reading 'tiers')`，看不出是哪个扩展、哪个模型、缺哪个字段 | 在 `~/.mmp/extensions/` 写一个不带 `cost` 的 provider 扩展，`mmp --provider <它> -p hi </dev/null` | 已修（合并 B1：注册时指出扩展、provider/模型和缺的字段；比 Pi 严格，见 pi-internals） |
+| D1 | P3 | 扩展用 `pi.registerProvider` 注册模型时漏写 `cost`，发请求时只报 `Cannot read properties of undefined (reading 'tiers')`，看不出是哪个扩展、哪个模型、缺哪个字段 | 在 `~/.mmp/extensions/` 写一个不带 `cost` 的 provider 扩展，`mmp --provider <它> --model <它的模型 id> -p hi </dev/null`（Pi 1.0 起 `--provider` 必须配 `--model`） | 已修（合并 B1：注册时指出扩展、provider/模型和缺的字段；比 Pi 严格，见 pi-internals） |
 | D2 | P2 | 完整测试要约 3 分钟，拖慢每个开发任务。最慢的是界面测试（每个 10–14 秒，例如 Esc 放回排队消息 14.3 秒、`/login` 流程 13.9 秒），推测大多在等固定延时或超时，而不是等界面状态出现 | `node --test --test-reporter=tap test/*.test.mjs`，按每个测试的 `duration_ms` 排序 | 已修（合并 D2：完整测试 3 分钟 → 约 44 秒） |
 | D3 | P2 | `-p` 时有一个 MCP 服务卡在连接（不回 `initialize`），第一条消息 10 秒后照常发出，但进程要等到那个服务的请求超时（默认 60 秒）才退出；等进程退出的 benchmark 会多等这么久。Pi 自己也一样（连接中的请求 `close()` 取消不了） | 测试夹具 `MMP_FIXTURE_HANG_INITIALIZE=1`，`mmp -p hi </dev/null` 计时 | 已修（合并 D3：会话关闭时关掉还在连接的 MCP 传输；`-p` 61 秒 → 11 秒，json 60 → 10 秒，TUI 退出 31 → 5 秒） |
 | D4 | P3 | `mmp mcp list` 不支持 `--approve`（`mmp install -l` 支持），不信任的项目只能先 `/trust`；空配置提示 "Add them to … then run `mmp mcp add`" 语序别扭 | 在不信任的项目里 `mmp mcp list --approve` → Unknown option | 已修（合并 B1：`mmp mcp list/login/logout --approve`，空配置提示改写） |
@@ -68,4 +68,9 @@
 | D62 | P3 | 非交互 `piMain` 启动仍读取项目 `.pi/settings.json`，项目 `sessionDir` 可重定向会话；之前终审只看到 bootstrap 的 `projectTrusted: false`，误判为文档过期。Pi 当前依赖的 `main.js` 随后还创建了未传 trust 选项的 `startupSettingsManager`，默认 `true` | 临时 HOME/MMP_HOME + faux-echo + `--no-project --offline -p`：坏 JSON 产生设置解析警告；有效 `sessionDir` 指向临时目录时，该目录新增 1 份会话，MMP 默认 sessions 目录为 0。对照 `main.js` 的 bootstrap/startup 两处构造和 `settings-manager.js` 默认参数 | 已校正文档与复现结论；隔离缺口待修（仍按决策 D3 跟踪） |
 | D63 | P3 | 需要决定：用户给 Pi 设的 `PI_OFFLINE=1` 会让 mmp 悄悄离线（Pi 内核 `model-runtime.js`、`package-manager.js`、`version-check.js` 读它）。按 D21 的原则（不读用户 Pi 环境里的 `PI_*`）应隔离：MMP 用自己的 `MMP_OFFLINE`，启动时清掉继承的 `PI_OFFLINE` 再按需设置；测试也要改用 MMP 的变量（Fable 终审） | `PI_OFFLINE=1 mmp -p hi` | 待定 |
 | D64 | P3 | Fable 终审的两条 PLAUSIBLE：TUI 路径 `process.exit` 前没有像 `-p` 路径那样等 stderr 写完（`host.ts`）；`exit()` 在 `await drainInput` 之后才停 TUI（`app.ts`）。两处都和 Pi 的写法一致 | Fable review.md | 待查 |
+| D65 | P3 | `/login` → "Sign in with an API key" 的服务商列表按 Esc：Pi 1.0 回到认证方式选择（`showLoginProviderSelector` 里 `if (authType) this.showLoginAuthTypeSelector()`），MMP 直接回编辑器（`src/tui/commands.ts` `chooseProvider`）。改时注意 U4 的 ambient 测试要多按一次 Esc | U4 review-1 N2 | 待做 |
+| D66 | P1 | `/login` 的 "Sign in with ChatGPT" 一定失败：MMP 调 `modelRuntime.login` 没传 Pi 的 `getDeviceId`（0.99.1 起就这样）。设备 ID 存在 `~/.mmp/pi/settings.json` | U2 review-1 P1 | 已修（U4，c9819c6） |
+| D67 | P2 | rpc `switch_session` 没有跨项目保护：Pi 在目标会话的 cwd 重建服务，MMP 的 piMain/rpc 路径没有 `crossProjectRefusal`（TUI 有，`src/tui/project-guard.ts`），所以 rpc 客户端能切到别的项目的会话，在那里用启动项目的 Rules 跑工具。U5 之前就这样 | U5 review-1 F2 | 待做 |
+| D68 | P3 | `MMP_HOME` 不是 `~/.mmp` 而 cwd 在真实 home 下时，`mmp list` 会把真实的 `~/.mmp/mmp.json` 当成项目 Manifest（显示 not trusted，没读取）。真实使用时 `MMP_HOME` 就是 `~/.mmp` 不受影响；测试要用临时 cwd | K4 report | 待查 |
+| D69 | P3 | 用户在 mmp 的 bash 工具里启动 `pi` 时，它继承 `PI_CODING_AGENT_DIR=<MMP_HOME>/pi`，用的是 MMP 的 Pi 状态（规则 1 的反方向）。D63 之前就这样，D63 只是让它更早设置。可选修法：给 bash 工具/hooks 的子进程去掉 `PI_CODING_AGENT_DIR` | D63 review-1 F5 | 待定 |
 | K4 | P2 | 决策 H3/K4 待实现：内置标准能力（`mmp:task`、`mmp:mcp`、`mmp:hooks`）默认开启，可在 Manifest 里关闭；关闭的不读配置、不启动子进程。注意 `mmp:task` 默认开启会改变模型看到的工具（快照、benchmark） | development.md §3.4 | 待做（U1 合并后开工，避免和 MCP 改动冲突） |

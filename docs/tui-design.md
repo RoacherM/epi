@@ -155,7 +155,7 @@ Pi 的 `main.ts` 在创建交互界面前做了 30 步，SDK 笔记 1.4 节逐�
 resourceLoaderOptions: {
   noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
   additionalExtensionPaths: <Manifest 声明的外部扩展>,
-  extensionFactories: <mmp:runtime / mmp:task / mmp:mcp / mmp:hooks>,
+  extensionFactories: <mmp:runtime / mmp:task / mmp:mcp / mmp:hooks / mmp:system-prompt（固定最后）>,
 }
 agentDir: ~/.mmp/pi（显式传入，同时保留 PI_CODING_AGENT_DIR 环境变量，因为 Pi 内部还有直接读它的地方）
 ```
