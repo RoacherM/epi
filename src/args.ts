@@ -82,7 +82,7 @@ interface FlagTableEntry {
  * it.
  */
 export const MMP_FLAG_TABLE: readonly FlagTableEntry[] = [
-  { flags: ["--provider"], arity: "value", handler: "forward", help: "--provider <name>              Provider name" },
+  { flags: ["--provider"], arity: "value", handler: "forward", help: "--provider <name>              Provider to search for --model (requires --model)" },
   { flags: ["--model"], arity: "value", handler: "forward", help: "--model <pattern>               Model pattern or ID (\"provider/id\", optional \":<thinking>\")" },
   { flags: ["--thinking"], arity: "value", handler: "forward", help: "--thinking <level>              Thinking level: off, minimal, low, medium, high, xhigh, max" },
   { flags: ["--api-key"], arity: "value", handler: "forward", help: "--api-key <key>                 API key (defaults to env vars)" },

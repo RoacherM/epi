@@ -38,17 +38,19 @@ function loginOptions(session: AgentSession): LoginOption[] {
     const status = auth.configured
       ? { type: runtime.isUsingOAuth(provider.id) ? "oauth" as const : "api_key" as const, source: auth.label ?? auth.source ?? "" }
       : undefined;
+    // Pi's selector says "subscription" unless this is false (Pi 1.0: other OAuth sign-ins say "account").
+    const subscription = provider.auth.oauth?.isSubscription === true;
     if (provider.auth.oauth) {
-      options.push({ id: provider.id, name: provider.name, authType: "oauth", method: provider.auth.oauth, ...(status ? { status } : {}) } as LoginOption);
+      options.push({ id: provider.id, name: provider.name, authType: "oauth", method: provider.auth.oauth, subscription, ...(status ? { status } : {}) } as LoginOption);
     }
     if (provider.auth.apiKey) {
-      options.push({ id: provider.id, name: provider.name, authType: "api_key", method: provider.auth.apiKey, ...(status ? { status } : {}) } as LoginOption);
+      options.push({ id: provider.id, name: provider.name, authType: "api_key", method: provider.auth.apiKey, subscription, ...(status ? { status } : {}) } as LoginOption);
     }
   }
   return options.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-const ACCOUNT_LABEL = "Sign in with an account (subscription)";
+const ACCOUNT_LABEL = "Sign in with an account";
 const API_KEY_LABEL = "Sign in with an API key";
 
 /** Like Pi: first the method (account or API key), then the providers offering it. */
@@ -70,7 +72,7 @@ export async function runLogin(host: CommandHost, providerRef: string): Promise<
   if (authType === undefined) return;
   const options = candidates.filter((option) => option.authType === authType);
   if (matches.length > 0 && options.length === 1 && options[0] !== undefined) {
-    await startLogin(host, options[0]);
+    await startLogin(host, options[0], () => runLogin(host, providerRef));
     return;
   }
   await chooseProvider(host, options, matches.length > 0 ? undefined : providerRef.trim());
@@ -102,7 +104,7 @@ async function chooseProvider(host: CommandHost, options: LoginOption[], search:
     const selector = new OAuthSelectorComponent("login", options, (providerId, authType) => {
       restore();
       const option = options.find((candidate) => candidate.id === providerId && candidate.authType === authType);
-      void (option === undefined ? Promise.resolve() : startLogin(host, option)).then(resolve);
+      void (option === undefined ? Promise.resolve() : startLogin(host, option, () => chooseProvider(host, options, search))).then(resolve);
     }, () => {
       restore();
       resolve();
@@ -111,7 +113,9 @@ async function chooseProvider(host: CommandHost, options: LoginOption[], search:
   });
 }
 
-async function startLogin(host: CommandHost, option: LoginOption): Promise<void> {
+/** `onBack` reopens the selector the login was started from when the user cancels it (Pi 1.0's
+ * startProviderLogin). */
+async function startLogin(host: CommandHost, option: LoginOption, onBack?: () => Promise<void>): Promise<void> {
   const method = option.method as { login?: unknown; name?: string } | undefined;
   if (option.authType === "api_key" && method?.login === undefined) {
     host.notice(`${option.name}: ${method?.name ?? "authentication"} is configured outside MMP (environment or models.json).`, "warning");
@@ -133,7 +137,12 @@ async function startLogin(host: CommandHost, option: LoginOption): Promise<void>
     const message = errorText(error);
     if (error instanceof CredentialSynchronizationError) {
       host.notice(`Logged in to ${option.name}, but local model state could not be synchronized: ${message}`, "error");
-    } else if (message !== CANCELLED) {
+    } else if (message === CANCELLED || dialog.signal.aborted) {
+      // The dialog's Esc aborts its signal before rejecting the prompt, and pi-ai's Models.login
+      // races the login against that signal, so a cancel usually arrives as "This operation was
+      // aborted" rather than CANCELLED. Either way the user cancelled: nothing failed.
+      await onBack?.();
+    } else {
       host.notice(`Login to ${option.name} failed: ${message}`, "error");
     }
     return;
@@ -216,6 +225,7 @@ export async function runLogout(host: CommandHost): Promise<void> {
       name: runtime.getProvider(providerId)?.name ?? providerId,
       authType: type,
       status: { type, source: "stored credential" },
+      subscription: runtime.getProvider(providerId)?.auth.oauth?.isSubscription === true,
     }) as LoginOption)
     .sort((a, b) => a.name.localeCompare(b.name));
   await new Promise<void>((resolve) => {

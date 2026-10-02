@@ -9,12 +9,13 @@ import test from "node:test";
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
-function runApp(t, extensions, steps, inspect) {
+function runApp(t, extensions, steps, inspect, setup) {
   const root = mkdtempSync(join(tmpdir(), "mmp-tui-app-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   mkdirSync(join(home, ".mmp"), { recursive: true });
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  setup?.(home);
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
@@ -121,6 +122,53 @@ test("TUI v2 logs in with an API key, then asks for a model and uses it", (t) =>
   assert.match(marks.switched, /Model: openai\/gpt-4o-mini/);
   assert.match(marks.loggedOut, /Removed stored API key for OpenAI/);
   // Credentials live in MMP's own agent dir, and /logout removed them.
+  assert.equal(auth.openai, undefined);
+});
+
+// Pi 1.0: only subscription-backed providers (`auth.oauth.isSubscription`) say "subscription"; other
+// OAuth sign-ins such as OpenRouter's say "account". Pi's selector treats a missing flag as
+// "subscription", so MMP has to pass it, and its method label must not promise a subscription either.
+// The selector only tags entries when the list mixes auth types: /logout's list of stored credentials.
+test("TUI v2 /login and /logout label subscription and account sign-ins like Pi", (t) => {
+  const oauth = { type: "oauth", access: "test-access", refresh: "test-refresh", expires: Date.now() + 86_400_000 };
+  const { marks } = runApp(t, [], [
+    ["waitReady"], ["type", "/login"], ["key", "enter"], ["waitFor", "Sign in with an API key"], ["mark", "method"],
+    ["key", "esc"], ["wait", 200],
+    ["type", "/logout"], ["key", "enter"], ["waitFor", "Select provider to logout"], ["waitFor", { regex: "OpenRouter[^\\n]*\\[" }], ["mark", "logout"],
+    ["key", "esc"], ["wait", 200], ["key", "ctrl+d"],
+  ], undefined, (home) => {
+    mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
+    writeFileSync(join(home, ".mmp", "pi", "auth.json"), JSON.stringify({
+      anthropic: oauth, openrouter: oauth, openai: { type: "api_key", key: "sk-test" },
+    }));
+  });
+  assert.match(marks.method, /Sign in with an account\s/);
+  assert.doesNotMatch(marks.method, /\(subscription\)/);
+  const logout = marks.logout.slice(marks.logout.lastIndexOf("Select provider to logout"));
+  assert.match(logout, /OpenRouter \[account\]/);
+  assert.match(logout, /Anthropic[^\n]* \[subscription\]/);
+  assert.match(logout, /OpenAI \[API key\]/);
+});
+
+// Pi 1.0: "Cancelling a login returns to the menu it was started from" (interactive-mode.js's
+// startProviderLogin onBack). Nothing is saved, and the reopened list still works.
+test("TUI v2 /login: cancelling the key prompt returns to the provider list", (t) => {
+  let auth;
+  const { marks } = runApp(t, [], [
+    ["waitReady"], ["type", "/login"], ["key", "enter"], ["waitFor", "Sign in with an API key"],
+    ["key", "down"], ["wait", 200], ["key", "enter"], ["waitFor", "Select provider to configure"],
+    ["type", "openai"], ["waitFor", { regex: "> openai[\\s\\S]*\\(1/\\d+\\)" }], ["key", "enter"], ["waitFor", "Enter OpenAI API key"], ["mark", "keyPrompt"],
+    // waitFor only looks at what was drawn since the step's own input, so these need the list redrawn.
+    ["key", "esc"], ["waitFor", "Select provider to configure"], ["mark", "back"],
+    ["type", "openai"], ["waitFor", { regex: "> openai[\\s\\S]*\\(1/\\d+\\)" }], ["key", "enter"],
+    ["waitFor", "Enter OpenAI API key"], ["mark", "again"],
+    ["key", "esc"], ["wait", 200], ["key", "esc"], ["wait", 200], ["key", "ctrl+d"],
+  ], (home) => {
+    try { auth = JSON.parse(readFileSync(join(home, ".mmp", "pi", "auth.json"), "utf8")); } catch { auth = {}; }
+  });
+  assert.match(marks.back.slice(marks.keyPrompt.length), /Select provider to configure/);
+  assert.doesNotMatch(marks.back.slice(marks.keyPrompt.length), /Login to OpenAI failed|aborted/);
+  assert.match(marks.again.slice(marks.back.length), /Enter OpenAI API key/);
   assert.equal(auth.openai, undefined);
 });
 

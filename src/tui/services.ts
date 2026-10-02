@@ -304,6 +304,15 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
       diagnostics.push({ type: "warning", message: `Extension package "${path}": ${warning}` });
     }
 
+    // Pi's buildSessionOptions (main.js, 1.0 #10236): --provider alone is an error, not silently
+    // ignored in favour of another provider's default model. resolveCliModel returns nothing
+    // without a model, so the check has to be made here.
+    if (parsed.provider && !parsed.model) {
+      diagnostics.push({
+        type: "error",
+        message: `--provider requires --model (for example: --provider ${parsed.provider} --model <pattern>)`,
+      });
+    }
     const cli = parsed.provider || parsed.model || parsed.thinking
       ? resolveCliModel({
           ...(parsed.provider === undefined ? {} : { cliProvider: parsed.provider }),
