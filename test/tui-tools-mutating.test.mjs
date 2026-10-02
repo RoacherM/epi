@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createBashTool, createEditTool, createWriteTool } from "@earendil-works/pi-coding-agent";
+import { createBashTool, createEditTool, createWriteTool, generateDiffString } from "@earendil-works/pi-coding-agent";
 
 import { piTui } from "../dist/tui/pi-tui.js";
 import { createMmpTheme } from "../dist/tui/theme.js";
@@ -574,4 +574,71 @@ test("edit: expanded multi-hunk diffs from the real edit tool keep every hunk an
   assert.deepEqual(three.filter((row) => row.includes("NEW") || /^\s*\d+ line (3|18|19|36)$/.test(row)), [
     " 3 line 3", " 3 NEW 3", "18 line 18", "19 line 19", "36 line 36", "34 NEW 36",
   ]);
+});
+
+// Expected rows for a gap of `gap` unchanged lines starting at old line `from`: shown whole up to 6,
+// otherwise 3 + "… N unchanged lines" + 3.
+function expectedGap(from, gap) {
+  const ctx = (n) => `${String(n).padStart(2)} line ${n}`;
+  const rows = Array.from({ length: gap }, (_, i) => ctx(from + i));
+  return gap <= 6 ? rows : [...rows.slice(0, 3), `   … ${gap - 6} unchanged lines`, ...rows.slice(-3)];
+}
+
+test("edit: a hunk that changes the line count draws the gap to the next hunk once (D77)", async (t) => {
+  const ctx = (n) => `${String(n).padStart(2)} line ${n}`;
+  const collapsed = (n) => `   … ${n} unchanged lines`;
+  const head = [collapsed(1), ctx(2), ctx(3), ctx(4)];
+  const tail = (n) => [ctx(n + 1), ctx(n + 2), ctx(n + 3), collapsed(1)];
+  // Gaps 1–8 reach the renderer whole (Pi elides only gaps over 2 × 4 lines); 9 crosses Pi's "...".
+  for (let gap = 1; gap <= 9; gap++) {
+    // The first hunk grows by one line, so the next hunk's old numbers lag its "+" rows.
+    const grows = await renderRealEdit(t, [
+      { oldText: "line 5\n", newText: "NEW a\nNEW b\n" },
+      { oldText: `line ${6 + gap}\n`, newText: "NEW x\n" },
+    ]);
+    assert.deepEqual(grows, [
+      ...head, " 5 line 5", " 5 NEW a", " 6 NEW b", ...expectedGap(6, gap),
+      `${String(6 + gap).padStart(2)} line ${6 + gap}`, `${String(7 + gap).padStart(2)} NEW x`, ...tail(6 + gap),
+    ], `grows, gap ${gap}`);
+    assertOldLinesAccountedFor(grows.slice(0, -1));
+
+    // The first hunk shrinks by one line.
+    const shrinks = await renderRealEdit(t, [
+      { oldText: "line 5\nline 6\n", newText: "NEW a\n" },
+      { oldText: `line ${7 + gap}\n`, newText: "NEW x\n" },
+    ]);
+    assert.deepEqual(shrinks, [
+      ...head, " 5 line 5", " 6 line 6", " 5 NEW a", ...expectedGap(7, gap),
+      `${String(7 + gap).padStart(2)} line ${7 + gap}`, `${String(6 + gap).padStart(2)} NEW x`, ...tail(7 + gap),
+    ], `shrinks, gap ${gap}`);
+    assertOldLinesAccountedFor(shrinks.slice(0, -1));
+
+    // A pure deletion, then a pure insertion: the first hunk ends on an old number, the next starts on a new one.
+    const deletesThenInserts = await renderRealEdit(t, [
+      { oldText: "line 5\nline 6\n", newText: "" },
+      { oldText: `line ${6 + gap}\n`, newText: `line ${6 + gap}\nNEW x\n` },
+    ]);
+    assert.deepEqual(deletesThenInserts, [
+      ...head, " 5 line 5", " 6 line 6", ...expectedGap(7, gap),
+      `${String(5 + gap).padStart(2)} NEW x`, ...tail(6 + gap),
+    ], `deletes then inserts, gap ${gap}`);
+    assertOldLinesAccountedFor(deletesThenInserts.slice(0, -1));
+  }
+});
+
+test("edit: a short gap that Pi elides with \"...\" is collapsed, not shown as if whole", () => {
+  // With 2 context lines Pi keeps only 2 + 2 of the 6-line gap between lines 5 and 12 and puts "..."
+  // between them, so the 4 rows that arrive are not consecutive even though there are fewer than 6.
+  const old = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
+  const edited = old.replace("line 5\n", "NEW 5\n").replace("line 12\n", "NEW 12\n");
+  const { diff } = generateDiffString(old, edited, 2);
+  const rows = editRenderers.renderResult({ content: [], details: { diff } }, { expanded: true, isPartial: false }, theme, { cwd: "/" })
+    .render(120)
+    .map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+  const ctx = (n) => `${String(n).padStart(2)} line ${n}`;
+  assert.deepEqual(rows, [
+    "   … 2 unchanged lines", ctx(3), ctx(4), " 5 line 5", " 5 NEW 5",
+    ctx(6), ctx(7), "   … 2 unchanged lines", ctx(10), ctx(11), "12 line 12", "12 NEW 12", ctx(13), ctx(14),
+  ]);
+  assertOldLinesAccountedFor(rows);
 });

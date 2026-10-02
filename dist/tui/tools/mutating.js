@@ -37,11 +37,13 @@ function parseDiffString(diffStr) {
     const lines = [];
     let additions = 0;
     let removals = 0;
+    let afterSkip = false;
     for (const rawLine of rawLines) {
         if (!rawLine || rawLine.startsWith("---") || rawLine.startsWith("+++")) {
             continue;
         }
         if (/^\s*\.\.\.\s*$/.test(rawLine)) {
+            afterSkip = true;
             continue;
         }
         // Pi's edit tool (edit-diff.js generateDiffString) only ever emits a numbered line
@@ -56,15 +58,16 @@ function parseDiffString(diffStr) {
         const text = piMatch[3].replace(/\t/g, "   ");
         if (prefix === "+") {
             additions++;
-            lines.push({ kind: "add", lineNum, text });
+            lines.push({ kind: "add", lineNum, text, afterSkip });
         }
         else if (prefix === "-") {
             removals++;
-            lines.push({ kind: "remove", lineNum, text });
+            lines.push({ kind: "remove", lineNum, text, afterSkip });
         }
         else {
-            lines.push({ kind: "context", lineNum, text });
+            lines.push({ kind: "context", lineNum, text, afterSkip });
         }
+        afterSkip = false;
     }
     return { lines, additions, removals };
 }
@@ -109,14 +112,18 @@ function leadingContext(diffLines, firstHunk) {
 /**
  * Context between two hunks: all of it when it is short (≤6) and Pi sent it whole, otherwise 3 rows
  * after the earlier hunk, a count of the rest, and 3 rows before the later one.
+ * Pi sent it whole exactly when no "..." marker splits it. Hunk line numbers can't tell: "+" rows carry
+ * new-file numbers and the rest old-file numbers, which drift apart once a hunk changes the line count.
  */
 function contextBetween(diffLines, hunk, next) {
     const between = diffLines.slice(hunk.endIdx + 1, next.startIdx);
-    const consecutive = next.firstLineNum - hunk.lastLineNum - 1 === between.length;
+    const skipIdx = between.findIndex((line) => line.afterSkip);
+    const consecutive = skipIdx === -1;
     if (between.length <= 6 && consecutive)
         return lineItems(between);
-    const keptAfter = between.slice(0, 3);
-    const keptBefore = between.slice(-3);
+    // Keep each side of the marker apart, so rows from before it never repeat after it.
+    const keptAfter = (consecutive ? between : between.slice(0, skipIdx)).slice(0, 3);
+    const keptBefore = (consecutive ? between : between.slice(skipIdx)).slice(-3);
     const lastKept = keptAfter[keptAfter.length - 1]?.lineNum ?? hunk.lastLineNum;
     const firstNext = keptBefore[0]?.lineNum ?? next.firstLineNum;
     const collapsed = firstNext - lastKept - 1;
