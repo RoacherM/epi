@@ -100,19 +100,22 @@ mmp mcp logout <server> [--approve|--no-approve]
 - **`-p`/`--mode json` 下连接失败完全静默，违反硬规则 3（同一次 review，F3 修正）**：本节第 2 段已经记过"错误的可见性"，但那次只堵了配置校验错误（`buildInlineExtensions` 时同步抛 `MmpConfigError`）；服务器*配置合法但连接失败*（进程起不来、需要登录）走的是 Pi 自己异步的 `reportProblems()` -> `ctx.ui.notify`，在 `-p`/`--mode json` 下这条路径是纯空操作（`modes/print-mode.js` 的 `bindExtensions` 不传 `uiContext`）。Pi 0.99.1 时的做法是在第一个 `before_agent_start` 里、Pi 自己的启动等待之后读每个服务的状态，失败 / 需要登录 / 还在连接的各写一行；Pi 1.0 起改成下一条的规则。
 - **Pi 的 MCP 启动链本身出错时被报成"still connecting"（dogfood D6）**：加载 `runtime.js` 之后、连接之前（比如构造 `McpServerConnection`）抛出的错误，Pi 只用 `ctx.ui.notify("MCP failed to load: …", "error")` 报告；当时 MMP 的逐服务检查又把每个服务都报成"still connecting"。下一条的规则里这条消息原样到 stderr，而且 MMP 只报失败 / 需要登录的服务，没有连接的服务不会被误报。`runtime.js` 整个加载不了的情况走不到这里：`mmp:mcp` 自己先加载它，失败就是 `Failed to load extension "<inline:mmp:mcp>": …`，退出码 1（实测）。
 - **rpc 下同一个问题报两次（dogfood D47、D52）**：rpc 有 UI（`hasUI` 为真），Pi 自己的 `ctx.ui.notify` 会作为 `extension_ui_request` 发给客户端，所以 rpc 下 MMP 不往 stderr 写，每个问题只经客户端报一次。规则：有 UI 就走 UI，只有没 UI（`-p`/json）才写 stderr。
-- **Pi 1.0 起 MCP 问题怎么报（U1，2026-10-02 重新决定；dogfood D40）**：Pi 0.99.2 起只有带 direct 工具的服务会挡住第一条消息（最多 `startupWaitMs`，默认 10 s，MMP 不传），其余服务在后台连接，codemode 脚本点名它、搜索工具或 `tool_search` 时才等它（`extensions/mcp/index.js` 的 `waitForDirectServers` 和 `tool_call` 处理函数；CHANGELOG 0.99.2 #10212）。"第一条消息时还没连上"对这些服务是常态，MMP 原来那行 `mcp: <名字> is still connecting` 会对健康的服务误报（D40 预言的情况，升级门禁里 F3/D42 测试的失败就是它）。新规则对齐 Pi 自己报什么：
+- **Pi 1.0 起 MCP 问题怎么报（U1，2026-10-02 重新决定；dogfood D40）**：Pi 0.99.2 起只有带 direct 工具的服务会挡住第一条消息（最多 `startupWaitMs`，Pi 默认 10 s；MMP 显式传同一个值，因为会话结束时的补报也用它，测试用 `MMP_TEST_MCP_STARTUP_WAIT_MS` 缩短），其余服务在后台连接，codemode 脚本点名它、搜索工具或 `tool_search` 时才等它（`extensions/mcp/index.js` 的 `waitForDirectServers` 和 `tool_call` 处理函数；CHANGELOG 0.99.2 #10212）。"第一条消息时还没连上"对这些服务是常态，MMP 原来那行 `mcp: <名字> is still connecting` 会对健康的服务误报（D40 预言的情况，升级门禁里 F3/D42 测试的失败就是它）。新规则对齐 Pi 自己报什么：
 
   | 情况 | Pi 自己（TUI、rpc 客户端） | `-p` / `--mode json`（stderr） | rpc |
   |---|---|---|---|
   | 启动链出错 | `MCP failed to load: …`（error） | Pi 的原文 | 只靠 Pi 的 notify |
-  | 失败 / 需要登录 | 所有启动连接都结束后一条 `MCP servers need attention:` + 每个服务一行 `  <名字>: <状态>` + `Run /mcp to fix.`（warning） | Pi 的原文 | 只靠 Pi 的 notify |
-  | 同上，但会话结束时 Pi 还没报（一个挂住的服务让整批等到它的请求超时，`-p` 早就结束了） | 不报（会话结束时丢掉） | MMP 在 `session_shutdown`（Pi 的处理函数之前）补报，格式同 Pi，只报 Pi 这个会话还没报过的行 | MMP 补报，`ctx.ui.notify(…, "warning")` 发给客户端（实测会话结束时仍能送达） |
-  | 带 direct 工具的服务在第一条消息的等待里没连上 | `MCP servers are still connecting; …`（info） | Pi 的原文 | 只靠 Pi 的 notify |
-  | 其他还在连接的服务（codemode / deferred、后来注册的） | 不报 | 不报 | 不报 |
-  | codemode / tool_search 都没启用，MCP 工具调不到 | warning | Pi 的原文 | 只靠 Pi 的 notify |
+  | 失败 / 需要登录 | 所有启动连接都结束后一条 `MCP servers need attention:` + 每个服务一行 `  <名字>: <状态>` + `Run /mcp to fix.`（warning） | Pi 的原文，后面加 MMP 一行 shell 提示（见下） | 只靠 Pi 的 notify |
+  | 同上，但会话结束时 Pi 还没报（一个挂住的服务让整批等到它的请求超时，`-p` 早就结束了） | 不报（会话结束时丢掉） | MMP 在 `session_shutdown`（Pi 的处理函数之前）补报，头和每行格式同 Pi，只报 Pi 这个会话还没报过的行，结尾是 shell 提示而不是 `Run /mcp to fix.` | MMP 补报，同样的消息，`ctx.ui.notify(…, "warning")` 发给客户端（实测会话结束时仍能送达） |
+  | 带 direct 工具的服务在第一条消息的等待里没连上 | `MCP servers are still connecting; …`（info），不点名 | Pi 的原文；会话结束时它还没连上，MMP 的补报里点名 `  <名字>: still connecting` | Pi 的 notify；结束时 MMP 同样点名 |
+  | 其他还在连接的服务（codemode / deferred、后来注册的） | 不报 | 会话不超过 `startupWaitMs` 时不报（D40）；更长的会话结束时还没连上，MMP 点名 | 同 `-p` |
+  | codemode / tool_search 都没启用，MCP 工具调不到 | warning | 不复制（U1 review 1 finding 1） | 只靠 Pi 的 notify |
 
-  做法：Pi 的 MCP 扩展通过 `pi.on` 注册的每个处理函数拿到的 ctx 里，`ui.notify` 在没有 UI 时把消息原样写到 stderr（同一会话同一条只写一次）——不再只挑 error 级，也不再自己措辞，`-p` 和 TUI 说的是同一句话，Pi 以后在事件处理函数里新加的提示也自动可见。`session_shutdown` 的补报从 `/mcp` 命令对 `reconnect ` 的补全读每个服务的状态（名字 + Pi 的 `describeState()` 文本，和 `reportProblems()` 每行用的是同一段文本），逐行和 Pi 这个会话已经报过的行比较，所以不会重复。还在连接的服务一律不报：`-p` 里一个从没被用到、到结束时还没连上的服务，它会不会失败本来就不知道；真被脚本用到时，Pi 会等它，失败了就进上表第二、三行。stdout 完全不碰（benchmark 和 json 消费者读 stdout）；退出码不变（和"错误的可见性"一样，是已认可的偏差）。挂住的服务不会拖住退出（D3：MMP 在 Pi 的 `session_shutdown` 之后关掉还在连接的 transport）。
-  - 取舍：去掉了两处 MMP 自己的"still connecting"：codemode 服务在第一条消息时还没连上（D40 误报），以及 rpc 下启动后才注册的服务还在连接（原 D52 由 MMP 补发的那条）——两者 Pi 1.0 都视为正常的后台连接，不报。带 direct 工具的服务等待超时仍然报，用 Pi 自己的那句（不再逐个列名字）。
+  shell 提示（硬规则 4：只给 mmp 自己的命令；`-p`/json 里没有 `/mcp`）：`From the shell: run "mmp mcp list" to see why.`；有需要登录的服务时加 `, or "mmp mcp login <名字>" to sign in`（只有一个时写出它的名字，多个时写 `<server>`）。
+
+  做法：Pi 的 MCP 扩展通过 `pi.on` 注册的每个处理函数拿到的 ctx 里，`ui.notify` 在没有 UI 时把消息原样写到 stderr（同一会话同一条只写一次）——不再只挑 error 级，也不再自己措辞，`-p` 和 TUI 说的是同一句话，Pi 以后在事件处理函数里新加的提示也自动可见。`session_shutdown` 的补报从 `/mcp` 命令对 `reconnect ` 的补全读每个服务的状态（名字 + Pi 的 `describeState()` 文本，和 `reportProblems()` 每行用的是同一段文本），逐行和 Pi 这个会话已经报过的行比较，所以不会重复。还在连接的服务只在两种情况下点名（U1 review 1 finding 2）：这个会话里 Pi 自己发过 "still connecting"（等 direct 服务超时了，但 Pi 不说是哪个），或者会话已经比 `startupWaitMs` 长——这时还没连上就不再是"后台连接中"的常态。短的 `-p` 里一个从没被用到、到结束时还没连上的服务，它会不会失败本来就不知道，不报；真被脚本用到时，Pi 会等它，失败了就进上表第二、三行。stdout 完全不碰（benchmark 和 json 消费者读 stdout）；退出码不变（和"错误的可见性"一样，是已认可的偏差）。挂住的服务不会拖住退出（D3：MMP 在 Pi 的 `session_shutdown` 之后关掉还在连接的 transport）。
+  - 取舍：去掉了两处 MMP 自己的"still connecting"：codemode 服务在第一条消息时还没连上（D40 误报），以及 rpc 下启动后才注册的服务还在连接（原 D52 由 MMP 补发的那条）——两者在短会话里 Pi 1.0 都视为正常的后台连接，不报。带 direct 工具的服务等待超时仍然报，用 Pi 自己的那句，会话结束时 MMP 再点名。
+  - Pi 的 "MCP tools are only reachable from the codemode or tool_search tool…" 在 `-p`/json 不复制：它说的是工具调不到（常见于用户自己给了 `--no-tools` / `--tools`），不是服务失败，硬规则 3 不要求；TUI 和 rpc 照 Pi 显示。
   - 依赖 Pi 的内部约定，登记进 `docs/pi-internals.md`：`mcp-notifies-outside-ui`（Pi 只通过事件处理函数的 `ctx.ui.notify` 报问题）、`mcp-reconnect-completion-states`（补全文本）、`mcp-report-before-pi-shutdown`（Pi 在自己的 `session_shutdown` 里才清掉服务，运行器按注册顺序逐个 await）、`mcp-own-reports-in-rpc`（`reportProblems()` 的格式和调用点）。原来的 `mcp-startup-wait-before-agent-start`（MMP 不再在 `before_agent_start` 读状态）删掉，`mcp-load-failure-notify` 并入 `mcp-notifies-outside-ui`。
 
 ## 8. 测试和升级门禁

@@ -533,6 +533,8 @@ const registry = [
         [/if \(!isEnabled\(server\)\)\s*return "disabled";/, "disabled (checked first)"],
         [/return withError \? `failed: \$\{firstLine/, "failed: <first error line>"],
         [/return "needs sign-in";/, "needs sign-in"],
+        // A server still connecting is named at session_shutdown only after Pi's startup wait (review 1 finding 2).
+        [/case "connecting":\s*return "connecting…";/, "connecting…"],
       ]) {
         assert.match(indexText, pattern, `${indexPath}'s describeState() no longer returns "${state}" -- ${why}`);
       }
@@ -576,6 +578,14 @@ const registry = [
           'ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error");',
         ],
         `${indexPath}'s pi.on handlers raise different notifies: ${review}`,
+      );
+      // MMP recognises two of Pi's notifies by their text (src/extensions/mcp.ts): the still-connecting
+      // one above (then names the servers at session_shutdown), and the unreachable-tools warning,
+      // which -p/json do not copy (it is about reachability, not a failed server; review 1 finding 1).
+      assert.match(
+        indexText,
+        /ctx\.ui\.notify\(`MCP tools are only reachable from the codemode or tool_search tool, but neither is active\$\{reason\}; they cannot be called\.`, "warning"\);/,
+        `${indexPath}'s unreachable-tools warning changed: PI_UNREACHABLE_PREFIX in src/extensions/mcp.ts would stop matching it and -p/json would print it again -- ${why}`,
       );
     },
   },
