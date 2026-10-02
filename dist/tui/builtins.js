@@ -31,27 +31,15 @@ export const BUILTIN_COMMANDS = [
     { name: "changelog", description: "Show MMP's release notes", run: (host) => runChangelog(host) },
     { name: "bug", description: "Report an MMP bug on GitHub", argumentHint: "[description]", run: (host, args) => runBug(host, args) },
 ];
-/** Pi built-ins not wired yet. */
-const PLANNED = {};
-/** Pi built-ins MMP leaves out on purpose, with the reason shown to the user. */
-const NOT_IN_MMP = {};
 export function findBuiltin(name) {
-    const command = BUILTIN_COMMANDS.find((candidate) => candidate.name === name);
-    if (command !== undefined)
-        return { kind: "run", command };
-    if (name in PLANNED)
-        return { kind: "planned", message: `/${name} is not available in MMP yet.` };
-    if (name in NOT_IN_MMP)
-        return { kind: "excluded", message: `/${name} is not available in MMP. ${NOT_IN_MMP[name]}` };
-    return undefined;
+    return BUILTIN_COMMANDS.find((candidate) => candidate.name === name);
 }
-/** Everything `/` can complete: built-ins (planned ones marked), prompt templates, extension commands, skills. */
+/** Everything `/` can complete: built-ins, prompt templates, extension commands, skills. */
 export function slashCompletions(session) {
-    const builtins = [
-        ...BUILTIN_COMMANDS.map(({ name, description, argumentHint }) => ({ name, description, ...(argumentHint === undefined ? {} : { argumentHint }) })),
-        ...Object.entries(PLANNED).map(([name, description]) => ({ name, description: `${description} (not yet)` })),
-    ];
-    const taken = new Set([...builtins.map((command) => command.name), ...Object.keys(NOT_IN_MMP)]);
+    const builtins = BUILTIN_COMMANDS.map(({ name, description, argumentHint }) => ({
+        name, description, ...(argumentHint === undefined ? {} : { argumentHint }),
+    }));
+    const taken = new Set(builtins.map((command) => command.name));
     const templates = session.promptTemplates.map((template) => ({
         name: template.name,
         ...(template.description === undefined ? {} : { description: template.description }),
