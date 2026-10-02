@@ -260,16 +260,10 @@ export async function runMmp(argv) {
         return;
     }
     process.env.PI_CODING_AGENT_DIR = prepared.agentDir;
-    // No shared config with a Pi install (docs/cli-design.md §2): a Pi user's own
-    // PI_CODING_AGENT_SESSION_DIR must not silently redirect MMP's sessions on the piMain path below,
-    // where Pi's own main.js reads that variable directly. Clear it and, if MMP's own MMP_SESSION_DIR
-    // is set, pass its resolved value through Pi's variable instead, so piMain's resolution
+    // PI_CODING_AGENT_SESSION_DIR, which Pi's main.js reads on the piMain path below, already holds
+    // MMP_SESSION_DIR and never the user's own value (src/pi-env.ts), so piMain's resolution
     // (--session-dir, then its env var, then the sessionDir setting) agrees with services.ts's
     // identical MMP_SESSION_DIR-based resolution on the TUI path below.
-    delete process.env.PI_CODING_AGENT_SESSION_DIR;
-    if (process.env.MMP_SESSION_DIR !== undefined && process.env.MMP_SESSION_DIR !== "") {
-        process.env.PI_CODING_AGENT_SESSION_DIR = process.env.MMP_SESSION_DIR;
-    }
     // Every interactive run takes MMP's own TUI (docs/tui-design.md); no environment switch.
     // `--help` and `--list-models` are MMP's own too (above/below); all other runs (print/json/rpc,
     // --export, Pi CLI subcommands, non-TTY) keep going through piMain unchanged (docs/decisions.md D3).

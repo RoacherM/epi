@@ -31,7 +31,7 @@ test("/new failing after teardown is fatal: the alt screen is left cleanly and t
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       // fatal() calls process.exit(1) directly (Pi's own handleFatalRuntimeError does too), which
       // cuts off the harness's own JSON stdout write -- so this checks the raw process exit and
       // stderr instead of the usual marks/JSON.
@@ -80,7 +80,7 @@ test("/import failing after teardown is fatal: the alt screen is left cleanly an
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       // As in the /new case above: fatal() calls process.exit(1) directly, cutting off the harness's
       // JSON stdout write, so this checks the raw process exit and stderr instead of marks/JSON.
       MMP_TUI_HARNESS: JSON.stringify({
@@ -122,7 +122,7 @@ test("/switchto a session whose cwd no longer exists offers to continue in the c
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({
         args: ["--no-project"],
         steps: [
@@ -165,7 +165,7 @@ test("/switchto a session whose cwd no longer exists, cancelled, leaves the curr
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({
         args: ["--no-project"],
         steps: [

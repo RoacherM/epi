@@ -1,3 +1,3 @@
 #!/usr/bin/env node
-export {};
+import "./isolate-pi-env.js";
 //# sourceMappingURL=cli.d.ts.map

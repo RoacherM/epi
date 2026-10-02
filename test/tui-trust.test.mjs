@@ -25,7 +25,7 @@ function runAppInProject(t, steps) {
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({ steps }),
     },
     encoding: "utf8",
@@ -84,7 +84,7 @@ test("/trust: no project found from the current directory", (t) => {
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({
         steps: [
           ["waitReady"],

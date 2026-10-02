@@ -29,7 +29,7 @@ function makeHome(t) {
   mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [hangingCompact] }));
   writeFileSync(join(home, ".mmp", "pi", "settings.json"), JSON.stringify(settings));
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1", MMP_FAUX_ABORT_MARK: join(root, "aborted") };
+  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_FAUX_ABORT_MARK: join(root, "aborted") };
   return { root, env };
 }
 

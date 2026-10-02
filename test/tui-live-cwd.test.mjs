@@ -47,7 +47,7 @@ test("header, /trust's cwd, and !pwd all agree after switching to a session in a
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TEST_SWITCH_SESSION_PATH: otherSessionFile,
       MMP_TUI_HARNESS: JSON.stringify({
         steps: [

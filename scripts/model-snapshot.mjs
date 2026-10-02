@@ -85,7 +85,7 @@ function captureModelVisibleContent() {
         PATH: process.env.PATH,
         HOME: home,
         MMP_HOME: mmpHome,
-        PI_OFFLINE: "1",
+        MMP_OFFLINE: "1",
         HOOK_ACCEPTANCE_LOG: hookLog,
         MMP_MODEL_SNAPSHOT_OUT: captureFile,
         MMP_SDK_RUNNER: JSON.stringify(options),

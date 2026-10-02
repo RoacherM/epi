@@ -59,7 +59,7 @@ function fixture(t) {
   mkdirSync(join(projectB, ".mmp"), { recursive: true });
   writeFileSync(join(projectA, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [switchtoExtension] }));
   writeFileSync(join(projectB, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [switchtoExtension] }));
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" };
+  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
   return { root, home, projectA, projectASub, projectB, env };
 }
 

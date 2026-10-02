@@ -37,7 +37,7 @@ try {
     env: {
       PATH: dirname(process.execPath) + ":/usr/bin:/bin",
       HOME: home, MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1", MMP_DISABLE_UPDATE_CHECK: "1",
+      MMP_OFFLINE: "1", MMP_DISABLE_UPDATE_CHECK: "1",
       TERM: "xterm-256color", COLORTERM: "truecolor", COLORFGBG: "15;0",
       MMP_TUI_HARNESS: JSON.stringify({
         columns, rows, args: ["--no-project", "--offline", "--thinking", "medium"], steps,

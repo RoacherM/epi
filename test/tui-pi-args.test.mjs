@@ -23,7 +23,7 @@ function fixture(t) {
   mkdirSync(join(home, ".mmp"), { recursive: true });
   mkdirSync(project, { recursive: true });
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" };
+  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
   return { root, home, project, env };
 }
 
@@ -148,7 +148,7 @@ function runHarness(t, extensions, args, steps) {
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({ args, steps }),
     },
     encoding: "utf8",
@@ -181,7 +181,7 @@ test('mmp @file.txt inlines the file into the first prompt (docs/cli-design.md Â
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({
         args: ["--no-project", "@note.txt", "hello"],
         steps: [["waitReady"], ["waitFor", { regex: "ECHO:.*note\\.txt.*the file's own content.*hello", flags: "s" }, { all: true }], ["mark", "afterStartup"], ["key", "ctrl+d"]],

@@ -117,7 +117,7 @@ test("a failed /reload or /new keeps the last valid Rules and Skill roots, not t
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: mmpHome,
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       // Tall enough that /mmp's whole report is drawn, not just its tail.
       MMP_TUI_HARNESS: JSON.stringify({ steps, rows: 120, args: ["--no-project", "--model", "mmp-faux/model-a"] }),
     },
@@ -147,7 +147,7 @@ test("rpc: switch_session and fork after a failed Manifest refresh keep the last
   const { root, home, mmpHome, manifest, manifestPath } = failedRefreshFixture(t);
   const child = spawn(process.execPath, [cliPath, "--no-project", "--model", "mmp-faux/model-a", "--mode", "rpc"], {
     cwd: root,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: mmpHome, PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: mmpHome, MMP_OFFLINE: "1" },
     stdio: ["pipe", "pipe", "pipe"],
   });
   const killTimer = setTimeout(() => child.kill(), 30_000);

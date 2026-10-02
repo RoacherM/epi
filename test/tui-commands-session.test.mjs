@@ -26,7 +26,7 @@ function runApp(t, extensions, steps, { settings, inspect, env: extraEnv = {} } 
       PATH: process.env.PATH,
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({ steps }),
       ...extraEnv,
     },
@@ -149,7 +149,7 @@ test("mmp --resume opens the same selector at startup, without typing /resume, a
   const home = join(root, "home");
   mkdirSync(join(home, ".mmp"), { recursive: true });
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("faux-echo.mjs")] }));
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" };
+  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
 
   function run(steps, args) {
     const result = spawnSync(process.execPath, [harness], {
@@ -195,7 +195,7 @@ test("mmp --resume, given Esc at the selector, prints \"No session selected\" an
   const home = join(root, "home");
   mkdirSync(join(home, ".mmp"), { recursive: true });
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("faux-echo.mjs")] }));
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" };
+  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
 
   function run(steps, args) {
     const result = spawnSync(process.execPath, [harness], {

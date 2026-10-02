@@ -24,7 +24,7 @@ function runMmpIn(t, extensions, { args = ["--list-models"], setup, timeout = 30
   const result = spawnSync(process.execPath, [cliPath, "--no-project", ...args], {
     cwd: root,
     encoding: "utf8",
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: mmpHome, PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: mmpHome, MMP_OFFLINE: "1" },
     timeout,
   });
   return { ...result, context: `status=${result.status} signal=${result.signal}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}` };

@@ -25,7 +25,7 @@ function runApp(t, extensions, steps, { keybindings, rows } = {}) {
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
-      PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1",
+      PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({ steps, ...(rows ? { rows } : {}) }),
     },
     encoding: "utf8",

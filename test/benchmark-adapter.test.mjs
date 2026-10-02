@@ -34,7 +34,7 @@ function createFixture() {
   return { fixtureRoot, bundle };
 }
 
-function runAdapter(fixture, name, prompt, extra = [], variant = "mmp-core-empty") {
+function runAdapter(fixture, name, prompt, extra = [], variant = "mmp-core-empty", env = {}) {
   const outputDir = join(fixture.fixtureRoot, name);
   const result = spawnSync(
     process.execPath,
@@ -66,6 +66,7 @@ function runAdapter(fixture, name, prompt, extra = [], variant = "mmp-core-empty
       env: {
         ...process.env,
         PATH: "/usr/bin:/bin",
+        ...env,
       },
       timeout: 30_000,
     },
@@ -160,6 +161,22 @@ test("benchmark adapter maps Harness, model, infra, and grader failures", () => 
     assert.equal(grader.result.status, 5, grader.result.stderr);
     assert.equal(grader.metadata.result.failureCategory, "grader");
     assert.equal(grader.metadata.grader.exitCode, 9);
+  } finally {
+    rmSync(fixture.fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+// D63: the adapter imports Pi in-process, and Pi's config.js reads PI_PACKAGE_DIR at import time; the
+// operator's value must not change the Pi version the adapter checks and records.
+test("benchmark adapter ignores the operator's PI_PACKAGE_DIR", () => {
+  const fixture = createFixture();
+  try {
+    const fakePackage = join(fixture.fixtureRoot, "pi-package");
+    mkdirSync(fakePackage);
+    writeFileSync(join(fakePackage, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "999.0.0" }));
+    const trial = runAdapter(fixture, "trial", "BENCHMARK_OK", [], "mmp-core-empty", { PI_PACKAGE_DIR: fakePackage });
+    assert.equal(trial.result.status, 0, trial.result.stderr);
+    assert.equal(trial.metadata.versions.pi, PI_VERSION);
   } finally {
     rmSync(fixture.fixtureRoot, { recursive: true, force: true });
   }

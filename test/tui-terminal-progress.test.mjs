@@ -25,7 +25,7 @@ function run(t, steps, { extension = "faux-echo.mjs", settings } = {}) {
   const result = spawnSync(process.execPath, [harness], {
     cwd: project,
     env: {
-      PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1",
+      PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({ steps }),
     },
     encoding: "utf8",

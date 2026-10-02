@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+// First, like src/cli.ts: clears the operator's PI_* before Pi's modules load (config.js reads
+// PI_PACKAGE_DIR at import time, which would change PI_VERSION below; docs/cli-design.md §2.1).
+import "../dist/isolate-pi-env.js";
+
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -680,6 +684,9 @@ async function main(argv) {
   process.once("SIGINT", onSigint);
   process.once("SIGTERM", onSigterm);
 
+  // Both harnesses get this script's env as-is, after the bridge above: the operator's own PI_*
+  // are gone, MMP_* knobs (MMP_OFFLINE, ...) arrive as PI_*, everything else passes through. Bare
+  // `pi` gets no further isolation: this is a dev tool the operator runs, not something users do.
   const environment = {
     ...process.env,
     // HOME isolation matters beyond auth/session state now: MMP auto-discovers skills from

@@ -23,7 +23,7 @@ test("-p with a provider extension whose model has no cost names the extension, 
   writeFileSync(join(mmpHome, "mmp.json"), JSON.stringify({ version: 1, extensions: [noCostExtension] }));
   const result = spawnSync(process.execPath, [cliPath, "--no-project", "--model", "mmp-nocost/echo", "-p", "hi"], {
     encoding: "utf8",
-    env: { PATH: process.env.PATH, HOME: join(root, "home"), MMP_HOME: mmpHome, PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: join(root, "home"), MMP_HOME: mmpHome, MMP_OFFLINE: "1" },
     timeout: 30_000,
   });
   const context = `status=${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;

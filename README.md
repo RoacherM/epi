@@ -53,7 +53,7 @@ mmp
 mmp update
 ```
 
-`mmp update` 查询 GitHub 上最新的 Release；有新版就下载该版本的 `install.sh` 并运行，安装器同样会校验 SHA-256。交互模式每天最多检查一次新版本（后台进行，超时 3 秒），有新版时在底栏显示 `Update available! … Run: mmp update`。检查结果缓存在 `~/.mmp/update-check.json`，检查失败时错误也记在这里。非交互模式、`--offline`、`PI_OFFLINE`、`CI` 环境下不检查；设置 `MMP_DISABLE_UPDATE_CHECK=1` 可以完全关闭。MMP 会关掉 Pi 自带的更新提示，因为它提示的 `pi update` 不会更新 MMP 锁定的 Pi。MMP 不做后台自动安装。安装器不会自动使用 `sudo`：如果当初是装在需要 root 权限的全局目录里，`mmp update` 会失败退出，需要按当初的方式手动重装。
+`mmp update` 查询 GitHub 上最新的 Release；有新版就下载该版本的 `install.sh` 并运行，安装器同样会校验 SHA-256。交互模式每天最多检查一次新版本（后台进行，超时 3 秒），有新版时在底栏显示 `Update available! … Run: mmp update`。检查结果缓存在 `~/.mmp/update-check.json`，检查失败时错误也记在这里。非交互模式、`--offline`、`MMP_OFFLINE`、`CI` 环境下不检查；设置 `MMP_DISABLE_UPDATE_CHECK=1` 可以完全关闭。MMP 会关掉 Pi 自带的更新提示，因为它提示的 `pi update` 不会更新 MMP 锁定的 Pi。MMP 不做后台自动安装。安装器不会自动使用 `sudo`：如果当初是装在需要 root 权限的全局目录里，`mmp update` 会失败退出，需要按当初的方式手动重装。
 
 也可以直接通过 npm 安装同一个 GitHub Release；`<version>` 换成 [Releases 页面](https://github.com/RoacherM/mmp/releases)上的最新版本号（tgz 的文件名带版本号，没有 `latest` 别名）：
 
@@ -115,7 +115,7 @@ MMP 自有、和 Pi 行为不同的参数：
 | `-v, --version` | 输出 MMP 与固定内核版本 |
 | `-h, --help` | 只打印 MMP 自己的帮助 |
 
-其余模型、Session、工具、输出参数（`--provider`、`--model`、`--thinking`、`-c/--continue`、`--session*`、`-p/--print`、`--mode`、`--list-models`、`--export`、`--offline`、`--verbose` 等）和 Pi 对齐，参数名和取值语义不变。`--verbose` 在交互界面里把启动信息（已加载的 Rules/Skills/Extensions 数量、当前模型、当前 Session）显示成对话区提示；非交互模式行为和 Pi 一致。`@file` 参数：文本文件原文内联进第一条消息，图片文件会读取为图片附件并附在首条消息中（同时保留路径提示），文件不存在会报错退出。`--session-dir` 没给时依次看 `MMP_SESSION_DIR` 环境变量、`~/.mmp/pi/settings.json` 里的 `sessionDir`（和 Pi 的 `--session-dir`/`PI_CODING_AGENT_SESSION_DIR`/`sessionDir` 顺序一致，只是变量名换成 MMP 自己的——Pi 装置里设置的 `PI_CODING_AGENT_SESSION_DIR` 不会被读取，不会跟 MMP 共享）。
+其余模型、Session、工具、输出参数（`--provider`、`--model`、`--thinking`、`-c/--continue`、`--session*`、`-p/--print`、`--mode`、`--list-models`、`--export`、`--offline`、`--verbose` 等）和 Pi 对齐，参数名和取值语义不变。`--verbose` 在交互界面里把启动信息（已加载的 Rules/Skills/Extensions 数量、当前模型、当前 Session）显示成对话区提示；非交互模式行为和 Pi 一致。`@file` 参数：文本文件原文内联进第一条消息，图片文件会读取为图片附件并附在首条消息中（同时保留路径提示），文件不存在会报错退出。`--session-dir` 没给时依次看 `MMP_SESSION_DIR` 环境变量、`~/.mmp/pi/settings.json` 里的 `sessionDir`（和 Pi 的 `--session-dir`/`PI_CODING_AGENT_SESSION_DIR`/`sessionDir` 顺序一致，只是变量名换成 MMP 自己的——Pi 装置里设置的 `PI_CODING_AGENT_SESSION_DIR` 不会被读取，不会跟 MMP 共享）。其他环境变量同理：Pi 的 `PI_*` 变量（`PI_OFFLINE` 等）对 mmp 不起作用，需要时改用同名的 `MMP_*`（`MMP_OFFLINE`、`MMP_TELEMETRY`、`MMP_CACHE_RETENTION`、`MMP_OAUTH_CALLBACK_HOST`、`MMP_HYPERLINKS`、`MMP_IMAGE_PROTOCOL`、`MMP_TRUE_COLOR`、`MMP_TUI_ESC_TIMEOUT`），完整清单见 [docs/cli-design.md](docs/cli-design.md) §2.1。
 
 以下参数**不提供**：`--use-theme`、`--tui-mode`（界面已经是 grok 风格的单一全屏主题，由 MMP 管理）；`--extension`/`-e`、`--skill`、`--prompt-template`、`--theme`、`--system-prompt`、`--append-system-prompt` 及其 `--no-*` 形式（Rules/Extensions 只能通过 Manifest 声明；Skills 除 Manifest 声明外还会从固定目录自动发现，见"Manifest"一节；这些 flag 都不提供，直接传入会报错并提示改用 `mmp install`/编辑 Manifest）。
 
@@ -138,7 +138,7 @@ mmp auth print-api-key|print-bearer-token|check                # 打印或检查
 mmp mcp add|remove|list|login|logout                            # 配置、检查 MCP 服务，OAuth 登录/登出
 ```
 
-`-l` 把 `install`/`remove`/`config` 的目标从全局 `~/.mmp/mmp.json` 换成当前目录的 `.mmp/mmp.json`；目标项目未被信任时三者都会拒绝，报同一句 "not trusted" 提示，除非带 `--approve`（仅本次生效，和 Pi 自己的项目级 package 命令一样，见 `package-manager-cli.js`）。`mmp install` 写入前会校验来源是否真实存在：`npm:` 用 `npm view <spec> version` 确认包（和版本）能解析，`git:` 用 `git ls-remote` 确认仓库可达（10 秒超时；命令缺失或返回非零都会带上原始报错说明原因；`--offline` 和 `PI_OFFLINE` 一样跳过这项检查），本地路径确认文件存在；`git:` 只接受 Pi 自己会接受的形状（host/path、显式协议 URL、scp 语法，可选 `@ref`），校验失败不写入，并说明原因。写入后需要重启 `mmp` 才生效；扩展包本身不会被预先下载进 `.pi/` 或 Pi 的 `settings.json`——它们和其它 Manifest 声明的 Extension 一样，在下次 `mmp` 启动时按 `--extension npm:x`/`git:x` 的方式加载，缓存在 `~/.mmp/pi/tmp/extensions` 下；`mmp update --extensions` 清空这份缓存，让声明的来源在下次启动时重新拉取。`mmp config` 的编辑结果如果校验失败，会保留编辑前的文件内容并报错。
+`-l` 把 `install`/`remove`/`config` 的目标从全局 `~/.mmp/mmp.json` 换成当前目录的 `.mmp/mmp.json`；目标项目未被信任时三者都会拒绝，报同一句 "not trusted" 提示，除非带 `--approve`（仅本次生效，和 Pi 自己的项目级 package 命令一样，见 `package-manager-cli.js`）。`mmp install` 写入前会校验来源是否真实存在：`npm:` 用 `npm view <spec> version` 确认包（和版本）能解析，`git:` 用 `git ls-remote` 确认仓库可达（10 秒超时；命令缺失或返回非零都会带上原始报错说明原因；`--offline` 和 `MMP_OFFLINE` 一样跳过这项检查），本地路径确认文件存在；`git:` 只接受 Pi 自己会接受的形状（host/path、显式协议 URL、scp 语法，可选 `@ref`），校验失败不写入，并说明原因。写入后需要重启 `mmp` 才生效；扩展包本身不会被预先下载进 `.pi/` 或 Pi 的 `settings.json`——它们和其它 Manifest 声明的 Extension 一样，在下次 `mmp` 启动时按 `--extension npm:x`/`git:x` 的方式加载，缓存在 `~/.mmp/pi/tmp/extensions` 下；`mmp update --extensions` 清空这份缓存，让声明的来源在下次启动时重新拉取。`mmp config` 的编辑结果如果校验失败，会保留编辑前的文件内容并报错。
 
 ## 配置布局
 

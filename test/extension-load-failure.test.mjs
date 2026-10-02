@@ -26,7 +26,7 @@ function brokenExtensionHome(t) {
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho, broken] }));
   return {
     cwd: root,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
   };
 }
 
@@ -65,7 +65,7 @@ function spawnTui(t, root, extensions, args = []) {
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
   const child = spawn(process.execPath, ["--import", fakeTty, cli, "--no-project", ...args], {
     cwd: root,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), PI_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
     stdio: ["pipe", "pipe", "pipe"],
   });
   t.after(() => child.kill("SIGKILL"));

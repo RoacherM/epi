@@ -79,9 +79,10 @@ export async function refreshUpdateCache(options) {
     writeFileSync(cachePath(options.mmpHome), `${JSON.stringify(next, null, 2)}\n`);
     return next;
 }
-/** Update checks never run for reproducible or offline runs. `--offline` after a bare `--` is a
- * message, not the flag (Pi's own parseArgs, cli/args.js, stops interpreting flags at `--`; bug 9's
- * passthroughHasFlag respects that same boundary). */
+/** Update checks never run for reproducible or offline runs. `environment` is the process
+ * environment after src/pi-env.ts, where PI_OFFLINE can only come from MMP_OFFLINE. `--offline`
+ * after a bare `--` is a message, not the flag (Pi's own parseArgs, cli/args.js, stops interpreting
+ * flags at `--`; bug 9's passthroughHasFlag respects that same boundary). */
 export function updateCheckDisabled(environment, piArguments) {
     return (environment.MMP_DISABLE_UPDATE_CHECK !== undefined ||
         environment.PI_OFFLINE !== undefined ||

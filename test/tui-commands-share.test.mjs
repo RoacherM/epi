@@ -28,7 +28,7 @@ function runApp(t, extensions, steps, { path } = {}) {
       PATH: path ?? "",
       HOME: home,
       MMP_HOME: join(home, ".mmp"),
-      PI_OFFLINE: "1",
+      MMP_OFFLINE: "1",
       MMP_TUI_HARNESS: JSON.stringify({ steps }),
     },
     encoding: "utf8",

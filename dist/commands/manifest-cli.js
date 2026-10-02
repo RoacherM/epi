@@ -153,7 +153,8 @@ export async function defaultCheckSourceExists(source, options) {
         throw new MmpArgumentError(`git repository not reachable: ${source.url}${result.stderr ? `\n${result.stderr}` : ""}`);
     }
 }
-/** Mirrors Pi's own `isOfflineModeEnabled` (package-manager.js): PI_OFFLINE disables every
+/** Mirrors Pi's own `isOfflineModeEnabled` (package-manager.js): PI_OFFLINE (here always MMP_OFFLINE's
+ * value, src/pi-env.ts) disables every
  * network-backed resolution Pi does, including this same kind of npm/git existence check, so
  * `mmp install` skips it here too instead of failing on a check nothing intends to satisfy. */
 function isOffline() {
@@ -336,7 +337,7 @@ Options:
                       otherwise trusted (this run only; does not persist -- use mmp --approve or
                       /trust to persist it)
   -na, --no-approve  Refuse an -l write even if the project is otherwise trusted
-  --offline          Skip checking that an npm:/git: source actually resolves (like PI_OFFLINE)
+  --offline          Skip checking that an npm:/git: source actually resolves (like MMP_OFFLINE)
 
 Examples:
   mmp install npm:@foo/bar
