@@ -270,8 +270,9 @@ test("mmp mcp list outside a project offers only the global mcp.json", (t) => {
   const result = run(f, ["list"]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^No MCP servers configured -- add one to .*mcp\.json with `mmp mcp add <server> \(--url <url> \| -- <command> \[args\.\.\.\]\)`\.$/m);
-  // The flag, not any "-l" inside the printed temp path (mkdtemp's suffix can start with "l").
-  assert.doesNotMatch(result.stdout, /(^|\s)-l\b/);
+  // The flag in any spelling (`-l`, (-l), [-l], "-l", '-l', a|-l alternative, --local), not a "-l"
+  // inside the printed temp path (mkdtemp's suffix can start with "l").
+  assert.doesNotMatch(result.stdout, /(^|[\s`(\["'|])-l\b|--local\b/);
 });
 
 // Dogfood D4: list/login/logout read the project's .mmp/mcp.json, so they take the same

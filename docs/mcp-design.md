@@ -68,6 +68,8 @@ Manifest 同时声明第三方 MCP 扩展（例如 pi-mcp-adapter）和 `mmp:mcp
 
 对模型可见内容的影响：`test/snapshots/model-visible.json` 里 pi-mcp-adapter 的 `mcp` 代理工具消失；配了测试服务时出现 `codemode`。用 `scripts/model-snapshot.mjs --diff` 重新生成并逐条审查。
 
+提示缓存（已认可的代价，不是 bug；U3 review 1 F2）：Pi 每次用户提示都重新渲染 `<mcp_servers>`。MMP 把整段提示固定成开头唯一的一条 system 消息（[pi-internals.md](pi-internals.md) `system-prompt-forced-last`），所以这一段在会话中途一变，开头的文本就变了，provider 的提示缓存会整段失效一次。不像原版 Pi 那样作为会话中途的 system 补丁追加。会变的时机有两种：服务在后台连上后带来 `instructions`，或者用 `/mcp` 启用、停用服务。`-p` 和 benchmark 只有一次用户提示，不受影响。
+
 ## 6. `mmp mcp` 子命令
 
 用法对齐 Pi 的 `pi mcp`（`extensions/mcp/cli.js`）：
