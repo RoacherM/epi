@@ -70,4 +70,6 @@
 | D64 | P3 | Fable 终审的两条 PLAUSIBLE：TUI 路径 `process.exit` 前没有像 `-p` 路径那样等 stderr 写完（`host.ts`）；`exit()` 在 `await drainInput` 之后才停 TUI（`app.ts`）。两处都和 Pi 的写法一致 | Fable review.md | 待查 |
 | D65 | P3 | `/login` → "Sign in with an API key" 的服务商列表按 Esc：Pi 1.0 回到认证方式选择（`showLoginProviderSelector` 里 `if (authType) this.showLoginAuthTypeSelector()`），MMP 直接回编辑器（`src/tui/commands.ts` `chooseProvider`）。改时注意 U4 的 ambient 测试要多按一次 Esc | U4 review-1 N2 | 待做 |
 | D66 | P1 | `/login` 的 "Sign in with ChatGPT" 一定失败：MMP 调 `modelRuntime.login` 没传 Pi 的 `getDeviceId`（0.99.1 起就这样）。设备 ID 存在 `~/.mmp/pi/settings.json` | U2 review-1 P1 | 已修（U4，c9819c6） |
+| D67 | P2 | rpc `switch_session` 没有跨项目保护：Pi 在目标会话的 cwd 重建服务，MMP 的 piMain/rpc 路径没有 `crossProjectRefusal`（TUI 有，`src/tui/project-guard.ts`），所以 rpc 客户端能切到别的项目的会话，在那里用启动项目的 Rules 跑工具。U5 之前就这样 | U5 review-1 F2 | 待做 |
+| D68 | P3 | `MMP_HOME` 不是 `~/.mmp` 而 cwd 在真实 home 下时，`mmp list` 会把真实的 `~/.mmp/mmp.json` 当成项目 Manifest（显示 not trusted，没读取）。真实使用时 `MMP_HOME` 就是 `~/.mmp` 不受影响；测试要用临时 cwd | K4 report | 待查 |
 | K4 | P2 | 决策 H3/K4 待实现：内置标准能力（`mmp:task`、`mmp:mcp`、`mmp:hooks`）默认开启，可在 Manifest 里关闭；关闭的不读配置、不启动子进程。注意 `mmp:task` 默认开启会改变模型看到的工具（快照、benchmark） | development.md §3.4 | 待做（U1 合并后开工，避免和 MCP 改动冲突） |
