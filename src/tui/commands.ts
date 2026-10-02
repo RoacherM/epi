@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { CommandHost } from "./command-host.js";
+import { dialog, selectInEditorSlot } from "./dialogs.js";
 import { errorText } from "./errors.js";
 import { resolveMmpPaths } from "../paths.js";
 import { findNearestProjectManifest } from "../project.js";
@@ -78,19 +79,11 @@ export async function runLogin(host: CommandHost, providerRef: string): Promise<
   await chooseProvider(host, options, matches.length > 0 ? undefined : providerRef.trim());
 }
 
-function chooseAuthType(host: CommandHost, providerName: string | undefined): Promise<LoginOption["authType"] | undefined> {
-  return new Promise((resolve) => {
-    let restore: () => void = () => {};
-    const title = providerName === undefined ? "Select authentication method:" : `Select authentication method for ${providerName}:`;
-    const selector = new ExtensionSelectorComponent(title, [ACCOUNT_LABEL, API_KEY_LABEL], (choice) => {
-      restore();
-      resolve(choice === ACCOUNT_LABEL ? "oauth" : "api_key");
-    }, () => {
-      restore();
-      resolve(undefined);
-    });
-    restore = host.takeEditorSlot(selector);
-  });
+async function chooseAuthType(host: CommandHost, providerName: string | undefined): Promise<LoginOption["authType"] | undefined> {
+  const title = providerName === undefined ? "Select authentication method:" : `Select authentication method for ${providerName}:`;
+  const choice = await selectInEditorSlot(host, title, [ACCOUNT_LABEL, API_KEY_LABEL]);
+  if (choice === undefined) return undefined;
+  return choice === ACCOUNT_LABEL ? "oauth" : "api_key";
 }
 
 async function chooseProvider(host: CommandHost, options: LoginOption[], search: string | undefined): Promise<void> {
@@ -313,35 +306,28 @@ export async function runTrust(host: CommandHost): Promise<void> {
     return;
   }
   const choices = projectTrustOptions(candidate.root);
-  await new Promise<void>((resolve) => {
-    let restore: () => void = () => {};
-    const selector = new ExtensionSelectorComponent(
-      "Trust project folder?",
-      choices.map((choice) => choice.label),
-      (label) => {
-        restore();
-        const choice = choices.find((option) => option.label === label);
-        if (choice !== undefined) {
-          if (choice.updates.length > 0) {
-            saveProjectTrustChoice(host.agentDir, choice);
-            host.notice(`Saved: ${choice.label}. Takes effect after restarting mmp (manifest extensions cannot be hot-loaded).`);
-          } else {
-            host.notice(`${choice.label}: not saved.`);
-          }
-        }
-        resolve();
-      },
-      () => {
-        restore();
-        resolve();
-      },
-      {
-        description: `${candidate.root}\n` +
-          "This lets MMP read .mmp/mmp.json and load its rules, skills and extensions (extensions run code).",
-      },
-    );
-    restore = host.takeEditorSlot(selector);
-  });
+  // Saves inside the selector's callback, right after `done` gives the editor back, so the notice
+  // lands in the same frame (requestRender waits for process.nextTick).
+  await dialog<void>(host, (done) => new ExtensionSelectorComponent(
+    "Trust project folder?",
+    choices.map((choice) => choice.label),
+    (label) => {
+      done();
+      const choice = choices.find((option) => option.label === label);
+      if (choice === undefined) return;
+      if (choice.updates.length > 0) {
+        saveProjectTrustChoice(host.agentDir, choice);
+        host.notice(`Saved: ${choice.label}. Takes effect after restarting mmp (manifest extensions cannot be hot-loaded).`);
+      } else {
+        host.notice(`${choice.label}: not saved.`);
+      }
+    },
+    () => done(),
+    {
+      description: `${candidate.root}\n` +
+        "This lets MMP read .mmp/mmp.json and load its rules, skills and extensions (extensions run code).",
+    },
+  ), undefined);
 }
 
 async function selectModel(host: CommandHost, model: Model, persist: boolean): Promise<void> {

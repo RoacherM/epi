@@ -1,10 +1,10 @@
 // /tree, /fork, /clone (docs/tui-design.md 4.6); registered in builtins.ts.
 // Mirrors Pi's showTreeSelector, showUserMessageSelector, handleCloneCommand
 // (interactive-mode.js) built from the components Pi exports.
-import { ExtensionEditorComponent, ExtensionSelectorComponent, TreeSelectorComponent, UserMessageSelectorComponent, } from "@earendil-works/pi-coding-agent";
+import { TreeSelectorComponent, UserMessageSelectorComponent } from "@earendil-works/pi-coding-agent";
+import { editInEditorSlot, selectInEditorSlot } from "./dialogs.js";
 import { errorText } from "./errors.js";
 import { labelStoredImages } from "./paste-chips.js";
-import { piTui } from "./pi-tui.js";
 /** The image parts of a user (or custom) message entry, read before /fork or /tree switches away
  * from it, so the text Pi puts back in the editor gets its images too. */
 function entryImages(host, entryId) {
@@ -68,34 +68,12 @@ async function askForSummary(host) {
     if (host.session().settingsManager.getBranchSummarySkipPrompt())
         return { summarize: false };
     while (true) {
-        const choice = await new Promise((resolve) => {
-            let restore = () => { };
-            const selector = new ExtensionSelectorComponent("Summarize branch?", [...SUMMARY_CHOICES], (label) => {
-                restore();
-                resolve(label);
-            }, () => {
-                restore();
-                resolve(undefined);
-            });
-            restore = host.takeEditorSlot(selector);
-        });
+        const choice = await selectInEditorSlot(host, "Summarize branch?", [...SUMMARY_CHOICES]);
         if (choice === undefined)
             return undefined;
         if (choice !== "Summarize with custom prompt")
             return { summarize: choice === "Summarize" };
-        const customInstructions = await new Promise((resolve) => {
-            let restore = () => { };
-            const editor = new ExtensionEditorComponent(host.tui, 
-            // Pi's app-level KeybindingsManager, installed as pi-tui's global map by keybindings.ts.
-            piTui.getKeybindings(), "Custom summarization instructions", undefined, (value) => {
-                restore();
-                resolve(value);
-            }, () => {
-                restore();
-                resolve(undefined);
-            });
-            restore = host.takeEditorSlot(editor);
-        });
+        const customInstructions = await editInEditorSlot(host, "Custom summarization instructions", undefined);
         if (customInstructions === undefined)
             continue; // looped back to the summary choice, like Pi
         return { summarize: true, customInstructions };

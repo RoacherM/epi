@@ -57,6 +57,30 @@ test("/tree navigates to an earlier branch point, replays the transcript, and a 
   assert.match(out, /EXIT=0/);
 });
 
+test("/tree: Esc in the custom summary prompt goes back to the summary choice, which can still navigate", (t) => {
+  const { text: out, marks } = runApp(t, [fixture("switchto-extension.mjs")], [
+    ["waitReady"],
+    ["type", "first message"], ["key", "enter"], ["wait", 800],
+    ["type", "second message"], ["key", "enter"], ["wait", 800], ["mark", "afterSecond"],
+    ["type", "/tree"], ["key", "enter"], ["wait", 500],
+    ["key", "up"], ["wait", 100], ["key", "up"], ["wait", 100],
+    ["key", "enter"], ["waitFor", "Summarize branch?"], ["mark", "summaryPrompt"],
+    ["key", "down"], ["wait", 100], ["key", "down"], ["wait", 100],
+    ["key", "enter"], ["waitFor", "Custom summarization instructions"], ["mark", "customPrompt"],
+    ["key", "esc"], ["waitFor", "Summarize branch?"], ["mark", "backToChoice"],
+    // "No summary" is highlighted again: the selector is a fresh one.
+    ["key", "enter"], ["waitFor", "Navigated to selected point."], ["mark", "afterNavigate"],
+    ["type", "after"], ["wait", 150], ["mark", "typedAfter"],
+    ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.summaryPrompt.slice(marks.afterSecond.length), /Summarize with custom prompt/);
+  assert.match(marks.customPrompt.slice(marks.summaryPrompt.length), /Custom summarization instructions/);
+  assert.match(marks.backToChoice.slice(marks.customPrompt.length), /Summarize branch\?/);
+  assert.doesNotMatch(marks.afterNavigate.slice(marks.backToChoice.length), /Summarizing branch/);
+  assert.match(marks.typedAfter.slice(marks.afterNavigate.length), /❯ after/);
+  assert.match(out, /EXIT=0/);
+});
+
 test("/fork forks from an earlier user message, refills the editor, and /resume can switch back to the original session", (t) => {
   const { text: out, marks } = runApp(t, [fixture("switchto-extension.mjs")], [
     ["waitReady"],
