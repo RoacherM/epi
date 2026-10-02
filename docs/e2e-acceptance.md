@@ -62,7 +62,7 @@
 | P6 | 剪贴板为空时按 Ctrl+V | 提示 "Nothing to paste: the clipboard holds no image or text." |
 | P7 | 双击文字标签 | 展开成原文 |
 | P8 | 光标在标签上按退格 | 整个标签一次删掉，不会删成半截 |
-| P9 | 贴图后连按 Ctrl+Z 撤销 | 按顺序撤回，标签和内容一起撤回，不会互换 |
+| P9 | 贴图后连按 Ctrl+-（撤销；macOS 上 Ctrl+Z 是挂起，Pi 的默认） | 按顺序撤回，标签和内容一起撤回，不会互换 |
 | P10 🖐 | 在对话区拖选一段文字 | 右下角闪 "Copied!"，剪贴板里是选中的文字（"选中即复制"，对齐 Pi 的默认设置）。注意：这会覆盖剪贴板里原来的图 |
 
 ### 3.4 斜杠命令
@@ -75,7 +75,7 @@
 |---|---|---|
 | ★ K1 | 打开任意弹窗（`/model`）再关掉，然后按 Shift+Tab、Ctrl+V | 快捷键仍然有效（焦点回到输入框） |
 | K2 | 输入 `/` | 补全列表只有 mmp 的命令，没有 Pi 独有、MMP 不提供的命令 |
-| K3 | `/settings`：翻到底（↓），再搜 `Theme`；把 `Fullscreen scrollbar` 改成 `always`、`Autocomplete max items` 改成 `7`，Esc；输入 `/`；退出后看 `~/.mmp/pi/settings.json`，重启再开 `/settings` | 列表 15 项（`(15/15)`），搜 `Theme` 显示 `No matching settings`；改完对话区右侧立刻出现滚动条，`/` 补全一次显示 7 行；文件里有 `fullscreenScrollbar`、`autocompleteMaxVisible`，`~/.pi` 和项目 `.pi/` 下没有新文件；重启后两项仍是新值。Esc 后 Shift+Tab、Ctrl+V 照常（同 K1） |
+| K3 | `/settings`：翻到底（↓），再搜 `Theme`；把 `Fullscreen scrollbar` 改成 `always`、`Autocomplete max items` 改成 `7`，Esc；输入 `/`；退出后看 `~/.mmp/pi/settings.json`，重启再开 `/settings` | 列表 18 项（`(18/18)`，Pi 1.0），搜 `Theme` 只匹配到 "Default thinking level per model"（没有主题项）；改完对话区右侧立刻出现滚动条，`/` 补全一次显示 7 行；文件里有 `fullscreenScrollbar`、`autocompleteMaxVisible`，`~/.pi` 和项目 `.pi/` 下没有新文件；重启后两项仍是新值。Esc 后 Shift+Tab、Ctrl+V 照常（同 K1） |
 
 ### 3.5 MCP 和 skills
 
@@ -110,4 +110,4 @@
 | 编号 | 现象 | 状态 |
 |---|---|---|
 | D9 | Pi 0.99 会把图片缩放说明（`[Image: original WxH, displayed at …]`）追加到发给模型的文字里，MMP 的用户消息块把它原样显示出来，看起来像多了一行乱码 | 待定：建议界面上隐藏这类说明，模型照常收到 |
-| D10 | Pi 0.99 新增的快捷键 MMP 还没接：切换模型（`app.model.cycleForward/Backward`）、上一条/下一条提示（`tui.altScreen.previousPrompt/nextPrompt`）、搜索（`tui.altScreen.search`） | 待排期 |
+| D10 | 已接：`/hotkeys` 列出切换模型（默认没绑键）、上一条/下一条提示、对话区搜索（2026-10-02 完整验收时确认，按键本身没逐个按） | 已修 |

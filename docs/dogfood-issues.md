@@ -77,4 +77,7 @@
 | D71 | P3 | `mmp mcp login --timeout` 校验了但没生效：`promptForRedirectUrl` 只等取消信号、不起计时器（Pi 的 CLI 有 `setTimeout(abort, timeoutMs)`），"not completed within N seconds" 只会在取消时出现，一个失败表现成另一个 | Fable pi-100 终审（U1 review-1 F8） | 待做 |
 | D72 | P3 | `mmp mcp logout` 只调一次 `credentials.remove(name, url)`：同时存在 1.0 的按服务键和旧的按 URL 键时，旧键会被重新采用，退出后仍是登录状态（只在新旧 MMP 都写过凭据时出现；Pi 本身也这样） | Fable pi-100 终审（U1 review-1 F7） | 待定（循环 remove 或交给上游） |
 | D73 | P3 | `mmp mcp list` 不看 `"disable"`：`mmp:mcp` 关掉后仍启动并连接服务、显示 connected，不说能力已关；`config error:` 行写到 stdout | Fable pi-100 终审 | 待做 |
+| D74 | P2 | Alt+Enter 插话（steer）写进了会话文件，但模型收不到，换进程 `-c` 恢复后仍然收不到。Pi 0.99.1 工具版一样。Pi 用会话构造的请求里有这条消息，直接 curl 发给 magpie 正常，怀疑 magpie 网关有自己的会话状态，未抓真实请求、MMP 未完全排除 | `.dev/e2e/2026-10-02-e1f96f8-full.md` F1 | 待查（换一个 provider 复现可区分） |
+| D75 | P2 | Esc 中止后发的第一条消息模型看不到，回答的还是被中止的那条；会话里中止产生一条空的 `stopReason:"error"` 助手消息。0.99.1 一样。疑同 D74 | `.dev/e2e/2026-10-02-e1f96f8-full.md` F2 | 待查 |
+| D76 | P2 | `/compact` 显示 "Context compacted."、压缩条目正常，但下一次请求没变小（69.3K → 72.4K；0.99.1：60.4K → 71.6K）。疑同 D74 | `.dev/e2e/2026-10-02-e1f96f8-full.md` F3 | 待查 |
 | K4 | P2 | 决策 H3/K4：内置标准能力（`mmp:task`、`mmp:mcp`、`mmp:hooks`）默认开启，可在 Manifest 里关闭；关闭的不读配置、不启动子进程。注意 `mmp:task` 默认开启会改变模型看到的工具（快照、benchmark） | development.md §3.4 | 已修（K4，6b4420e、d1c12a1、d7b1cae：Manifest 的 `"disable"`；快照只变了提示词里 Manifest schema 那一行，工具不变） |
