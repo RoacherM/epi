@@ -3,7 +3,7 @@
 - 项目：MMP（Make My Pi）
 - 状态：自有 TUI、原生 MCP、Rules/Skills、Task/Hooks 和 benchmark adapter 已实现；验收与遗留项见 §21
 - 目标依赖：`@earendil-works/pi-coding-agent`（见 `package.json`）；Node.js `>=22.19.0`
-- 当前验证环境：`package.json` 锁定的 Pi 版本已通过全部契约测试、ambient 隔离测试和离线 MCP 验收；真实模型冒烟和 benchmark adapter 冒烟是 Pi `0.83.0` 时做的，升级后还没重做，之后每次升级也要看是否需要重跑（见 `docs/pi-upgrade-design.md` 第 3 节"模型可见内容快照"）。OMP `17.1.3` 仅作能力边界参考，不是运行依赖
+- 当前验证环境：`package.json` 锁定的 Pi 版本已通过全部契约测试、ambient 隔离测试和离线 MCP 验收；真实模型冒烟和 benchmark adapter 基线在 Pi `1.0.0` 上重做过（2026-10-02，`.dev/e2e/`、`.dev/bench/2026-10-02/report.md`），之后每次升级也要看是否需要重跑（见 `docs/pi-upgrade-design.md` 第 3 节"模型可见内容快照"）。OMP `17.1.3` 仅作能力边界参考，不是运行依赖
 - Pi 升级：设计见 `docs/pi-upgrade-design.md`（版本锁死、升级自动化，已定，见 `docs/decisions.md`）
 - 交互界面：设计见 `docs/tui-design.md`，代码在 `src/tui/`，是 `mmp` 唯一的交互入口（不再启动 Pi 经典交互界面），进度见设计文档第 15 节
 - 开发流程：角色分工、独立合并前审查、任务说明要求、Herdr 实测和对照 grok，见 `docs/dev-workflow.md`；给 agent 的入口见根目录 `AGENTS.md`，硬规则见 `docs/dev-workflow.md`
@@ -1127,7 +1127,7 @@ Benchmark 不是阶段 A/B 的实现内容，但阶段 A 的 JSON mode、stdout/
 - `reports/benchmark-adapter/mmp-full-smoke-2026-08-02/metadata.json`；
 - `reports/benchmark-adapter/pi-baseline-smoke-2026-08-02/metadata.json`。
 
-两者均使用依赖中的 Pi `0.83.0` 和 resolved model `openrouter/openai/gpt-4o-mini`，分别返回 `BENCHMARK_ADAPTER_OK` 与 `BASELINE_ADAPTER_OK`。升级到 Pi `0.87.1` 后 system prompt 的格式变了（改为 `<tools>`、`<rules>`、`<docs>`、`<cwd>` 分段），这两个冒烟和基线都要重跑；重跑会调用真实模型、产生费用，还没做。
+两者均使用依赖中的 Pi `0.83.0` 和 resolved model `openrouter/openai/gpt-4o-mini`，分别返回 `BENCHMARK_ADAPTER_OK` 与 `BASELINE_ADAPTER_OK`。Pi `1.0.0` 升级后（2026-10-02）重跑：四个 variant × 两个带评分的小编程任务 × 3 次，新（Pi 1.0.0）旧（Pi 0.99.1 工具版）各一组，48 次全部通过评分，时间、token、工具调用没有系统性退化；方法、bundle 和结果见 `.dev/bench/2026-10-02/report.md`（原始输出在 `reports/benchmark-adapter/2026-10-02*/`）。这不是 §20.5 的九项正式 benchmark。
 
 ## 21. 当前验证与遗留项
 
