@@ -46,23 +46,8 @@ export const BUILTIN_COMMANDS: BuiltinCommand[] = [
   { name: "bug", description: "Report an MMP bug on GitHub", argumentHint: "[description]", run: (host, args) => runBug(host, args) },
 ];
 
-/** Pi built-ins not wired yet. */
-const PLANNED: Record<string, string> = {};
-
-/** Pi built-ins MMP leaves out on purpose, with the reason shown to the user. */
-const NOT_IN_MMP: Record<string, string> = {};
-
-export type BuiltinLookup =
-  | { kind: "run"; command: BuiltinCommand }
-  | { kind: "planned" | "excluded"; message: string }
-  | undefined;
-
-export function findBuiltin(name: string): BuiltinLookup {
-  const command = BUILTIN_COMMANDS.find((candidate) => candidate.name === name);
-  if (command !== undefined) return { kind: "run", command };
-  if (name in PLANNED) return { kind: "planned", message: `/${name} is not available in MMP yet.` };
-  if (name in NOT_IN_MMP) return { kind: "excluded", message: `/${name} is not available in MMP. ${NOT_IN_MMP[name]}` };
-  return undefined;
+export function findBuiltin(name: string): BuiltinCommand | undefined {
+  return BUILTIN_COMMANDS.find((candidate) => candidate.name === name);
 }
 
 export interface SlashCompletion {
@@ -71,13 +56,12 @@ export interface SlashCompletion {
   argumentHint?: string;
 }
 
-/** Everything `/` can complete: built-ins (planned ones marked), prompt templates, extension commands, skills. */
+/** Everything `/` can complete: built-ins, prompt templates, extension commands, skills. */
 export function slashCompletions(session: AgentSession): SlashCompletion[] {
-  const builtins: SlashCompletion[] = [
-    ...BUILTIN_COMMANDS.map(({ name, description, argumentHint }) => ({ name, description, ...(argumentHint === undefined ? {} : { argumentHint }) })),
-    ...Object.entries(PLANNED).map(([name, description]) => ({ name, description: `${description} (not yet)` })),
-  ];
-  const taken = new Set([...builtins.map((command) => command.name), ...Object.keys(NOT_IN_MMP)]);
+  const builtins: SlashCompletion[] = BUILTIN_COMMANDS.map(({ name, description, argumentHint }) => ({
+    name, description, ...(argumentHint === undefined ? {} : { argumentHint }),
+  }));
+  const taken = new Set(builtins.map((command) => command.name));
   const templates = session.promptTemplates.map((template) => ({
     name: template.name,
     ...(template.description === undefined ? {} : { description: template.description }),

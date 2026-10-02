@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { BUILTIN_COMMANDS, findBuiltin, slashCompletions } from "../dist/tui/builtins.js";
@@ -11,6 +13,25 @@ import { piTui } from "../dist/tui/pi-tui.js";
 const CTRL_L = "\x0c";
 const CTRL_Q = "\x11";
 const CTRL_P = "\x10";
+
+const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
+const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
+
+function runApp(t, extensions, steps) {
+  const root = mkdtempSync(join(tmpdir(), "mmp-tui-keys-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  const result = spawnSync(process.execPath, [harness], {
+    cwd: root,
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_TUI_HARNESS: JSON.stringify({ steps }) },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
 
 test("Pi's key map loads from its package file and becomes pi-tui's global map", (t) => {
   const agentDir = mkdtempSync(join(tmpdir(), "mmp-keys-"));
@@ -49,13 +70,30 @@ test("model cycling is unbound by default, bindable in keybindings.json, and sta
 });
 
 test("built-in lookup finds wired commands only", () => {
-  assert.equal(findBuiltin("login")?.kind, "run");
-  assert.equal(findBuiltin("resume")?.kind, "run");
-  assert.equal(findBuiltin("tree")?.kind, "run");
-  assert.equal(findBuiltin("share")?.kind, "run");
-  assert.equal(findBuiltin("trust")?.kind, "run");
-  assert.equal(findBuiltin("settings")?.kind, "run");
+  for (const name of ["login", "resume", "tree", "share", "trust", "settings"]) {
+    assert.equal(findBuiltin(name)?.name, name);
+  }
   assert.equal(findBuiltin("mmp"), undefined);
+});
+
+test("an unknown /command goes to the model as a plain prompt", (t) => {
+  const { exit, output } = runApp(t, [fixture("faux-echo.mjs")], [
+    ["waitReady"], ["type", "/nosuchcmd hi"], ["key", "enter"],
+    ["waitFor", { regex: "ECHO:/nosuchcmd hi[\\s\\S]*Worked for" }], ["key", "ctrl+d"],
+  ]);
+  assert.equal(exit, 0);
+  assert.doesNotMatch(output, /not available in MMP/);
+});
+
+test("a built-in wins over an extension command of the same name; other extension commands run", (t) => {
+  const { exit, output } = runApp(t, [fixture("faux-echo.mjs"), fixture("builtin-name-command-extension.mjs")], [
+    ["waitReady"], ["type", "/session"], ["key", "enter"], ["waitFor", "Session Info"],
+    ["type", "/extonly go"], ["key", "enter"], ["waitFor", "EXTONLY-RAN:go"], ["key", "ctrl+d"],
+  ]);
+  assert.equal(exit, 0);
+  assert.doesNotMatch(output, /EXT-SESSION-RAN/);
+  // Neither command reached the model.
+  assert.doesNotMatch(output, /ECHO:/);
 });
 
 test("slash completions list built-ins, templates, extension commands and skills without duplicates", () => {
