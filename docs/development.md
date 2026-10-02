@@ -122,7 +122,8 @@ Rules 与第三方 Extensions 未声明就不加载。固定 `mmp:runtime` 与 �
 
 | 路径 | 用途 |
 |---|---|
-| `README.md` | 安装、使用和配置参考 |
+| `README.md` | 项目是什么：定位、要点、快速开始、文档索引 |
+| `docs/guide/` | 用户文档：安装与升级、命令行、配置、Task、MCP、Hooks、benchmark adapter（索引 `docs/guide/README.md`） |
 | `AGENTS.md` | coding agent 的简短入口，详细规则在 `docs/dev-workflow.md` |
 | `docs/` | 架构、开发流程、决策、验收和问题记录；`docs/notes/` 放调研 |
 | `examples/development/mmp.json` | 自开发配置模板，复制到本地 `.mmp/mmp.json` 后才启用 |
@@ -756,7 +757,7 @@ Handler 必须只返回一个严格 JSON decision：
 
 `user_prompt` 的 `block` / `cancel` 同理：Pi 的 `input` 结果 `handled` 没有 reason 字段，Pi 要扩展自己提示（Pi 的 `examples/extensions/input-transform.ts`），所以 `mmp:hooks` 用同一个渠道提示 `Prompt blocked by user_prompt hook: <reason>`（warning 级；`print`/`json` 模式也写 stderr）；`cancel` 没给原因时只提示 `Prompt cancelled by user_prompt hook`。提示在包住钩子运行的 `try` 外面发，notify 自己出错不会再被当成钩子失败多报一次（D46）。notify 出错时仍然返回 `handled`（Pi 的 `emitInput` 把出错的 `input` 处理器当作 `continue`，被拦下的提示词会发给模型），notify 的错误在 stderr 报一次。钩子原因和失败信息里的 stderr 尾部来自用户配置的程序，显示前去掉 ANSI 转义和其他控制字符、多行用 ` | ` 连成一行，文本自己的空格不动（`displayLine`，D46）。不提示的话提示词从编辑器消失、界面上什么都没有（D26）。`-p` 被拦下时退出码仍是 0，和 Pi 对 `handled` 的处理一致。
 
-完整用户配置说明与可复制示例位于根目录 `README.md`。
+完整用户配置说明与可复制示例位于 [docs/guide/](guide/configuration.md)（根目录 `README.md` 只做入口）。
 
 ### 14.3 验证
 
