@@ -6,7 +6,7 @@
 // defaultProvider/defaultModel) was itself in scope.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,4 +65,41 @@ test("the initial model falls back to the first scoped model when the saved defa
   assert.equal(result.status, 0, result.stderr);
   const { model } = JSON.parse(result.stdout);
   assert.equal(model.id, "model-a");
+});
+
+// Pi's buildSessionOptions (main.js) picks a scoped model only for a session without messages; a
+// continued or opened session keeps its own model. Seeds a session on model-b, then reopens it
+// with a scope whose first (and only) model is model-a.
+function seedSessionOnModelB(f) {
+  const seeded = run(f, { args: ["--no-project", "--model", "mmp-faux/model-b"], prompt: "hi" });
+  assert.equal(seeded.status, 0, seeded.stderr);
+  assert.match(seeded.stdout, /PICKED=model-b/);
+  const sessionsDir = join(f.home, ".mmp", "pi", "sessions");
+  const files = readdirSync(sessionsDir, { recursive: true }).filter((name) => name.endsWith(".jsonl"));
+  assert.equal(files.length, 1, files.join(","));
+  return join(sessionsDir, files[0]);
+}
+
+function startedModelId(f, args) {
+  const result = run(f, { args: ["--no-project", ...args], dumpModel: true });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout).model.id;
+}
+
+test("--continue and --session with --models keep the session's model instead of picking a scoped one", (t) => {
+  const f = fixture(t);
+  const sessionFile = seedSessionOnModelB(f);
+  assert.equal(startedModelId(f, ["--continue", "--models", "model-a"]), "model-b");
+  assert.equal(startedModelId(f, ["--session", sessionFile, "--models", "model-a"]), "model-b");
+  // A new session with the same scope does pick model-a, so the scope itself is in effect.
+  assert.equal(startedModelId(f, ["--models", "model-a"]), "model-a");
+});
+
+test("--continue and --session with the enabledModels setting keep the session's model", (t) => {
+  const f = fixture(t);
+  const sessionFile = seedSessionOnModelB(f);
+  writeFileSync(join(f.home, ".mmp", "pi", "settings.json"), JSON.stringify({ enabledModels: ["model-a"] }));
+  assert.equal(startedModelId(f, ["--continue"]), "model-b");
+  assert.equal(startedModelId(f, ["--session", sessionFile]), "model-b");
+  assert.equal(startedModelId(f, []), "model-a");
 });

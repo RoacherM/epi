@@ -184,6 +184,29 @@ test("mmp mcp add rejects an invalid exposure before writing anything", (t) => {
   assert.equal(existsSync(globalMcpPath(f)), false);
 });
 
+// Each input trips two of add's checks, so the error names the one that runs first: the
+// --approve/--no-approve conflict, then usage, then options on the wrong transport, then the
+// server config itself, and only then the -l trust gate (addCommand/buildServerConfig).
+test("mmp mcp add reports the first of two failing checks, in a fixed order", (t) => {
+  const f = fixture(t);
+  mkdirSync(join(f.project, ".mmp"), { recursive: true });
+  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
+  const cases = [
+    [["--approve", "--no-approve"], "--approve and --no-approve can't be used together.", /Usage:/],
+    [["--header", "A=1"], "Usage: mmp mcp add <server>", /only applies to/],
+    [["-l", "--exposure", "bogus", "--", "node", fixtureServerPath], "exposure must be one of", /not trusted/],
+  ];
+  for (const [args, message, other] of cases) {
+    const result = run(f, ["add", "bad", ...args]);
+    const context = `${args.join(" ")}\n${result.stdout}\n${result.stderr}`;
+    assert.equal(result.status, 2, context);
+    assert.ok(result.stderr.includes(message), context);
+    assert.doesNotMatch(result.stderr, other, context);
+  }
+  assert.equal(existsSync(globalMcpPath(f)), false);
+  assert.equal(existsSync(projectMcpPath(f)), false);
+});
+
 test("mmp mcp add -l refuses an untrusted project without --approve, like mmp install -l", (t) => {
   const f = fixture(t);
   mkdirSync(join(f.project, ".mmp"), { recursive: true });
