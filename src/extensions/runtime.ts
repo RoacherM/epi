@@ -43,6 +43,7 @@ function reloadableAssembly(
   return {
     ...next,
     inlineExtensions: initial.inlineExtensions,
+    disabledExtensions: initial.disabledExtensions,
     externalExtensions: initial.externalExtensions,
   };
 }

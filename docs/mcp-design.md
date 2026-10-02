@@ -53,11 +53,11 @@ Pi 自己的 ~/.mmp/pi/mcp.json ✗                          ├─ createCodemo
 - 迁移：用户机器上现在没有 `~/.mmp/mcp.json`（主控核实），不做迁移代码。旧字段出现时，Pi 的校验会报错（失败可见）。
 - `src/mcp-config.ts` 里 pi-mcp-adapter 的类型定义和合并逻辑删掉。
 
-## 4. 开关：仍由 Manifest 声明
+## 4. 开关：默认开启，Manifest 的 `disable` 关闭
 
-Pi 的内置 MCP 默认总是开着；MMP 保持现状：Manifest 里声明 `"mmp:mcp"` 才启用（`src/manifest.ts`）。理由是 MMP 的核心约定"资源只由 Manifest 声明"（`cli-design.md` §0 第 2 条），这一条写进 `cli-design.md`。
+~~Manifest 里声明 `"mmp:mcp"` 才启用。~~ 已被决策 H3/K4（2026-10-02）取代：`mmp:mcp` 和另外两个内置能力一样默认开启，Manifest 的 `"disable": ["mmp:mcp"]` 关掉它，关掉后不读 `mcp.json`（`development.md` §3.4）。和 Pi 的区别只剩"可以在 Manifest 里关"。没有配置任何服务时，`mmp:mcp` 和随它加载的 codemode/tool-search 对模型不可见：两者的工具都注册为 inactive，Pi 的 MCP 扩展只在有服务需要时才激活它们（K4 用 `scripts/model-snapshot.mjs` 核对过，工具列表和提示词都没有变化）。
 
-Manifest 同时声明第三方 MCP 扩展（例如 pi-mcp-adapter）和 `mmp:mcp` 时，两边都会注册 `/mcp`。Pi 的"可替换"机制只对内置扩展生效，对 MMP 的 inline 工厂不生效，所以这种情况要**启动时报错**，说清楚两者只能选一个，不静默丢掉其中一个。
+Manifest 声明了第三方 MCP 扩展（例如 pi-mcp-adapter）而 `mmp:mcp` 开着（默认开，不用声明）时，两边都会注册 `/mcp`。Pi 的"可替换"机制只对内置扩展生效，对 MMP 的 inline 工厂不生效，所以这种情况要**启动时报错**，不静默丢掉其中一个。错误里说清楚怎么选：要留第三方那个，就在 Manifest 里加 `"disable": ["mmp:mcp"]`（`mmp:mcp` 写在某个文件的 `extensions` 里时，提示改成先从那里删掉，因为同一文件两边都写是配置错误）；否则从 Manifest 删掉第三方那个。
 
 - **怎么发现冲突**：Pi 对两个扩展注册同名命令的处理不是报错，是**都改名**（`core/extensions/runner.js` 的 `resolveRegisteredCommands`：某个命令名被注册超过一次时，两边都变成 `mcp:1`/`mcp:2`，不会有一份还叫 `mcp`）。`mmp:mcp` 自己的 `session_start` 里查 `pi.getCommands()`，看有没有 `/^mcp:\d+$/` 的名字，有就是冲突。命令注册全部发生在扩展加载阶段（同步，早于任何事件），所以不管冲突的扩展在 Manifest 里排第几，到 `session_start` 时都已经能看到。
 - **能见到多硬（2026-09-30 实测，不只是看源码；2026-09-30 补一次修正）**：这一步检测出来后能做的补救很有限——`ctx.ui.notify` 和 `ctx.shutdown()` 在 `-p`/print 模式下都是空操作（`modes/print-mode.js` 的 `bindExtensions` 既不传 `uiContext` 也不传 `shutdownHandler`）；扩展加载阶段的抛错（stage 1 `mmp:mcp` 那种）确实会让 Pi 直接 `process.exit(1)`，但那是在**所有**扩展加载完之前的检查点，等不到后面才声明冲突命令的扩展。所以现在的做法是在 `session_start` 里只 `throw`（不再额外调 `ctx.ui.notify`——最初两个都调，结果 MMP 的 TUI 里同一条消息出现两次：`ctx.ui.notify` 和 `onError` 在 `src/tui/app.ts` 里落的是同一个 `transcript.notice` 宿，`throw` 单独一个就够了）：不会改变退出码，但 Pi 自己的 `runner.emit()` 会把它交给每个模式都接了的 `onError`（print 模式打到 `console.error`；MMP 的 TUI 里是 `src/tui/app.ts` 的 `onError: (error) => transcript.notice(...)`，一条常驻提示；RPC/json 模式进事件流），可见，但不保证非零退出码——这是 Pi 架构的限制，测试（`test/mcp.test.mjs`）断言的是 stderr 上出现这条消息、TUI 里恰好出现一次，不是退出码。

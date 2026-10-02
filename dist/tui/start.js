@@ -18,6 +18,7 @@ extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, 
         piArgs: prepared.args.passthrough,
         extensionFactories,
         externalExtensionPaths: prepared.assembly.externalExtensions.map((extension) => extension.value),
+        assembly: prepared.assembly,
         projectIdentity: projectIdentityFromPrepared(prepared, cwd),
     });
 }

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { getDocsPath } from "@earendil-works/pi-coding-agent";
+import { builtInOffInstruction } from "./assembly.js";
 /**
  * Pi's `main.js` ends a startup extension load failure with this hint (its unexported
  * `EXTENSION_LOAD_FAILURE_HINT`, with `APP_NAME` = "pi"). MMP has no `-ne` and exposes only its own
@@ -11,6 +12,45 @@ import { getDocsPath } from "@earendil-works/pi-coding-agent";
  */
 export const PI_EXTENSION_LOAD_FAILURE_HINT = 'Hint: Start without extensions using "pi -ne".';
 export const EXTENSION_LOAD_FAILURE_HINT = 'Hint: Fix the extension, or remove it from the Manifest that declares it ("mmp list" shows which).';
+/** Pi names an inline extension `<inline:NAME>` in its load errors. mmp:mcp also loads `codemode`
+ * and `tool-search` (src/extensions/index.ts), so their failures are turned off with it. */
+const BUILT_IN_PATH = /^<inline:(mmp:(?:task|mcp|hooks)|codemode|tool-search)>$/;
+const LOADED_WITH = {
+    codemode: "mmp:mcp",
+    "tool-search": "mmp:mcp",
+};
+/** Pi's `reportDiagnostics` line for a load error, chalk's color codes optional; anchored so other
+ * output mentioning the phrase (an extension's own, stdout taken over in `-p`/json) isn't counted. */
+const LOAD_ERROR_LINE = /^(?:\x1b\[[\d;]*m)*Error: Failed to load extension "([^"]*)"/gm;
+/**
+ * The hint after extension load failures (`failedPaths` as Pi names them). A built-in is on by
+ * default (decision H3/K4) and loads after every Manifest extension, so a third-party extension
+ * registering one of its tools (`todo`, `task`, ...) shows up as the built-in failing, with no
+ * Manifest declaring it: say how to turn it off. Any other failure gets the plain hint.
+ */
+export function extensionLoadFailureHint(failedPaths, assembly) {
+    const failing = new Set();
+    let other = failedPaths.length === 0;
+    for (const path of failedPaths) {
+        const name = BUILT_IN_PATH.exec(path)?.[1];
+        if (name === undefined)
+            other = true;
+        else
+            failing.add(name);
+    }
+    const lines = [...failing].map((name) => {
+        const builtIn = LOADED_WITH[name] ?? name;
+        const what = builtIn === name
+            ? `${name} is built in and on by default`
+            : `${name} is loaded with ${builtIn}, which is built in and on by default`;
+        return `Hint: ${what}; another extension may clash with it (a tool or command of the same ` +
+            `name). Turn ${builtIn} off: ${builtInOffInstruction(builtIn, assembly)}. ` +
+            'Or remove the other extension from its Manifest ("mmp list" shows which).';
+    });
+    if (other)
+        lines.unshift(EXTENSION_LOAD_FAILURE_HINT);
+    return lines.join("\n");
+}
 /** MMP's own login guidance: `--list-models`' empty list (dogfood D48) and, in place of Pi's, every
  * "no model / no API key" error (D55). */
 export const PROVIDER_LOGIN_HELP = "Log in to a provider with /login inside mmp (OAuth or API key), or declare " +
@@ -60,10 +100,16 @@ function rewriteStream(stream, rewrite) {
  * happens on the streams. Only those exact texts are replaced; everything around them passes
  * through unchanged.
  */
-export function rewritePiOutput() {
-    rewriteStream(process.stderr, (text) => rewritePiText(text.includes(PI_EXTENSION_LOAD_FAILURE_HINT)
-        ? text.replace(PI_EXTENSION_LOAD_FAILURE_HINT, EXTENSION_LOAD_FAILURE_HINT)
-        : text));
+export function rewritePiOutput(assembly) {
+    // Pi prints every load error (reportDiagnostics) before the hint, each in its own write.
+    const failedPaths = [];
+    rewriteStream(process.stderr, (text) => {
+        for (const match of text.matchAll(LOAD_ERROR_LINE))
+            failedPaths.push(match[1]);
+        return rewritePiText(text.includes(PI_EXTENSION_LOAD_FAILURE_HINT)
+            ? text.replace(PI_EXTENSION_LOAD_FAILURE_HINT, () => extensionLoadFailureHint(failedPaths, assembly))
+            : text);
+    });
     rewriteStream(process.stdout, rewritePiText);
 }
 //# sourceMappingURL=pi-output.js.map

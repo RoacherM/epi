@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { MmpArgumentError, MmpConfigError } from "../errors.js";
-import { resolveManifest } from "../manifest.js";
+import { BUILT_IN_EXTENSION_NAMES, BUILT_IN_EXTENSIONS, resolveManifest, } from "../manifest.js";
 import { resolveMmpPaths } from "../paths.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "../project.js";
 import { discoverSkillRoots } from "../skill-discovery.js";
@@ -456,17 +456,26 @@ export async function runRemoveCommand(argv, commandName) {
         assertProjectTrustedFor(process.cwd(), approveOverride);
     const target = local ? projectTarget(process.cwd()) : globalTarget();
     let removed = false;
-    writeManifest(target, (json) => {
+    const written = writeManifest(target, (json) => {
         const before = extensionsOf(json);
         const extensions = before.filter((entry) => entry !== source);
         removed = extensions.length !== before.length;
         return { ...json, version: 1, extensions };
     });
+    // Built-ins are on by default (decision H3/K4): removing the entry, or finding none, leaves it on.
+    const builtIn = BUILT_IN_EXTENSIONS[source] === true;
+    const disableHint = written.disabledExtensions.some((extension) => extension.name === source)
+        ? `${source} is built in and already off: "disable" in ${target.path} lists it.`
+        : `${source} is built in and stays on; to turn it off, add "disable": ["${source}"] to ${target.path}.`;
     if (!removed) {
         process.stderr.write(`mmp: no matching extension source ${JSON.stringify(source)} in ${target.path}\n`);
+        if (builtIn)
+            process.stderr.write(`${disableHint}\n`);
         return 1;
     }
-    process.stdout.write(`Removed ${source} from ${target.path}. Restart mmp for it to take effect.\n`);
+    process.stdout.write(builtIn
+        ? `Removed ${source} from ${target.path}. ${disableHint}\n`
+        : `Removed ${source} from ${target.path}. Restart mmp for it to take effect.\n`);
     return 0;
 }
 function describeManifest(label, manifest, lines) {
@@ -483,7 +492,10 @@ function describeManifest(label, manifest, lines) {
         lines.push(`  extension ${extension.name} (built-in)`);
     for (const extension of manifest.externalExtensions)
         lines.push(`  extension ${extension.value}`);
-    const total = manifest.rules.length + manifest.skills.length + manifest.inlineExtensions.length + manifest.externalExtensions.length;
+    for (const extension of manifest.disabledExtensions)
+        lines.push(`  disable   ${extension.name} (built-in)`);
+    const total = manifest.rules.length + manifest.skills.length + manifest.inlineExtensions.length +
+        manifest.externalExtensions.length + manifest.disabledExtensions.length;
     if (total === 0)
         lines.push("  (empty)");
 }
@@ -498,7 +510,9 @@ export function runListCommand(argv) {
     const mmpPaths = resolveMmpPaths(process.env);
     const global = globalTarget();
     const lines = [];
-    describeManifest("Global", resolveManifest(global.path, "global"), lines);
+    const globalManifest = resolveManifest(global.path, "global");
+    const manifests = [globalManifest];
+    describeManifest("Global", globalManifest, lines);
     const projectCandidate = findNearestProjectManifest(process.cwd(), global.path);
     let trustedProjectRoot;
     if (projectCandidate === undefined) {
@@ -513,7 +527,9 @@ export function runListCommand(argv) {
         }
         else {
             trustedProjectRoot = projectCandidate.root;
-            describeManifest("Project", resolveManifest(projectCandidate.manifestPath, "project"), lines);
+            const projectManifest = resolveManifest(projectCandidate.manifestPath, "project");
+            manifests.push(projectManifest);
+            describeManifest("Project", projectManifest, lines);
         }
     }
     const discovered = discoverSkillRoots({
@@ -529,6 +545,12 @@ export function runListCommand(argv) {
     else {
         for (const root of discovered)
             lines.push(`  skill     ${root.value} (discovered: ${root.discovered})`);
+    }
+    // Same rule as resolveAssembly: on by default, off if any read Manifest disables it.
+    lines.push("Built-in capabilities:");
+    for (const name of BUILT_IN_EXTENSION_NAMES) {
+        const disabledIn = manifests.flatMap((manifest) => manifest.disabledExtensions.filter((entry) => entry.name === name).map((entry) => entry.declaredIn));
+        lines.push(disabledIn.length === 0 ? `  ${name.padEnd(10)}on` : `  ${name.padEnd(10)}off (disabled in ${disabledIn.join(", ")})`);
     }
     process.stdout.write(`${lines.join("\n")}\n`);
     return 0;

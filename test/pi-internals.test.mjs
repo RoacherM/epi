@@ -217,6 +217,19 @@ const registry = [
         /console\.error\(chalk\.yellow\(EXTENSION_LOAD_FAILURE_HINT\)\)/,
         `${mainPath} no longer writes the hint to stderr in one console.error call`,
       );
+      // K4: the built-in hint reads the failing paths from the error lines written before it.
+      assert.ok(
+        piText.includes('message: `Failed to load extension "${path}": ${error}`'),
+        `${mainPath} changed its load error message; src/pi-output.ts no longer finds the failing paths`,
+      );
+      assert.match(
+        piText,
+        /const prefix = diagnostic\.type === "error" \? "Error: "[^\n]*\n\s*console\.error\(color\(`\$\{prefix\}\$\{diagnostic\.message\}`\)\);/,
+        `${mainPath}'s reportDiagnostics no longer writes each error as one "Error: " line`,
+      );
+      const report = piText.indexOf("reportDiagnostics(startupDiagnostics);");
+      const hint = piText.indexOf("console.error(chalk.yellow(EXTENSION_LOAD_FAILURE_HINT))");
+      assert.ok(report !== -1 && report < hint, `${mainPath} no longer reports the load errors before the hint`);
     },
   },
   {

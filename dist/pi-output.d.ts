@@ -1,3 +1,4 @@
+import { type ResolvedAssembly } from "./assembly.js";
 /**
  * Pi's `main.js` ends a startup extension load failure with this hint (its unexported
  * `EXTENSION_LOAD_FAILURE_HINT`, with `APP_NAME` = "pi"). MMP has no `-ne` and exposes only its own
@@ -9,6 +10,13 @@
  */
 export declare const PI_EXTENSION_LOAD_FAILURE_HINT = "Hint: Start without extensions using \"pi -ne\".";
 export declare const EXTENSION_LOAD_FAILURE_HINT = "Hint: Fix the extension, or remove it from the Manifest that declares it (\"mmp list\" shows which).";
+/**
+ * The hint after extension load failures (`failedPaths` as Pi names them). A built-in is on by
+ * default (decision H3/K4) and loads after every Manifest extension, so a third-party extension
+ * registering one of its tools (`todo`, `task`, ...) shows up as the built-in failing, with no
+ * Manifest declaring it: say how to turn it off. Any other failure gets the plain hint.
+ */
+export declare function extensionLoadFailureHint(failedPaths: readonly string[], assembly: Pick<ResolvedAssembly, "globalManifest" | "inlineExtensions">): string;
 /** MMP's own login guidance: `--list-models`' empty list (dogfood D48) and, in place of Pi's, every
  * "no model / no API key" error (D55). */
 export declare const PROVIDER_LOGIN_HELP: string;
@@ -32,5 +40,5 @@ export declare function rewritePiText(text: string): string;
  * happens on the streams. Only those exact texts are replaced; everything around them passes
  * through unchanged.
  */
-export declare function rewritePiOutput(): void;
+export declare function rewritePiOutput(assembly: Pick<ResolvedAssembly, "globalManifest" | "inlineExtensions">): void;
 //# sourceMappingURL=pi-output.d.ts.map

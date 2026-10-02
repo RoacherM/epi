@@ -254,6 +254,7 @@ export async function runMmp(argv) {
             rules: prepared.assembly.rules,
             skills: prepared.assembly.skills,
             inlineExtensions: prepared.assembly.inlineExtensions,
+            disabledExtensions: prepared.assembly.disabledExtensions,
             externalExtensions: prepared.assembly.externalExtensions,
         };
         process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
@@ -287,7 +288,7 @@ export async function runMmp(argv) {
         });
         return;
     }
-    rewritePiOutput();
+    rewritePiOutput(prepared.assembly);
     // Before piMain: Pi's output guard binds process.stdout.write when it takes stdout over (D54).
     // Print/json only: an rpc client that stops reading is left to Pi as before, since the guard
     // would keep the process running with its prompts dropped and nothing on stderr.

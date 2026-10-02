@@ -31,8 +31,8 @@ export declare function emptyStateMessage(mmpHome: string, cwd: string): string;
  *   - `/mcp` with zero configured servers shows MMP's own message instead of Pi's (which names
  *     `.pi/mcp.json`, a path MMP never reads) -- done by wrapping the `pi` passed into Pi's factory
  *     so only the "mcp" registration is intercepted; every other call passes through untouched.
- *   - a Manifest that (mis)declares a second extension also registering "/mcp" fails visibly at
- *     `session_start` instead of silently producing "/mcp:1"/"/mcp:2".
+ *   - a second extension also registering "/mcp" fails visibly at `session_start` instead of
+ *     silently producing "/mcp:1"/"/mcp:2"; the error says how to turn mmp:mcp off (`turnOff`).
  *   - a server still connecting when the session shuts down is closed instead of holding the
  *     process open until its request timeout (dogfood D3, `trackingTransportFactory`).
  *   - outside the TUI, Pi's own MCP notifies reach stderr when there is no UI, and a failed or
@@ -49,5 +49,5 @@ export declare function emptyStateMessage(mmpHome: string, cwd: string): string;
  * default-already-correct shortcut concern (it is a plain string), so it is passed explicitly for
  * auditability, matching the design.
  */
-export declare function createMmpMcpExtension(source: McpConfigSource): InlineExtension;
+export declare function createMmpMcpExtension(source: McpConfigSource, turnOff?: string): InlineExtension;
 //# sourceMappingURL=mcp.d.ts.map
