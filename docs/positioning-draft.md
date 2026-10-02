@@ -1,6 +1,6 @@
 # MMP 定位与设计逻辑（初稿，待对齐）
 
-状态：2026-10-02 初稿。依据：决策 H1（长期方向参照 OMP）、OMP 研究笔记 [notes/omp-study.md](notes/omp-study.md)、现行 [development.md](development.md) §1–3 和 §17。对齐后并入 development.md，这份草稿删除。
+状态：2026-10-02 初稿；同日部分对齐，见决策 H2：K1 选 A（不 fork），K2、K5 先不做（先做好外围，遇到瓶颈再考虑改 Pi 的行为），K7 按 D63 执行；K3、K4、K6、K8 待定。依据：决策 H1（长期方向参照 OMP）、OMP 研究笔记 [notes/omp-study.md](notes/omp-study.md)、现行 [development.md](development.md) §1–3 和 §17。对齐后并入 development.md，这份草稿删除。
 
 标记说明：**[提议]** 是我建议的、需要你拍板的内容；其余是已经定下或已经实现的事实。
 
@@ -88,11 +88,11 @@ mmp CLI（只暴露 mmp 自己的面）
 
 | # | 问题 | 选项 | 我的建议 |
 |---|---|---|---|
-| K1 | 和 Pi 的关系 | A. 继续用官方 SDK、不 fork；B. 像 OMP 那样 fork | **A**。OMP 的 fork 已经落后上游半年；我们的升级门禁这次一天内就把 1.0 接上了 |
-| K2 | §3.1 的边界 | A. 照第 3 节的表改：界面和 harness 归 MMP，内核归 Pi；B. 保持现状 | **A** |
+| K1 ✅ A | 和 Pi 的关系 | A. 继续用官方 SDK、不 fork；B. 像 OMP 那样 fork | **A**。OMP 的 fork 已经落后上游半年；我们的升级门禁这次一天内就把 1.0 接上了 |
+| K2 ⏸ 先不做 | §3.1 的边界 | A. 照第 3 节的表改：界面和 harness 归 MMP，内核归 Pi；B. 保持现状 | **A** |
 | K3 | 配置哲学 | A. 保持严格（不读别家配置，显式装配，要信任）；B. 学 OMP 自动发现 | **A**。以后需要的话，可以加一个显式的一次性导入命令（例如 `mmp import claude`） |
 | K4 | 内置能力要不要默认开 | A. 维持"在 Manifest 里声明才开"；B. 一组"标准能力"默认开（Task、MCP、web……），在 Manifest 里可以关掉；C. 用 profile 选择 | **B**。开箱即用更接近 OMP 的体验，也仍然显式、可关，failures 照样可见 |
-| K5 | 路线图顺序 | 第 4 节的 1 到 6 | 按表里的顺序，web 和 LSP 先做 |
+| K5 ⏸ 先不做 | 路线图顺序 | 第 4 节的 1 到 6 | 按表里的顺序，web 和 LSP 先做 |
 | K6 | 审批默认值 | A. 和 Pi 一样不审批；B. 只在写和执行时审批；C. 学 OMP 默认 yolo、提供分级 | **A**，先把分级机制做出来，默认值以后再定；理由是对齐 Pi |
 | K7 | 环境变量 | 统一用 `MMP_*`，不认用户的 `PI_*` | 已按你的决定在做（D63） |
 | K8 | 文档整理 | 对齐后并入 development.md §1–3、§17，改 tui-design.md 的开头，删掉这份草稿 | 照做 |
