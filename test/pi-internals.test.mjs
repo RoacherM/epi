@@ -484,6 +484,10 @@ const registry = [
       const store = new runtime.McpOAuthCredentialStore();
       assertFunction(store.forServer, "McpOAuthCredentialStore.prototype.forServer");
       assertFunction(store.remove, "McpOAuthCredentialStore.prototype.remove");
+      // Pi 1.0 keys credentials by server name and URL (CHANGELOG #10252); mmp mcp login/logout pass both.
+      for (const method of ["forServer", "remove"]) {
+        assert.equal(store[method].length, 2, `McpOAuthCredentialStore.prototype.${method} no longer takes (name, serverUrl) -- src/commands/mcp-cli.ts's login/logout pass both`);
+      }
     },
   },
   {
@@ -519,16 +523,16 @@ const registry = [
     check() {
       const indexPath = join(piDist, "extensions", "mcp", "index.js");
       const indexText = readFileSync(indexPath, "utf8");
-      const why = "mcpProblemLines (src/extensions/mcp.ts) reads each server's state from these completions";
+      const why = "mcpProblemLines (src/extensions/mcp.ts) reads each server's state from these completions at session_shutdown";
       assert.match(
         indexText,
-        /label: candidate\.entry\.name,\s*description: describeState\(candidate\)/,
-        `${indexPath}'s "/mcp" completions no longer label items with the server name and describe them with describeState() -- ${why}`,
+        /action === "reconnect" \? candidate\.connection !== undefined[\s\S]{0,300}label: candidate\.entry\.name,\s*description: describeState\(candidate\)/,
+        `${indexPath}'s "/mcp" completions for reconnect no longer list each server with a connection, labelled with its name and described with describeState() -- ${why}`,
       );
       for (const [pattern, state] of [
+        [/if \(!isEnabled\(server\)\)\s*return "disabled";/, "disabled (checked first)"],
         [/return withError \? `failed: \$\{firstLine/, "failed: <first error line>"],
         [/return "needs sign-in";/, "needs sign-in"],
-        [/return "connecting…";/, "connecting…"],
       ]) {
         assert.match(indexText, pattern, `${indexPath}'s describeState() no longer returns "${state}" -- ${why}`);
       }
@@ -541,26 +545,38 @@ const registry = [
     },
   },
   {
-    id: "mcp-load-failure-notify",
+    id: "mcp-notifies-outside-ui",
     check() {
       const indexPath = join(piDist, "extensions", "mcp", "index.js");
       const indexText = readFileSync(indexPath, "utf8");
-      const why = "src/extensions/mcp.ts's reportingContext writes this notify to stderr outside the TUI (dogfood D6)";
+      const why = "src/extensions/mcp.ts's reportingContext copies the notifies of Pi's MCP event handlers to stderr when there is no UI (hard rule 3; dogfood D6, F3)";
       const loadFailures = indexText.match(/ctx\.ui\.notify\(`MCP failed to load: \$\{errorMessage\(error\)\}`, "error"\)/g) ?? [];
       assert.equal(loadFailures.length, 2, `${indexPath} no longer reports its startup and mcp_servers_change failures as ctx.ui.notify(\`MCP failed to load: ...\`, "error") -- ${why}`);
       assert.match(
         indexText,
-        /\.then\(\(\) => loadMcpRuntime\(\)\)[\s\S]{0,800}\.catch\(\(error\) => \{[\s\S]{0,200}MCP failed to load/,
-        `${indexPath}'s startup chain no longer ends in a catch that notifies "MCP failed to load" -- ${why}`,
+        /pending = Promise\.all\(enabled\.map\(\(server\) => startConnection\(server, isCurrent, runtime\)\)\)[\s\S]{0,200}\.catch\(\(error\) => \{[\s\S]{0,200}MCP failed to load/,
+        `${indexPath}'s startup chain (session_start) no longer ends in a catch that notifies "MCP failed to load" -- ${why}`,
       );
-      // Dogfood D47 (B1 review F4): any other error-level notify from an event handler would be
-      // printed too, and would hide the per-server lines. Pin how many there are (7 in 0.99.1, the
-      // two above in the pi.on handlers), so a new one anywhere in the file forces a re-review.
-      const review = `review whether it is raised from a pi.on handler, then update this count and docs/pi-internals.md -- ${why}`;
-      assert.equal((indexText.match(/"error"/g) ?? []).length, 7, `${indexPath}'s number of error-level notifies changed: ${review}`);
-      const handlers = indexText.slice(indexText.indexOf("pi.on("), indexText.indexOf('pi.registerCommand("mcp"'));
+      // Pi reports MCP problems only through ctx.ui.notify, and MMP sees only the notifies made with
+      // the ctx of an event handler (command handlers get their own ctx, and are interactive anyway).
+      // Pin the notifies: 3 written in the pi.on handlers (two load failures, the still-connecting
+      // wait), 18 in the whole file in 1.0.0 (the others are in reportProblems/ensureDiscoveryActive,
+      // which handlers call, and in the /mcp command's helpers). A new one anywhere forces a re-review:
+      // is it raised from an event handler (MMP copies it -- fine), or does Pi now report a problem
+      // some other way that print/json would drop?
+      const review = `review how it reaches the user, then update this count and docs/pi-internals.md -- ${why}`;
+      assert.equal((indexText.match(/notify\(/g) ?? []).length, 18, `${indexPath}'s number of notifies changed: ${review}`);
+      const handlers = indexText.slice(indexText.indexOf('pi.on("session_start"'), indexText.indexOf('pi.registerCommand("mcp"'));
       assert.ok(handlers.length > 0, `${indexPath} no longer registers its pi.on handlers before the "/mcp" command -- ${why}`);
-      assert.equal((handlers.match(/"error"/g) ?? []).length, 2, `${indexPath}'s pi.on handlers raise a different number of error-level notifies: ${review}`);
+      assert.deepEqual(
+        handlers.match(/ctx\.ui\.notify\(.*\);/g) ?? [],
+        [
+          'ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error");',
+          'ctx.ui.notify("MCP servers are still connecting; their tools become available once connected.", "info");',
+          'ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error");',
+        ],
+        `${indexPath}'s pi.on handlers raise different notifies: ${review}`,
+      );
     },
   },
   {
@@ -586,21 +602,22 @@ const registry = [
     },
   },
   {
-    id: "mcp-startup-wait-before-agent-start",
+    id: "mcp-report-before-pi-shutdown",
     check() {
       const indexPath = join(piDist, "extensions", "mcp", "index.js");
-      const indexText = readFileSync(indexPath, "utf8");
+      const shutdown = mcpHandlerSource(readFileSync(indexPath, "utf8"), "session_shutdown");
+      const why = "src/extensions/mcp.ts reports failed servers Pi has not reported in a session_shutdown handler registered before Pi's, while Pi still has the servers";
+      assert.ok(shutdown !== undefined, `${indexPath} no longer has a session_shutdown handler -- ${why}`);
       assert.match(
-        indexText,
-        /pi\.on\("before_agent_start", async \(_event, ctx\) => \{\s*const startup = pending;[\s\S]{0,400}setTimeout\(\(\) => resolve\(false\), startupWaitMs\)/,
-        `${indexPath} no longer waits for startup connections in before_agent_start, bounded by startupWaitMs -- src/extensions/mcp.ts's problem report would read server states before they had a chance to connect`,
+        shutdown,
+        /servers = \[\];[\s\S]{0,200}connection\.close\(\)/,
+        `${indexPath}'s session_shutdown handler no longer forgets the servers and closes their connections -- ${why}; re-check when the report must run`,
       );
       const runnerPath = join(piDist, "core", "extensions", "runner.js");
-      const runnerText = readFileSync(runnerPath, "utf8");
       assert.match(
-        runnerText,
-        /snapshotEventHandlers\(this\.extensions, "before_agent_start"\)\) \{\s*for \(const handler of handlers\) \{[\s\S]{0,600}await handler\(event, ctx\)/,
-        `${runnerPath}'s emitBeforeAgentStart no longer awaits handlers one after another -- MMP's handler might run before Pi's startup wait is over`,
+        readFileSync(runnerPath, "utf8"),
+        /async emit\(event\) \{\s*const ctx = this\.createContext\(\);[\s\S]{0,200}for \(const \{ ext, handlers \} of snapshotEventHandlers\(this\.extensions, event\.type\)\) \{\s*for \(const handler of handlers\) \{\s*try \{\s*const handlerResult = await handler\(event, ctx\);/,
+        `${runnerPath}'s emit() no longer awaits one extension's handlers one after another in registration order -- MMP's report might run after Pi's session_shutdown handler has forgotten the servers`,
       );
     },
   },
@@ -664,66 +681,56 @@ function mcpHandlerSource(indexText, event) {
 }
 
 /** The `mcp-own-reports-in-rpc` row's check, on the text of `extensions/mcp/index.js`, so that the
- * test below can run it on mutated copies too (B7 review N1, N2). */
+ * test below can run it on mutated copies too (B7 review N1, N2; redone for Pi 1.0). */
 function checkMcpOwnReportsInRpc(indexText, indexPath) {
-  const why = "src/extensions/mcp.ts leaves these reports to Pi in rpc and sends only its other lines (dogfood D52)";
+  const why = "src/extensions/mcp.ts leaves these reports to Pi in rpc and adds, at session_shutdown, only the failed servers Pi has not reported, matched line by line (dogfood D52)";
+  // reportProblems(): one `<name>: <describeState()>` line per failed or needs-sign-in server, each
+  // indented by two spaces under "MCP servers need attention:" -- MMP compares its own lines (the
+  // same describeState() text, from the "/mcp" completions) with these.
   assert.match(
     indexText,
-    /if \(state === "needs-auth" \|\| state === "failed"\)[\s\S]{0,200}ctx\.ui\.notify\(`MCP servers need attention:/,
-    `${indexPath}'s reportProblems() no longer notifies failed and needs-sign-in servers -- ${why}`,
+    /if \(state === "needs-auth" \|\| state === "failed"\)\s*lines\.push\(`\$\{server\.entry\.name\}: \$\{describeState\(server\)\}`\);/,
+    `${indexPath}'s reportProblems() no longer lists failed and needs-sign-in servers as "<name>: <describeState()>" -- ${why}`,
+  );
+  assert.ok(
+    indexText.includes('ctx.ui.notify(`MCP servers need attention:\\n${lines.map((line) => `  ${line}`).join("\\n")}\\nRun /mcp to fix.`, "warning");'),
+    `${indexPath}'s reportProblems() no longer notifies "MCP servers need attention:" with each line indented by two spaces -- ${why}`,
   );
   assert.match(
     indexText,
-    /ensureDiscoveryActive\(ctx\);\s*reportProblems\(ctx\);\s*\}\)\s*\.catch/,
-    `${indexPath}'s startup chain no longer ends in reportProblems() -- ${why}`,
+    /pending = Promise\.all\(enabled\.map\(\(server\) => startConnection\(server, isCurrent, runtime\)\)\)\s*\.then\(\(\) => \{\s*if \(isCurrent\(\)\)\s*reportProblems\(ctx\);\s*\}\)/,
+    `${indexPath}'s startup chain no longer ends in reportProblems() -- a failed server would reach an rpc client only when the session ends; ${why}`,
   );
   const change = mcpHandlerSource(indexText, "mcp_servers_change");
   assert.ok(change !== undefined, `${indexPath} no longer has an mcp_servers_change handler -- ${why}`);
   assert.match(
     change,
-    /ensureDiscoveryActive\(ctx\);\s*reportProblems\(ctx, connecting\);/,
-    `${indexPath}'s mcp_servers_change handler no longer ends in reportProblems(ctx, connecting) -- a server registered later that fails would be reported nowhere in rpc; ${why}`,
-  );
-  const handler = mcpHandlerSource(indexText, "before_agent_start");
-  assert.ok(handler !== undefined, `${indexPath} no longer has a before_agent_start handler -- ${why}`);
-  const notice = `${indexPath}'s before_agent_start handler notifies something other than "still connecting" -- MMP takes any notify there to mean its own still-connecting lines are covered; ${why}`;
-  // Every notify, however it is written (split over lines too), and none through a helper: the
-  // handler calls exactly these, in this order (D57; comments and keywords aside).
-  assert.equal((handler.match(/notify\(/g) ?? []).length, 1, notice);
-  const calls = [...handler.replace(/\/\/.*$/gm, "").matchAll(/([A-Za-z_$][\w$.]*)\s*\(/g)]
-    .map((match) => match[1])
-    .filter((name) => !/^(?:if|for|while|switch|catch|return|async|function|await)$/.test(name));
-  assert.deepEqual(
-    calls,
-    ["pi.on", "Promise.race", "startup.then", "Promise", "setTimeout", "resolve", "clearTimeout", "ctx.ui.notify"],
-    notice,
-  );
-  assert.deepEqual(
-    handler.match(/ctx\.ui\.notify\(.*\);/g) ?? [],
-    ['ctx.ui.notify("MCP servers are still connecting; their tools become available once connected.", "info");'],
-    notice,
+    /if \(current !== generation\)\s*return;\s*reportProblems\(ctx, connecting\);/,
+    `${indexPath}'s mcp_servers_change handler no longer ends in reportProblems(ctx, connecting) -- a server registered later that fails would reach an rpc client only when the session ends; ${why}`,
   );
 }
 
-test("the mcp-own-reports-in-rpc check catches B7 review N1/N2's mutations of Pi's MCP extension (D56)", () => {
+test("the mcp-own-reports-in-rpc check catches mutations of Pi's MCP extension MMP's rpc reports depend on (D56)", () => {
   const indexPath = join(piDist, "extensions", "mcp", "index.js");
   const indexText = readFileSync(indexPath, "utf8");
   checkMcpOwnReportsInRpc(indexText, indexPath);
-  // Replaces `from` inside one handler only.
+  const replaced = (from, to) => {
+    assert.ok(indexText.includes(from), `no ${JSON.stringify(from)} to mutate`);
+    return indexText.replace(from, to);
+  };
   const inHandler = (event, from, to) => {
     const handler = mcpHandlerSource(indexText, event);
     assert.ok(handler.includes(from), `${event} handler has no ${JSON.stringify(from)} to mutate`);
     return indexText.replace(handler, handler.replace(from, to));
   };
   const mutations = {
-    "N1: a notify through reportProblems()": inHandler("before_agent_start", "clearTimeout(timer);\n", "clearTimeout(timer);\n reportProblems(ctx);\n"),
-    "N1: a notify through ensureDiscoveryActive()": inHandler("before_agent_start", "clearTimeout(timer);\n", "clearTimeout(timer);\n ensureDiscoveryActive(ctx);\n"),
-    "N1: a notify through any other helper (B8 review m8)": inHandler("before_agent_start", "clearTimeout(timer);\n", "clearTimeout(timer);\n emitChange(ctx);\n"),
-    "N1: a second notify split over lines": inHandler("before_agent_start", "clearTimeout(timer);\n", 'clearTimeout(timer);\n ctx.ui.notify(\n"MCP servers need attention: x",\n"warning");\n'),
-    "N2: no reportProblems(ctx, connecting) after mcp_servers_change": inHandler("mcp_servers_change", "reportProblems(ctx, connecting);", ""),
+    "reportProblems lists servers in another shape": [replaced("lines.push(`${server.entry.name}: ${describeState(server)}`)", "lines.push(`- ${server.entry.name} (${describeState(server)})`)"), /no longer lists failed/],
+    "reportProblems stops indenting its lines": [replaced("lines.map((line) => `  ${line}`)", "lines.map((line) => `- ${line}`)"), /no longer notifies "MCP servers need attention:"/],
+    "reportProblems renames its header": [replaced("`MCP servers need attention:\\n", "`MCP servers have problems:\\n"), /no longer notifies "MCP servers need attention:"/],
+    "no reportProblems at the end of the startup chain": [replaced("if (isCurrent())\n                    reportProblems(ctx);", "if (isCurrent())\n                    emitChange();"), /startup chain no longer ends/],
+    "N2: no reportProblems(ctx, connecting) after mcp_servers_change": [inHandler("mcp_servers_change", "reportProblems(ctx, connecting);", ""), /mcp_servers_change handler no longer ends/],
   };
-  for (const [name, mutated] of Object.entries(mutations)) {
-    const expected = name.startsWith("N2") ? /mcp_servers_change handler no longer ends/ : /before_agent_start handler notifies something other/;
+  for (const [name, [mutated, expected]] of Object.entries(mutations)) {
     assert.throws(() => checkMcpOwnReportsInRpc(mutated, indexPath), expected, `not caught: ${name}`);
   }
 });
