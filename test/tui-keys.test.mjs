@@ -17,12 +17,16 @@ const CTRL_P = "\x10";
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
-function runApp(t, extensions, steps) {
+function runApp(t, extensions, steps, settings) {
   const root = mkdtempSync(join(tmpdir(), "mmp-tui-keys-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   mkdirSync(join(home, ".mmp"), { recursive: true });
   writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  if (settings !== undefined) {
+    mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
+    writeFileSync(join(home, ".mmp", "pi", "settings.json"), JSON.stringify(settings));
+  }
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_TUI_HARNESS: JSON.stringify({ steps }) },
@@ -74,12 +78,29 @@ test("built-in lookup finds wired commands only", () => {
     assert.equal(findBuiltin(name)?.name, name);
   }
   assert.equal(findBuiltin("mmp"), undefined);
+  // Own names only: Object.prototype's names are not commands.
+  for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+    assert.equal(findBuiltin(name), undefined, name);
+  }
 });
 
 test("an unknown /command goes to the model as a plain prompt", (t) => {
   const { exit, output } = runApp(t, [fixture("faux-echo.mjs")], [
     ["waitReady"], ["type", "/nosuchcmd hi"], ["key", "enter"],
     ["waitFor", { regex: "ECHO:/nosuchcmd hi[\\s\\S]*Worked for" }], ["key", "ctrl+d"],
+  ]);
+  assert.equal(exit, 0);
+  assert.doesNotMatch(output, /not available in MMP/);
+});
+
+test("/constructor and /toString are unknown commands too: sent to the model as text, no notice", (t) => {
+  // They used to hit a "not available in MMP yet" notice because the lookup used `in`, which
+  // walks Object.prototype.
+  const { exit, output } = runApp(t, [fixture("faux-echo.mjs")], [
+    ["waitReady"], ["type", "/constructor hi"], ["key", "enter"],
+    ["waitFor", { regex: "ECHO:/constructor hi[\\s\\S]*Worked for" }],
+    ["type", "/toString"], ["key", "enter"],
+    ["waitFor", { regex: "ECHO:/toString[\\s\\S]*Worked for" }], ["key", "ctrl+d"],
   ]);
   assert.equal(exit, 0);
   assert.doesNotMatch(output, /not available in MMP/);
@@ -94,6 +115,29 @@ test("a built-in wins over an extension command of the same name; other extensio
   assert.doesNotMatch(output, /EXT-SESSION-RAN/);
   // Neither command reached the model.
   assert.doesNotMatch(output, /ECHO:/);
+});
+
+test("an extension command typed during compaction runs at once instead of being queued", (t) => {
+  const { exit, marks, output } = runApp(t, [fixture("faux-slow-compact.mjs"), fixture("builtin-name-command-extension.mjs")], [
+    ["waitReady"], ["type", "go"], ["key", "enter"], ["waitFor", { regex: "BEFORE-COMPACT[\\s\\S]*Ctrl\\+t:thinking" }],
+    ["type", "/compact"], ["key", "enter"], ["waitFor", "Compacting…"],
+    ["type", "/extonly go"], ["key", "enter"], ["waitFor", "EXTONLY-RAN:go"], ["mark", "ran"],
+    ["waitFor", "Context compacted."], ["key", "ctrl+d"],
+  ], { compaction: { keepRecentTokens: 0 } });
+  assert.equal(exit, 0);
+  assert.doesNotMatch(marks.ran, /Context compacted\./);
+  assert.doesNotMatch(output, /Queued message for after compaction\./);
+});
+
+test("an extension command does not warn about an image label with no image; a prompt does", (t) => {
+  const { exit, marks } = runApp(t, [fixture("faux-echo.mjs"), fixture("builtin-name-command-extension.mjs")], [
+    ["waitReady"], ["type", "/extonly [Image #1]"], ["key", "enter"], ["waitFor", "EXTONLY-RAN:[Image #1]"], ["mark", "command"],
+    ["type", "about [Image #1]"], ["key", "enter"],
+    ["waitFor", { regex: "ECHO:about \\[Image #1\\][\\s\\S]*Worked for" }], ["mark", "prompt"], ["key", "ctrl+d"],
+  ]);
+  assert.equal(exit, 0);
+  assert.doesNotMatch(marks.command, /No image attached/);
+  assert.match(marks.prompt.slice(marks.command.length), /No image attached for \[Image #1\]; sent as text\./);
 });
 
 test("slash completions list built-ins, templates, extension commands and skills without duplicates", () => {

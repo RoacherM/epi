@@ -31,3 +31,12 @@ test("a string content matches as text and has no images; malformed messages mat
   assert.deepEqual(imagesFor(["hi"], []), [[]]);
   assert.deepEqual(imagesFor([], [user({ type: "text", text: "hi" }, image("A"))]), []);
 });
+
+test("a text with no matching message takes no images, even when an unmatched one has some", () => {
+  assert.deepEqual(imagesFor(["zzz"], [user({ type: "text", text: "mine" }, image("M"))]), [[]]);
+});
+
+test("a string-content message is matched and claimed like any other, so the second \"hi\" gets the image message", () => {
+  const peeked = [{ role: "user", content: "hi" }, user({ type: "text", text: "hi" }, image("A"))];
+  assert.deepEqual(imagesFor(["hi", "hi"], peeked), [[], [image("A")]]);
+});
