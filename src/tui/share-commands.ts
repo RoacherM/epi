@@ -21,7 +21,7 @@ import {
   VERSION as PI_VERSION,
 } from "@earendil-works/pi-coding-agent";
 
-import { MMP_VERSION } from "../host.js";
+import { MMP_VERSION } from "../version.js";
 import { MMP_REPO } from "../update.js";
 import type { CommandHost } from "./command-host.js";
 import { errorText } from "./errors.js";

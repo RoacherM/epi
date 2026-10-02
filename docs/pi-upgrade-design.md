@@ -73,7 +73,7 @@ B 的直接后果：用户只能通过 MMP 的新发布拿到新 Pi，所以 MMP
 
 ## 5. 发布自动化
 
-**版本号谁来加。** MMP 的 patch 版本号在升级 PR 里就已经加好了：`scripts/pi-upgrade.mjs` 门禁通过后顺手把 `package.json`（和 `package-lock.json` 里对应的根版本号）加一个 patch 版本，这样这条 PR 本身就是"可发布"的（见第 8 节步 3）。`src/host.ts` 的 `MMP_VERSION` 在运行时直接读 `package.json`（单一来源，另一处并行改动），升级脚本不需要再改它。`scripts/release.mjs` 只读 `package.json` 里已经写好的版本号，自己不改版本号，也不提交任何东西。
+**版本号谁来加。** MMP 的 patch 版本号在升级 PR 里就已经加好了：`scripts/pi-upgrade.mjs` 门禁通过后顺手把 `package.json`（和 `package-lock.json` 里对应的根版本号）加一个 patch 版本，这样这条 PR 本身就是"可发布"的（见第 8 节步 3）。`src/version.ts` 的 `MMP_VERSION` 在运行时直接读 `package.json`（单一来源，另一处并行改动），升级脚本不需要再改它。`scripts/release.mjs` 只读 `package.json` 里已经写好的版本号，自己不改版本号，也不提交任何东西。
 
 **SHA-256 只算一次，仓库里不存哈希。** `install.sh` 在仓库里是一份模板，`MMP_VERSION` 和 `DEFAULT_PACKAGE_SHA256` 两处都是占位符（`__MMP_VERSION__` / `__MMP_PACKAGE_SHA256__`），从来不是真的版本号或哈希——直接跑这份模板会在 SHA-256 格式校验那一步就报错退出，不需要额外代码。真正的哈希只在发布时算一次：
 

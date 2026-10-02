@@ -90,16 +90,6 @@ export const MMP_FLAG_TABLE = [
 ];
 const FLAG_LOOKUP = new Map(MMP_FLAG_TABLE.flatMap((entry) => entry.flags.map((flag) => [flag, entry])));
 export function parseMmpArgs(argv) {
-    if (argv[0] === "update") {
-        return {
-            dryRun: false,
-            noProject: false,
-            version: false,
-            update: true,
-            projectTrustOverride: undefined,
-            passthrough: argv.slice(1),
-        };
-    }
     const passthrough = [];
     let dryRun = false;
     let noProject = false;
@@ -187,7 +177,6 @@ export function parseMmpArgs(argv) {
         dryRun,
         noProject,
         version,
-        update: false,
         projectTrustOverride,
         passthrough,
     };

@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BorderedLoader, ExtensionEditorComponent, ExtensionSelectorComponent, VERSION as PI_VERSION, } from "@earendil-works/pi-coding-agent";
-import { MMP_VERSION } from "../host.js";
+import { MMP_VERSION } from "../version.js";
 import { MMP_REPO } from "../update.js";
 import { errorText } from "./errors.js";
 import { piTui } from "./pi-tui.js";

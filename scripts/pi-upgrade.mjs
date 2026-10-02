@@ -185,7 +185,7 @@ export function bumpPatch(version) {
 /** Bumps package.json's version and package-lock.json's matching root version (so the lockfile
  * isn't visibly stale in the PR -- `npm ci` doesn't require this, but a release-ready PR shouldn't
  * ship an inconsistent lockfile), so a passing-gate PR is release-ready (docs/pi-upgrade-design.md
- * §5). `src/host.ts`'s `MMP_VERSION` now reads package.json at runtime (single source of truth --
+ * §5). `src/version.ts`'s `MMP_VERSION` now reads package.json at runtime (single source of truth --
  * a separate concurrent change), so there is nothing else to edit here. */
 export function bumpMmpVersion({ cwd, readFile = readFileSync, writeFile = writeFileSync }) {
   const pkg = readPackageJson(cwd);

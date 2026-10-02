@@ -2,9 +2,8 @@ import { type ResolvedAssembly } from "./assembly.js";
 import { type MmpArgs } from "./args.js";
 import { type MmpRuntimeIdentity } from "./runtime-identity.js";
 import type { ResolvedResource } from "./manifest.js";
-export declare const MMP_VERSION: string;
-export declare const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
-export declare const MMP_HELP: string;
+import { MMP_VERSION } from "./version.js";
+export { MMP_VERSION };
 export declare const BASE_PI_RESOURCE_ARGS: readonly ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--system-prompt", "", "--append-system-prompt", "", "--no-approve"];
 export interface PiArgumentResources {
     externalExtensions: readonly ResolvedResource[];
