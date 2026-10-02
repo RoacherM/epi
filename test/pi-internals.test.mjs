@@ -789,6 +789,39 @@ const registry = [
       }
     },
   },
+  {
+    id: "edit-diff-format",
+    async check() {
+      const { generateDiffString } = await import("@earendil-works/pi-coding-agent");
+      const { parseDiffString } = await import(pathToFileURL(join(root, "dist", "tui", "tools", "mutating.js")).href);
+      const editPath = join(piDist, "core", "tools", "edit.js");
+      const editText = readFileSync(editPath, "utf8");
+      assert.match(editText, /const diffResult = generateDiffString\(/, `${editPath} no longer builds its diff with generateDiffString`);
+      assert.match(editText, /details: \{ diff: diffResult\.diff,/, `${editPath} no longer returns generateDiffString's output as details.diff`);
+      // 12 lines; line 3 becomes two lines (so new-file numbers run one ahead), line 10 is replaced.
+      // One context line keeps the expected rows short; MMP doesn't depend on the context count.
+      const old = Array.from({ length: 12 }, (_, i) => `l${i + 1}`).join("\n") + "\n";
+      const edited = old.replace("l3\n", "A\nB\n").replace("l10\n", "C\n");
+      const { diff } = generateDiffString(old, edited, 1);
+      const row = (kind, lineNum, text, afterSkip = false) => ({ kind, lineNum, text, afterSkip });
+      assert.deepEqual(
+        parseDiffString(diff).lines,
+        [
+          row("context", 2, "l2", true),
+          row("remove", 3, "l3"),
+          row("add", 3, "A"),
+          row("add", 4, "B"),
+          row("context", 4, "l4"),
+          row("context", 9, "l9", true),
+          row("remove", 10, "l10"),
+          row("add", 11, "C"),
+          row("context", 11, "l11"),
+        ],
+        `generateDiffString's rows changed shape -- MMP's edit diff (src/tui/tools/mutating.ts) expects numbered "+N"/"-N"/" N" rows, ` +
+          `context rows numbered in old-file lines, and a "..." line where unchanged lines were left out. Pi's output:\n${diff}`,
+      );
+    },
+  },
 ];
 
 /** Every `PI_*` name in the Pi runtime code mmp loads: each @earendil-works package's dist/, at the

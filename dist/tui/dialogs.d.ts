@@ -5,7 +5,7 @@ interface EditorSlotHost {
     /** Shows `component` in the editor slot; the returned function gives the editor back, focus included. */
     takeEditorSlot(component: Component): () => void;
 }
-export type DialogOptions = {
+type DialogOptions = {
     signal?: AbortSignal;
     timeout?: number;
 } | undefined;

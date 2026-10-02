@@ -71,7 +71,7 @@ function parseGrepOutput(output) {
  * Error result shared by all four tools: the first line collapsed (after `label: ` when given),
  * every line expanded, each painted `error`.
  */
-function renderError(context, theme, output, fallback, expanded, label) {
+function renderError(context, theme, output, { fallback, expanded, label }) {
     const errorLines = output ? output.split("\n") : [fallback];
     if (!expanded) {
         const first = theme.fg("error", errorLines[0] ?? "error");
@@ -105,7 +105,7 @@ function renderReadResult(result, options, theme, context) {
     const relPath = formatRelativePath(rawPath, context.cwd);
     const output = textContent(result).replace(/\r/g, "");
     if (isErrorResult(result, context)) {
-        return renderError(context, theme, output, "Error reading file", options.expanded, relPath);
+        return renderError(context, theme, output, { fallback: "Error reading file", expanded: options.expanded, label: relPath });
     }
     let renderedLines;
     try {
@@ -154,7 +154,7 @@ function renderGrepCall(args, theme, context) {
 function renderGrepResult(result, options, theme, context) {
     const output = textContent(result);
     if (isErrorResult(result, context)) {
-        return renderError(context, theme, output, "Error executing grep", options.expanded);
+        return renderError(context, theme, output, { fallback: "Error executing grep", expanded: options.expanded });
     }
     const pattern = context.args?.pattern ? `/${context.args.pattern}/` : "[missing pattern]";
     const { lines, matchCount, fileCount } = parseGrepOutput(output);
@@ -183,7 +183,7 @@ function entryListResult(toolName, emptyMarker, labelOf) {
     return (result, options, theme, context) => {
         const output = textContent(result);
         if (isErrorResult(result, context)) {
-            return renderError(context, theme, output, `Error executing ${toolName}`, options.expanded);
+            return renderError(context, theme, output, { fallback: `Error executing ${toolName}`, expanded: options.expanded });
         }
         const entries = parseEntryLines(output, emptyMarker);
         const count = entries.length;

@@ -59,7 +59,8 @@ interface ParsedDiff {
   removals: number;
 }
 
-function parseDiffString(diffStr: string): ParsedDiff {
+/** Exported for test/pi-internals.test.mjs's `edit-diff-format` check (docs/pi-internals.md). */
+export function parseDiffString(diffStr: string): ParsedDiff {
   const rawLines = diffStr.replace(/\r\n/g, "\n").split("\n");
   const lines: DiffLine[] = [];
   let additions = 0;
