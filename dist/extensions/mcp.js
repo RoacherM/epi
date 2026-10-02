@@ -151,14 +151,19 @@ async function mcpProblemLines(completions, { includeConnecting }) {
         return includeConnecting && state.startsWith("connecting") ? [`  ${item.label}: still connecting`] : [];
     });
 }
-const DUPLICATE_MCP_COMMAND_MESSAGE = "Another extension in the Manifest also registers \"/mcp\" alongside mmp:mcp. Pi's builtin-" +
-    "replace mechanism does not apply to MMP's inline extensions, so both would silently rename to " +
-    "\"/mcp:1\"/\"/mcp:2\" -- declare only one MCP integration in the Manifest.";
+/** mmp:mcp is on by default (decision H3/K4), so the user may well have declared only the other
+ * integration: the way out is turning mmp:mcp off (`turnOff`, from `builtInOffInstruction`). */
+function duplicateMcpCommandMessage(turnOff) {
+    return "Another extension also registers \"/mcp\" alongside the built-in mmp:mcp (on by default). " +
+        "Pi's builtin-replace mechanism does not apply to MMP's inline extensions, so both were renamed " +
+        `to "/mcp:1"/"/mcp:2". To keep the other MCP integration, turn mmp:mcp off: ${turnOff}. ` +
+        "Otherwise remove the other extension from its Manifest (\"mmp list\" shows which).";
+}
 /** `pi.getCommands()` returns each command's final, post-collision invocation name (private
  * disambiguation in Pi's `ExtensionRunner.resolveRegisteredCommands`): when two extensions both
  * register "mcp", Pi renames *both* to "mcp:1"/"mcp:2" rather than keeping one plain "mcp" --
  * verified in `core/extensions/runner.js`. That is MMP's signal to fail visibly (docs/mcp-design.md
- * §4): a Manifest that declares another extension registering "/mcp" alongside "mmp:mcp". */
+ * §4): a Manifest extension that registers "/mcp" while mmp:mcp is on. */
 function hasDuplicateMcpCommand(pi) {
     return pi.getCommands().some((command) => /^mcp:\d+$/.test(command.name));
 }
@@ -168,8 +173,8 @@ function hasDuplicateMcpCommand(pi) {
  *   - `/mcp` with zero configured servers shows MMP's own message instead of Pi's (which names
  *     `.pi/mcp.json`, a path MMP never reads) -- done by wrapping the `pi` passed into Pi's factory
  *     so only the "mcp" registration is intercepted; every other call passes through untouched.
- *   - a Manifest that (mis)declares a second extension also registering "/mcp" fails visibly at
- *     `session_start` instead of silently producing "/mcp:1"/"/mcp:2".
+ *   - a second extension also registering "/mcp" fails visibly at `session_start` instead of
+ *     silently producing "/mcp:1"/"/mcp:2"; the error says how to turn mmp:mcp off (`turnOff`).
  *   - a server still connecting when the session shuts down is closed instead of holding the
  *     process open until its request timeout (dogfood D3, `trackingTransportFactory`).
  *   - outside the TUI, Pi's own MCP notifies reach stderr when there is no UI, and a failed or
@@ -186,7 +191,7 @@ function hasDuplicateMcpCommand(pi) {
  * default-already-correct shortcut concern (it is a plain string), so it is passed explicitly for
  * auditability, matching the design.
  */
-export function createMmpMcpExtension(source) {
+export function createMmpMcpExtension(source, turnOff = 'add "disable": ["mmp:mcp"] to the global mmp.json') {
     const { mmpHome, resolveAssembly } = source;
     const loadConfig = (ctx) => loadNativeMcpConfig(source, ctx.cwd);
     const logPath = join(mmpHome, "pi", "mcp.log");
@@ -338,7 +343,7 @@ export function createMmpMcpExtension(source) {
                     // warned session is a better outcome than one that may exit before anyone reads why. None
                     // of this changes the exit code in print mode (documented in docs/mcp-design.md §4, not
                     // silently assumed).
-                    throw new Error(DUPLICATE_MCP_COMMAND_MESSAGE);
+                    throw new Error(duplicateMcpCommandMessage(turnOff));
                 }
             });
         },

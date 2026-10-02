@@ -6,7 +6,7 @@ import {
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 
-import type { ResolvedAssembly } from "../assembly.js";
+import { builtInOffInstruction, type ResolvedAssembly } from "../assembly.js";
 import { MmpConfigError } from "../errors.js";
 import type { ResolvedInlineExtension } from "../manifest.js";
 import { resolveEffectiveHooks } from "../hooks-config.js";
@@ -21,7 +21,7 @@ import type { UpdateCheckOptions } from "./runtime.js";
  * now stop a run whose user never asked for that capability: say how to turn it off as well. */
 function withDisableHint(
   extension: ResolvedInlineExtension,
-  globalManifest: string,
+  assembly: ResolvedAssembly,
   build: () => void,
 ): void {
   try {
@@ -30,11 +30,8 @@ function withDisableHint(
     if (!(error instanceof MmpConfigError)) {
       throw error;
     }
-    const off = extension.declaredIn === undefined
-      ? `add "disable": ["${extension.name}"] to ${globalManifest}`
-      : `remove "${extension.name}" from "extensions" in ${extension.declaredIn} and list it in "disable"`;
     throw new MmpConfigError(
-      `${error.message}\nFix that file, or turn ${extension.name} off: ${off}.`,
+      `${error.message}\nFix that file, or turn ${extension.name} off: ${builtInOffInstruction(extension.name, assembly)}.`,
     );
   }
 }
@@ -50,7 +47,7 @@ export function buildInlineExtensions(
   const mmpRuntime = createMmpRuntimeExtensions(runtimeIdentity, assembly, resolveAssembly, updateCheck, verbose);
   const extensions: InlineExtension[] = [mmpRuntime.runtime];
   for (const extension of assembly.inlineExtensions) {
-    withDisableHint(extension, assembly.globalManifest, () => {
+    withDisableHint(extension, assembly, () => {
       switch (extension.name) {
         case "mmp:task":
           extensions.push(
@@ -72,11 +69,12 @@ export function buildInlineExtensions(
           // must be visible" (docs/mcp-design.md; this repo's existing --dry-run contract predates the
           // Pi 0.99 upgrade and is kept here rather than downgraded to Pi's softer default).
           const mcpConfigSource = { mmpHome, resolveAssembly };
+          const turnOff = builtInOffInstruction("mmp:mcp", assembly);
           const preflight = loadNativeMcpConfig(mcpConfigSource, process.cwd());
           if (preflight.errors.length > 0) {
             throw new MmpConfigError(`mmp:mcp: ${preflight.errors.join("; ")}`);
           }
-          extensions.push(createMmpMcpExtension(mcpConfigSource));
+          extensions.push(createMmpMcpExtension(mcpConfigSource, turnOff));
           // Both required alongside mmp:mcp (docs/mcp-design.md §2): codemode for the default
           // exposure: "codemode" servers, tool-search for "deferred" exposure. Neither is Pi's own
           // builtin (those are never loaded -- MMP always runs with noExtensions, which in 0.99 also

@@ -1,4 +1,4 @@
-import { type ResolvedDisabledExtension, type ResolvedInlineExtension, type ResolvedResource } from "./manifest.js";
+import { type BuiltInExtensionName, type ResolvedDisabledExtension, type ResolvedInlineExtension, type ResolvedResource } from "./manifest.js";
 import { type ProjectDiscovery, type ProjectManifestState } from "./project.js";
 export interface ResolveAssemblyOptions {
     agentDir: string;
@@ -27,5 +27,8 @@ export interface ResolvedAssembly {
     /** Every `"disable"` entry, one per file that lists it (global first). */
     disabledExtensions: ResolvedDisabledExtension[];
 }
+/** How to turn a loaded built-in off (decision H3/K4), for messages about something it broke. A
+ * built-in listed in `"extensions"` must leave that list too: the same name in both is an error. */
+export declare function builtInOffInstruction(name: BuiltInExtensionName, assembly: Pick<ResolvedAssembly, "globalManifest" | "inlineExtensions">): string;
 export declare function resolveAssembly(options: ResolveAssemblyOptions): ResolvedAssembly;
 //# sourceMappingURL=assembly.d.ts.map

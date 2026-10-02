@@ -3,7 +3,7 @@
 // inventory, and that a disabled capability reads none of its config.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,9 +13,14 @@ import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import { resolveAssembly } from "../dist/assembly.js";
 import { buildInlineExtensions } from "../dist/extensions/index.js";
 import { createMmpRuntimeExtensions } from "../dist/extensions/runtime.js";
+import { EXTENSION_LOAD_FAILURE_HINT, extensionLoadFailureHint } from "../dist/pi-output.js";
 import { createMmpRuntimeIdentity } from "../dist/runtime-identity.js";
 
 const cliPath = new URL("../dist/cli.js", import.meta.url);
+const fakeTty = new URL("./fixtures/fake-tty.mjs", import.meta.url).pathname;
+const fauxEcho = new URL("./fixtures/faux-echo.mjs", import.meta.url).pathname;
+const todoRogue = new URL("./fixtures/todo-rogue.mjs", import.meta.url).pathname;
+const mcpRogue = new URL("./fixtures/mcp-duplicate-rogue.mjs", import.meta.url).pathname;
 const BUILT_INS = ["mmp:task", "mmp:mcp", "mmp:hooks"];
 
 function createFixture(t) {
@@ -42,12 +47,21 @@ function writeJson(path, value) {
   writeFileSync(path, typeof value === "string" ? value : JSON.stringify(value));
 }
 
-function runCli(fixture, args, cwd = fixture.projectRoot) {
-  return spawnSync(process.execPath, [cliPath.pathname, ...args], {
+function runCli(fixture, args, cwd = fixture.projectRoot, nodeArgs = []) {
+  return spawnSync(process.execPath, [...nodeArgs, cliPath.pathname, ...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, HOME: fixture.home, MMP_HOME: fixture.mmpHome },
+    input: "",
+    timeout: 60_000,
+    env: { ...process.env, HOME: fixture.home, MMP_HOME: fixture.mmpHome, PI_OFFLINE: "1" },
   });
+}
+
+/** A real one-prompt run on the faux echo model: `-p`, or the TUI under a fake tty. */
+function runPrompt(fixture, mode) {
+  return mode === "-p"
+    ? runCli(fixture, ["--no-project", "--model", "mmp-faux/echo", "-p", "hi"])
+    : runCli(fixture, ["--no-project", "--model", "mmp-faux/echo"], fixture.projectRoot, ["--import", fakeTty]);
 }
 
 function dryRun(fixture, flags = ["--no-project"]) {
@@ -193,7 +207,10 @@ test("an unknown name in a trusted project's \"disable\" names the project file"
 
   const result = runCli(fixture, ["--approve", "--dry-run"]);
   assert.equal(result.status, 2);
-  assert.ok(result.stderr.includes(fixture.projectManifest), result.stderr);
+  assert.ok(
+    result.stderr.includes(`${fixture.projectManifest}: disable[0]: "mmp:unknown" is not a built-in capability`),
+    result.stderr,
+  );
 });
 
 test("the same name in \"extensions\" and \"disable\" of one file is a config error", (t) => {
@@ -265,6 +282,17 @@ test("no mcp.json and no hooks.json: default mmp:mcp and mmp:hooks start without
   assert.ok(names.includes("mmp:mcp") && names.includes("mmp:hooks"), names.join(", "));
   const output = dryRun(fixture);
   assert.deepEqual(output.inlineExtensions.map((entry) => entry.name), BUILT_INS);
+  // Building them and a no-manifest dry run write nothing into MMP_HOME.
+  assert.deepEqual(readdirSync(fixture.mmpHome), []);
+
+  // A real run with all three on: no error, and no mcp.json / hooks.json appears.
+  writeJson(fixture.globalManifest, { version: 1, extensions: [fauxEcho] });
+  const run = runPrompt(fixture, "-p");
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout.trim(), "ECHO:hi");
+  assert.equal(run.stderr, "");
+  assert.equal(existsSync(join(fixture.mmpHome, "mcp.json")), false);
+  assert.equal(existsSync(join(fixture.mmpHome, "hooks.json")), false);
 });
 
 test("mmp list shows each built-in's state and the file that disabled it", (t) => {
@@ -283,8 +311,107 @@ test("mmp remove of a built-in says it stays on and how to disable it", (t) => {
 
   const result = runCli(fixture, ["remove", "mmp:task"], fixture.home);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /mmp:task is built in and stays on; to turn it off, add "disable": \["mmp:task"\]/);
+  assert.equal(
+    result.stdout,
+    `Removed mmp:task from ${fixture.globalManifest}. mmp:task is built in and stays on; ` +
+      `to turn it off, add "disable": ["mmp:task"] to ${fixture.globalManifest}.\n`,
+  );
+  assert.doesNotMatch(result.stdout, /Restart/);
   assert.deepEqual(dryRun(fixture).inlineExtensions.map((entry) => entry.name), BUILT_INS);
+
+  // Not declared (the natural try for "turn MCP off"): nothing to remove, but the same hint.
+  const undeclared = runCli(fixture, ["remove", "mmp:mcp"], fixture.home);
+  assert.equal(undeclared.status, 1);
+  assert.equal(undeclared.stdout, "");
+  assert.equal(
+    undeclared.stderr,
+    `mmp: no matching extension source "mmp:mcp" in ${fixture.globalManifest}\n` +
+      `mmp:mcp is built in and stays on; to turn it off, add "disable": ["mmp:mcp"] to ${fixture.globalManifest}.\n`,
+  );
+
+  // Any other extension still gets the plain messages.
+  writeJson(fixture.globalManifest, { version: 1, extensions: [fauxEcho] });
+  const other = runCli(fixture, ["remove", fauxEcho], fixture.home);
+  assert.equal(other.stdout, `Removed ${fauxEcho} from ${fixture.globalManifest}. Restart mmp for it to take effect.\n`);
+  const missing = runCli(fixture, ["remove", fauxEcho], fixture.home);
+  assert.equal(missing.stderr, `mmp: no matching extension source ${JSON.stringify(fauxEcho)} in ${fixture.globalManifest}\n`);
+});
+
+// Review F1: a third-party extension registering one of mmp:task's tools ("todo" here) makes Pi
+// fail to load mmp:task, which no Manifest declares: the hint must say how to turn mmp:task off.
+for (const mode of ["-p", "tui"]) {
+  test(`a third-party "todo" tool stops a default run (${mode}) with how to disable mmp:task, and disabling it works`, (t) => {
+    const fixture = createFixture(t);
+    writeJson(fixture.globalManifest, { version: 1, extensions: [todoRogue, fauxEcho] });
+
+    const failed = runPrompt(fixture, mode);
+    assert.equal(failed.status, 1, failed.stdout);
+    assert.match(failed.stderr, /Failed to load extension "<inline:mmp:task>": Tool "todo" conflicts with .*todo-rogue\.mjs/);
+    assert.ok(
+      failed.stderr.includes(`Turn mmp:task off: add "disable": ["mmp:task"] to ${fixture.globalManifest}.`),
+      failed.stderr,
+    );
+    // Not the plain hint: no Manifest declares mmp:task.
+    assert.equal(failed.stderr.includes(EXTENSION_LOAD_FAILURE_HINT), false, failed.stderr);
+    assert.doesNotMatch(failed.stderr, /-ne\b|"pi /);
+
+    // Declared explicitly: drop it from "extensions" too (both lists is a config error).
+    writeJson(fixture.globalManifest, { version: 1, extensions: ["mmp:task", todoRogue, fauxEcho] });
+    const declared = runPrompt(fixture, mode);
+    assert.equal(declared.status, 1);
+    assert.ok(
+      declared.stderr.includes(`Turn mmp:task off: remove "mmp:task" from "extensions" in ${fixture.globalManifest} and list it in "disable".`),
+      declared.stderr,
+    );
+
+    if (mode === "-p") {
+      writeJson(fixture.globalManifest, { version: 1, extensions: [todoRogue, fauxEcho], disable: ["mmp:task"] });
+      const fixed = runPrompt(fixture, mode);
+      assert.equal(fixed.status, 0, fixed.stderr);
+      assert.equal(fixed.stdout.trim(), "ECHO:hi");
+    }
+  });
+}
+
+test("the load-failure hint keeps the plain line for other extensions and adds one per failing built-in", () => {
+  const assembly = {
+    globalManifest: "/g/mmp.json",
+    inlineExtensions: [{ name: "mmp:hooks", source: "project", declaredIn: "/p/.mmp/mmp.json" }],
+  };
+  assert.equal(extensionLoadFailureHint(["/x/broken.mjs"], assembly), EXTENSION_LOAD_FAILURE_HINT);
+  assert.equal(extensionLoadFailureHint(["<inline:mmp:runtime>"], assembly), EXTENSION_LOAD_FAILURE_HINT);
+  const lines = extensionLoadFailureHint(
+    ["/x/broken.mjs", "<inline:mmp:task>", "<inline:mmp:hooks>", "<inline:mmp:task>"],
+    assembly,
+  ).split("\n");
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0], EXTENSION_LOAD_FAILURE_HINT);
+  assert.ok(lines[1].includes('Turn mmp:task off: add "disable": ["mmp:task"] to /g/mmp.json.'), lines[1]);
+  assert.ok(lines[2].includes('Turn mmp:hooks off: remove "mmp:hooks" from "extensions" in /p/.mmp/mmp.json'), lines[2]);
+});
+
+// Review F2: with mmp:mcp on by default, a Manifest that declares only another "/mcp" extension
+// gets the duplicate-/mcp error; it must say to disable mmp:mcp, not "declare only one".
+test("another \"/mcp\" extension with mmp:mcp not declared: the error says to disable mmp:mcp, and that clears it", (t) => {
+  const fixture = createFixture(t);
+  writeJson(fixture.globalManifest, { version: 1, extensions: [mcpRogue, fauxEcho] });
+
+  const clashing = runPrompt(fixture, "-p");
+  assert.equal(clashing.stdout.trim(), "ECHO:hi");
+  assert.match(clashing.stderr, /Extension error \(<inline:mmp:mcp>\): Another extension also registers "\/mcp"/);
+  assert.ok(
+    clashing.stderr.includes(
+      `To keep the other MCP integration, turn mmp:mcp off: add "disable": ["mmp:mcp"] to ${fixture.globalManifest}.`,
+    ),
+    clashing.stderr,
+  );
+  assert.doesNotMatch(clashing.stderr, /declare only one/);
+
+  writeJson(fixture.globalManifest, { version: 1, extensions: [mcpRogue, fauxEcho], disable: ["mmp:mcp"] });
+  const fixed = runPrompt(fixture, "-p");
+  assert.equal(fixed.status, 0, fixed.stderr);
+  assert.equal(fixed.stdout.trim(), "ECHO:hi");
+  assert.equal(fixed.stderr, "");
 });
 
 test("/reload keeps the startup built-in selection, disabled list included, and warns a restart is needed", async (t) => {

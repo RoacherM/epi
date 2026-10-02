@@ -6,7 +6,7 @@ import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createAgentSessionFromServices, createAgentSessionRuntime, createAgentSessionServices, parseArgs, resolveCliModel, resolveModelScopeWithDiagnostics, SessionManager, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { MmpArgumentError } from "../errors.js";
-import { EXTENSION_LOAD_FAILURE_HINT } from "../pi-output.js";
+import { extensionLoadFailureHint } from "../pi-output.js";
 import { crossProjectRefusal } from "./project-guard.js";
 // pi-internals row `http-dispatcher` (dogfood D38): Pi's own core/http-dispatcher.js, not in the
 // package "exports" map, so imported by file path. The package root already loaded it (through
@@ -318,8 +318,9 @@ export async function createMmpRuntime(options) {
             : [];
         if (errors.length > 0) {
             const lines = errors.map((diagnostic) => diagnostic.message);
-            if (extensions.errors.length > 0)
-                lines.push(EXTENSION_LOAD_FAILURE_HINT);
+            if (extensions.errors.length > 0) {
+                lines.push(extensionLoadFailureHint(extensions.errors.map(({ path }) => path), options.assembly));
+            }
             throw new Error(lines.join("\n"));
         }
         const created = await createAgentSessionFromServices({

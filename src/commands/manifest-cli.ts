@@ -511,15 +511,17 @@ export async function runRemoveCommand(argv: readonly string[], commandName: "re
     removed = extensions.length !== before.length;
     return { ...json, version: 1, extensions };
   });
+  // Built-ins are on by default (decision H3/K4): removing the entry, or finding none, leaves it on.
+  const builtIn = BUILT_IN_EXTENSIONS[source as BuiltInExtensionName] === true;
+  const disableHint = `${source} is built in and stays on; to turn it off, add "disable": ["${source}"] to ${target.path}.`;
   if (!removed) {
     process.stderr.write(`mmp: no matching extension source ${JSON.stringify(source)} in ${target.path}\n`);
+    if (builtIn) process.stderr.write(`${disableHint}\n`);
     return 1;
   }
-  process.stdout.write(`Removed ${source} from ${target.path}. Restart mmp for it to take effect.\n`);
-  if (BUILT_IN_EXTENSIONS[source as BuiltInExtensionName] === true) {
-    // Built-ins are on by default (decision H3/K4): dropping the entry alone leaves it on.
-    process.stdout.write(`${source} is built in and stays on; to turn it off, add "disable": ["${source}"] to ${target.path}.\n`);
-  }
+  process.stdout.write(builtIn
+    ? `Removed ${source} from ${target.path}. ${disableHint}\n`
+    : `Removed ${source} from ${target.path}. Restart mmp for it to take effect.\n`);
   return 0;
 }
 

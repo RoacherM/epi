@@ -656,7 +656,7 @@ export function createMmpMcpExtension(source) {
 - `McpServerEntry.source` 就是传给 `loadMcpConfig` 的那个 `agentDir` 拼出来的路径；`/mcp` 面板的写回（启用/停用/改曝光方式）默认调 `updateMcpServerConfig(entry.source, ...)`——只要不传自定义 `updateConfig`，写回自然落在 MMP 自己的文件上，不用额外代码。
 - `credentials` 没有显式传：它的类型是 `McpOAuthCredentialStore` 实例（不是路径），Pi 的默认值走 `getAgentDir()`，MMP 早就把它重定向到 `<MMP_HOME>/pi` 了，结果和显式传一样，省了引入 `oauth.js` 的代价。
 - 一份坏的 `mcp.json`（`loadNativeMcpConfig` 的 `errors` 非空）在 `src/extensions/index.ts` 里同步抛 `MmpConfigError`，不等 Pi 自己那句软提示（`ctx.ui.notify(..., "warning")`，在 `-p` 模式下是空操作）。
-- Manifest 同时声明别的扩展也注册 `/mcp` 时，Pi 自己的处理是把两边都改名成 `/mcp:1`/`/mcp:2`（不报错）；`mmp:mcp` 在 `session_start` 里查这个改名信号，throw 一个错误——在 print 模式下这条错误经由 Pi 的 `onError` 打到 stderr，在 TUI 里额外用 `ctx.ui.notify` 落一条常驻提示（`ctx.shutdown()` 在 print 模式是空操作，在 TUI 里会立刻退出，可能和提示渲染赛跑，所以不调用它）。
+- `mmp:mcp` 开着（默认开）而 Manifest 声明的别的扩展也注册 `/mcp` 时，Pi 自己的处理是把两边都改名成 `/mcp:1`/`/mcp:2`（不报错）；`mmp:mcp` 在 `session_start` 里查这个改名信号，throw 一个错误，告诉用户要留另一个就加 `"disable": ["mmp:mcp"]`，否则删掉另一个——在 print 模式下这条错误经由 Pi 的 `onError` 打到 stderr，在 TUI 里经由 `onError` 落一条常驻提示（`ctx.shutdown()` 在 print 模式是空操作，在 TUI 里会立刻退出，可能和提示渲染赛跑，所以不调用它）。
 
 `mmp mcp add|remove|list|login|logout`（`src/commands/mcp-cli.ts`，docs/mcp-design.md §6）复用同一批 Pi 代码（`config.js` 的 `addMcpServerConfig`/`removeMcpServerConfig`/`getMcpToolExposure`、`core/mcp-servers.js` 的 `validateMcpServerConfig`、`runtime.js` 的 `McpServerConnection`/`McpOAuthCredentialStore`/`signInMcpServer`，全部登记进 [docs/pi-internals.md](pi-internals.md)），但参数解析和信任判断是 MMP 自己的——Pi 的 `runMcpCommand` 写死 `.pi/mcp.json` 和 Pi 自己的项目信任存储，不能直接用。
 

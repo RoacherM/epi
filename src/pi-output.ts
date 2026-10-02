@@ -2,6 +2,9 @@ import { join } from "node:path";
 
 import { getDocsPath } from "@earendil-works/pi-coding-agent";
 
+import { builtInOffInstruction, type ResolvedAssembly } from "./assembly.js";
+import type { BuiltInExtensionName } from "./manifest.js";
+
 /**
  * Pi's `main.js` ends a startup extension load failure with this hint (its unexported
  * `EXTENSION_LOAD_FAILURE_HINT`, with `APP_NAME` = "pi"). MMP has no `-ne` and exposes only its own
@@ -15,6 +18,34 @@ export const PI_EXTENSION_LOAD_FAILURE_HINT = 'Hint: Start without extensions us
 
 export const EXTENSION_LOAD_FAILURE_HINT =
   'Hint: Fix the extension, or remove it from the Manifest that declares it ("mmp list" shows which).';
+
+/** Pi names an inline extension `<inline:NAME>` in its load errors. */
+const BUILT_IN_PATH = /^<inline:(mmp:(?:task|mcp|hooks))>$/;
+
+/**
+ * The hint after extension load failures (`failedPaths` as Pi names them). A built-in is on by
+ * default (decision H3/K4) and loads after every Manifest extension, so a third-party extension
+ * registering one of its tools (`todo`, `task`, ...) shows up as the built-in failing, with no
+ * Manifest declaring it: say how to turn it off. Any other failure gets the plain hint.
+ */
+export function extensionLoadFailureHint(
+  failedPaths: readonly string[],
+  assembly: Pick<ResolvedAssembly, "globalManifest" | "inlineExtensions">,
+): string {
+  const builtIns = new Set<BuiltInExtensionName>();
+  let other = failedPaths.length === 0;
+  for (const path of failedPaths) {
+    const name = BUILT_IN_PATH.exec(path)?.[1] as BuiltInExtensionName | undefined;
+    if (name === undefined) other = true;
+    else builtIns.add(name);
+  }
+  const lines = [...builtIns].map((name) =>
+    `Hint: ${name} is built in and on by default; another extension may clash with it (a tool or ` +
+    `command of the same name). Turn ${name} off: ${builtInOffInstruction(name, assembly)}. ` +
+    'Or remove the other extension from its Manifest ("mmp list" shows which).');
+  if (other) lines.unshift(EXTENSION_LOAD_FAILURE_HINT);
+  return lines.join("\n");
+}
 
 /** MMP's own login guidance: `--list-models`' empty list (dogfood D48) and, in place of Pi's, every
  * "no model / no API key" error (D55). */
@@ -73,10 +104,14 @@ function rewriteStream(stream: NodeJS.WriteStream, rewrite: (text: string) => st
  * happens on the streams. Only those exact texts are replaced; everything around them passes
  * through unchanged.
  */
-export function rewritePiOutput(): void {
-  rewriteStream(process.stderr, (text) =>
-    rewritePiText(text.includes(PI_EXTENSION_LOAD_FAILURE_HINT)
-      ? text.replace(PI_EXTENSION_LOAD_FAILURE_HINT, EXTENSION_LOAD_FAILURE_HINT)
-      : text));
+export function rewritePiOutput(assembly: Pick<ResolvedAssembly, "globalManifest" | "inlineExtensions">): void {
+  // Pi prints every load error (reportDiagnostics) before the hint, each in its own write.
+  const failedPaths: string[] = [];
+  rewriteStream(process.stderr, (text) => {
+    for (const match of text.matchAll(/Failed to load extension "([^"]*)"/g)) failedPaths.push(match[1]!);
+    return rewritePiText(text.includes(PI_EXTENSION_LOAD_FAILURE_HINT)
+      ? text.replace(PI_EXTENSION_LOAD_FAILURE_HINT, () => extensionLoadFailureHint(failedPaths, assembly))
+      : text);
+  });
   rewriteStream(process.stdout, rewritePiText);
 }

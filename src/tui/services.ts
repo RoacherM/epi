@@ -19,8 +19,9 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 
+import type { ResolvedAssembly } from "../assembly.js";
 import { MmpArgumentError } from "../errors.js";
-import { EXTENSION_LOAD_FAILURE_HINT } from "../pi-output.js";
+import { extensionLoadFailureHint } from "../pi-output.js";
 import { crossProjectRefusal, type ProjectIdentity } from "./project-guard.js";
 
 export interface MmpSessionOptions {
@@ -30,6 +31,8 @@ export interface MmpSessionOptions {
   piArgs: readonly string[];
   extensionFactories: InlineExtension[];
   externalExtensionPaths: string[];
+  /** Names the file to turn a built-in off in, when one fails to load (`extensionLoadFailureHint`). */
+  assembly: Pick<ResolvedAssembly, "globalManifest" | "inlineExtensions">;
   /** The project this process assembled its manifest from; --session/--fork targets from another
    * project are refused up front, the same way a later /resume would be (project-guard.ts). */
   projectIdentity: ProjectIdentity;
@@ -388,7 +391,9 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
       : [];
     if (errors.length > 0) {
       const lines = errors.map((diagnostic) => diagnostic.message);
-      if (extensions.errors.length > 0) lines.push(EXTENSION_LOAD_FAILURE_HINT);
+      if (extensions.errors.length > 0) {
+        lines.push(extensionLoadFailureHint(extensions.errors.map(({ path }) => path), options.assembly));
+      }
       throw new Error(lines.join("\n"));
     }
 

@@ -3,6 +3,14 @@ import { MmpConfigError } from "./errors.js";
 import { BUILT_IN_EXTENSION_NAMES, resolveManifest, } from "./manifest.js";
 import { resolveProjectManifest, } from "./project.js";
 import { discoverSkillRoots } from "./skill-discovery.js";
+/** How to turn a loaded built-in off (decision H3/K4), for messages about something it broke. A
+ * built-in listed in `"extensions"` must leave that list too: the same name in both is an error. */
+export function builtInOffInstruction(name, assembly) {
+    const declaredIn = assembly.inlineExtensions.find((extension) => extension.name === name)?.declaredIn;
+    return declaredIn === undefined
+        ? `add "disable": ["${name}"] to ${assembly.globalManifest}`
+        : `remove "${name}" from "extensions" in ${declaredIn} and list it in "disable"`;
+}
 function mergeUnique(groups, keyOf) {
     const merged = [];
     const seen = new Set();
