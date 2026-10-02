@@ -1,7 +1,3 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import {
   createAgentSessionServices,
   SettingsManager,
@@ -35,37 +31,22 @@ import {
 import type { ResolvedResource } from "./manifest.js";
 import { askProjectTrust, saveProjectTrustChoice, shouldAskProjectTrust } from "./trust-prompt.js";
 import { runMmpUpdateCommand, updateCheckDisabled } from "./update.js";
+import { MMP_VERSION } from "./version.js";
 
-/** `package.json`'s "version" is the single source: this file compiles to `dist/host.js`, whether
- * run from the repo (`dist/`, package root one level up) or an installed package (same layout,
- * `package.json` is always included regardless of the "files" field) -- a release only bumps
- * `package.json` (+ lock), nothing here. Fails loudly (not a stale fallback) if it can't be read. */
-function readMmpVersion(): string {
-  const packageJsonPath = join(dirname(dirname(fileURLToPath(import.meta.url))), "package.json");
-  let parsed: { version?: unknown };
-  try {
-    parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { version?: unknown };
-  } catch (error) {
-    throw new Error(`MMP_VERSION: could not read or parse ${packageJsonPath}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  if (typeof parsed.version !== "string" || parsed.version.length === 0) {
-    throw new Error(`MMP_VERSION: ${packageJsonPath} has no non-empty "version" field`);
-  }
-  return parsed.version;
-}
+// scripts/model-snapshot.mjs imports MMP_VERSION from dist/host.js.
+export { MMP_VERSION };
 
-export const MMP_VERSION = readMmpVersion();
-export const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
+const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
 
-export const MMP_HELP = renderHelp();
+/** `mmp <subcommand>`: routed before any flag parsing, and only when it is the first argument
+ * (`mmp -p update` is a prompt), never forwarded to Pi's own CLI dispatcher (docs/cli-design.md
+ * §3) -- each reads/writes the Manifest or MMP's own agent directory directly. */
+const MMP_SUBCOMMANDS = new Set(["update", "install", "remove", "uninstall", "list", "config", "auth", "mcp"]);
 
-/** `mmp <subcommand>`: routed before any flag parsing, and never forwarded to Pi's own CLI
- * dispatcher (docs/cli-design.md §3) -- each reads/writes the Manifest or MMP's own agent
- * directory directly. */
-const MMP_SUBCOMMANDS = new Set(["install", "remove", "uninstall", "list", "config", "auth", "mcp"]);
-
-async function runSubcommand(subcommand: string, argv: readonly string[]): Promise<number> {
+async function runSubcommand(subcommand: string, argv: readonly string[], agentDir: string): Promise<number> {
   switch (subcommand) {
+    case "update":
+      return runMmpUpdateCommand(argv, { currentVersion: MMP_VERSION, agentDir });
     case "install":
       return runInstallCommand(argv);
     case "remove":
@@ -263,26 +244,18 @@ async function maybeAskProjectTrust(
 }
 
 export async function runMmp(argv: readonly string[]): Promise<void> {
-  // Subcommands and `update` read/write MMP's own agent directory (~/.mmp/pi) directly, never
-  // through prepareMmpRun -- set the isolation guard (never Pi's default ~/.pi/agent) before each,
-  // but not before --help/--version, which must work even with an invalid MMP_HOME.
+  // Subcommands read/write MMP's own agent directory (~/.mmp/pi) directly, never through
+  // prepareMmpRun -- set the isolation guard (never Pi's default ~/.pi/agent) before each, but not
+  // before --help/--version, which must work even with an invalid MMP_HOME.
   const subcommand = argv[0];
   if (subcommand !== undefined && MMP_SUBCOMMANDS.has(subcommand)) {
-    process.env.PI_CODING_AGENT_DIR = resolveMmpPaths(process.env).agentDir;
-    process.exitCode = await runSubcommand(subcommand, argv.slice(1));
+    const agentDir = resolveMmpPaths(process.env).agentDir;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    process.exitCode = await runSubcommand(subcommand, argv.slice(1), agentDir);
     return;
   }
 
   const args = parseMmpArgs(argv);
-  if (args.update) {
-    const agentDir = resolveMmpPaths(process.env).agentDir;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    process.exitCode = await runMmpUpdateCommand(args.passthrough, {
-      currentVersion: MMP_VERSION,
-      agentDir,
-    });
-    return;
-  }
   // Pi's own notice would suggest `pi update`, which does not update MMP's pinned Pi.
   process.env.PI_SKIP_VERSION_CHECK = "1";
   // Before any path below can load an extension that registers a provider (--help included).
