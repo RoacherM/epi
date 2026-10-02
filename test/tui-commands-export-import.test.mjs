@@ -41,12 +41,12 @@ function runApp(t, extensions, steps, { cwd, home: providedHome, args } = {}) {
 }
 
 test("/export writes HTML by default and JSONL when asked, then /import round-trips it back", (t) => {
-  const { text: out, marks, root } = runApp(t, [fixture("switchto-extension.mjs")], [
+  const { text: out, marks, screens, root } = runApp(t, [fixture("switchto-extension.mjs")], [
     ["waitReady"],
     ["type", "hello there"], ["key", "enter"], ["wait", 800], ["mark", "afterReply"],
     ["type", "/export session.html"], ["key", "enter"], ["wait", 400], ["mark", "afterHtmlExport"],
     ["type", "/export session.jsonl"], ["key", "enter"], ["wait", 400], ["mark", "afterJsonlExport"],
-    ["type", "/import session.jsonl"], ["key", "enter"], ["wait", 300], ["mark", "confirmShown"],
+    ["type", "/import session.jsonl"], ["key", "enter"], ["wait", 300], ["mark", "confirmShown"], ["screen", "confirm"],
     ["key", "enter"], ["wait", 800], ["mark", "afterImport"],
     ["key", "ctrl+d"],
   ]);
@@ -62,6 +62,8 @@ test("/export writes HTML by default and JSONL when asked, then /import round-tr
   assert.ok(existsSync(join(root, "session.jsonl")));
 
   assert.match(marks.confirmShown.slice(marks.afterJsonlExport.length), /Replace current session with session\.jsonl\?/);
+  // The confirm dialog's title on its own row, the question on the row below.
+  assert.match(screens.confirm.join("\n"), /^ *Import session *\n *Replace current session with session\.jsonl\? *$/m);
   const afterImportOnly = marks.afterImport.slice(marks.confirmShown.length);
   assert.match(afterImportOnly, /Session imported from: session\.jsonl/);
   // The imported session is the same conversation, replayed fresh -- proven from the JSONL file's

@@ -626,6 +626,29 @@ test("edit: a hunk that changes the line count draws the gap to the next hunk on
   }
 });
 
+test("edit: a short gap after one of Pi's \"...\" markers is still shown whole", async (t) => {
+  const ctx = (n) => `${String(n).padStart(2)} line ${n}`;
+  const changed = (n) => [`${String(n).padStart(2)} line ${n}`, `${String(n).padStart(2)} NEW ${n}`];
+  const edit = (lines) => renderRealEdit(t, lines.map((n) => ({ oldText: `line ${n}\n`, newText: `NEW ${n}\n` })));
+
+  // Pi opens with "..." (lines 1–15 elided), then sends the 5-line gap 21–25 whole.
+  const leadingMarker = await edit([20, 26, 40]);
+  assert.deepEqual(leadingMarker, [
+    "   … 16 unchanged lines", ctx(17), ctx(18), ctx(19), ...changed(20),
+    ...expectedGap(21, 5), ...changed(26), ...expectedGap(27, 13), ...changed(40),
+  ]);
+  assertOldLinesAccountedFor(leadingMarker);
+
+  // The far gap 6–19 crosses Pi's "..."; the short gap 21–25 after it does not.
+  const farThenShort = await edit([5, 20, 26]);
+  assert.deepEqual(farThenShort, [
+    "   … 1 unchanged lines", ctx(2), ctx(3), ctx(4), ...changed(5),
+    ...expectedGap(6, 14), ...changed(20), ...expectedGap(21, 5), ...changed(26),
+    ctx(27), ctx(28), ctx(29), "   … 1 unchanged lines",
+  ]);
+  assertOldLinesAccountedFor(farThenShort.slice(0, -1));
+});
+
 test("edit: a short gap that Pi elides with \"...\" is collapsed, not shown as if whole", () => {
   // With 2 context lines Pi keeps only 2 + 2 of the 6-line gap between lines 5 and 12 and puts "..."
   // between them, so the 4 rows that arrive are not consecutive even though there are fewer than 6.

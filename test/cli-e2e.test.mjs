@@ -129,6 +129,18 @@ test("mmp install -l --no-approve refuses even though nothing else was decided y
   assert.equal(existsSync(projectManifestPath(f)), false);
 });
 
+test("mmp install -l takes the last of --approve and --no-approve, like Pi", (t) => {
+  const f = fixture(t);
+  const refused = run(f, ["install", "npm:proj-extension", "-l", "--approve", "--no-approve"]);
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /refused by --no-approve/);
+  assert.equal(existsSync(projectManifestPath(f)), false);
+
+  const accepted = run(f, ["install", "npm:proj-extension", "-l", "--no-approve", "--approve"]);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(projectManifestPath(f), "utf8")).extensions, ["npm:proj-extension"]);
+});
+
 test("mmp remove -l and mmp config -l also refuse an untrusted project without --approve", (t) => {
   const f = fixture(t);
   const removeResult = run(f, ["remove", "npm:proj-extension", "-l"]);
