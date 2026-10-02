@@ -67,6 +67,11 @@ export declare class Transcript {
     /** A block from the host (command output, info panels), separated like any other message. */
     addBlock(component: Component): void;
     handle(event: AgentSessionEvent): void;
+    private messageStarted;
+    private messageEnded;
+    private retryFailed;
+    private toolEnded;
+    private compactionEnded;
     /**
      * `gap: false` for components that already start with a blank row (Pi's assistant and tool
      * components). `counts: false` for a notice, which shares the spacer rhythm but must not hide
