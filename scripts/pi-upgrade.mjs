@@ -233,10 +233,10 @@ function buildReport({
     "",
     `- Pi packages: ${oldPiVersion} → ${newPiVersion}`,
   ];
-  const minorJump = safeMinorJump(oldPiVersion, newPiVersion);
-  if (minorJump !== undefined && minorJump >= NOTABLE_MINOR_JUMP) {
+  const jump = describeNotableJump(oldPiVersion, newPiVersion);
+  if (jump !== undefined) {
     lines.push(
-      `  **${minorJump} minor versions at once** -- expect the gate to need a human even if it passes; this is not a routine daily bump.`,
+      `  **${jump}** -- expect the gate to need a human even if it passes; this is not a routine daily bump.`,
     );
   }
   lines.push(`- Gate: ${formatGateResult(gate)}`);
@@ -303,11 +303,20 @@ export function computeReportHash({ oldPiVersion, newPiVersion, gate }) {
   return createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex");
 }
 
-function safeMinorJump(oldVersion, newVersion) {
+/** The report's "not a routine bump" headline, or undefined for a routine one. A major bump is
+ * reported as such: minors restart at 0 across a major, so counting minors there is meaningless
+ * (the old `major * 1000 + minor` arithmetic reported 0.99.1 -> 1.0.0 as "901 minor versions"). */
+export function describeNotableJump(oldVersion, newVersion) {
   if (semver.valid(oldVersion) === null || semver.valid(newVersion) === null) return undefined;
-  const from = semver.major(oldVersion) * 1000 + semver.minor(oldVersion);
-  const to = semver.major(newVersion) * 1000 + semver.minor(newVersion);
-  return Math.max(0, to - from);
+  const fromMajor = semver.major(oldVersion);
+  const toMajor = semver.major(newVersion);
+  if (toMajor > fromMajor) {
+    const count = toMajor - fromMajor;
+    const what = count === 1 ? "Major version upgrade" : `${count} major versions at once`;
+    return `${what} (${oldVersion} → ${newVersion})`;
+  }
+  const minorJump = semver.minor(newVersion) - semver.minor(oldVersion);
+  return minorJump >= NOTABLE_MINOR_JUMP ? `${minorJump} minor versions at once` : undefined;
 }
 
 // ---- orchestration ----------------------------------------------------------------------------

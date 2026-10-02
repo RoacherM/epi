@@ -86,6 +86,31 @@ test("--diff against a changed baseline reports a diff and still exits 0 (report
   }
 });
 
+test("--diff names an unchanged section instead of printing an empty patch for it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mmp-model-snapshot-diff-one-section-"));
+  try {
+    const current = JSON.parse(runSnapshot([]).stdout);
+
+    const promptOnlyPath = join(dir, "prompt-only.json");
+    writeFileSync(promptOnlyPath, JSON.stringify({ ...current, systemPrompt: `${current.systemPrompt}\nEXTRA LINE` }));
+    const promptOnly = runSnapshot(["--diff", promptOnlyPath]);
+    assert.equal(promptOnly.status, 0, promptOnly.stderr);
+    assert.match(promptOnly.stdout, /systemPrompt \(baseline\)/);
+    assert.match(promptOnly.stdout, /^tools: unchanged$/m);
+    assert.doesNotMatch(promptOnly.stdout, /tools \(baseline\)/);
+
+    const toolsOnlyPath = join(dir, "tools-only.json");
+    writeFileSync(toolsOnlyPath, JSON.stringify({ ...current, tools: current.tools.slice(1) }));
+    const toolsOnly = runSnapshot(["--diff", toolsOnlyPath]);
+    assert.equal(toolsOnly.status, 0, toolsOnly.stderr);
+    assert.match(toolsOnly.stdout, /tools \(baseline\)/);
+    assert.match(toolsOnly.stdout, /^systemPrompt: unchanged$/m);
+    assert.doesNotMatch(toolsOnly.stdout, /systemPrompt \(baseline\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the committed baseline still matches the installed Pi (report-only, no assertion on content)", () => {
   const result = runSnapshot(["--diff", baselinePath]);
   assert.equal(result.status, 0, result.stderr);

@@ -12,7 +12,8 @@
 //     (tools sorted by name; paths/cwd/dates normalized to $TMP/$PI_PACKAGE_DIR/$CWD/$DATE tokens so
 //     two runs are byte-identical)
 //   node scripts/model-snapshot.mjs --diff <baseline.json>
-//     -> stdout: a unified-style diff of systemPrompt and tools against <baseline.json>, or the
+//     -> stdout: a unified-style diff of systemPrompt and/or tools against <baseline.json> (a section
+//        that did not change prints "<section>: unchanged" instead of an empty patch), or the
 //        exact line "NO MODEL-VISIBLE CHANGES" when identical. Always exits 0.
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
@@ -178,21 +179,29 @@ async function loadDiff() {
 
 async function printDiff(baselinePath, current) {
   const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
-  if (JSON.stringify(baseline.systemPrompt) === JSON.stringify(current.systemPrompt) &&
-      JSON.stringify(baseline.tools) === JSON.stringify(current.tools)) {
+  const promptChanged = JSON.stringify(baseline.systemPrompt) !== JSON.stringify(current.systemPrompt);
+  const toolsChanged = JSON.stringify(baseline.tools) !== JSON.stringify(current.tools);
+  if (!promptChanged && !toolsChanged) {
     process.stdout.write("NO MODEL-VISIBLE CHANGES\n");
     return;
   }
+  // An unchanged section gets one explicit line rather than an empty patch: the Pi 1.0 gate report
+  // printed a bare "--- tools (baseline) / +++ tools (current)" header with no hunks, which read as
+  // "the tools changed" when they were byte-identical.
   const { createTwoFilesPatch } = await loadDiff();
-  const promptPatch = createTwoFilesPatch(
-    "systemPrompt (baseline)", "systemPrompt (current)",
-    `${baseline.systemPrompt}\n`, `${current.systemPrompt}\n`, "", "",
-  );
-  const toolsPatch = createTwoFilesPatch(
-    "tools (baseline)", "tools (current)",
-    `${JSON.stringify(baseline.tools, null, 2)}\n`, `${JSON.stringify(current.tools, null, 2)}\n`, "", "",
-  );
-  process.stdout.write(`${promptPatch}\n${toolsPatch}\n`);
+  const promptSection = promptChanged
+    ? createTwoFilesPatch(
+      "systemPrompt (baseline)", "systemPrompt (current)",
+      `${baseline.systemPrompt}\n`, `${current.systemPrompt}\n`, "", "",
+    )
+    : "systemPrompt: unchanged\n";
+  const toolsSection = toolsChanged
+    ? createTwoFilesPatch(
+      "tools (baseline)", "tools (current)",
+      `${JSON.stringify(baseline.tools, null, 2)}\n`, `${JSON.stringify(current.tools, null, 2)}\n`, "", "",
+    )
+    : "tools: unchanged\n";
+  process.stdout.write(`${promptSection}\n${toolsSection}\n`);
 }
 
 async function main(argv) {
