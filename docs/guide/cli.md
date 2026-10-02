@@ -20,7 +20,7 @@ mmp --model openai/gpt-4o-mini
 
 ## 交互界面
 
-`mmp` 唯一的交互入口是它自己按 grok-build 设计写的第 4 层界面（设计见 [docs/tui-design.md](../tui-design.md)），不再启动 Pi 自带的经典交互界面。全屏布局、MMP 启动页、`/login`、`/logout`、`/model`、`/new`、`/resume`、`/compact`、`/reload`、`/trust`、对话和流式输出、工具调用、`!` bash、`--verbose` 启动提示、`@file` 首条消息、Esc 中止、Ctrl+C / Ctrl+D 退出、扩展的对话框和面板（`select`、`custom` 等）均已支持；未接线的内置命令在补全里标 `(not yet)`，输入后会提示尚未支持。`--help` 和 `--list-models` 也由 MMP 自己实现；`--print`、`--mode json/rpc`、`--export` 和其余非 TTY 运行仍使用内部 Pi CLI；`mmp update/install/remove/uninstall/list/config/auth` 是 MMP 自己的子命令（见 [子命令](#子命令)）。
+`mmp` 唯一的交互入口是它自己按 grok-build 设计写的第 4 层界面（设计见 [docs/tui-design.md](../tui-design.md)），不再启动 Pi 自带的经典交互界面。全屏布局、MMP 启动页、`/login`、`/logout`、`/model`、`/new`、`/resume`、`/compact`、`/reload`、`/trust`、对话和流式输出、工具调用、`!` bash、`--verbose` 启动提示、`@file` 首条消息、Esc 中止、Ctrl+C / Ctrl+D 退出、扩展的对话框和面板（`select`、`custom` 等）均已支持。不是内置命令、也没有扩展注册的 `/xxx` 会作为普通文字发给模型（和 Pi 一致）。`--help` 和 `--list-models` 也由 MMP 自己实现；`--print`、`--mode json/rpc`、`--export` 和其余非 TTY 运行仍使用内部 Pi CLI；`mmp update/install/remove/uninstall/list/config/auth` 是 MMP 自己的子命令（见 [子命令](#子命令)）。
 
 交互启动时，MMP 启动页会直接显示 `MMP on Pi` 身份、Manifest 状态、核心 JSON 配置方法和 `/mmp`、`/login` 等入口。每次 Agent 运行还会把同一份 runtime identity 注入模型上下文：当前 `MMP_HOME`/`agentDir`、Manifest 来源以及实际加载的 Rules、Skills 和 Extensions 都可核验；上游 Pi 文档中的 ambient 资源目录不会被误认为当前能力。
 
