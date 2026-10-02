@@ -1,5 +1,5 @@
 import type { ResolvedAssembly } from "./assembly.js";
-import type { DiscoveredSkillProvenance, ResolvedInlineExtension, ResolvedResource } from "./manifest.js";
+import type { DiscoveredSkillProvenance, ResolvedDisabledExtension, ResolvedInlineExtension, ResolvedResource } from "./manifest.js";
 export interface MmpRuntimeResource {
     kind: ResolvedResource["kind"];
     value: string;
@@ -11,6 +11,12 @@ export interface MmpRuntimeResource {
 export interface MmpRuntimeExtension {
     name: string;
     source: ResolvedInlineExtension["source"];
+    /** Absent for a built-in that is on by default (`source: "default"`). */
+    declaredIn?: string;
+}
+export interface MmpRuntimeDisabledExtension {
+    name: string;
+    source: ResolvedDisabledExtension["source"];
     declaredIn: string;
 }
 export interface MmpLoadedSkill {
@@ -61,6 +67,9 @@ export interface MmpRuntimeIdentity {
         skillRoots: MmpRuntimeResource[];
         inlineExtensions: MmpRuntimeExtension[];
         externalExtensions: MmpRuntimeResource[];
+        /** Built-ins turned off by a Manifest's `"disable"`; omitted when none are, so a run that
+         * disables nothing shows the model the same inventory as before the field existed. */
+        disabledExtensions?: MmpRuntimeDisabledExtension[];
     };
 }
 interface LoadedSkillLike {

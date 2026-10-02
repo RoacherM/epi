@@ -53,9 +53,9 @@ Pi 自己的 ~/.mmp/pi/mcp.json ✗                          ├─ createCodemo
 - 迁移：用户机器上现在没有 `~/.mmp/mcp.json`（主控核实），不做迁移代码。旧字段出现时，Pi 的校验会报错（失败可见）。
 - `src/mcp-config.ts` 里 pi-mcp-adapter 的类型定义和合并逻辑删掉。
 
-## 4. 开关：仍由 Manifest 声明
+## 4. 开关：默认开启，Manifest 的 `disable` 关闭
 
-Pi 的内置 MCP 默认总是开着；MMP 保持现状：Manifest 里声明 `"mmp:mcp"` 才启用（`src/manifest.ts`）。理由是 MMP 的核心约定"资源只由 Manifest 声明"（`cli-design.md` §0 第 2 条），这一条写进 `cli-design.md`。
+~~Manifest 里声明 `"mmp:mcp"` 才启用。~~ 已被决策 H3/K4（2026-10-02）取代：`mmp:mcp` 和另外两个内置能力一样默认开启，Manifest 的 `"disable": ["mmp:mcp"]` 关掉它，关掉后不读 `mcp.json`（`development.md` §3.4）。和 Pi 的区别只剩"可以在 Manifest 里关"。没有配置任何服务时，`mmp:mcp` 和随它加载的 codemode/tool-search 对模型不可见：两者的工具都注册为 inactive，Pi 的 MCP 扩展只在有服务需要时才激活它们（K4 用 `scripts/model-snapshot.mjs` 核对过，工具列表和提示词都没有变化）。
 
 Manifest 同时声明第三方 MCP 扩展（例如 pi-mcp-adapter）和 `mmp:mcp` 时，两边都会注册 `/mcp`。Pi 的"可替换"机制只对内置扩展生效，对 MMP 的 inline 工厂不生效，所以这种情况要**启动时报错**，说清楚两者只能选一个，不静默丢掉其中一个。
 

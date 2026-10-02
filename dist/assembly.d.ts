@@ -1,4 +1,4 @@
-import { type ResolvedInlineExtension, type ResolvedResource } from "./manifest.js";
+import { type ResolvedDisabledExtension, type ResolvedInlineExtension, type ResolvedResource } from "./manifest.js";
 import { type ProjectDiscovery, type ProjectManifestState } from "./project.js";
 export interface ResolveAssemblyOptions {
     agentDir: string;
@@ -20,8 +20,12 @@ export interface ResolvedAssembly {
     rules: ResolvedResource[];
     rulesText: string;
     skills: ResolvedResource[];
+    /** Built-ins that load this run: those a Manifest lists in `"extensions"` (declaration order),
+     * then the remaining defaults, minus every disabled one. */
     inlineExtensions: ResolvedInlineExtension[];
     externalExtensions: ResolvedResource[];
+    /** Every `"disable"` entry, one per file that lists it (global first). */
+    disabledExtensions: ResolvedDisabledExtension[];
 }
 export declare function resolveAssembly(options: ResolveAssemblyOptions): ResolvedAssembly;
 //# sourceMappingURL=assembly.d.ts.map

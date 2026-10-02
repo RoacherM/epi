@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { MmpConfigError } from "./errors.js";
-import { resolveManifest, } from "./manifest.js";
+import { BUILT_IN_EXTENSION_NAMES, resolveManifest, } from "./manifest.js";
 import { resolveProjectManifest, } from "./project.js";
 import { discoverSkillRoots } from "./skill-discovery.js";
 function mergeUnique(groups, keyOf) {
@@ -55,7 +55,12 @@ export function resolveAssembly(options) {
     // Declared groups come first: a discovered root that canonicalizes to the same path as a
     // declared skill is dropped here, so the Manifest entry's own source/declaredIn wins.
     const skills = mergeUnique([globalManifest.skills, projectSkills, discoveredSkills], (resource) => resource.value);
-    const inlineExtensions = mergeUnique([globalManifest.inlineExtensions, projectInlineExtensions], (extension) => extension.name);
+    // Built-ins are on by default (decision H3/K4). `disable` is the union of global + trusted
+    // project, and wins over an `extensions` entry in the other file.
+    const disabledExtensions = mergeUnique([globalManifest.disabledExtensions, project.manifest?.disabledExtensions ?? []], (extension) => `${extension.name}\0${extension.declaredIn}`);
+    const disabledNames = new Set(disabledExtensions.map((extension) => extension.name));
+    const defaultInlineExtensions = BUILT_IN_EXTENSION_NAMES.map((name) => ({ name, source: "default" }));
+    const inlineExtensions = mergeUnique([globalManifest.inlineExtensions, projectInlineExtensions, defaultInlineExtensions], (extension) => extension.name).filter((extension) => !disabledNames.has(extension.name));
     const externalExtensions = mergeUnique([globalManifest.externalExtensions, projectExternalExtensions], (resource) => resource.value);
     return {
         agentDir: options.agentDir,
@@ -68,6 +73,7 @@ export function resolveAssembly(options) {
         skills,
         inlineExtensions,
         externalExtensions,
+        disabledExtensions,
     };
 }
 //# sourceMappingURL=assembly.js.map

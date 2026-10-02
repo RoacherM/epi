@@ -11,7 +11,7 @@ MMP 是**改名叫 mmp 的定制版 Pi**：
 - 对外只有 mmp：帮助、报错、文档里只出现 mmp 的名字和参数，不出现 `pi` 命令，也不说"透传给 Pi"。底层可以继续调用 Pi 的实现。
 - 只在两种情况下和 Pi 不同，并在本文写明理由：
   1. 和 grok 界面冲突；
-  2. 和 MMP 的核心约定冲突：Rules/Extensions 由 Manifest 声明，Skills 另有决策 S1 的三个固定根；配置不和 Pi 共享（`~/.mmp/pi`，不读 `~/.pi/agent` 和项目 `.pi/`）。
+  2. 和 MMP 的核心约定冲突：Rules/Extensions 由 Manifest 声明（内置的 `mmp:task`/`mmp:mcp`/`mmp:hooks` 默认开启、由 Manifest 的 `disable` 关闭，决策 H3/K4），Skills 另有决策 S1 的三个固定根；配置不和 Pi 共享（`~/.mmp/pi`，不读 `~/.pi/agent` 和项目 `.pi/`）。
 
 ## 1. 入口
 

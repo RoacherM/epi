@@ -178,22 +178,23 @@ mmp mcp add|remove|list|login|logout                            # 配置、检�
   "rules": ["./RULES.md"],
   "skills": ["./skills"],
   "extensions": [
-    "mmp:task",
-    "mmp:mcp",
-    "mmp:hooks",
     "./extensions/local-extension.ts",
     "npm:some-pi-extension@1.2.3"
-  ]
+  ],
+  "disable": ["mmp:hooks"]
 }
 ```
 
 规则：
 
-- 只允许 `version`、`rules`、`skills`、`extensions`；未知字段直接失败。
+- 只允许 `version`、`rules`、`skills`、`extensions`、`disable`；未知字段直接失败。
 - 相对文件路径相对声明它的 Manifest 解析，并转换为 canonical absolute path。
 - Global 资源先装配，可信 Project 资源后装配；相同 canonical path 去重。
-- 内建 Extension 只有 `mmp:task`、`mmp:mcp`、`mmp:hooks`。
-- 未声明内建 Extension 时，其工具、handler、配置和子进程都不存在。
+- 内建能力只有 `mmp:task`、`mmp:mcp`、`mmp:hooks`，**默认开启**（没有 `mmp.json` 或 Manifest 为空也一样）。要关掉某个，把它写进 `disable`；关掉的能力不读它的配置文件（`mcp.json`、`hooks.json`、`agents/`），也不启动子进程，工具和 handler 都不存在。
+- `disable` 只接受这三个名字，其他值是配置错误（报出是哪个文件）。全局和可信项目的 `disable` 取并集：任一文件关掉就是关掉，即使另一个文件在 `extensions` 里列了它（例如全局列了 `mmp:task`、项目 `disable` 了它，结果是关）。未信任的项目不会被读取，它的 `disable` 也不生效。
+- 在 `extensions` 里列内建能力仍然有效（旧配置不用改），只是多余；同一个文件里既在 `extensions` 又在 `disable` 列同一个名字是配置错误。
+- 默认开启的能力没有配置时没有可见变化：没有 `mcp.json`（或一个服务都没有）时 `mmp:mcp` 不给模型加任何工具或提示词；没有 `hooks.json` 时 `mmp:hooks` 什么都不做。`mmp:task` 会给模型加上 `task`、`task_status` 等工具。
+- 内建能力开启时，它的配置文件写错会让启动失败（状态码 `2`），报错会说明可以改正文件，或用 `disable` 关掉这个能力。
 - 外部 Extension 可使用本地路径、`npm:` 或 `git:` source；MMP 仍关闭 Pi 的 ambient discovery。
 
 Rules 按装配顺序拼接到 Pi system prompt。Skills 使用 Pi 的 `SKILL.md` 格式，并通过绝对路径显式加载。
@@ -209,13 +210,13 @@ Rules 按装配顺序拼接到 Pi system prompt。Skills 使用 Pi 的 `SKILL.md
 Manifest 修改后：
 
 - `/reload` 会重新解析并严格校验 Manifest，然后在当前进程中重新加载 Rules 与 Skills；即使启动时尚未创建 `mmp.json`，创建后执行 `/reload` 也会生效。
-- Extension 的选择在进程启动时装配；修改 Manifest 的 `extensions`、Hooks 配置或 Task Agent profile 后必须重启 MMP。
-- 已启用 `mmp:mcp` 时，修改 `mcp.json` 后可用 `/reload` 重新读取配置并重建连接；首次添加或移除 `mmp:mcp` 仍需重启。
-- `/mmp` 显示当前实际生效的资源清单。Manifest 输入字段只有 `version`、`rules`、`skills`、`extensions`；`skillRoots`、`declaredResources` 等仅为运行时报告字段。
+- Extension 的选择在进程启动时装配；修改 Manifest 的 `extensions`、`disable`、Hooks 配置或 Task Agent profile 后必须重启 MMP。
+- 已启用 `mmp:mcp` 时，修改 `mcp.json` 后可用 `/reload` 重新读取配置并重建连接；关掉或重新打开 `mmp:mcp` 仍需重启。
+- `/mmp` 显示当前实际生效的资源清单：开启的内建能力在 `inlineExtensions`（默认开启的标 `"source": "default"`，没有 `declaredIn`），被关掉的在 `disabledExtensions`（带关掉它的文件）。`mmp --dry-run` 和 `mmp list`（"Built-in capabilities:" 一段）也显示同样的信息。Manifest 输入字段只有 `version`、`rules`、`skills`、`extensions`、`disable`；`skillRoots`、`declaredResources` 等仅为运行时报告字段。
 
 ## Task
 
-在 Manifest 声明 `mmp:task` 后，可用工具：
+`mmp:task` 默认开启（Manifest 里 `"disable": ["mmp:task"]` 可关掉），可用工具：
 
 ```text
 task
@@ -253,7 +254,7 @@ Review only the requested change. Return findings with file and line evidence.
 
 ## MCP
 
-在 Manifest 声明 `mmp:mcp`，然后创建 `~/.mmp/mcp.json`（格式和 Pi 自己的 `mcp.json` 逐字一致，见 Pi 的 `docs/mcp.md`）：
+`mmp:mcp` 默认开启（`"disable": ["mmp:mcp"]` 可关掉，关掉后不读 `mcp.json`），创建 `~/.mmp/mcp.json` 即可接入服务（格式和 Pi 自己的 `mcp.json` 逐字一致，见 Pi 的 `docs/mcp.md`）：
 
 ```json
 {
@@ -273,7 +274,7 @@ MMP 只决定读哪些配置文件（上面两份，从不读 Pi 自己的 `~/.m
 
 ## Hooks
 
-在 Manifest 声明 `mmp:hooks`，然后创建 `~/.mmp/hooks.json`：
+`mmp:hooks` 默认开启（`"disable": ["mmp:hooks"]` 可关掉，关掉后不读 `hooks.json`），创建 `~/.mmp/hooks.json` 即可：
 
 ```json
 {

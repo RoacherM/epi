@@ -29,6 +29,7 @@ function fixture() {
     }],
     inlineExtensions: [],
     externalExtensions: [],
+    disabledExtensions: [],
   };
   const identity = createMmpRuntimeIdentity({
     mmpVersion: MMP_VERSION,

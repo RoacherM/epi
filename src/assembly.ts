@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 
 import { MmpConfigError } from "./errors.js";
 import {
+  BUILT_IN_EXTENSION_NAMES,
   resolveManifest,
+  type ResolvedDisabledExtension,
   type ResolvedInlineExtension,
   type ResolvedResource,
 } from "./manifest.js";
@@ -34,8 +36,12 @@ export interface ResolvedAssembly {
   rules: ResolvedResource[];
   rulesText: string;
   skills: ResolvedResource[];
+  /** Built-ins that load this run: those a Manifest lists in `"extensions"` (declaration order),
+   * then the remaining defaults, minus every disabled one. */
   inlineExtensions: ResolvedInlineExtension[];
   externalExtensions: ResolvedResource[];
+  /** Every `"disable"` entry, one per file that lists it (global first). */
+  disabledExtensions: ResolvedDisabledExtension[];
 }
 
 function mergeUnique<T>(
@@ -103,10 +109,20 @@ export function resolveAssembly(
     [globalManifest.skills, projectSkills, discoveredSkills],
     (resource) => resource.value,
   );
-  const inlineExtensions = mergeUnique(
-    [globalManifest.inlineExtensions, projectInlineExtensions],
-    (extension) => extension.name,
+  // Built-ins are on by default (decision H3/K4). `disable` is the union of global + trusted
+  // project, and wins over an `extensions` entry in the other file.
+  const disabledExtensions = mergeUnique(
+    [globalManifest.disabledExtensions, project.manifest?.disabledExtensions ?? []],
+    (extension) => `${extension.name}\0${extension.declaredIn}`,
   );
+  const disabledNames = new Set(disabledExtensions.map((extension) => extension.name));
+  const defaultInlineExtensions: ResolvedInlineExtension[] = BUILT_IN_EXTENSION_NAMES.map(
+    (name) => ({ name, source: "default" }),
+  );
+  const inlineExtensions = mergeUnique(
+    [globalManifest.inlineExtensions, projectInlineExtensions, defaultInlineExtensions],
+    (extension) => extension.name,
+  ).filter((extension) => !disabledNames.has(extension.name));
   const externalExtensions = mergeUnique(
     [globalManifest.externalExtensions, projectExternalExtensions],
     (resource) => resource.value,
@@ -123,5 +139,6 @@ export function resolveAssembly(
     skills,
     inlineExtensions,
     externalExtensions,
+    disabledExtensions,
   };
 }

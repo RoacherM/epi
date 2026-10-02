@@ -13,6 +13,7 @@ const MANIFEST_KEYS: Readonly<Record<string, true>> = {
   rules: true,
   skills: true,
   extensions: true,
+  disable: true,
 };
 
 export const BUILT_IN_EXTENSIONS: Readonly<Record<BuiltInExtensionName, true>> = {
@@ -21,7 +22,14 @@ export const BUILT_IN_EXTENSIONS: Readonly<Record<BuiltInExtensionName, true>> =
   "mmp:hooks": true,
 };
 
+/** Built-in capabilities in the order they load when no Manifest names them (decision H3/K4: on
+ * by default, turned off with `"disable"`). */
+export const BUILT_IN_EXTENSION_NAMES: readonly BuiltInExtensionName[] = ["mmp:task", "mmp:mcp", "mmp:hooks"];
+
 export type ResourceSource = "global" | "project";
+/** `"default"`: a built-in no Manifest lists in `"extensions"`, on because built-ins are on by
+ * default; it has no `declaredIn`. */
+export type InlineExtensionSource = ResourceSource | "default";
 export type ResourceKind = "rule" | "skill" | "extension";
 export type BuiltInExtensionName = "mmp:task" | "mmp:mcp" | "mmp:hooks";
 /** Which fixed auto-discovery directory a skill root came from (docs/decisions.md S1); undefined
@@ -33,6 +41,7 @@ export interface MmpManifestV1 {
   rules?: string[];
   skills?: string[];
   extensions?: string[];
+  disable?: string[];
 }
 
 export interface ResolvedResource {
@@ -46,6 +55,14 @@ export interface ResolvedResource {
 
 export interface ResolvedInlineExtension {
   name: BuiltInExtensionName;
+  source: InlineExtensionSource;
+  /** Absent for `source: "default"`. */
+  declaredIn?: string;
+}
+
+/** A built-in turned off by a Manifest's `"disable"` list. */
+export interface ResolvedDisabledExtension {
+  name: BuiltInExtensionName;
   source: ResourceSource;
   declaredIn: string;
 }
@@ -57,6 +74,7 @@ export interface ResolvedManifest {
   skills: ResolvedResource[];
   inlineExtensions: ResolvedInlineExtension[];
   externalExtensions: ResolvedResource[];
+  disabledExtensions: ResolvedDisabledExtension[];
 }
 
 interface LoadedManifest {
@@ -70,7 +88,7 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 
 function parseStringList(
   value: unknown,
-  field: "rules" | "skills" | "extensions",
+  field: "rules" | "skills" | "extensions" | "disable",
   manifestPath: string,
 ): string[] | undefined {
   if (value === undefined) {
@@ -123,6 +141,7 @@ function loadManifest(manifestPath: string): LoadedManifest {
     "extensions",
     manifestPath,
   );
+  const disable = parseStringList(parsed.disable, "disable", manifestPath);
 
   return {
     manifest: {
@@ -130,6 +149,7 @@ function loadManifest(manifestPath: string): LoadedManifest {
       ...(rules === undefined ? {} : { rules }),
       ...(skills === undefined ? {} : { skills }),
       ...(extensions === undefined ? {} : { extensions }),
+      ...(disable === undefined ? {} : { disable }),
     },
     loaded: true,
   };
@@ -182,6 +202,7 @@ export function resolveManifest(
   const skills: ResolvedResource[] = [];
   const inlineExtensions: ResolvedInlineExtension[] = [];
   const externalExtensions: ResolvedResource[] = [];
+  const disabledExtensions: ResolvedDisabledExtension[] = [];
   const seenRules = new Set<string>();
   const seenSkills = new Set<string>();
   const seenExtensions = new Set<string>();
@@ -240,6 +261,28 @@ export function resolveManifest(
     }
   }
 
+  const disableList = manifest.disable ?? [];
+  disableList.forEach((name, index) => {
+    if (BUILT_IN_EXTENSIONS[name as BuiltInExtensionName] !== true) {
+      throw new MmpConfigError(
+        `${manifestPath}: disable[${index}]: ${JSON.stringify(name)} is not a built-in capability ` +
+          `(only ${BUILT_IN_EXTENSION_NAMES.join(", ")} can be disabled)`,
+      );
+    }
+    if (seenExtensions.has(name)) {
+      throw new MmpConfigError(
+        `${manifestPath}: ${JSON.stringify(name)} is listed in both "extensions" and "disable"; keep one`,
+      );
+    }
+    if (!disabledExtensions.some((entry) => entry.name === name)) {
+      disabledExtensions.push({
+        name: name as BuiltInExtensionName,
+        source,
+        declaredIn: manifestPath,
+      });
+    }
+  });
+
   return {
     path: manifestPath,
     loaded,
@@ -247,5 +290,6 @@ export function resolveManifest(
     skills,
     inlineExtensions,
     externalExtensions,
+    disabledExtensions,
   };
 }

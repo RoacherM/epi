@@ -254,6 +254,7 @@ export async function runMmp(argv) {
             rules: prepared.assembly.rules,
             skills: prepared.assembly.skills,
             inlineExtensions: prepared.assembly.inlineExtensions,
+            disabledExtensions: prepared.assembly.disabledExtensions,
             externalExtensions: prepared.assembly.externalExtensions,
         };
         process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);

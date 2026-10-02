@@ -275,6 +275,7 @@ test("dry-run is JSON-only and does not create MMP_HOME", (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, "");
   assert.equal(existsSync(mmpHome), false);
+  const defaultBuiltIns = ["mmp:task", "mmp:mcp", "mmp:hooks"].map((name) => ({ name, source: "default" }));
   assert.deepEqual(JSON.parse(result.stdout), {
     mmpVersion: MMP_VERSION,
     piVersion: PI_VERSION,
@@ -317,14 +318,16 @@ test("dry-run is JSON-only and does not create MMP_HOME", (t) => {
       declaredResources: {
         rules: [],
         skillRoots: [],
-        inlineExtensions: [],
+        // No Manifest: the three built-ins are on by default (decision H3/K4), with no declaredIn.
+        inlineExtensions: defaultBuiltIns,
         externalExtensions: [],
       },
     },
     piResourceArgs: [...BASE_PI_RESOURCE_ARGS],
     rules: [],
     skills: [],
-    inlineExtensions: [],
+    inlineExtensions: defaultBuiltIns,
+    disabledExtensions: [],
     externalExtensions: [],
   });
 });

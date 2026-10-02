@@ -110,11 +110,11 @@ MMP 可以构造和启动这些公开 runtime primitive，但不能 fork 或复�
 
 ### 3.4 显式装配边界
 
-Rules 与可选 Extensions 未声明就不加载；Task/MCP/Hooks 未启用时，不读取对应能力配置或启动子进程。固定 `mmp:runtime` 与 §7.1 的三个 Skill 自动发现根目录是明确的例外。
+Rules 与第三方 Extensions 未声明就不加载。固定 `mmp:runtime` 与 §7.1 的三个 Skill 自动发现根目录是明确的例外。
 
-**已定、待实现（决策 H3/K4）：** 内置的标准能力（`mmp:task`、`mmp:mcp`、`mmp:hooks`）改为默认开启，可在 Manifest 里关闭；关闭的能力仍然不读配置、不启动子进程。实现前以上一段为准（任务 K4，见 `docs/dogfood-issues.md`）。
+内置的标准能力（`mmp:task`、`mmp:mcp`、`mmp:hooks`）默认开启，Manifest 的 `"disable"` 列出的关闭（决策 H3/K4）。生效的关闭集合是全局与可信项目 `disable` 的并集；未信任项目的 Manifest 不读，其 `disable` 不生效。关闭的能力不读对应配置（`mcp.json`、`hooks.json`、`agents/`）、不启动子进程，也不注册工具或 handler。`mmp:hooks` 只在 `hooks.json` 里有 agent handler 时才读 `agents/`，所以关掉 `mmp:task` 之后，坏的 agent 文件也不会通过 `mmp:hooks` 让启动失败。默认开启的能力在没有配置时对模型不可见：没有 MCP 服务时 `mmp:mcp` 和随它加载的 codemode/tool-search 不增加任何工具或提示词（两者的工具注册为 inactive，`scripts/model-snapshot.mjs` 验证过）；`mmp:task` 会增加 `task` 等工具。开启的能力配置写错仍然 fail-fast，报错附带"改正文件或用 `disable` 关掉"的提示。
 
-空 Manifest 可以启动，并保留运行时身份和固定 Skill 发现行为；不启用 Task/MCP/Hooks。
+空 Manifest（或没有 Manifest）可以启动，保留运行时身份和固定 Skill 发现行为，Task/MCP/Hooks 三个内置能力全部开启。
 
 ## 4. 仓库结构
 
@@ -195,11 +195,8 @@ MMP 不复制这些文件的 schema，也不在 Manifest 中代理其字段。
   "version": 1,
   "rules": ["./RULES.md"],
   "skills": ["./skills"],
-  "extensions": [
-    "mmp:task",
-    "mmp:mcp",
-    "mmp:hooks"
-  ]
+  "extensions": ["npm:some-pi-extension@1.2.3"],
+  "disable": ["mmp:hooks"]
 }
 ```
 
@@ -211,8 +208,11 @@ interface MmpManifestV1 {
   rules?: string[];
   skills?: string[];
   extensions?: string[];
+  disable?: Array<"mmp:task" | "mmp:mcp" | "mmp:hooks">;
 }
 ```
+
+`disable`（决策 H3/K4）：只接受三个内置名字，其他值（包括 `mmp:runtime`、第三方 source）是配置错误，报错带上文件路径。同一个文件里同一个名字既在 `extensions` 又在 `disable` 是配置错误。内置能力仍可写在 `extensions` 里（旧配置有效），但已经多余：没写也是开启的。
 
 Extension source scheme：
 
@@ -254,7 +254,11 @@ Harness Core 只理解资源装配，不理解各 Extension 的内部配置。
 rules       = global + trusted project
 skills      = global + trusted project + discovered
 extensions  = global + trusted project
+disable     = global ∪ trusted project
+built-ins   = (declared in extensions, in order) + (remaining defaults: task, mcp, hooks) − disable
 ```
+
+`disable` 优先于另一个文件的 `extensions`：全局 `extensions` 列了 `mmp:task`、可信项目 `disable` 了它，结果是关闭。
 
 处理顺序：
 
@@ -277,7 +281,7 @@ interface ResolvedResource {
 }
 ```
 
-Extension 自己负责其配置文件的 schema 和 global/project 合并语义。Harness 只向已启用的内置 Extension 传递可信配置根；未启用的 Extension 不读取对应配置文件。
+Extension 自己负责其配置文件的 schema 和 global/project 合并语义。Harness 只向开启的内置 Extension 传递可信配置根；被 `disable` 关掉的不读取对应配置文件。
 
 ### 7.1 Skill 自动发现（docs/decisions.md S1）
 
@@ -409,7 +413,7 @@ mmp --model anthropic/claude-sonnet-4 --thinking high --print "fix this"
 
 Rules 与 Skills 不冻结在 Pi argv 中。`mmp:runtime` 通过 `resources_discover` 返回当前 Skill roots；当前 Rules 和运行时契约由同一组代码里的 `mmp:system-prompt` 在 `before_agent_start` 追加。它返回的 `systemPrompt` 会被 Pi 固定成最终文本，之后的 `sections` 修改都会丢失，所以它固定排在 inline 扩展的最后（Pi 1.0 的 MCP 在自己的 `before_agent_start` 里写 `<mcp_servers>`；Manifest 外部扩展本来就排在所有 inline 扩展之前），见 [pi-internals.md](pi-internals.md) `system-prompt-forced-last`。`/reload` 重新解析 Manifest 并加载 Rules/Skills；失败时保留上一份有效装配并显示错误。
 
-Manifest 的 Extension 选择、Hooks/Task 启动配置改变后需要重启。已启用的原生 MCP 通过 `loadConfig` 重新读取配置，`/reload` 可以应用 MCP 服务配置变化；首次在 Manifest 启用 `mmp:mcp` 仍需重启。具体能力边界见 [mcp-design.md](mcp-design.md)。
+Manifest 的 Extension 选择、Hooks/Task 启动配置改变后需要重启。已启用的原生 MCP 通过 `loadConfig` 重新读取配置，`/reload` 可以应用 MCP 服务配置变化；用 `disable` 关闭或重新开启 `mmp:mcp` 仍需重启。具体能力边界见 [mcp-design.md](mcp-design.md)。
 
 ### 9.4 运行约束
 
@@ -442,6 +446,11 @@ interface ResolvedAssembly {
   skills: ResolvedResource[];
   externalExtensions: ResolvedResource[];
   inlineExtensions: Array<{
+    name: "mmp:task" | "mmp:mcp" | "mmp:hooks";
+    source: "global" | "project" | "default"; // "default": 没有 Manifest 列出，默认开启
+    declaredIn?: string;                        // "default" 时没有
+  }>;
+  disabledExtensions: Array<{                   // 每个列出它的文件一条，全局在前
     name: "mmp:task" | "mmp:mcp" | "mmp:hooks";
     source: "global" | "project";
     declaredIn: string;
@@ -496,14 +505,17 @@ const extensionFactories: InlineExtension[] = [
     }
   ],
   "inlineExtensions": [
-    {
-      "name": "mmp:task",
-      "source": "global"
-    }
+    { "name": "mmp:task", "source": "global", "declaredIn": "/Users/byron/.mmp/mmp.json" },
+    { "name": "mmp:mcp", "source": "default" }
+  ],
+  "disabledExtensions": [
+    { "name": "mmp:hooks", "source": "project", "declaredIn": "/repo/.mmp/mmp.json" }
   ],
   "externalExtensions": []
 }
 ```
+
+`inlineExtensions` 是本次开启的内置能力，`disabledExtensions` 是被关掉的和关掉它的文件。运行时清单（`/mmp` 与提示词里的 `declaredResources`）同样有这两项，但 `disabledExtensions` 为空时省略，这样什么都没关时模型看到的清单和 K4 之前一样。
 
 `skills[]` 的每一项在自动发现（7.1 节）时还会带一个 `discovered: "agents" | "mmp" | "project"` 字段；Manifest 声明的 Skill 没有这个字段。
 
@@ -515,6 +527,7 @@ const extensionFactories: InlineExtension[] = [
 - 每项来自 global 还是 project；
 - 项目配置是否被信任和读取；
 - 哪些 Extension 是 inline factory，哪些交给 Pi package resolver；
+- 哪些内置能力开启（声明的还是默认的），哪些被关掉、由哪个文件关掉；
 - 哪个配置错误阻止启动。
 
 禁止输出：
@@ -651,7 +664,7 @@ MMP 不拥有 transport、OAuth、connection lifecycle、tool discovery/call、r
 
 ## 14. Hooks Extension
 
-`mmp:hooks` 已实现为 Pi `InlineExtension`。它只在 Manifest 显式声明 `"mmp:hooks"` 时装配：
+`mmp:hooks` 已实现为 Pi `InlineExtension`。它默认装配，Manifest 的 `"disable": ["mmp:hooks"]` 关掉它（决策 H3/K4，§3.4）；没有 `hooks.json` 时什么都不做：
 
 ```text
 ~/.mmp/hooks.json

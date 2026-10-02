@@ -54,7 +54,8 @@ test("--exclude-tools bash,edit,write leaves only the tools not named", (t) => {
   const f = fixture(t);
   const result = runSdkPath(f, { args: ["--no-project", "--exclude-tools", "bash,edit,write"], dumpTools: true });
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), ["read"]);
+  // mmp:task is on by default (decision H3/K4) and its tools are not named, so they stay.
+  assert.deepEqual(JSON.parse(result.stdout), ["read", "task", "task_status", "task_wait", "task_cancel", "todo"]);
 });
 
 test("without tool flags, the default built-in tools are all enabled", (t) => {
