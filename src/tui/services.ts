@@ -7,8 +7,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   type AgentSessionRuntime,
+  type AgentSessionServices,
+  type CreateAgentSessionFromServicesOptions,
   type CreateAgentSessionRuntimeFactory,
   type InlineExtension,
+  type ScopedModel,
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
@@ -248,6 +251,133 @@ async function buildSessionManager(
   return SessionManager.create(cwd, sessionDir, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
 }
 
+/** createAgentSessionServices leaves extension load results out of its diagnostics; Pi's main.js
+ * adds them itself (~641-648). Without this, a Manifest extension that failed to load was skipped
+ * with nothing on screen (dogfood D45). */
+function collectExtensionDiagnostics(services: AgentSessionServices): Diagnostic[] {
+  const extensions = services.resourceLoader.getExtensions();
+  return [
+    ...extensions.errors.map(({ path, error }): Diagnostic => ({
+      type: "error",
+      message: `Failed to load extension "${path}": ${error}`,
+    })),
+    ...(extensions.warnings ?? []).map(({ path, warning }): Diagnostic => ({
+      type: "warning",
+      message: `Extension package "${path}": ${warning}`,
+    })),
+  ];
+}
+
+/** Pi's buildSessionOptions (main.js ~382-401): prefer the saved default model when it's in scope,
+ * otherwise fall back to the first scoped model. `modelsAreEqual` isn't part of the SDK's export
+ * surface, so provider+id is compared directly instead. */
+function pickScopedModel(scopedModels: readonly ScopedModel[], services: AgentSessionServices): ScopedModel {
+  const savedProvider = services.settingsManager.getDefaultProvider();
+  const savedModelId = services.settingsManager.getDefaultModel();
+  const savedModel = savedProvider !== undefined && savedModelId !== undefined
+    ? services.modelRuntime.getModel(savedProvider, savedModelId)
+    : undefined;
+  const savedInScope = savedModel === undefined
+    ? undefined
+    : scopedModels.find((scopedModel) => scopedModel.model.provider === savedModel.provider && scopedModel.model.id === savedModel.id);
+  return savedInScope ?? scopedModels[0]!;
+}
+
+/** --provider/--model/--thinking, through Pi's resolveCliModel, as Pi's buildSessionOptions
+ * (main.js) does. */
+function resolveCliModelArgs(
+  parsed: ParsedPiArgs,
+  services: AgentSessionServices,
+): { cli: ReturnType<typeof resolveCliModel> | undefined; diagnostics: Diagnostic[] } {
+  const diagnostics: Diagnostic[] = [];
+  // Pi's buildSessionOptions (main.js, 1.0 #10236): --provider alone is an error, not silently
+  // ignored in favour of another provider's default model. resolveCliModel returns nothing
+  // without a model, so the check has to be made here.
+  if (parsed.provider && !parsed.model) {
+    diagnostics.push({
+      type: "error",
+      message: `--provider requires --model (for example: --provider ${parsed.provider} --model <pattern>)`,
+    });
+  }
+  const cli = parsed.provider || parsed.model || parsed.thinking
+    ? resolveCliModel({
+        ...(parsed.provider === undefined ? {} : { cliProvider: parsed.provider }),
+        ...(parsed.model === undefined ? {} : { cliModel: parsed.model }),
+        ...(parsed.thinking === undefined ? {} : { cliThinking: parsed.thinking }),
+        modelRuntime: services.modelRuntime,
+      })
+    : undefined;
+  if (cli?.warning !== undefined) diagnostics.push({ type: "warning", message: cli.warning });
+  if (cli?.error !== undefined) diagnostics.push({ type: "error", message: cli.error });
+  return { cli, diagnostics };
+}
+
+/** Without --models, scope to the enabled-models setting, like main.js's own modelPatterns
+ * (~641: `parsed.models ?? settingsManager.getEnabledModels()`). */
+async function resolveScopedModels(
+  parsed: ParsedPiArgs,
+  services: AgentSessionServices,
+): Promise<{ scopedModels: ScopedModel[]; diagnostics: Diagnostic[] }> {
+  const modelPatterns = parsed.models ?? services.settingsManager.getEnabledModels();
+  if (modelPatterns === undefined || modelPatterns.length === 0) {
+    return { scopedModels: [], diagnostics: [] };
+  }
+  return resolveModelScopeWithDiagnostics(modelPatterns, services.modelRuntime, {
+    signal: AbortSignal.timeout(15_000),
+  });
+}
+
+type InitialModel = {
+  options: Pick<CreateAgentSessionFromServicesOptions, "model" | "thinkingLevel" | "scopedModels">;
+  /** Whether a CLI-originated thinking level (an explicit --thinking, or a --model
+   * pattern:thinking shorthand) needs re-applying once the session has a real model attached
+   * (main.js ~667's cliThinkingOverride/cliThinkingFromModel). */
+  cliThinkingOverride: boolean;
+  diagnostics: Diagnostic[];
+};
+
+/** The model half of Pi's buildSessionOptions (main.js), plus its modelPatterns/resolveModelScope
+ * step: the scoped models, and the initial model and thinking level. */
+async function resolveInitialModel(
+  parsed: ParsedPiArgs,
+  services: AgentSessionServices,
+  sessionManager: SessionManager,
+): Promise<InitialModel> {
+  const { cli, diagnostics: cliDiagnostics } = resolveCliModelArgs(parsed, services);
+  const { scopedModels, diagnostics: scopeDiagnostics } = await resolveScopedModels(parsed, services);
+
+  let initialModel = cli?.model;
+  let initialThinking = cli?.thinkingLevel;
+  const hasHistory = sessionManager.buildSessionContext().messages.length > 0;
+  if (initialModel === undefined && scopedModels.length > 0 && !hasHistory) {
+    const picked = pickScopedModel(scopedModels, services);
+    initialModel = picked.model;
+    initialThinking ??= picked.thinkingLevel;
+  }
+  if (parsed.thinking !== undefined) {
+    initialThinking = parsed.thinking;
+  }
+  return {
+    options: {
+      ...(initialModel === undefined ? {} : { model: initialModel }),
+      ...(initialThinking === undefined ? {} : { thinkingLevel: initialThinking }),
+      ...(scopedModels.length > 0 ? { scopedModels } : {}),
+    },
+    cliThinkingOverride: parsed.thinking !== undefined || cli?.thinkingLevel !== undefined,
+    diagnostics: [...cliDiagnostics, ...scopeDiagnostics],
+  };
+}
+
+/** The tools half of Pi's buildSessionOptions (main.js). */
+function toolOptions(parsed: ParsedPiArgs): Pick<CreateAgentSessionFromServicesOptions, "tools" | "excludeTools" | "noTools"> {
+  const noTools: "all" | "builtin" | undefined = parsed.noTools ? "all" : parsed.noBuiltinTools ? "builtin" : undefined;
+  return {
+    ...(parsed.tools === undefined ? {} : { tools: [...parsed.tools] }),
+    ...(parsed.excludeTools === undefined ? {} : { excludeTools: [...parsed.excludeTools] }),
+    ...(noTools === undefined ? {} : { noTools }),
+  };
+}
+
 export async function createMmpRuntime(options: MmpSessionOptions): Promise<AgentSessionRuntime> {
   process.env.PI_CODING_AGENT_DIR = options.agentDir;
   const parsed = parseArgs([...options.piArgs]);
@@ -268,8 +398,6 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
   }
   const startupSettingsManager = createSettingsManager(options.cwd, options.agentDir);
   configureHttpAtStartup(startupSettingsManager);
-
-  const noTools: "all" | "builtin" | undefined = parsed.noTools ? "all" : parsed.noBuiltinTools ? "builtin" : undefined;
 
   const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
     const services = await createAgentSessionServices({
@@ -295,77 +423,14 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
     // queues after createAgentSessionServices' own awaited refresh, that awaited pass is discarded and
     // the initial model is picked from a stale snapshot. A refresh started now is the latest one.
     await services.modelRuntime.refresh({ allowNetwork: false });
-    const diagnostics: Diagnostic[] = [...services.diagnostics];
-    // createAgentSessionServices leaves extension load results out of its diagnostics; Pi's main.js
-    // adds them itself (~641-648). Without this, a Manifest extension that failed to load was
-    // skipped with nothing on screen (dogfood D45).
-    const extensions = services.resourceLoader.getExtensions();
-    for (const { path, error } of extensions.errors) {
-      diagnostics.push({ type: "error", message: `Failed to load extension "${path}": ${error}` });
-    }
-    for (const { path, warning } of extensions.warnings ?? []) {
-      diagnostics.push({ type: "warning", message: `Extension package "${path}": ${warning}` });
-    }
+    const initial = await resolveInitialModel(parsed, services, sessionManager);
+    const diagnostics: Diagnostic[] = [
+      ...services.diagnostics,
+      ...collectExtensionDiagnostics(services),
+      ...initial.diagnostics,
+    ];
 
-    // Pi's buildSessionOptions (main.js, 1.0 #10236): --provider alone is an error, not silently
-    // ignored in favour of another provider's default model. resolveCliModel returns nothing
-    // without a model, so the check has to be made here.
-    if (parsed.provider && !parsed.model) {
-      diagnostics.push({
-        type: "error",
-        message: `--provider requires --model (for example: --provider ${parsed.provider} --model <pattern>)`,
-      });
-    }
-    const cli = parsed.provider || parsed.model || parsed.thinking
-      ? resolveCliModel({
-          ...(parsed.provider === undefined ? {} : { cliProvider: parsed.provider }),
-          ...(parsed.model === undefined ? {} : { cliModel: parsed.model }),
-          ...(parsed.thinking === undefined ? {} : { cliThinking: parsed.thinking }),
-          modelRuntime: services.modelRuntime,
-        })
-      : undefined;
-    if (cli?.warning !== undefined) diagnostics.push({ type: "warning", message: cli.warning });
-    if (cli?.error !== undefined) diagnostics.push({ type: "error", message: cli.error });
-
-    // Without --models, scope to the enabled-models setting, like main.js's own modelPatterns
-    // (~641: `parsed.models ?? settingsManager.getEnabledModels()`).
-    const modelPatterns = parsed.models ?? services.settingsManager.getEnabledModels();
-    let scopedModels: Awaited<ReturnType<typeof resolveModelScopeWithDiagnostics>>["scopedModels"] = [];
-    if (modelPatterns !== undefined && modelPatterns.length > 0) {
-      const scoped = await resolveModelScopeWithDiagnostics(modelPatterns, services.modelRuntime, {
-        signal: AbortSignal.timeout(15_000),
-      });
-      scopedModels = scoped.scopedModels;
-      diagnostics.push(...scoped.diagnostics);
-    }
-
-    let initialModel = cli?.model;
-    let initialThinking = cli?.thinkingLevel;
-    const hasHistory = sessionManager.buildSessionContext().messages.length > 0;
-    if (initialModel === undefined && scopedModels.length > 0 && !hasHistory) {
-      // Pi's buildSessionOptions (main.js ~382-401): prefer the saved default model when it's in
-      // scope, otherwise fall back to the first scoped model. `modelsAreEqual` isn't part of the
-      // SDK's export surface, so provider+id is compared directly instead.
-      const savedProvider = services.settingsManager.getDefaultProvider();
-      const savedModelId = services.settingsManager.getDefaultModel();
-      const savedModel = savedProvider !== undefined && savedModelId !== undefined
-        ? services.modelRuntime.getModel(savedProvider, savedModelId)
-        : undefined;
-      const savedInScope = savedModel === undefined
-        ? undefined
-        : scopedModels.find((scopedModel) => scopedModel.model.provider === savedModel.provider && scopedModel.model.id === savedModel.id);
-      const picked = savedInScope ?? scopedModels[0]!;
-      initialModel = picked.model;
-      initialThinking ??= picked.thinkingLevel;
-    }
-    if (parsed.thinking !== undefined) {
-      initialThinking = parsed.thinking;
-    }
-    // Whether a CLI-originated thinking level (an explicit --thinking, or a --model
-    // pattern:thinking shorthand) needs re-applying once the session has a real model attached
-    // (main.js ~667's cliThinkingOverride/cliThinkingFromModel).
-    const cliThinkingOverride = parsed.thinking !== undefined || cli?.thinkingLevel !== undefined;
-
+    const initialModel = initial.options.model;
     if (parsed.apiKey !== undefined) {
       if (initialModel === undefined) {
         diagnostics.push({
@@ -391,8 +456,9 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
       : [];
     if (errors.length > 0) {
       const lines = errors.map((diagnostic) => diagnostic.message);
-      if (extensions.errors.length > 0) {
-        lines.push(extensionLoadFailureHint(extensions.errors.map(({ path }) => path), options.assembly));
+      const extensionErrors = services.resourceLoader.getExtensions().errors;
+      if (extensionErrors.length > 0) {
+        lines.push(extensionLoadFailureHint(extensionErrors.map(({ path }) => path), options.assembly));
       }
       throw new Error(lines.join("\n"));
     }
@@ -401,12 +467,8 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
       services,
       sessionManager,
       ...(sessionStartEvent === undefined ? {} : { sessionStartEvent }),
-      ...(initialModel === undefined ? {} : { model: initialModel }),
-      ...(initialThinking === undefined ? {} : { thinkingLevel: initialThinking }),
-      ...(scopedModels.length > 0 ? { scopedModels } : {}),
-      ...(parsed.tools === undefined ? {} : { tools: [...parsed.tools] }),
-      ...(parsed.excludeTools === undefined ? {} : { excludeTools: [...parsed.excludeTools] }),
-      ...(noTools === undefined ? {} : { noTools }),
+      ...initial.options,
+      ...toolOptions(parsed),
     });
     // Re-apply a CLI-originated thinking level once the session has a real model (main.js ~670-673).
     // Note: createAgentSession (sdk.js) already clamps thinkingLevel to the model's supported levels
@@ -414,7 +476,7 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
     // level; it mirrors Pi's own call site anyway, for whatever persistence/event-emission edge case
     // (a scoped model's or extension's thinking-level metadata resolving differently at this later
     // point) motivated Pi to add it.
-    if (created.session.model !== undefined && cliThinkingOverride) {
+    if (created.session.model !== undefined && initial.cliThinkingOverride) {
       created.session.setThinkingLevel(created.session.thinkingLevel);
     }
     return { ...created, services, diagnostics };
