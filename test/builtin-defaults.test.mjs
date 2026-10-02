@@ -305,7 +305,7 @@ test("mmp list shows each built-in's state and the file that disabled it", (t) =
   assert.match(result.stdout, /^Built-in capabilities:\n {2}mmp:task {2}on\n {2}mmp:mcp {3}on\n {2}mmp:hooks off \(disabled in .*mmp\.json\)$/m);
 });
 
-test("mmp remove of a built-in says it stays on and how to disable it", (t) => {
+test("mmp remove of a built-in says it stays on and how to disable it, or that it is already off", (t) => {
   const fixture = createFixture(t);
   writeJson(fixture.globalManifest, { version: 1, extensions: ["mmp:task"] });
 
@@ -335,6 +335,26 @@ test("mmp remove of a built-in says it stays on and how to disable it", (t) => {
   assert.equal(other.stdout, `Removed ${fauxEcho} from ${fixture.globalManifest}. Restart mmp for it to take effect.\n`);
   const missing = runCli(fixture, ["remove", fauxEcho], fixture.home);
   assert.equal(missing.stderr, `mmp: no matching extension source ${JSON.stringify(fauxEcho)} in ${fixture.globalManifest}\n`);
+
+  // Review 2 N3: that file's "disable" already lists it -- say it is off, not "stays on".
+  writeJson(fixture.globalManifest, { version: 1, extensions: [], disable: ["mmp:mcp"] });
+  const disabled = runCli(fixture, ["remove", "mmp:mcp"], fixture.home);
+  assert.equal(disabled.status, 1);
+  assert.equal(
+    disabled.stderr,
+    `mmp: no matching extension source "mmp:mcp" in ${fixture.globalManifest}\n` +
+      `mmp:mcp is built in and already off: "disable" in ${fixture.globalManifest} lists it.\n`,
+  );
+  // Listed in both (a config error) -- removing it leaves it off.
+  writeJson(fixture.globalManifest, { version: 1, extensions: ["mmp:task"], disable: ["mmp:task"] });
+  const both = runCli(fixture, ["remove", "mmp:task"], fixture.home);
+  assert.equal(both.status, 0, both.stderr);
+  assert.equal(
+    both.stdout,
+    `Removed mmp:task from ${fixture.globalManifest}. mmp:task is built in and already off: ` +
+      `"disable" in ${fixture.globalManifest} lists it.\n`,
+  );
+  assert.doesNotMatch(disabled.stderr + both.stdout, /stays on/);
 });
 
 // Review F1: a third-party extension registering one of mmp:task's tools ("todo" here) makes Pi
@@ -373,6 +393,67 @@ for (const mode of ["-p", "tui"]) {
   });
 }
 
+// Review 2 F1: mmp:mcp also loads the inline "codemode" and "tool-search" extensions, so a
+// third-party tool of the same name makes one of those fail: the hint must name mmp:mcp.
+for (const [extension, tool, mode] of [["tool-search", "tool_search", "-p"], ["codemode", "codemode", "tui"]]) {
+  test(`a third-party "${tool}" tool stops a default run (${mode}) with how to disable mmp:mcp, and disabling it works`, (t) => {
+    const fixture = createFixture(t);
+    const rogue = join(fixture.home, `${tool}-rogue.mjs`);
+    writeFileSync(rogue, `export default function (pi) {
+  pi.registerTool({ name: ${JSON.stringify(tool)}, label: "x", description: "third-party",
+    parameters: { type: "object", properties: {} }, execute: async () => ({ content: [] }) });
+}
+`);
+    writeJson(fixture.globalManifest, { version: 1, extensions: [rogue, fauxEcho] });
+
+    const failed = runPrompt(fixture, mode);
+    assert.equal(failed.status, 1, failed.stdout);
+    assert.ok(
+      failed.stderr.includes(`Failed to load extension "<inline:${extension}>": Tool "${tool}" conflicts with ${rogue}`),
+      failed.stderr,
+    );
+    assert.ok(
+      failed.stderr.includes(
+        `Hint: ${extension} is loaded with mmp:mcp, which is built in and on by default; ` +
+          `another extension may clash with it (a tool or command of the same name). ` +
+          `Turn mmp:mcp off: add "disable": ["mmp:mcp"] to ${fixture.globalManifest}.`,
+      ),
+      failed.stderr,
+    );
+    assert.equal(failed.stderr.includes(EXTENSION_LOAD_FAILURE_HINT), false, failed.stderr);
+    assert.doesNotMatch(failed.stderr, /-ne\b|"pi /);
+
+    if (mode === "-p") {
+      writeJson(fixture.globalManifest, { version: 1, extensions: [rogue, fauxEcho], disable: ["mmp:mcp"] });
+      const fixed = runPrompt(fixture, mode);
+      assert.equal(fixed.status, 0, fixed.stderr);
+      assert.equal(fixed.stdout.trim(), "ECHO:hi");
+    }
+  });
+}
+
+// Review 2 N2: only Pi's own "Error: Failed to load extension" lines name failing extensions, not
+// the same phrase in other output (stdout is taken over onto stderr in -p and json mode).
+for (const mode of ["-p", "json"]) {
+  test(`the load-failure hint ignores the phrase in an extension's own output (${mode})`, (t) => {
+    const fixture = createFixture(t);
+    const noisy = join(fixture.home, "noisy.mjs");
+    writeFileSync(noisy, `process.stderr.write('Failed to load extension "<inline:mmp:hooks>": noise\\n');
+console.log('Failed to load extension "<inline:mmp:mcp>": noise');
+export default function () {}
+`);
+    writeJson(fixture.globalManifest, { version: 1, extensions: [noisy, todoRogue, fauxEcho] });
+
+    const args = ["--no-project", "--model", "mmp-faux/echo", ...(mode === "json" ? ["--mode", "json"] : []), "-p", "hi"];
+    const failed = runCli(fixture, args);
+    assert.equal(failed.status, 1, failed.stdout);
+    assert.ok(failed.stderr.includes('Failed to load extension "<inline:mmp:hooks>": noise'), failed.stderr);
+    assert.ok(failed.stderr.includes(`Turn mmp:task off: add "disable": ["mmp:task"] to ${fixture.globalManifest}.`), failed.stderr);
+    assert.doesNotMatch(failed.stderr, /Turn mmp:(?:hooks|mcp) off/);
+    assert.equal(failed.stderr.includes(EXTENSION_LOAD_FAILURE_HINT), false, failed.stderr);
+  });
+}
+
 test("the load-failure hint keeps the plain line for other extensions and adds one per failing built-in", () => {
   const assembly = {
     globalManifest: "/g/mmp.json",
@@ -388,6 +469,25 @@ test("the load-failure hint keeps the plain line for other extensions and adds o
   assert.equal(lines[0], EXTENSION_LOAD_FAILURE_HINT);
   assert.ok(lines[1].includes('Turn mmp:task off: add "disable": ["mmp:task"] to /g/mmp.json.'), lines[1]);
   assert.ok(lines[2].includes('Turn mmp:hooks off: remove "mmp:hooks" from "extensions" in /p/.mmp/mmp.json'), lines[2]);
+
+  // codemode and tool-search load with mmp:mcp (review 2 F1), which is how they are turned off.
+  for (const name of ["codemode", "tool-search"]) {
+    assert.equal(
+      extensionLoadFailureHint([`<inline:${name}>`], assembly),
+      `Hint: ${name} is loaded with mmp:mcp, which is built in and on by default; another extension may ` +
+        'clash with it (a tool or command of the same name). Turn mmp:mcp off: add "disable": ["mmp:mcp"] ' +
+        'to /g/mmp.json. Or remove the other extension from its Manifest ("mmp list" shows which).',
+    );
+  }
+  const declaredMcp = { globalManifest: "/g/mmp.json", inlineExtensions: [{ name: "mmp:mcp", source: "global", declaredIn: "/g/mmp.json" }] };
+  const mcpLines = extensionLoadFailureHint(["<inline:tool-search>", "<inline:x-codemode>"], declaredMcp).split("\n");
+  assert.equal(mcpLines[0], EXTENSION_LOAD_FAILURE_HINT);
+  assert.ok(
+    mcpLines[1].startsWith("Hint: tool-search is loaded with mmp:mcp") &&
+      mcpLines[1].includes('Turn mmp:mcp off: remove "mmp:mcp" from "extensions" in /g/mmp.json and list it in "disable".'),
+    mcpLines[1],
+  );
+  assert.equal(mcpLines.length, 2);
 });
 
 // Review F2: with mmp:mcp on by default, a Manifest that declares only another "/mcp" extension

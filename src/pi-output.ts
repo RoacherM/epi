@@ -19,8 +19,17 @@ export const PI_EXTENSION_LOAD_FAILURE_HINT = 'Hint: Start without extensions us
 export const EXTENSION_LOAD_FAILURE_HINT =
   'Hint: Fix the extension, or remove it from the Manifest that declares it ("mmp list" shows which).';
 
-/** Pi names an inline extension `<inline:NAME>` in its load errors. */
-const BUILT_IN_PATH = /^<inline:(mmp:(?:task|mcp|hooks))>$/;
+/** Pi names an inline extension `<inline:NAME>` in its load errors. mmp:mcp also loads `codemode`
+ * and `tool-search` (src/extensions/index.ts), so their failures are turned off with it. */
+const BUILT_IN_PATH = /^<inline:(mmp:(?:task|mcp|hooks)|codemode|tool-search)>$/;
+const LOADED_WITH: Readonly<Record<string, BuiltInExtensionName>> = {
+  codemode: "mmp:mcp",
+  "tool-search": "mmp:mcp",
+};
+
+/** Pi's `reportDiagnostics` line for a load error, chalk's color codes optional; anchored so other
+ * output mentioning the phrase (an extension's own, stdout taken over in `-p`/json) isn't counted. */
+const LOAD_ERROR_LINE = /^(?:\x1b\[[\d;]*m)*Error: Failed to load extension "([^"]*)"/gm;
 
 /**
  * The hint after extension load failures (`failedPaths` as Pi names them). A built-in is on by
@@ -32,17 +41,22 @@ export function extensionLoadFailureHint(
   failedPaths: readonly string[],
   assembly: Pick<ResolvedAssembly, "globalManifest" | "inlineExtensions">,
 ): string {
-  const builtIns = new Set<BuiltInExtensionName>();
+  const failing = new Set<string>();
   let other = failedPaths.length === 0;
   for (const path of failedPaths) {
-    const name = BUILT_IN_PATH.exec(path)?.[1] as BuiltInExtensionName | undefined;
+    const name = BUILT_IN_PATH.exec(path)?.[1];
     if (name === undefined) other = true;
-    else builtIns.add(name);
+    else failing.add(name);
   }
-  const lines = [...builtIns].map((name) =>
-    `Hint: ${name} is built in and on by default; another extension may clash with it (a tool or ` +
-    `command of the same name). Turn ${name} off: ${builtInOffInstruction(name, assembly)}. ` +
-    'Or remove the other extension from its Manifest ("mmp list" shows which).');
+  const lines = [...failing].map((name) => {
+    const builtIn = LOADED_WITH[name] ?? (name as BuiltInExtensionName);
+    const what = builtIn === name
+      ? `${name} is built in and on by default`
+      : `${name} is loaded with ${builtIn}, which is built in and on by default`;
+    return `Hint: ${what}; another extension may clash with it (a tool or command of the same ` +
+      `name). Turn ${builtIn} off: ${builtInOffInstruction(builtIn, assembly)}. ` +
+      'Or remove the other extension from its Manifest ("mmp list" shows which).';
+  });
   if (other) lines.unshift(EXTENSION_LOAD_FAILURE_HINT);
   return lines.join("\n");
 }
@@ -108,7 +122,7 @@ export function rewritePiOutput(assembly: Pick<ResolvedAssembly, "globalManifest
   // Pi prints every load error (reportDiagnostics) before the hint, each in its own write.
   const failedPaths: string[] = [];
   rewriteStream(process.stderr, (text) => {
-    for (const match of text.matchAll(/Failed to load extension "([^"]*)"/g)) failedPaths.push(match[1]!);
+    for (const match of text.matchAll(LOAD_ERROR_LINE)) failedPaths.push(match[1]!);
     return rewritePiText(text.includes(PI_EXTENSION_LOAD_FAILURE_HINT)
       ? text.replace(PI_EXTENSION_LOAD_FAILURE_HINT, () => extensionLoadFailureHint(failedPaths, assembly))
       : text);

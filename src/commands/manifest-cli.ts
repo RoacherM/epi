@@ -505,7 +505,7 @@ export async function runRemoveCommand(argv: readonly string[], commandName: "re
   if (local) assertProjectTrustedFor(process.cwd(), approveOverride);
   const target = local ? projectTarget(process.cwd()) : globalTarget();
   let removed = false;
-  writeManifest(target, (json) => {
+  const written = writeManifest(target, (json) => {
     const before = extensionsOf(json);
     const extensions = before.filter((entry) => entry !== source);
     removed = extensions.length !== before.length;
@@ -513,7 +513,9 @@ export async function runRemoveCommand(argv: readonly string[], commandName: "re
   });
   // Built-ins are on by default (decision H3/K4): removing the entry, or finding none, leaves it on.
   const builtIn = BUILT_IN_EXTENSIONS[source as BuiltInExtensionName] === true;
-  const disableHint = `${source} is built in and stays on; to turn it off, add "disable": ["${source}"] to ${target.path}.`;
+  const disableHint = written.disabledExtensions.some((extension) => extension.name === source)
+    ? `${source} is built in and already off: "disable" in ${target.path} lists it.`
+    : `${source} is built in and stays on; to turn it off, add "disable": ["${source}"] to ${target.path}.`;
   if (!removed) {
     process.stderr.write(`mmp: no matching extension source ${JSON.stringify(source)} in ${target.path}\n`);
     if (builtIn) process.stderr.write(`${disableHint}\n`);
