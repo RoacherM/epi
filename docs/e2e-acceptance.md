@@ -8,7 +8,7 @@
 
 | 时机 | 跑哪些 |
 |---|---|
-| 升级工具版之前（[dev-workflow-herdr.md](dev-workflow-herdr.md) 第 2 节） | 标 ★ 的冒烟条目 |
+| 升级工具版之前（[dev-workflow-herdr.md](dev-workflow-herdr.md) 第 4 节） | 标 ★ 的冒烟条目 |
 | 大节点审查前（打审查包时附上结果） | 全部 |
 | Pi 内核升级后 | 全部 |
 | 修了某一块的 bug | 那一块的全部条目 |

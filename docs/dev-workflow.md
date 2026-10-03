@@ -7,7 +7,7 @@
 | 角色 | 谁 | 做什么 |
 |---|---|---|
 | 主控 | 主会话（Opus 5.5，high） | 和用户讨论需求、写设计文档、拆任务、审查和验证每个任务（2026-10-03 起不再有单独的初审）、合并、在 Herdr 里实测、向用户汇报 |
-| 顾问 | Fable（主会话的 `advisor` 工具） | 定计划之前、同样的问题第二次出现、宣布完成或合并之前给意见，见 [dev-workflow-herdr.md](dev-workflow-herdr.md) 第 1 节 |
+| 顾问 | Fable（主会话的 `advisor` 工具） | 定计划之前、同样的问题第二次出现、宣布完成或合并之前给意见，见 [dev-workflow-herdr.md](dev-workflow-herdr.md) 第 2 节 |
 | 编码 | Herdr 里的 mmp（magpie opus-5.5，high），见 [code-quality.md](code-quality.md) 第 1 节 | 在独立 git worktree 里实现一个边界清楚的任务，自带测试，提交后交回 |
 | 终审 | Fable（`model: "fable"`，只读） | 大节点审查，主控打审查包 |
 | 阅读 | Claude Code 的 Sonnet 子代理（`model: "sonnet"`，只读） | 读代码、查资料，结论带文件行号或来源链接；主控核对原文后再用。不再用 agy |
