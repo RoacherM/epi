@@ -483,7 +483,7 @@ const extensionFactories: InlineExtension[] = [
 
 ```json
 {
-  "mmpVersion": "0.1.4",
+  "mmpVersion": "<MMP version, see package.json>",
   "piVersion": "<installed Pi version, see package.json>",
   "sdkEntry": "@earendil-works/pi-coding-agent/main",
   "agentDir": "/Users/byron/.mmp/pi",
