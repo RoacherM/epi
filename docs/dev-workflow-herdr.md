@@ -1,10 +1,10 @@
 # 用 mmp 开发 mmp（Herdr 自举流程）
 
-状态：2026-09-30 用户确认，2026-10-01 起启用，是 [dev-workflow.md](dev-workflow.md) 第 1–2 节摘要的完整版；那里的第 5 节（不可违反的约定）不变。2026-10-03 用户确认调整：去掉 mmp 初审，主控自己审查和验证；Fable 作为主控的顾问，在固定时点给意见；读代码和查资料只交给 Sonnet 子代理，不再用 agy；流程按通用的[工作流图](workflow-graph.md)写成节点、交接和闸门。
+状态：2026-09-30 用户确认，2026-10-01 起启用，是 [dev-workflow.md](dev-workflow.md) 第 1–2 节摘要的完整版；那里的第 5 节（不可违反的约定）不变。2026-10-03 用户确认调整：去掉 mmp 初审，主控自己审查和验证；Fable 作为主控的顾问，在固定时点给意见；读代码和查资料只交给 Sonnet 子代理，不再用 agy；流程按通用的[工作流图](https://github.com/RoacherM/Wayne-Skills/blob/main/skills/workflow-graph/SKILL.md)（wayne-skills 的 `workflow-graph` skill）写成节点、交接和闸门。
 
 目标：编码由 Herdr 里运行的 mmp 完成，mmp 在给自己干活的过程中暴露问题，再按优先级修掉。主控管进度、文档，并负责每个任务的审查和验证。
 
-**怎么读本文**：第 1–3 节是完整流程，只读这三节就能把一个任务从计划走到汇报；那里出现的术语都在第 1 节定义。链接只指向细节：命令原文（[code-quality.md](code-quality.md) 第 3 节）和冒烟测试条目（[e2e-acceptance.md](e2e-acceptance.md)）。第 4 节以后是工具和环境的细节。只有要改流程本身的结构时，才需要读通用的 [workflow-graph.md](workflow-graph.md)。
+**怎么读本文**：第 1–3 节是完整流程，只读这三节就能把一个任务从计划走到汇报；那里出现的术语都在第 1 节定义。链接只指向细节：命令原文（[code-quality.md](code-quality.md) 第 3 节）和冒烟测试条目（[e2e-acceptance.md](e2e-acceptance.md)）。第 4 节以后是工具和环境的细节。只有要改流程本身的结构时，才需要读通用的 [workflow-graph skill](https://github.com/RoacherM/Wayne-Skills/blob/main/skills/workflow-graph/SKILL.md)。
 
 ## 1. 术语
 
