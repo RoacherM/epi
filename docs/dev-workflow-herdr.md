@@ -1,18 +1,28 @@
 # 用 mmp 开发 mmp（Herdr 自举流程）
 
-状态：2026-09-30 用户确认，2026-10-01 起启用，替换 [dev-workflow.md](dev-workflow.md) 第 1–4 节；第 5 节（不可违反的约定）不变。代码规范、合并前检查、审查清单和 code smell 扫描见 [code-quality.md](code-quality.md)。
+状态：2026-09-30 用户确认，2026-10-01 起启用，替换 [dev-workflow.md](dev-workflow.md) 第 1–4 节；第 5 节（不可违反的约定）不变。2026-10-03 用户确认调整角色：去掉 mmp 初审，改由主控审查和验证；Fable 作为主控的顾问，在固定时点给意见；读代码和查资料只交给 Sonnet 子代理，不再用 agy。代码规范、合并前检查、审查清单和 code smell 扫描见 [code-quality.md](code-quality.md)。
 
-目标：开发和审查都由 Herdr 里运行的 mmp 完成，mmp 在给自己干活的过程中暴露问题，再按优先级修掉。主控只管进度、文档和质量把关。
+目标：编码由 Herdr 里运行的 mmp 完成，mmp 在给自己干活的过程中暴露问题，再按优先级修掉。主控管进度、文档，并负责每个任务的审查和验证。
 
 ## 1. 角色
 
 | 角色 | 谁 | 在哪 | 做什么 |
 |---|---|---|---|
-| 主控 | Claude Code 主会话 | 用户的会话 | 拆任务、写任务说明、盯进度、合并、同步文档、分拣 mmp 问题、向用户汇报 |
-| 编码 | mmp，`magpie` 的 `claude/claude-opus-5-5`，thinking `high`（用户 2026-10-01 定为默认） | Herdr pane，cwd 是任务的 worktree | 按任务说明实现、写测试、提交 |
-| 初审 | mmp，`claude/claude-sonnet-5-5`，thinking `high`（`startmmp <worktree> sonnet`，用户 2026-10-02 定），每次新会话 | 另一个 pane，同一 worktree，只读 | 每个任务合并前审查：复现、分级、写审查报告（清单见 code-quality.md 第 4 节） |
-| 终审 | Fable（主控的只读 subagent） | 主控会话 | 大节点审查：主控把一个阶段的改动打成审查包交给它（见第 5 节） |
-| 调研 | agy（`agy -p`）或 mmp | — | 同现在；写进 scratchpad，主控核对后再用 |
+| 主控 | Claude Code 主会话（Opus 5.5，effort high） | 用户的会话 | 拆任务、写任务说明、盯进度、**审查和验证每个任务**（清单见 code-quality.md 第 4 节）、合并、同步文档、分拣 mmp 问题、向用户汇报 |
+| 顾问 | Fable（主控会话的 `advisor` 工具，自动读到主控的整个会话） | 主控会话 | 只在三个时点给意见（见下）；日常步骤不调用；不写代码 |
+| 编码 | mmp，`magpie` 的 `claude/claude-opus-5-5`，thinking `high`（用户 2026-10-01 定为默认，2026-10-03 确认不改） | Herdr pane，cwd 是任务的 worktree | 按任务说明实现、写测试、提交 |
+| 阅读 | Claude Code 的 Sonnet 子代理（Agent 工具，`model: "sonnet"`），只读 | 主控会话 | 读代码（explorer，用 `Explore` 类型）：回答"X 在哪、谁调用它、改它会影响什么"；查资料（researcher，用 `general-purpose` 类型）：外部文档、规范、论文。结论都要带文件行号或来源链接，主控引用前打开原文核对 |
+| 终审 | Fable（主控的只读 subagent，`model: "fable"`） | 主控会话 | 大节点审查：主控把一个阶段的改动打成审查包交给它（见第 5 节） |
+
+顾问的三个时点：
+
+| 时点 | 例子 |
+|---|---|
+| 定计划之前 | 写 `brief.md`、拆任务、改设计文档之前，先读完需要的材料，再问顾问 |
+| 同样的问题第二次出现 | 同一条审查发现第二次退回；worker 或主控第二次撞上同一个错误；方案迟迟收不拢 |
+| 宣布完成之前 | 合并一个任务之前（主控审查和验证做完以后）；向用户报告完成之前。问之前先把成果落盘（提交、写文件） |
+
+主控会话没有 `advisor` 工具时，先告诉用户，不要跳过这些时点。顾问的意见和主控查到的证据冲突时，带着证据再问一次，不要悄悄换方向。
 
 用哪个模型、什么 thinking 级别，由启动命令决定（第 3 节），不靠 mmp 的默认设置。
 
@@ -59,7 +69,7 @@ cd <worktree> && node ~/Projects/sides/mmp-tool/dist/cli.js --approve \
   --provider magpie --model claude/claude-opus-5-5 --thinking high
 ```
 
-编码用 `startmmp <worktree> opus`，审查用 `startmmp <worktree> sonnet`。每个任务、每轮审查都用新会话，不复用上一个的上下文。
+编码用 `startmmp <worktree> opus`。每个任务、每轮修改都用新会话，不复用上一个的上下文。
 
 ## 4. 任务交接：用文件，不靠读屏
 
@@ -70,21 +80,23 @@ cd <worktree> && node ~/Projects/sides/mmp-tool/dist/cli.js --approve \
 | `brief.md` | 主控 | 任务说明，格式同 [dev-workflow.md](dev-workflow.md) 第 3 节（起点、规格来源、状态清单、测试要求、测试卫生、边界、交付）；默认基于 `main`，写明实际基准提交 |
 | `report.md` | 编码者 | 每项做了什么、对照了 Pi 的哪些函数、测试数、没验证的地方；最后一行 `STATUS: done` 或 `STATUS: blocked` |
 | `question.md` | 编码者 | 需要主控决定的问题；写完就停下等 |
-| `review-N.md` | 初审 | 第 N 轮审查：结论（可合并 / 不可合并）、按严重程度排的发现，每条标 CONFIRMED 或 PLAUSIBLE、附文件行号和复现命令 |
+| `review-N.md` | 主控 | 退回时写：第 N 轮审查按严重程度排的发现，每条标 CONFIRMED 或 PLAUSIBLE、附文件行号和复现命令 |
 
 流程：
 
 ```
-主控写 brief.md
+主控读材料（大范围读代码交 Sonnet explorer）→ 问顾问 → 写 brief.md
   → pane 里发一行：Read .dev/tasks/<id>/brief.md and do the task. Write your report to .dev/tasks/<id>/report.md.
   → 等：herdr pane wait-output <pane> --match "STATUS:"（再读 report.md 确认），超时就读屏看卡在哪
   → 有 question.md → 主控回答（send-text）→ 继续等
-  → report.md 写完 → 主控看 diff、跑 npm test
-  → 初审 pane：Review the diff of <branch> against <任务说明中的基准提交> per .dev/tasks/<id>/brief.md; write .dev/tasks/<id>/review-1.md. Do not modify files.
-      审完主控检查 worktree `git status` 仍然干净（mmp 没有权限系统，只读靠指令 + 事后检查）
-  → 不可合并 → 把 review-N.md 发给编码者修 → 再审（只审新提交，但重跑上一轮全部复现命令）
-  → 可合并 → 主控合并、跑完整测试、Herdr 验收 → 升级工具版
+  → report.md 写完 → 主控审查和验证（code-quality.md 第 3、4 节）：
+      读 diff、逐条过审查清单、在临时副本里重跑"修复前失败"、跑完整测试；
+      要确认某个改动影响到哪里时派 Sonnet explorer，结论打开原文核对后再用
+  → 不可合并 → 主控写 review-N.md 发给编码者修 → 再审（只审新提交，但重跑上一轮全部复现命令）
+      同一条发现第二次退回 → 先问顾问，再决定继续退回、改任务说明还是自己接手
+  → 可合并 → 问顾问 → 主控合并、跑完整测试、Herdr 验收 → 升级工具版
   → 一个阶段的任务都合并后 → 主控打审查包交 Fable 终审（第 5 节）
+  → 问顾问 → 向用户汇报
 ```
 
 退回时主控先把上一轮的 `report.md` 改名为 `report-N.md` 再发指令，否则旧文件里的 `STATUS:` 会让等待立刻结束（D2 试跑时发现）。
@@ -93,7 +105,7 @@ cd <worktree> && node ~/Projects/sides/mmp-tool/dist/cli.js --approve \
 
 ## 5. 质量把关
 
-- **初审**：每个任务合并前都要，由 mmp（sonnet-5.5）做，清单见 [code-quality.md](code-quality.md) 第 4 节。
+- **主控审查**：每个任务合并前都要，由主控自己做，清单见 [code-quality.md](code-quality.md) 第 4 节。审查做完、合并之前问一次顾问（第 1 节）。
 - **终审（Fable）**：只在大节点做（用户 2026-09-30 定），不逐个任务审。大节点指一个阶段的功能做完、准备验收的时候，例如"Pi 0.99 + MCP"、"/settings"这样一组任务全部合并后，或者工具版要跨大版本升级前。
 - **审查包**：主控在 `.dev/milestones/<名字>/pack.md` 里打包，交给 Fable：
 
@@ -101,14 +113,14 @@ cd <worktree> && node ~/Projects/sides/mmp-tool/dist/cli.js --approve \
   |---|---|
   | 目标和范围 | 这个阶段要做成什么，对应哪些设计文档章节和决策编号 |
   | 提交范围 | `git log <上一个大节点>..<现在>`，每个任务的分支和合并提交 |
-  | 每个任务的材料 | `brief.md`、`report.md`、各轮 `review-N.md` 的路径，以及初审没解决的分歧 |
+  | 每个任务的材料 | `brief.md`、`report.md`、各轮 `review-N.md` 的路径，以及审查中没解决的分歧 |
   | 风险清单 | 主控标出碰到硬规则（配置隔离、信任、密钥、对外接口）和复杂状态的文件和函数，请 Fable 重点看 |
   | 证据 | 完整测试的输出、模型可见快照的差异、Herdr 验收的步骤和画面 |
   | 已知问题 | `docs/dogfood-issues.md` 里这个阶段新增、还没修的条目 |
   | 要 Fable 回答的问题 | 主控拿不准的具体点 |
 
   Fable 的结论照旧：可合并/不可合并、按严重程度排的发现（CONFIRMED / PLAUSIBLE、文件行号、复现）。不通过的发现拆成任务交回 mmp 修，修完主控再打一个小的补充包复查。
-- **质量记录**：`subagent-quality-log.md` 继续记，作者一栏写 `mmp-sonnet` / `mmp-opus`，另记"初审放过、被 Fable 在大节点查出"的问题数——这是判断初审能不能信任的依据。
+- **质量记录**：`subagent-quality-log.md` 继续记，作者一栏写 `mmp-opus`，另记"主控审查放过、合并后或被 Fable 在大节点查出"的问题数——这是判断去掉独立初审行不行的依据。主控审查放过的 P1 累计到 2 个，就向用户提出恢复独立初审（阈值是主控定的，用户可改）。
 
 ## 6. mmp 自己的问题：记录和修复顺序
 
@@ -138,7 +150,6 @@ cd <worktree> && node ~/Projects/sides/mmp-tool/dist/cli.js --approve \
 | pane | 用途 |
 |---|---|
 | worker-1 | 编码者（必要时 worker-2 并行第二个任务，两个任务改的文件不重叠） |
-| reviewer | 初审 |
 | check | 主控的 Herdr 验收、跑命令。用户可能随时关掉它，用之前先确认还在（`herdr.sh` 找不到 pane 会直接报错），不在就重新 split 一个 |
 | grok | 对比 grok（需要时开） |
 
