@@ -28,6 +28,8 @@ MMP（Make My Pi）是在同一 Node.js 进程中使用锁定版本 Pi SDK 的�
 
 MMP 不调用 PATH 中的全局 `pi`，不复制 Agent Loop。交互应用由 MMP 调用 `createAgentSessionRuntime()` 并复用 pi-tui 组件；print/json/rpc 等模式仍通过 Pi 的 `main()` 运行。
 
+内置 `magpie` 模型 provider 由包内隐藏 factory 注册，使用 Pi native Provider、动态目录和公开的协议客户端；不属于 Manifest 的三个能力，也不新增 Manifest 字段。设计见 [magpie-design.md](magpie-design.md)，使用见 [guide/magpie.md](guide/magpie.md)。TUI、print/json/rpc、模型列表和 Task worker 共用这份 provider 实现。
+
 `mmp:runtime` 始终注入，用于运行时身份、Rules、Skills、`/mmp` 与启动信息。Task、MCP、Hooks 只有被 Manifest 声明后才装配。Skills 除 Manifest 外还从三个固定根目录发现，见 §7.1。
 
 ## 2. 核心架构
@@ -131,6 +133,7 @@ Rules 与第三方 Extensions 未声明就不加载。固定 `mmp:runtime` 与 �
 | `src/assembly.ts`、`src/manifest.ts`、`src/project.ts` | 装配、schema 和 trust |
 | `src/tui/` | 交互应用与工具渲染 |
 | `src/extensions/`、`src/worker.ts` | 内置能力与隔离 Task worker |
+| `src/providers/` | 内置 Magpie provider、模型目录转换和协议分发 |
 | `dist/` | 必须与源码构建结果一致的已提交产物 |
 | `test/`、`test/fixtures/` | 离线契约测试、伪模型与隔离配置 |
 | `scripts/`、`.github/workflows/` | 升级、发布、benchmark 和 CI |
@@ -150,7 +153,7 @@ Rules 与第三方 Extensions 未声明就不加载。固定 `mmp:runtime` 与 �
 ├── task.json
 ├── mcp.json
 ├── hooks.json
-└── pi/                 # Pi auth/settings/sessions/trust
+└── pi/                 # Pi auth/settings/sessions/trust/models-store
 ```
 
 项目配置：

@@ -7,7 +7,8 @@
 //   2. the doc table and this registry never drift apart (same ids, both directions);
 //   3. a *new* deep reach added to src/ without a matching row fails here, not silently.
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
@@ -29,6 +30,44 @@ function assertFunction(value, label) {
 }
 
 const registry = [
+  {
+    id: "magpie-protocol-apis",
+    async check() {
+      const factories = [
+        ["anthropic-messages.lazy", "anthropicMessagesApi"],
+        ["openai-responses.lazy", "openAIResponsesApi"],
+        ["openai-completions.lazy", "openAICompletionsApi"],
+        ["google-generative-ai.lazy", "googleGenerativeAIApi"],
+      ];
+      for (const [subpath, name] of factories) {
+        const module = await import(`@earendil-works/pi-ai/api/${subpath}`);
+        assertFunction(module[name], name);
+        const api = module[name]();
+        assertFunction(api.stream, `${name}.stream`);
+        assertFunction(api.streamSimple, `${name}.streamSimple`);
+      }
+    },
+  },
+  {
+    id: "models-store-file",
+    async check() {
+      const { FileModelsStore } = await importDeep("core", "models-store.js");
+      assertFunction(FileModelsStore, "FileModelsStore");
+      const dir = mkdtempSync(join(tmpdir(), "mmp-models-store-"));
+      try {
+        const path = join(dir, "models-store.json");
+        const store = new FileModelsStore(path);
+        const entry = { models: [{ id: "probe", provider: "probe" }], checkedAt: 1, etag: "tag" };
+        await store.write("probe", entry);
+        assert.deepEqual(await store.read("probe"), entry);
+        assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { probe: entry });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+      const runtime = readFileSync(join(piDist, "core", "model-runtime.js"), "utf8");
+      assert.match(runtime, /join\(dirname\(modelsPath\), "models-store\.json"\)/, "ModelRuntime no longer keeps models-store.json beside models.json");
+    },
+  },
   {
     id: "keybindings-manager",
     async check() {
@@ -1000,6 +1039,7 @@ function findDeepPathUsages() {
 
 const KNOWN_DEEP_PATHS = new Map([
   ["core/keybindings.js", "keybindings-manager"],
+  ["core/models-store.js", "models-store-file"],
   ["utils/clipboard.js", "clipboard-text"],
   ["utils/clipboard-image.js", "clipboard-image"],
   ["utils/mime.js", "mime-sniffer"],

@@ -2,17 +2,16 @@
 
 import {
   createAgentSession,
-  DefaultResourceLoader,
-  ModelRuntime,
+  createAgentSessionServices,
   resolveCliModel,
   SessionManager,
   SettingsManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import { join } from "node:path";
 import { readFileSync, unlinkSync } from "node:fs";
 
 import type { TaskCapsule } from "./task-runtime.js";
+import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
 
 interface WorkerResultEvent {
   type: "result";
@@ -113,27 +112,34 @@ async function main(): Promise<void> {
     capsule.agentDir,
     { projectTrusted: false },
   );
-  const resourceLoader = new DefaultResourceLoader({
+  const usingMagpie = capsule.model === undefined
+    ? settingsManager.getDefaultProvider() === "magpie"
+    : capsule.model.startsWith("magpie/");
+  const { modelRuntime, resourceLoader, diagnostics } = await createAgentSessionServices({
     cwd: capsule.cwd,
     agentDir: capsule.agentDir,
     settingsManager,
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    noContextFiles: true,
-    systemPrompt: "",
-    appendSystemPrompt: [],
-    systemPromptOverride: () => undefined,
-    appendSystemPromptOverride: () =>
-      capsule.systemPrompt.length === 0 ? [] : [capsule.systemPrompt],
+    resourceLoaderOptions: {
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+      systemPrompt: "",
+      appendSystemPrompt: [],
+      systemPromptOverride: () => undefined,
+      appendSystemPromptOverride: () =>
+        capsule.systemPrompt.length === 0 ? [] : [capsule.systemPrompt],
+      extensionFactories: [createMagpieInlineExtension({
+        agentDir: capsule.agentDir,
+        online: process.env.PI_OFFLINE === undefined,
+        discover: usingMagpie,
+        required: usingMagpie,
+      })],
+    },
   });
-  await resourceLoader.reload();
-
-  const modelRuntime = await ModelRuntime.create({
-    authPath: join(capsule.agentDir, "auth.json"),
-    modelsPath: join(capsule.agentDir, "models.json"),
-  });
+  const errors = diagnostics.filter((diagnostic) => diagnostic.type === "error");
+  if (errors.length > 0) throw new Error(errors.map((diagnostic) => diagnostic.message).join("; "));
   const resolvedModel = capsule.model === undefined
     ? undefined
     : resolveCliModel({ cliModel: capsule.model, modelRuntime });

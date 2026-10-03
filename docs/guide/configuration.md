@@ -82,6 +82,10 @@ Manifest 修改后：
 - 已启用 `mmp:mcp` 时，修改 `mcp.json` 后可用 `/reload` 重新读取配置并重建连接；关掉或重新打开 `mmp:mcp` 仍需重启。
 - `/mmp` 显示当前实际生效的资源清单：开启的内建能力在 `inlineExtensions`（默认开启的标 `"source": "default"`，没有 `declaredIn`），被关掉的在 `disabledExtensions`（带关掉它的文件）。`mmp --dry-run` 和 `mmp list`（"Built-in capabilities:" 一段）也显示同样的信息。Manifest 输入字段只有 `version`、`rules`、`skills`、`extensions`、`disable`；`skillRoots`、`declaredResources` 等仅为运行时报告字段。
 
+## 内置模型 provider
+
+MMP 自带 `magpie` provider，默认连接本机 `http://127.0.0.1:3425`，自动发现模型并按模型选择协议。它不需要 Manifest 扩展声明，也不是 `disable` 中的第四个能力。唯一的配置是 API key，用 `/login` → Sign in with an API key → Magpie 保存；详见 [Magpie](magpie.md)。模型列表保存在 MMP 独立的 `pi/models-store.json`。
+
 ## 配置检查与故障定位
 
 ```bash

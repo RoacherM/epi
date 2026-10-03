@@ -13,6 +13,7 @@ import { resolveMmpPaths } from "./paths.js";
 import { rewritePiOutput } from "./pi-output.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { installProviderCostValidation } from "./provider-validation.js";
+import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
 import { createMmpRuntimeIdentity, } from "./runtime-identity.js";
 import { askProjectTrust, saveProjectTrustChoice, shouldAskProjectTrust } from "./trust-prompt.js";
 import { runMmpUpdateCommand, updateCheckDisabled } from "./update.js";
@@ -117,7 +118,10 @@ async function collectExtensionHelpFlags(args, environment, cwd) {
     try {
         const prepared = prepareParsedMmpRun(args, environment, cwd);
         process.env.PI_CODING_AGENT_DIR = prepared.agentDir;
-        const extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly);
+        const extensionFactories = [
+            createMagpieInlineExtension({ agentDir: prepared.agentDir, online: false, discover: false }),
+            ...buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly),
+        ];
         const services = await createAgentSessionServices({
             cwd,
             agentDir: prepared.agentDir,
@@ -173,6 +177,14 @@ async function maybeAskProjectTrust(args, environment, cwd) {
     saveProjectTrustChoice(paths.agentDir, choice);
     args.projectTrustOverride = choice.trusted;
 }
+/** Magpie is selected when the model flags name it or, without model flags, when it is the saved
+ * default provider. Only then does startup wait for its catalog. */
+function selectsMagpie(modelArgs, agentDir, cwd) {
+    if (modelArgs.provider !== undefined || modelArgs.model !== undefined) {
+        return modelArgs.provider === "magpie" || modelArgs.model?.startsWith("magpie/") === true;
+    }
+    return SettingsManager.create(cwd, agentDir, { projectTrusted: false }).getDefaultProvider() === "magpie";
+}
 export async function runMmp(argv) {
     // Subcommands read/write MMP's own agent directory (~/.mmp/pi) directly, never through
     // prepareMmpRun -- set the isolation guard (never Pi's default ~/.pi/agent) before each, but not
@@ -211,7 +223,19 @@ export async function runMmp(argv) {
         disabled: updateCheckDisabled(process.env, args.passthrough),
     };
     // Building the inline extensions also validates their config (MCP, hooks), which --dry-run reports.
-    const extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly, updateCheck, passthroughHasFlag(args.passthrough, "--verbose"));
+    const modelArgs = parseArgs([...args.passthrough]);
+    const usingMagpie = selectsMagpie(modelArgs, prepared.agentDir, process.cwd());
+    const extensionFactories = [
+        createMagpieInlineExtension({
+            agentDir: prepared.agentDir,
+            // Same test as Pi's ModelRuntime: any PI_OFFLINE value (bridged from MMP_OFFLINE) is offline.
+            online: !modelArgs.offline && process.env.PI_OFFLINE === undefined,
+            discover: usingMagpie || isListModelsRun(prepared.piArgs),
+            required: usingMagpie,
+            ...(!usingMagpie || modelArgs.apiKey === undefined ? {} : { apiKey: modelArgs.apiKey }),
+        }),
+        ...buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly, updateCheck, passthroughHasFlag(args.passthrough, "--verbose")),
+    ];
     if (prepared.args.dryRun) {
         const output = {
             mmpVersion: MMP_VERSION,
