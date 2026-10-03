@@ -11,21 +11,26 @@ herdr pane get "$P" >/dev/null 2>&1 || { echo "herdr.sh: pane $P not found" >&2;
 WORKFLOW_LOG=${WORKFLOW_LOG:-$(cd "$(git rev-parse --git-common-dir)/.." && pwd -P)/.workflow/log.jsonl}
 
 # Append one fact to the log. $1 = task, $2 = event, $3 = node, rest = key=value (by defaults to
-# 主控; round and cap are numbers). node writes the JSON so quoting in notes cannot break a line.
+# 主控; round and cap are numbers; a gate's result is pass or fail). node writes the JSON so quoting
+# in notes cannot break a line, and refuses a malformed fact instead of writing it.
 fact() {
   local task=$1 event=$2 where=$3; shift 3
   mkdir -p "$(dirname "$WORKFLOW_LOG")"
   node -e '
+    process.on("uncaughtException", (err) => { console.error(err.message); process.exit(1) })
     const [task, event, node, ...pairs] = process.argv.slice(1)
     const now = new Date(), offset = -now.getTimezoneOffset()
     const pad = (n) => String(Math.trunc(Math.abs(n))).padStart(2, "0")
-    const local = new Date(now.getTime() + offset * 60000).toISOString().slice(0, 19)
+    const local = new Date(now.getTime() + offset * 60000).toISOString().slice(0, 23)
     const fact = { time: local + (offset < 0 ? "-" : "+") + pad(offset / 60) + ":" + pad(offset % 60), task, event, node, by: "主控" }
     for (const pair of pairs) {
       const i = pair.indexOf("=")
+      if (i < 1) throw new Error("fact: expected key=value, got " + JSON.stringify(pair))
       const key = pair.slice(0, i), value = pair.slice(i + 1)
+      if ((key === "round" || key === "cap") && !/^[0-9]+$/.test(value)) throw new Error("fact: " + key + " must be a number, got " + JSON.stringify(value))
       fact[key] = key === "round" || key === "cap" ? Number(value) : value
     }
+    if (event === "gate" && fact.result !== "pass" && fact.result !== "fail") throw new Error("fact: a gate needs result=pass or result=fail")
     process.stdout.write(JSON.stringify(fact) + "\n")
   ' "$task" "$event" "$where" "$@" >> "$WORKFLOW_LOG"
 }
@@ -72,6 +77,7 @@ waitreport() {
   for i in $(seq 1 "$limit"); do
     seen=$(grep -oE '^STATUS: (done|blocked)' "$report" 2>/dev/null | tail -1)
     if [[ -n $seen ]]; then
+      [[ -e $dir/question.md ]] && echo "(warning: $dir/question.md is still there; answer it and rename it before re-dispatching)" >&2
       fact "$task" "${seen#STATUS: }" 实现 by=worker
       echo "$seen"; return 0
     fi
