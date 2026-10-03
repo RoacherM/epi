@@ -67,13 +67,13 @@ quitmmp() {
 # - "Compacting…" has been on screen for 10 minutes or more;
 # - mmp is no longer running in the pane.
 waitreport() {
-  local report=$1 limit=${2:-3600} idle=0 i screen compacting status
+  local report=$1 limit=${2:-3600} idle=0 i screen compacting seen
   local dir=${report%/*}; local task=${dir##*/}
   for i in $(seq 1 "$limit"); do
-    status=$(grep -oE '^STATUS: (done|blocked)' "$report" 2>/dev/null | tail -1)
-    if [[ -n $status ]]; then
-      fact "$task" "${status#STATUS: }" 实现 by=worker
-      echo "$status"; return 0
+    seen=$(grep -oE '^STATUS: (done|blocked)' "$report" 2>/dev/null | tail -1)
+    if [[ -n $seen ]]; then
+      fact "$task" "${seen#STATUS: }" 实现 by=worker
+      echo "$seen"; return 0
     fi
     if [[ -e $dir/question.md ]]; then
       fact "$task" question 实现 by=worker to=主控
