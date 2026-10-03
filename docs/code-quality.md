@@ -1,16 +1,10 @@
 # 代码规范与质量检查
 
-状态：2026-10-02 用户确认（"把我们的代码开发规范、代码质量检查写到文档中，后续按照这个模式进行"）。流程（谁拆任务、怎么交接）见 [dev-workflow-herdr.md](dev-workflow-herdr.md)；不可违反的约定见 [dev-workflow.md](dev-workflow.md) 第 5 节。本文只管两件事：代码写成什么样，合并前和阶段结束时怎么检查。
+状态：2026-10-02 用户确认（"把我们的代码开发规范、代码质量检查写到文档中，后续按照这个模式进行"）；2026-10-03 角色、审查清单和记录移到流程文档。流程（谁拆任务、怎么交接）见 [dev-workflow-herdr.md](dev-workflow-herdr.md)；不可违反的约定见 [dev-workflow.md](dev-workflow.md) 第 5 节。本文只管两件事：代码写成什么样，合并前和阶段结束时怎么检查。
 
 ## 1. 角色和模型
 
-| 角色 | 谁 | 在哪 |
-|---|---|---|
-| 编码 | mmp，magpie `claude/claude-opus-5-5`，thinking high（`startmmp <worktree> opus`） | Herdr pane，任务自己的 worktree |
-| 初审、复审 | mmp，magpie `claude/claude-sonnet-5-5`，thinking high（`startmmp <worktree> sonnet`），每次开新会话 | Herdr pane，同一 worktree，只读 |
-| 大节点终审 | Fable（主控的只读 subagent），主控打审查包 | 主控会话 |
-| 大量阅读（代码通读、调研） | agy（`agy -p`）；结论只当线索，由初审角色对照代码核实后才用（2026-10-02 agy 的报告引用过不存在的代码） | scratchpad |
-| 主控 | Claude Code 主会话：拆任务、写任务说明、合并、同步文档、汇报。主控自己不调用 magpie，只经由 Herdr 里的 mmp 使用 | 用户的会话 |
+谁编码、谁审查、用什么模型，见 [dev-workflow-herdr.md](dev-workflow-herdr.md) 第 2 节。本文用到的"主控""worker""修复前失败"等术语也在那里第 1 节定义。
 
 ## 2. 写代码的规范
 
@@ -29,7 +23,7 @@
 
 ## 3. 每个任务合并前必须过的检查
 
-worker 交付前自己跑，初审复核，主控合并后再跑一遍完整测试。
+这是合并闸门 G1 的各项命令（[dev-workflow-herdr.md](dev-workflow-herdr.md) 第 3.3 节）。worker 交付前自己跑，主控审查时复核，合并后再跑一遍完整测试。
 
 | 检查 | 命令 | 通过标准 |
 |---|---|---|
@@ -42,19 +36,9 @@ worker 交付前自己跑，初审复核，主控合并后再跑一遍完整测�
 | 不改行为的重构 | 改动前后各跑一遍受影响的命令（`--help`、子命令、`-p` 配假模型、`--dry-run` 等），比对 stdout、stderr、退出码 | 逐字节一致 |
 | TUI 改动 | Herdr 里用真实终端、真实模型走一遍（[e2e-acceptance.md](e2e-acceptance.md) 对应条目） | 按清单 |
 
-## 4. 审查清单（初审、复审用）
+## 4. 审查清单
 
-审查者开新会话，只读，不改仓库和 worktree，所有复现都在临时副本和禁网沙箱里做。
-
-1. **对照任务说明**：每项要求是否做到；有没有做任务以外的改动。
-2. **复跑证据**：至少重跑两个"修复前失败"检查；必要时故意改坏代码（mutation），确认测试能抓到。
-3. **硬规则**：配置隔离（不读 `~/.pi`、项目 `.pi/`、用户的 `PI_*`）、信任、密钥、对外只暴露 mmp。碰到就阻塞合并。
-4. **状态和路径**：新增或改动的状态，在启动、切换会话、`/new`、`/resume`、`/reload`、中止、退出时是否都对。
-5. **第 2 节的规范**：复杂度、注释、无用导出、旧路径、失败是否可见。
-6. **测试质量**：测试是否真能失败（不是被重绘、缓存或宽松正则碰巧满足）；是否碰了真实环境。
-7. **dist**：重新构建后和提交的一致。
-
-审查报告写到 `.dev/tasks/<id>/review-N.md`：开头是结论（可合并 / 不可合并），然后按严重程度排发现，每条标 CONFIRMED（跑出来了）或 PLAUSIBLE（推断），附文件行号和复现命令，最后写没检查的部分，结尾一行 `STATUS: done`。"算不算问题"这类策略问题由主控决定，写进下一轮任务说明。
+审查清单是流程的一部分，写在 [dev-workflow-herdr.md](dev-workflow-herdr.md) 第 3.1 节；退回时写的 `review-N.md` 格式见同文第 3.2 节。
 
 ## 5. 定期的 code smell 扫描
 
@@ -104,8 +88,8 @@ export default [{
 
 ```
 工具扫描（主控）
-  → agy 按工具结果通读代码，写带文件行号的 smell 报告
-  → 初审角色逐条对照代码核实：属实 / 部分属实 / 不成立
+  → Sonnet explorer 按工具结果通读代码，写带文件行号的 smell 报告
+  → 主控逐条打开代码核实：属实 / 部分属实 / 不成立
   → 主控整理成方案：每项写收益、风险、测试覆盖，分成互不改同一文件的任务包
   → 和用户对齐（会改变用户可见行为或模型可见内容的项单独列出，由用户决定）
   → 按任务包走第 3、4 节
@@ -113,5 +97,4 @@ export default [{
 
 ## 6. 记录
 
-- 每次合并后在 memory 的 `subagent-quality-log.md` 记一行：任务、作者、退回几轮、合并后查出的问题。
-- 用 mmp 干活时发现的 mmp 自身问题记进 [dogfood-issues.md](dogfood-issues.md)，按 P0–P3 排。
+每次合并后记什么、汇报时附哪三个指标，见 [dev-workflow-herdr.md](dev-workflow-herdr.md) 第 3.4 节。用 mmp 干活时发现的 mmp 自身问题记进 [dogfood-issues.md](dogfood-issues.md)，按 P0–P3 排。
