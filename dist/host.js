@@ -13,6 +13,7 @@ import { resolveMmpPaths } from "./paths.js";
 import { rewritePiOutput } from "./pi-output.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { installProviderCostValidation } from "./provider-validation.js";
+import { createMagpieInlineExtension, selectsMagpie } from "./providers/magpie-extension.js";
 import { createMmpRuntimeIdentity, } from "./runtime-identity.js";
 import { askProjectTrust, saveProjectTrustChoice, shouldAskProjectTrust } from "./trust-prompt.js";
 import { runMmpUpdateCommand, updateCheckDisabled } from "./update.js";
@@ -117,7 +118,10 @@ async function collectExtensionHelpFlags(args, environment, cwd) {
     try {
         const prepared = prepareParsedMmpRun(args, environment, cwd);
         process.env.PI_CODING_AGENT_DIR = prepared.agentDir;
-        const extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly);
+        const extensionFactories = [
+            createMagpieInlineExtension({ agentDir: prepared.agentDir, online: false, discover: false }),
+            ...buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly),
+        ];
         const services = await createAgentSessionServices({
             cwd,
             agentDir: prepared.agentDir,
@@ -211,7 +215,19 @@ export async function runMmp(argv) {
         disabled: updateCheckDisabled(process.env, args.passthrough),
     };
     // Building the inline extensions also validates their config (MCP, hooks), which --dry-run reports.
-    const extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly, updateCheck, passthroughHasFlag(args.passthrough, "--verbose"));
+    const modelArgs = parseArgs([...args.passthrough]);
+    const usingMagpie = selectsMagpie(modelArgs, SettingsManager.create(process.cwd(), prepared.agentDir, { projectTrusted: false }));
+    const extensionFactories = [
+        createMagpieInlineExtension({
+            agentDir: prepared.agentDir,
+            // Same test as Pi's ModelRuntime: any PI_OFFLINE value (bridged from MMP_OFFLINE) is offline.
+            online: !modelArgs.offline && process.env.PI_OFFLINE === undefined,
+            discover: usingMagpie || isListModelsRun(prepared.piArgs),
+            required: usingMagpie,
+            ...(!usingMagpie || modelArgs.apiKey === undefined ? {} : { apiKey: modelArgs.apiKey }),
+        }),
+        ...buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly, updateCheck, passthroughHasFlag(args.passthrough, "--verbose")),
+    ];
     if (prepared.args.dryRun) {
         const output = {
             mmpVersion: MMP_VERSION,

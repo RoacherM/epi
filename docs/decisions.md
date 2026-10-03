@@ -40,6 +40,7 @@
 | 2026-10-02 | H3 | 定位的其余关键点：K3 配置保持严格（不读别家工具配置，显式装配，项目要信任；以后可加显式的一次性导入命令）；K4 内置标准能力（`mmp:task`、`mmp:mcp`、`mmp:hooks`）默认开启、可在 Manifest 关闭；K6 和 Pi 一样默认不审批，审批分级先不做 | 用户决定（"K3/K4/K6 按你说的"） | K3 学 OMP 自动发现；K4 维持"声明才开"或用 profile；K6 默认 yolo 或写/执行要审批 | 已定（K4 已实现：Manifest 的 `disable` 字段） | development.md §1、§3.4、§17 |
 | 2026-09-30 | T3 | 界面细节："选中即复制"保持开启（和 Pi 一致）；用户消息块不显示 Pi 追加的图片缩放/格式转换说明（模型照常收到，"Image omitted" 这类失败说明照常显示） | 用户决定 | 关闭选中即复制；原样显示说明 | 已定（D9 随任务 D11 实现中） | [dogfood-issues.md](dogfood-issues.md) D9 |
 | 2026-09-30 | T4 | 图片标签 `[Image #N]` 留在发给模型的文字里；整个会话统一编号，下一张 = 会话里出现过的最大编号 + 1；没有编号的图片显示 `[Image]`；没有图片数据的标签显示成暗色删除线，发送时提示 | 用户确认（"我觉得没啥问题"）；做法参照 Claude Code，用户可以直接说"第 2 张图" | 按计数推算、按图片内容匹配预留（D11 前两轮，过于复杂且仍会错位） | 已定（D11 实现中） | [dogfood-issues.md](dogfood-issues.md) D11 |
+| 2026-10-03 | MG1 | MMP 内置 `magpie` provider（不进 Manifest，不是 `disable` 的第四项）；唯一配置是 API key，放在 `/login` 的 API key 登录项（存 `pi/auth.json`），没有 `magpie.json`，地址固定 `127.0.0.1:3425`；只有选中 Magpie 或 `--list-models` 时启动才等待目录 | 用户决定（"magpie的配置只需要填入api-key即可（放在api那一项配置中"）；启动策略是主控按审查结果定的：用其他 provider 时不为 Magpie 多等 | `magpie.json` 配置地址、超时、逐模型协议和开关；每次启动都查询目录 | 已定 | [magpie-design.md](magpie-design.md) |
 
 ## 待定
 
