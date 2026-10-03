@@ -14,7 +14,7 @@
 | 顾问 | Fable，主控会话里的 `advisor` 工具，调用时自动读到主控的整个会话。只在第 2 节的三个时点调用，不写代码、不做决定 |
 | worker | 在 Herdr pane 里运行的 mmp，负责写代码。Herdr 是终端多路复用器，pane 是其中一个终端窗格 |
 | magpie | 一个模型服务商（provider）。worker 通过它使用 Opus；主控自己不调用 magpie |
-| worktree | 每个任务一个 git worktree（独立的工作目录和分支），worker 只在自己的 worktree 里改 |
+| worktree | 每个任务一个 git worktree（独立的工作目录和分支，分支名 `dev/<任务编号>`），worker 只在自己的 worktree 里改 |
 | 基准提交 | 任务开始时 worktree 所基于的 `main` 上的提交，写在 `brief.md` 里；审查时 diff 就是对它比 |
 | 节点 | 流程里的一步，内部是一个循环：触发 → 动作 → 检查 → 不过就重试，到停止条件就移交 |
 | 交接物 | 节点之间传递的文件或提交，格式固定（第 3.2 节） |
@@ -83,7 +83,7 @@
 | `report.md` | N2 → N3 | 每项做了什么、对照了 Pi 的哪些函数、测试数、做了哪些假设、没验证的地方；最后一行 `STATUS: done` 或 `STATUS: blocked` |
 | `question.md` | N2 → 主控（提问，不是回边） | 需要主控决定的问题，带选项。主控在 pane 里回答后 worker 继续 |
 | `review-N.md` | N3 → N2（回边） | 第 N 轮的发现，按严重程度排，每条标 CONFIRMED 或 PLAUSIBLE，附文件行号和复现命令；策略问题（"这算不算问题"）主控当场决定并写进去。发出前先把旧的 `report.md` 改名为 `report-N.md`，否则旧文件里的 `STATUS:` 会让等待立刻结束 |
-| 合并提交 | N4 → N5 | 说明写作者、审查情况、合并时主控改了什么 |
+| 合并提交 | N4 → N5 | 标题以 `Merge dev/<任务编号>:` 开头（任务面板靠它判断已合并）；说明写作者、审查情况、合并时主控改了什么 |
 | `pack.md` | N5 → N6 | 目标和范围（设计文档章节、决策编号）；提交范围；每个任务的 `brief.md`/`report.md`/`review-N.md` 路径和没解决的分歧；风险清单（碰到硬规则和复杂状态的文件、函数）；证据（完整测试输出、模型可见快照的差异、Herdr 验收步骤）；已知问题；要终审回答的问题 |
 | 终审结论 | N6 → N1（回边） | 可接受 / 不可接受，按严重程度排的发现（CONFIRMED / PLAUSIBLE、文件行号、复现） |
 
@@ -192,6 +192,8 @@ cd <worktree> && node ~/Projects/sides/mmp-tool/dist/cli.js --approve \
 | worker-1 | 编码者（必要时 worker-2 并行第二个任务，两个任务改的文件不重叠） |
 | check | 主控的 Herdr 验收、跑命令。用户可能随时关掉它，用之前先确认还在（`herdr.sh` 找不到 pane 会直接报错），不在就重新 split 一个 |
 | grok | 对比 grok（需要时开） |
+
+主控的 Claude Code 可以加载任务面板：`claude --plugin-dir scripts/dev/task-pane`（在仓库根目录启动），输入 `/mmp-tasks` 打开（`/tasks` 是 Claude Code 自带的命令）。面板每 5 秒读一次 `.dev/tasks/` 和合并记录，每个任务一行（状态、退回轮数、周期），输入框下方常驻一行计数；有任务变成待审查、有提问或卡住时弹出提醒。只认第 3.2 节的格式，2026-10-03 之前的任务目录不显示。
 
 mmp 不是 Herdr 认识的 agent 类型，所以用 pane 命令（`pane run` / `send-text` / `wait-output` / `read`）操作，pane 编号记在 `.dev/panes.json`。现在放在 scratchpad 的辅助脚本 `h.sh`（`startmmp` / `quitmmp` / `say` / `scr`）移进仓库 `scripts/dev/herdr.sh`，因为 scratchpad 只在当前会话有效。
 
