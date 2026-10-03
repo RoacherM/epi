@@ -1,6 +1,6 @@
 # MMP 开发流程
 
-2026-09-30 起执行；2026-10-01 起改由 mmp 在 Herdr 里自己开发自己，流程见 [dev-workflow-herdr.md](dev-workflow-herdr.md)，代码规范、合并前检查和审查清单见 [code-quality.md](code-quality.md)。本文第 1–4 节是改用 Herdr 之前的做法，保留作参考；第 5–6 节仍然有效。记录的是开发 MMP 时实际在用、并和用户确认过的做法。产品层面的约定见 [development.md](development.md)，关键决策见 [decisions.md](decisions.md)。
+2026-09-30 起执行；2026-10-01 起改由 mmp 在 Herdr 里自己开发自己，流程见 [dev-workflow-herdr.md](dev-workflow-herdr.md)，代码规范、合并前检查和审查清单见 [code-quality.md](code-quality.md)。本文第 1–2 节是当前流程的摘要（完整版以 dev-workflow-herdr.md 第 1–3 节为准）；第 3 节是任务说明的写法，第 4 节是 Herdr 实测的操作，第 5–6 节是不可违反的约定和仓库文件约定。记录的是开发 MMP 时实际在用、并和用户确认过的做法。产品层面的约定见 [development.md](development.md)，关键决策见 [decisions.md](decisions.md)。
 
 ## 1. 角色分工
 
