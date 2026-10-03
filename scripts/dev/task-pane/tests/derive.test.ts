@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { FORMAT_SINCE_MS, deriveTask, formatDuration, parseMerges, summary } from '../hooks/derive.js'
+import { FORMAT_SINCE_MS, deriveTask, formatDuration, parseMerges, sortRows, summary } from '../hooks/derive.js'
 
 const T0 = FORMAT_SINCE_MS + 3_600_000 // an hour after the format took effect
 const min = (n: number) => T0 + n * 60_000
@@ -16,10 +16,13 @@ test('folders without a brief, or with a brief older than the format, are left o
   expect(derive([{ name: 'brief.md', mtimeMs: FORMAT_SINCE_MS - 1 }])).toBe(null)
 })
 
-test('a question newer than the brief and every review waits on the main session', () => {
+test('question.md is an open question until the main session renames it', () => {
   expect(derive([file('brief.md', 0), file('question.md', 10)])?.state).toBe('question')
-  // Answered and returned since: the old question no longer counts
-  expect(derive([file('brief.md', 0), file('question.md', 10), file('review-1.md', 20)])?.state).toBe('fixing')
+  expect(derive([file('brief.md', 0), file('question-1.md', 10)])?.state).toBe('working')
+  // A question asked during round 2, after the review
+  const round2 = derive([file('brief.md', 0), file('report-1.md', 30), file('review-1.md', 31), file('question.md', 40)])
+  expect(round2?.state).toBe('question')
+  expect(round2?.questionMs).toBe(min(40))
 })
 
 test('report.md decides by its last line', () => {
@@ -33,6 +36,33 @@ test('after a return the old report is archived and the task is being fixed', ()
   const row = derive([file('brief.md', 0), file('report-1.md', 30), file('review-1.md', 31), file('review-2.md', 50)])
   expect(row?.state).toBe('fixing')
   expect(row?.rounds).toBe(2)
+})
+
+test('a round starts as soon as the old report is archived, before review-N.md exists', () => {
+  const row = derive([file('brief.md', 0), file('report-1.md', 30)])
+  expect(row?.state).toBe('fixing')
+  expect(row?.rounds).toBe(1)
+})
+
+test('a report older than the latest review is stale: the task is being fixed', () => {
+  const files = [file('brief.md', 0), file('report.md', 30), file('review-1.md', 31)]
+  expect(derive(files, { reportLastLine: 'STATUS: done' })?.state).toBe('fixing')
+})
+
+test('a merge older than the brief belongs to an earlier task with the same id', () => {
+  expect(derive([file('brief.md', 50)], { mergedAtMs: min(45) })?.state).toBe('working')
+})
+
+test('active tasks come first, oldest first; merged after, most recently merged first', () => {
+  const row = (id: string, state: string, startedMs: number, cycleMs: number) => ({ id, state, startedMs, cycleMs, rounds: 0 })
+  const { active, merged } = sortRows([
+    row('A', 'working', 20, 1),
+    row('M1', 'merged', 0, 10),
+    row('B', 'review', 10, 1),
+    row('M2', 'merged', 5, 30),
+  ])
+  expect(active.map((r) => r.id)).toEqual(['B', 'A'])
+  expect(merged.map((r) => r.id)).toEqual(['M2', 'M1'])
 })
 
 test('a merged task reports brief-to-merge as its cycle', () => {

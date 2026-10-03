@@ -23,26 +23,35 @@ export function parseMerges(gitLog) {
 // report.md, or '' when there is none. Returns null for folders without a current-format brief.md.
 export function deriveTask({ id, files, reportLastLine, mergedAtMs, nowMs }) {
   const file = (name) => files.find((f) => f.name === name)
+  const count = (pattern) => files.filter((f) => pattern.test(f.name))
   const brief = file('brief.md')
   if (!brief || brief.mtimeMs < FORMAT_SINCE_MS) return null
 
-  const reviews = files.filter((f) => /^review-\d+\.md$/.test(f.name))
-  const rounds = reviews.length
-  const lastReviewMs = Math.max(brief.mtimeMs, ...reviews.map((f) => f.mtimeMs))
-  const question = file('question.md')
+  const reviews = count(/^review-\d+\.md$/)
+  // Before review-N.md is written the old report is already archived as report-N.md, so either
+  // file marks a round.
+  const rounds = Math.max(reviews.length, count(/^report-\d+\.md$/).length)
   const row = { id, rounds, startedMs: brief.mtimeMs }
 
-  if (mergedAtMs !== undefined) return { ...row, state: 'merged', cycleMs: mergedAtMs - brief.mtimeMs }
+  // A merge older than the brief belongs to an earlier task that used the same id.
+  if (mergedAtMs !== undefined && mergedAtMs >= brief.mtimeMs) {
+    return { ...row, state: 'merged', cycleMs: mergedAtMs - brief.mtimeMs }
+  }
   row.cycleMs = nowMs - brief.mtimeMs
 
-  if (file('report.md')) {
+  // Section 3.2: the main session renames question.md once it has answered, so its presence means
+  // an open question.
+  const question = file('question.md')
+  if (question) return { ...row, state: 'question', questionMs: question.mtimeMs }
+
+  const report = file('report.md')
+  const lastReviewMs = Math.max(-Infinity, ...reviews.map((f) => f.mtimeMs))
+  if (report && report.mtimeMs >= lastReviewMs) {
     if (/^STATUS:\s*blocked\b/.test(reportLastLine)) return { ...row, state: 'blocked' }
     if (/^STATUS:\s*done\b/.test(reportLastLine)) return { ...row, state: 'review' }
     return { ...row, state: 'reporting' }
   }
-  // question.md is never removed, so it only counts while it is newer than the brief and every
-  // review: after that the worker has moved on.
-  if (question && question.mtimeMs >= lastReviewMs) return { ...row, state: 'question' }
+  // No report, or one older than the latest review (not yet renamed): the worker is on it.
   return { ...row, state: rounds > 0 ? 'fixing' : 'working' }
 }
 
@@ -54,10 +63,11 @@ export const STATE_LABELS = {
   review: '待审查',
   blocked: '卡住',
   merged: '已合并',
+  error: '读取出错',
 }
 
 // States that need the main session to act.
-export const NEEDS_MAIN = new Set(['question', 'review', 'blocked'])
+export const NEEDS_MAIN = new Set(['question', 'review', 'blocked', 'error'])
 
 export function formatDuration(ms) {
   const minutes = Math.max(0, Math.round(ms / 60000))

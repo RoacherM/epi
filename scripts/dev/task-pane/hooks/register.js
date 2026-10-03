@@ -16,11 +16,20 @@ const PANE = 'mmp-tasks'
 const TASKS_DIR = '.dev/tasks'
 const REFRESH_MS = 5000
 const MERGED_SHOWN = 5
+const COLUMN_WIDTHS = [10, 10, 10, 8]
+
+const STATE_STYLE = {
+  question: { color: 'yellow', bold: true },
+  review: { color: 'yellow', bold: true },
+  blocked: { color: 'red', bold: true },
+  error: { color: 'red', bold: true },
+  merged: { dimColor: true },
+}
 
 let rows = []
-let error = ''
+let error = '' // a failure that stops the whole refresh; the last good rows stay on screen
 let refreshing = false
-let lastStates = null // id → state from the previous refresh; null until the first one
+let lastSeen = null // id → what was last announced; null until the first refresh
 const reportCache = new Map() // id → { mtimeMs, lastLine }
 
 async function lastLineOfReport($, id, mtimeMs) {
@@ -30,6 +39,18 @@ async function lastLineOfReport($, id, mtimeMs) {
   const lastLine = text.trim().split('\n').pop() ?? ''
   reportCache.set(id, { mtimeMs, lastLine })
   return lastLine
+}
+
+async function readTask($, id, merges, nowMs) {
+  try {
+    const files = await $.fs.list(TASKS_DIR + '/' + id)
+    const report = files.find((f) => f.name === 'report.md')
+    const reportLastLine = report ? await lastLineOfReport($, id, report.mtimeMs) : ''
+    return deriveTask({ id, files, reportLastLine, mergedAtMs: merges.get(id), nowMs })
+  } catch (err) {
+    // One unreadable folder shows as its own row so the other tasks stay visible.
+    return { id, state: 'error', reason: String(err.message ?? err), rounds: 0, startedMs: 0, cycleMs: 0 }
+  }
 }
 
 async function readRows($) {
@@ -43,26 +64,24 @@ async function readRows($) {
   const found = []
   for (const entry of await $.fs.list(TASKS_DIR)) {
     if (entry.kind !== 'dir') continue
-    const id = entry.name
-    const files = await $.fs.list(TASKS_DIR + '/' + id)
-    const report = files.find((f) => f.name === 'report.md')
-    const reportLastLine = report ? await lastLineOfReport($, id, report.mtimeMs) : ''
-    const row = deriveTask({ id, files, reportLastLine, mergedAtMs: merges.get(id), nowMs })
+    const row = await readTask($, entry.name, merges, nowMs)
     if (row) found.push(row)
   }
   return found
 }
 
+// A toast for each task that newly needs the main session. A second question in the same round
+// keeps the state but is a new file, so the question's time is part of what is compared.
 function announceChanges($) {
-  const states = new Map(rows.map((r) => [r.id, r.state]))
-  if (lastStates) {
+  const seen = new Map(rows.map((r) => [r.id, r.state + ':' + (r.questionMs ?? '')]))
+  if (lastSeen) {
     for (const r of rows) {
-      if (NEEDS_MAIN.has(r.state) && lastStates.get(r.id) !== r.state) {
+      if (NEEDS_MAIN.has(r.state) && lastSeen.get(r.id) !== seen.get(r.id)) {
         $.ui.toast(r.id + ' → ' + STATE_LABELS[r.state])
       }
     }
   }
-  lastStates = states
+  lastSeen = seen
 }
 
 async function refresh($) {
@@ -72,17 +91,15 @@ async function refresh($) {
     rows = await readRows($)
     error = ''
     announceChanges($)
-    $.ui.status('tasks: ' + (summary(rows) || '无进行中的任务'))
+    $.ui.status(summary(rows) || '无进行中的任务')
   } catch (err) {
     error = String(err.message ?? err)
-    $.ui.status('tasks: ' + error)
+    $.ui.status(error)
   } finally {
     refreshing = false
     $.ui.invalidate('ui.render')
   }
 }
-
-const COLUMN_WIDTHS = [10, 10, 10, 8]
 
 // One line of the table: cells = [[text, textProps], ...] in COLUMN_WIDTHS order.
 function drawLine({ Box, Text }, key, cells) {
@@ -97,15 +114,20 @@ function drawLine({ Box, Text }, key, cells) {
 }
 
 function drawRow(el, r) {
-  const urgent = NEEDS_MAIN.has(r.state)
   const merged = r.state === 'merged'
-  const stateProps = r.state === 'blocked' ? { color: 'red', bold: true } : urgent ? { color: 'yellow', bold: true } : merged ? { dimColor: true } : {}
-  return drawLine(el, r.id, [
+  const line = drawLine(el, r.id, [
     [r.id, merged ? { dimColor: true } : { bold: true }],
-    [STATE_LABELS[r.state], stateProps],
+    [STATE_LABELS[r.state], STATE_STYLE[r.state] ?? {}],
     [r.rounds > 0 ? '退回 ' + r.rounds + '/' + RETURN_CAP : '', r.rounds >= RETURN_CAP ? { color: 'red' } : { dimColor: true }],
-    [formatDuration(r.cycleMs), { dimColor: true }],
+    [r.state === 'error' ? '' : formatDuration(r.cycleMs), { dimColor: true }],
   ])
+  if (r.state !== 'error') return line
+  const { Box, Text } = el
+  return Box({
+    key: r.id,
+    flexDirection: 'column',
+    children: [line, Text({ color: 'red', wrap: 'truncate-end', children: ['  ' + r.reason] })],
+  })
 }
 
 export function register(on) {
@@ -130,11 +152,10 @@ export function register(on) {
     if (e.requestId !== PANE) return next(e)
     const el = $.ui.resolve(e)
     const { Box, Text } = el
-    if (error) return Text({ color: 'red', children: [error] })
-
     const { active, merged } = sortRows(rows)
     const shown = merged.slice(0, MERGED_SHOWN)
     const children = [
+      ...(error ? [Text({ color: 'red', children: [error] })] : []),
       Text({ bold: true, children: [summary(rows) || '无进行中的任务'] }),
       drawLine(el, 'header', ['任务', '状态', '退回', '周期'].map((t) => [t, { dimColor: true }])),
       ...active.map((r) => drawRow(el, r)),
