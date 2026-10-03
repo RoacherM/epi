@@ -29,3 +29,6 @@ test/fixtures/**/pi/mcp-cache.json
 
 # Task hand-off files for mmp working on itself (docs/dev-workflow-herdr.md section 4)
 .dev/
+
+# workflow-graph log of the self-hosting flow (docs/dev-workflow-herdr.md section 3.2)
+.workflow/
