@@ -1,6 +1,0 @@
-{
-  "name": "mmp-task-pane",
-  "version": "0.1.0",
-  "description": "Pane that tracks MMP self-hosting tasks under .dev/tasks (docs/dev-workflow-herdr.md section 3)",
-  "author": { "name": "RoacherM" }
-}

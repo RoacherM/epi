@@ -21,6 +21,7 @@
 | 回边 | 检查不过时，交接物退回造成问题的那个节点，附发现和复现方法 |
 | 闸门 | 交接通过前必须满足的条件，带阈值；人工闸门要等用户确认（第 3.3 节） |
 | 移交 | 节点到了停止条件，把问题和已有证据交给写明的下一个执行者 |
+| 记录 | `.workflow/log.jsonl`，每行一条事实（谁在什么时候让哪个任务进入、交出、退回、通过了什么），只追加；任务现在的状态从记录算出来（第 3.2 节） |
 | 修复前失败 | 新测试在修复之前的代码上会失败、修复后通过，证明测试真能抓到这个问题。在临时副本里验证（`git archive <修复前提交>` 解到临时目录），禁止联网运行；不用 `git stash`（所有 worktree 共用一个 stash 栈） |
 | 硬规则 | 碰到就阻塞合并的约定：配置不和 Pi 共享（不读 `~/.pi`、项目 `.pi/`、用户的 `PI_*`）、项目配置只在被信任时读、不泄露密钥、对外只暴露 `mmp` 自己的命令和帮助 |
 | P0–P3 | 问题级别。P0：开发流程本身卡住；P1：行为错误、安全或配置隔离问题、数据丢失；P2：能用但别扭；P3：小毛病、文案、测试整洁 |
@@ -83,9 +84,22 @@
 | `report.md` | N2 → N3 | 每项做了什么、对照了 Pi 的哪些函数、测试数、做了哪些假设、没验证的地方；最后一行 `STATUS: done` 或 `STATUS: blocked` |
 | `question.md` | N2 → 主控（提问，不是回边） | 需要主控决定的问题，带选项。回答 = 在 pane 里发出回复，并在同一步把它改名为 `question-N.md`（第 N 个问题，接着已有的编号），所以 `question.md` 存在就表示有没回答的问题 |
 | `review-N.md` | N3 → N2（回边） | 第 N 轮的发现，按严重程度排，每条标 CONFIRMED 或 PLAUSIBLE，附文件行号和复现命令；策略问题（"这算不算问题"）主控当场决定并写进去。发出前先把旧的 `report.md` 改名为 `report-N.md`，否则旧文件里的 `STATUS:` 会让等待立刻结束。`STATUS: blocked` 之后重新派工也一样先改名 |
-| 合并提交 | N4 → N5 | 标题以 `Merge dev/<任务编号>:` 开头（任务面板靠它判断已合并）；说明写作者、审查情况、合并时主控改了什么 |
+| 合并提交 | N4 → N5 | 标题以 `Merge dev/<任务编号>:` 开头；说明写作者、审查情况、合并时主控改了什么 |
 | `pack.md` | N5 → N6 | 目标和范围（设计文档章节、决策编号）；提交范围；每个任务的 `brief.md`/`report.md`/`review-N.md` 路径和没解决的分歧；风险清单（碰到硬规则和复杂状态的文件、函数）；证据（完整测试输出、模型可见快照的差异、Herdr 验收步骤）；已知问题；要终审回答的问题 |
 | 终审结论 | N6 → N1（回边） | 可接受 / 不可接受，按严重程度排的发现（CONFIRMED / PLAUSIBLE、文件行号、复现） |
+
+**记录**：主仓库根目录的 `.workflow/log.jsonl`（不提交），每行一条事实，格式按 workflow-graph skill 第 6 节：`time`、`task`、`event`、`node`、`by`，按事件再加 `to`、`round`、`cap`、`gate`、`result`、`version`、`note`。主控用 `scripts/dev/herdr.sh` 的 `fact <任务> <事件> <节点> [键=值…]` 写（`by` 默认是主控）。mmp 做完时不发信号，所以 worker 的三条事实由主控的等待脚本 `waitreport` 看到交接文件时代写，worker 自己不写记录。
+
+| 什么时候 | 事实 | 谁写 |
+|---|---|---|
+| 把任务发给 worker（N2 开始，含退回后重新派工） | `fact <任务> start 实现` | 主控 |
+| `report.md` 最后一行是 `STATUS: done` / `STATUS: blocked` | `done 实现` / `blocked 实现`，`by=worker` | `waitreport` |
+| 出现 `question.md` | `question 实现`，`by=worker to=主控`（`waitreport` 以退出码 3 返回） | `waitreport` |
+| 在 pane 里回答了提问 | `fact <任务> answer 实现` | 主控 |
+| 审查不过，发出 `review-N.md` | `fact <任务> return 审查验证 to=实现 round=N cap=3` | 主控 |
+| 退回到上限仍不过（G3） | `fact <任务> handoff 审查验证 to=主控 note=<怎么处理>` | 主控 |
+| 合并闸门 G1 判断完 | `fact <任务> gate 合并 gate=G1 result=pass\|fail version=<审查过的提交>` | 主控 |
+| 合并进 main、main 上完整测试通过 | `fact <任务> finish 合并 version=<合并提交>` | 主控 |
 
 ### 3.3 闸门
 
@@ -105,7 +119,7 @@
 |---|---|---|
 | 漏网问题 | 合并后或大节点才查出的 P1、P2 个数，标明是不是主控审查放过的 | 去掉独立初审后，审查够不够严（对应 G4） |
 | 退回轮数 | 每个任务退回 N2 的次数 | 任务说明写得好不好（对应 G3） |
-| 周期 | 从 `brief.md` 写好到合并的时长 | 流程哪里卡住。2026-10-03 起开始记，之前没有数据 |
+| 周期 | 从 `brief.md` 写好到合并的时长，即记录里这个任务第一条事实到 `finish` | 流程哪里卡住。2026-10-03 起开始记，之前没有数据 |
 
 ### 3.5 运行顺序
 
@@ -193,7 +207,7 @@ cd <worktree> && node ~/Projects/sides/mmp-tool/dist/cli.js --approve \
 | check | 主控的 Herdr 验收、跑命令。用户可能随时关掉它，用之前先确认还在（`herdr.sh` 找不到 pane 会直接报错），不在就重新 split 一个 |
 | grok | 对比 grok（需要时开） |
 
-主控的 Claude Code 可以加载任务面板：`claude --plugin-dir scripts/dev/task-pane`（在仓库根目录启动），输入 `/mmp-tasks` 打开（`/tasks` 是 Claude Code 自带的命令）。面板每 5 秒读一次 `.dev/tasks/` 和合并记录，每个任务一行（状态、退回轮数、周期），输入框下方常驻一行计数；有任务变成待审查、有提问或卡住时弹出提醒。只认第 3.2 节的格式，2026-10-03 之前的任务目录不显示。
+主控的 Claude Code 可以加载 workflow-graph skill 自带的看板，实时看第 3.2 节的记录：在仓库根目录启动 `claude --plugin-dir ~/.agents/skills/workflow-graph/pane`，输入 `/workflow-pane` 打开。每个任务一行（节点、状态、退回轮数、周期），输入框下方常驻一行计数；有任务交付、提问、卡住、闸门没过或移交时弹出提醒。看板只读记录，不读 `.dev/tasks/`。
 
 mmp 不是 Herdr 认识的 agent 类型，所以用 pane 命令（`pane run` / `send-text` / `wait-output` / `read`）操作，pane 编号记在 `.dev/panes.json`。现在放在 scratchpad 的辅助脚本 `h.sh`（`startmmp` / `quitmmp` / `say` / `scr`）移进仓库 `scripts/dev/herdr.sh`，因为 scratchpad 只在当前会话有效。
 

@@ -6,6 +6,30 @@ MMP_TOOL=${MMP_TOOL:-$HOME/Projects/sides/mmp-tool}
 P=${P:?set P to the Herdr pane id, e.g. P=w9:pX}
 herdr pane get "$P" >/dev/null 2>&1 || { echo "herdr.sh: pane $P not found" >&2; return 1 2>/dev/null || exit 1; }
 
+# The workflow-graph log (docs/dev-workflow-herdr.md section 3.2) lives in the main checkout, also
+# when this file is sourced from a worktree.
+WORKFLOW_LOG=${WORKFLOW_LOG:-$(cd "$(git rev-parse --git-common-dir)/.." && pwd -P)/.workflow/log.jsonl}
+
+# Append one fact to the log. $1 = task, $2 = event, $3 = node, rest = key=value (by defaults to
+# 主控; round and cap are numbers). node writes the JSON so quoting in notes cannot break a line.
+fact() {
+  local task=$1 event=$2 where=$3; shift 3
+  mkdir -p "$(dirname "$WORKFLOW_LOG")"
+  node -e '
+    const [task, event, node, ...pairs] = process.argv.slice(1)
+    const now = new Date(), offset = -now.getTimezoneOffset()
+    const pad = (n) => String(Math.trunc(Math.abs(n))).padStart(2, "0")
+    const local = new Date(now.getTime() + offset * 60000).toISOString().slice(0, 19)
+    const fact = { time: local + (offset < 0 ? "-" : "+") + pad(offset / 60) + ":" + pad(offset % 60), task, event, node, by: "主控" }
+    for (const pair of pairs) {
+      const i = pair.indexOf("=")
+      const key = pair.slice(0, i), value = pair.slice(i + 1)
+      fact[key] = key === "round" || key === "cap" ? Number(value) : value
+    }
+    process.stdout.write(JSON.stringify(fact) + "\n")
+  ' "$task" "$event" "$where" "$@" >> "$WORKFLOW_LOG"
+}
+
 say() { herdr pane send-text "$P" "$1" >/dev/null; herdr pane send-keys "$P" enter >/dev/null; }
 key() { herdr pane send-keys "$P" "$@" >/dev/null; }
 scr() { herdr pane read "$P" --source visible | sed '/^[[:space:]]*$/d' | tail -"${1:-30}"; }
@@ -34,15 +58,27 @@ quitmmp() {
   echo "(mmp still running after 15s)" >&2; return 1
 }
 
-# Wait until a task report ends with a STATUS line (section 4). $1 = report path, $2 = timeout seconds.
-# Also stops early (exit 2) when the worker in $P needs attention, so a stuck worker is noticed:
+# Wait until a task report ends with a STATUS line (section 3). $1 = report path, $2 = timeout seconds.
+# mmp gives no signal when it finishes, so this waiter is the one that sees the worker's hand-off
+# files and writes the worker's facts to the log: done or blocked (exit 0), or a new question.md
+# (exit 3, the main session answers). It also stops early (exit 2) when the worker in $P needs
+# attention, so a stuck worker is noticed:
 # - it is idle (footer shows Shift+Tab:effort) for 2 minutes without having written the STATUS line;
 # - "Compacting…" has been on screen for 10 minutes or more;
 # - mmp is no longer running in the pane.
 waitreport() {
-  local report=$1 limit=${2:-3600} idle=0 i screen compacting
+  local report=$1 limit=${2:-3600} idle=0 i screen compacting status
+  local dir=${report%/*}; local task=${dir##*/}
   for i in $(seq 1 "$limit"); do
-    if grep -qE '^STATUS: (done|blocked)' "$report" 2>/dev/null; then grep -E '^STATUS:' "$report" | tail -1; return 0; fi
+    status=$(grep -oE '^STATUS: (done|blocked)' "$report" 2>/dev/null | tail -1)
+    if [[ -n $status ]]; then
+      fact "$task" "${status#STATUS: }" 实现 by=worker
+      echo "$status"; return 0
+    fi
+    if [[ -e $dir/question.md ]]; then
+      fact "$task" question 实现 by=worker to=主控
+      echo "(question: $dir/question.md)"; return 3
+    fi
     if (( i % 30 == 0 )); then
       screen=$(herdr pane read "$P" --source visible 2>/dev/null)
       if ! mmp_running; then echo "(mmp is not running in $P)" >&2; return 2; fi
