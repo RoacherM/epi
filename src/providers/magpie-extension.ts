@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readStoredCredential, type InlineExtension } from "@earendil-works/pi-coding-agent";
+import { readStoredCredential, type InlineExtension, type SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, ModelsStore } from "@earendil-works/pi-ai";
 
 import { changedCatalogEntry, createMagpieProvider, discoverMagpieModels, magpieBaseUrl } from "./magpie.js";
@@ -47,6 +47,26 @@ async function saveCatalog(agentDir: string, baseUrl: string, models: Model<Api>
   await store.read("magpie");
 }
 
+const isMagpieRef = (ref: string): boolean => /^magpie(\/|$)/i.test(ref);
+
+/** Whether a run selects Magpie, so startup waits for its catalog. Like Pi: providers match
+ * case-insensitively, and without model flags the model comes from the saved default or the
+ * scoped models (`--models`, settings `enabledModels`), whose Magpie patterns need the catalog. */
+export function selectsMagpie(
+  flags: { provider?: string; model?: string; models?: string[] },
+  settings: SettingsManager,
+): boolean {
+  if (flags.provider !== undefined || flags.model !== undefined) {
+    return [flags.provider, flags.model].some((ref) => ref !== undefined && isMagpieRef(ref));
+  }
+  const scope = flags.models ?? settings.getEnabledModels() ?? [];
+  return scope.some(isMagpieRef) || isMagpieRef(settings.getDefaultProvider() ?? "");
+}
+
+// The first load runs before any TUI is drawn, so stderr is safe there. Later loads (/new,
+// /resume, /fork, /reload) run under the fullscreen UI, where stderr would draw over it.
+let loadedBefore = false;
+
 /** A bundled provider registration, not a Manifest extension or a new default-on capability. */
 export function createMagpieInlineExtension(options: MagpieExtensionOptions): InlineExtension {
   const baseUrl = magpieBaseUrl();
@@ -63,10 +83,13 @@ export function createMagpieInlineExtension(options: MagpieExtensionOptions): In
         } catch (error) {
           // Without a running gateway Magpie is simply not installed, unless the run asked for it.
           if (options.required || !isGatewayAbsent(error)) {
-            process.stderr.write(`Warning: ${failureMessage(error)}; using the last saved Magpie model list, if any.\n`);
+            const warning = `${failureMessage(error)}; using the last saved Magpie model list, if any.`;
+            if (loadedBefore) pi.on("session_start", (_event, context) => context.ui.notify(warning, "warning"));
+            else process.stderr.write(`Warning: ${warning}\n`);
           }
         }
       }
+      loadedBefore = true;
       if (initialModels) await saveCatalog(options.agentDir, baseUrl, initialModels);
       pi.registerProvider(createMagpieProvider(baseUrl, initialModels, options.online));
     },

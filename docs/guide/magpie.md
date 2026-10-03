@@ -37,12 +37,14 @@ MMP 通过 `/v1/models` 获取模型列表，不会后台轮询、启动 Magpie 
 
 | 时机 | 是否等待目录 |
 |---|---|
-| 选中 Magpie 启动（`--provider magpie`、`--model magpie/…`，或 settings 里默认 provider 是 magpie；Task worker 的模型是 `magpie/…`） | 等待，最多 2 秒；失败时打印警告 |
+| 选中 Magpie 启动（`--provider magpie`（大小写不限）、`--model magpie/…`、`--models` 或 settings `enabledModels` 里有 `magpie/…`，或没有模型参数时 settings 默认 provider 是 magpie；Task worker 的模型是 `magpie/…`） | 等待，最多 2 秒；失败时警告 |
 | `mmp --list-models` | 等待；本机没有网关（连接被拒绝）时不提示 |
 | 用其他 provider 启动 | 不查询，用上次保存的列表 |
 | 打开 `/model`、`/scoped-models` | 刷新 |
 
 Magpie 新增或删除模型后，下一次查询同步列表。
+
+命令行指定 Magpie 模型时要带 `magpie/` 前缀或 `--provider magpie`。只写 `--model claude/claude-opus-5-5` 不算选中 Magpie，启动时不查询目录；还没有保存过列表时会报 "not found"。
 
 协议选择顺序：
 

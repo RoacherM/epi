@@ -326,6 +326,7 @@ test("bundled provider works without any configuration; an unchanged catalog lea
     assert.equal(output.stdout.trim(), "MAGPIE_OK 你好", output.stderr);
   }
   assert.equal(statSync(storePath).mtimeMs, saved);
+  assert.equal(existsSync(storePath + ".lock"), false);
   const count = server.state.requests.length;
   const offline = await cliRun(fixture, ["--list-models", "magpie", "--offline"]);
   assert.match(offline.stdout, /claude\/claude-opus-test/);
@@ -333,13 +334,22 @@ test("bundled provider works without any configuration; an unchanged catalog lea
   assert.equal(existsSync(join(fixture.home, ".pi")), false);
 });
 
-test("the saved default provider counts as selecting Magpie", async (t) => {
+test("the saved default provider, scoped models and any provider casing all select Magpie", async (t) => {
   const server = await serverFor(t);
-  const fixture = setup(t, server.baseUrl);
-  writeFileSync(join(fixture.mmpHome, "pi", "settings.json"), JSON.stringify({ defaultProvider: "magpie", defaultModel: "claude/claude-opus-test" }));
-  const output = await cliRun(fixture, printArgs);
-  assert.equal(output.stdout.trim(), "MAGPIE_OK 你好", output.stderr);
-  assert.equal(catalogRequests(server).length, 1);
+  const cases = [
+    { settings: { defaultProvider: "magpie", defaultModel: "claude/claude-opus-test" }, args: [] },
+    { args: ["--models", "magpie/claude/*"] },
+    { settings: { enabledModels: ["magpie/claude/*"] }, args: [] },
+    { args: ["--provider", "Magpie", "--model", "claude/claude-opus-test"] },
+  ];
+  for (const { settings, args } of cases) {
+    const fixture = setup(t, server.baseUrl);
+    if (settings) writeFileSync(join(fixture.mmpHome, "pi", "settings.json"), JSON.stringify(settings));
+    server.state.requests.length = 0;
+    const output = await cliRun(fixture, [...args, ...printArgs]);
+    assert.equal(output.stdout.trim(), "MAGPIE_OK 你好", `${args.join(" ")}\n${output.stderr}`);
+    assert.equal(catalogRequests(server).length, 1);
+  }
 });
 
 test("help, dry-run and offline (any MMP_OFFLINE value, like Pi) do not discover models", async (t) => {

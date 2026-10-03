@@ -11,7 +11,7 @@ import {
 import { readFileSync, unlinkSync } from "node:fs";
 
 import type { TaskCapsule } from "./task-runtime.js";
-import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
+import { createMagpieInlineExtension, selectsMagpie } from "./providers/magpie-extension.js";
 
 interface WorkerResultEvent {
   type: "result";
@@ -112,9 +112,7 @@ async function main(): Promise<void> {
     capsule.agentDir,
     { projectTrusted: false },
   );
-  const usingMagpie = capsule.model === undefined
-    ? settingsManager.getDefaultProvider() === "magpie"
-    : capsule.model.startsWith("magpie/");
+  const usingMagpie = selectsMagpie(capsule.model === undefined ? {} : { model: capsule.model }, settingsManager);
   const { modelRuntime, resourceLoader, diagnostics } = await createAgentSessionServices({
     cwd: capsule.cwd,
     agentDir: capsule.agentDir,

@@ -14,10 +14,12 @@
 
 | 运行 | 启动时查询 | 失败时 |
 |---|---|---|
-| 选中 Magpie：`--provider magpie`、`--model magpie/…`；没有模型参数时 settings 的默认 provider 是 magpie；Task worker 的模型是 `magpie/…`（或没有模型且默认 provider 是 magpie） | 是，超时 2 秒 | 警告 |
+| 选中 Magpie（`selectsMagpie`，和 Pi 一样 provider 不分大小写）：`--provider magpie`、`--model magpie/…`；没有模型参数时 `--models` 或 settings `enabledModels` 有 `magpie/…`，或 settings 默认 provider 是 magpie；Task worker 的模型是 `magpie/…`（没有模型时按同样的 settings 规则） | 是，超时 2 秒 | 警告：首次加载写 stderr（界面还没画）；`/new`、`/resume`、`/reload` 等重新加载时改为 session_start 后的 `ui.notify`，不覆盖全屏界面 |
 | `--list-models` | 是 | 连接被拒绝（本机没装 Magpie）不提示，其他错误警告 |
 | 其他运行 | 否，用保存的列表 | — |
 | `/model`、`/scoped-models`、rpc 的后台刷新 | Pi 的联网刷新 | Pi 报告 |
+
+已知遗留（Fable 审查 F5，P3）：rpc 模式用其他 provider 时，Pi 的后台联网刷新可能写入变化了的列表；rpc 客户端在约 2 秒内关闭 stdin 时，进程可能在写入中退出，留下锁文件。范围很窄，暂不处理。
 | `--offline`、任意值的 `MMP_OFFLINE`、`--help`、`--dry-run` | 否 | — |
 
 理由（我定的）：用其他 provider 时不该为 Magpie 多等；离线判断和 Pi 的 `ModelRuntime` 一致（`PI_OFFLINE` 有值即离线）。

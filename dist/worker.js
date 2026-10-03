@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createAgentSession, createAgentSessionServices, resolveCliModel, SessionManager, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { readFileSync, unlinkSync } from "node:fs";
-import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
+import { createMagpieInlineExtension, selectsMagpie } from "./providers/magpie-extension.js";
 let activeSession;
 let interrupted = false;
 function emit(event) {
@@ -77,9 +77,7 @@ async function main() {
     const capsule = readCapsule(capsulePath);
     process.env.PI_CODING_AGENT_DIR = capsule.agentDir;
     const settingsManager = SettingsManager.create(capsule.cwd, capsule.agentDir, { projectTrusted: false });
-    const usingMagpie = capsule.model === undefined
-        ? settingsManager.getDefaultProvider() === "magpie"
-        : capsule.model.startsWith("magpie/");
+    const usingMagpie = selectsMagpie(capsule.model === undefined ? {} : { model: capsule.model }, settingsManager);
     const { modelRuntime, resourceLoader, diagnostics } = await createAgentSessionServices({
         cwd: capsule.cwd,
         agentDir: capsule.agentDir,

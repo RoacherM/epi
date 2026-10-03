@@ -13,7 +13,7 @@ import { resolveMmpPaths } from "./paths.js";
 import { rewritePiOutput } from "./pi-output.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { installProviderCostValidation } from "./provider-validation.js";
-import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
+import { createMagpieInlineExtension, selectsMagpie } from "./providers/magpie-extension.js";
 import { createMmpRuntimeIdentity, } from "./runtime-identity.js";
 import { askProjectTrust, saveProjectTrustChoice, shouldAskProjectTrust } from "./trust-prompt.js";
 import { runMmpUpdateCommand, updateCheckDisabled } from "./update.js";
@@ -177,14 +177,6 @@ async function maybeAskProjectTrust(args, environment, cwd) {
     saveProjectTrustChoice(paths.agentDir, choice);
     args.projectTrustOverride = choice.trusted;
 }
-/** Magpie is selected when the model flags name it or, without model flags, when it is the saved
- * default provider. Only then does startup wait for its catalog. */
-function selectsMagpie(modelArgs, agentDir, cwd) {
-    if (modelArgs.provider !== undefined || modelArgs.model !== undefined) {
-        return modelArgs.provider === "magpie" || modelArgs.model?.startsWith("magpie/") === true;
-    }
-    return SettingsManager.create(cwd, agentDir, { projectTrusted: false }).getDefaultProvider() === "magpie";
-}
 export async function runMmp(argv) {
     // Subcommands read/write MMP's own agent directory (~/.mmp/pi) directly, never through
     // prepareMmpRun -- set the isolation guard (never Pi's default ~/.pi/agent) before each, but not
@@ -224,7 +216,7 @@ export async function runMmp(argv) {
     };
     // Building the inline extensions also validates their config (MCP, hooks), which --dry-run reports.
     const modelArgs = parseArgs([...args.passthrough]);
-    const usingMagpie = selectsMagpie(modelArgs, prepared.agentDir, process.cwd());
+    const usingMagpie = selectsMagpie(modelArgs, SettingsManager.create(process.cwd(), prepared.agentDir, { projectTrusted: false }));
     const extensionFactories = [
         createMagpieInlineExtension({
             agentDir: prepared.agentDir,
