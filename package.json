@@ -1,6 +1,6 @@
 {
   "name": "mmp",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "description": "A customizable terminal coding agent built on Pi, with a focused TUI, skills, MCP, hooks, and isolated subagents.",
   "type": "module",
