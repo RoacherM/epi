@@ -5,6 +5,7 @@ import { type AgentSessionRuntime, type InlineExtension, parseArgs } from "@eare
 
 import { passthroughHasFlag } from "../args.js";
 import { buildInlineExtensions } from "../extensions/index.js";
+import { createPreviewInlineExtension } from "../extensions/preview.js";
 import { buildTuiInitialMessages } from "../file-arguments.js";
 import type { PreparedMmpRun } from "../host.js";
 import { findNearestProjectManifest } from "../project.js";
@@ -33,7 +34,9 @@ export async function createRuntimeFromPrepared(
     cwd,
     agentDir: prepared.agentDir,
     piArgs: prepared.args.passthrough,
-    extensionFactories,
+    // /preview is an interface feature, so only this path gets it. It goes before the last factory,
+    // mmp:system-prompt, which has to stay last (extensions/index.ts).
+    extensionFactories: [...extensionFactories.slice(0, -1), createPreviewInlineExtension(), ...extensionFactories.slice(-1)],
     externalExtensionPaths: prepared.assembly.externalExtensions.map((extension) => extension.value),
     assembly: prepared.assembly,
     projectIdentity: projectIdentityFromPrepared(prepared, cwd),
