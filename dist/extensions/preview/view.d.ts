@@ -26,6 +26,7 @@ export declare class FileBrowser {
     private layout;
     private parentEntries;
     private readonly listings;
+    private currentListing;
     private readonly stills;
     constructor(tui: TUI, theme: Theme, start: string, done: (result: PreviewResult) => void, 
     /** A file in `start` to show at once; closing its viewer leaves the browser on it. */

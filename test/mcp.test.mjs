@@ -249,9 +249,9 @@ test("/mcp with zero configured servers but one registered via pi.registerMcpSer
   assert.match(notices[0].message, /\.pi[\\/]mcp\.json/, "expected Pi's own handler to have run, proving MMP delegated instead of intercepting");
 });
 
-// ── Manifest declaring a second /mcp-registering extension fails visibly (docs/mcp-design.md §4) ─
+// ── Manifest declaring a second /mcp-registering extension: refused at startup (docs/mcp-design.md §4) ─
 
-test("a Manifest that declares another extension registering \"/mcp\" alongside mmp:mcp fails visibly", (t) => {
+test("a Manifest that declares another extension registering \"/mcp\" alongside mmp:mcp is refused at startup", (t) => {
   const root = createFixture(t);
   const mmpHome = join(root, "home");
   mkdirSync(mmpHome, { recursive: true });
@@ -264,15 +264,12 @@ test("a Manifest that declares another extension registering \"/mcp\" alongside 
     [cliPath, "--no-project", "--model", "mmp-faux/echo", "-p", "hi"],
     { encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" } },
   );
-  // Pi's own per-handler try/catch (core/extensions/runner.js's emit()) reports a session_start
-  // throw through onError rather than crashing the process -- verified empirically that
-  // ctx.ui.notify and ctx.shutdown() are both no-ops in print mode (no uiContext/shutdownHandler
-  // wired there), so this is the strongest visible signal reachable from this hook in `-p` mode; it
-  // does not by itself change the exit code (documented in src/extensions/mcp.ts and the stage 2
-  // report, not silently assumed).
+  // Like every duplicate command (src/tui/services.ts): nothing runs, and the error names both.
+  assert.equal(result.status, 1, `stderr:\n${result.stderr}`);
+  assert.equal(result.stdout, "");
   assert.match(
     result.stderr,
-    /Extension error \(<inline:mmp:mcp>\).*also registers "\/mcp"/,
+    /^Error: The command "\/mcp" is registered by more than one extension: .*mcp-duplicate-rogue\.mjs, <inline:mmp:mcp>\./m,
     `stderr:\n${result.stderr}`,
   );
 });
@@ -867,21 +864,22 @@ test("/new and /reload leave exactly one MCP child process running, never zero o
   assert.equal(leftovers, "", `MCP stdio server outlived the whole app\n${context}`);
 });
 
-test("the duplicate-/mcp error is visible in MMP's own TUI exactly once, not just print mode's stderr", (t) => {
+test("the duplicate-/mcp error stops MMP's own TUI before it starts, with the same message", (t) => {
   const rogue = fileURLToPath(new URL("./fixtures/mcp-duplicate-rogue.mjs", import.meta.url));
   const driver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
-  const { marks, output } = runTuiApp(
-    t,
-    ["mmp:mcp", rogue, driver],
-    [["waitReady"], ["mark", "startup"], ["key", "ctrl+d"]],
-    { mcpServers: {} },
-  );
-  // The thrown error is caught by Pi's own per-handler try/catch (core/extensions/runner.js's
-  // emit()) and routed to onError, which src/tui/app.ts wires to transcript.notice -- a persistent
-  // banner a person reading the TUI would see. Exactly one occurrence: an earlier version also
-  // called ctx.ui.notify directly, which landed in the same sink and posted the message twice.
-  const occurrences = (marks.startup.match(/also registers "\/mcp"/g) ?? []).length;
-  assert.equal(occurrences, 1, `expected the message exactly once, found ${occurrences}\noutput:\n${output}`);
+  const root = mkdtempSync(join(tmpdir(), "mmp-mcp-duplicate-tui-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  writeJson(join(home, ".mmp", "mmp.json"), { version: 1, extensions: ["mmp:mcp", rogue, driver] });
+  const result = spawnSync(process.execPath, [tuiHarness], {
+    cwd: root,
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_TUI_HARNESS: JSON.stringify({ steps: [["waitReady"]] }) },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /The command "\/mcp" is registered by more than one extension/, result.stderr);
 });
 
 test("a codemode call's nested MCP tool renders exactly once, not duplicated alongside the codemode block", (t) => {

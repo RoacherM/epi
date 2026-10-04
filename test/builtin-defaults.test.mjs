@@ -491,21 +491,18 @@ test("the load-failure hint keeps the plain line for other extensions and adds o
 });
 
 // Review F2: with mmp:mcp on by default, a Manifest that declares only another "/mcp" extension
-// gets the duplicate-/mcp error; it must say to disable mmp:mcp, not "declare only one".
-test("another \"/mcp\" extension with mmp:mcp not declared: the error says to disable mmp:mcp, and that clears it", (t) => {
+// is refused at startup like any duplicate command; the error says how to turn mmp:mcp off.
+test("another \"/mcp\" extension with mmp:mcp not declared: refused at startup, says to disable mmp:mcp, and that clears it", (t) => {
   const fixture = createFixture(t);
   writeJson(fixture.globalManifest, { version: 1, extensions: [mcpRogue, fauxEcho] });
 
   const clashing = runPrompt(fixture, "-p");
-  assert.equal(clashing.stdout.trim(), "ECHO:hi");
-  assert.match(clashing.stderr, /Extension error \(<inline:mmp:mcp>\): Another extension also registers "\/mcp"/);
+  assert.equal(clashing.status, 1, clashing.stderr);
+  assert.equal(clashing.stdout, "");
   assert.ok(
-    clashing.stderr.includes(
-      `To keep the other MCP integration, turn mmp:mcp off: add "disable": ["mmp:mcp"] to ${fixture.globalManifest}.`,
-    ),
+    clashing.stderr.includes(`Or turn mmp:mcp off: add "disable": ["mmp:mcp"] to ${fixture.globalManifest}.`),
     clashing.stderr,
   );
-  assert.doesNotMatch(clashing.stderr, /declare only one/);
 
   writeJson(fixture.globalManifest, { version: 1, extensions: [mcpRogue, fauxEcho], disable: ["mmp:mcp"] });
   const fixed = runPrompt(fixture, "-p");

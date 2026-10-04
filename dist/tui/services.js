@@ -6,6 +6,8 @@ import { homedir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createAgentSessionFromServices, createAgentSessionRuntime, createAgentSessionServices, parseArgs, resolveCliModel, resolveModelScopeWithDiagnostics, SessionManager, SettingsManager, } from "@earendil-works/pi-coding-agent";
+import { builtInOffInstruction } from "../assembly.js";
+import { BUILT_IN_EXTENSION_NAMES } from "../manifest.js";
 import { MmpArgumentError } from "../errors.js";
 import { extensionLoadFailureHint } from "../pi-output.js";
 import { notRunningWarnings, settleRegisteredProviders } from "../provider-startup.js";
@@ -233,6 +235,32 @@ export function settingsDiagnostics(settingsManager) {
         message: path ? `Invalid settings file ${path}: ${error.message}` : `Invalid ${scope} settings: ${error.message}`,
     }));
 }
+/** Built-ins that can be turned off, as Pi names them in `<inline:NAME>`. */
+const OFF_SWITCHABLE = new Set(BUILT_IN_EXTENSION_NAMES);
+/**
+ * Two extensions may not register the same command. Pi would rename both to "/name:1" and
+ * "/name:2", so the name the user types and the documentation gives silently stops working, or runs
+ * the other extension's command. MMP refuses that at startup and says which extensions clash. Same
+ * rule for every extension, built-in or not (docs/architecture.md §3.5).
+ */
+function duplicateCommandDiagnostics(services, assembly) {
+    const owners = new Map();
+    for (const extension of services.resourceLoader.getExtensions().extensions) {
+        for (const name of extension.commands.keys())
+            owners.set(name, [...(owners.get(name) ?? []), extension.path]);
+    }
+    return [...owners].filter(([, paths]) => paths.length > 1).map(([name, paths]) => {
+        const switchable = paths
+            .map((path) => /^<inline:(.+)>$/.exec(path)?.[1])
+            .filter((builtIn) => builtIn !== undefined && OFF_SWITCHABLE.has(builtIn));
+        const turnOff = switchable.map((builtIn) => ` Or turn ${builtIn} off: ${builtInOffInstruction(builtIn, assembly)}.`).join("");
+        return {
+            type: "error",
+            message: `The command "/${name}" is registered by more than one extension: ${paths.join(", ")}. ` +
+                `Rename it in one of them, or remove one from the Manifest that declares it ("mmp list" shows which).${turnOff}`,
+        };
+    });
+}
 /** createAgentSessionServices leaves extension load results out of its diagnostics; Pi's main.js
  * adds them itself (~641-648). Without this, a Manifest extension that failed to load was skipped
  * with nothing on screen (dogfood D45). */
@@ -382,6 +410,7 @@ export async function createMmpRuntime(options) {
         const diagnostics = [
             ...services.diagnostics,
             ...collectExtensionDiagnostics(services),
+            ...duplicateCommandDiagnostics(services, options.assembly),
             ...providers.warnings,
             ...notRunningWarnings(providers, services.settingsManager.getDefaultProvider(), initial.diagnostics.length > 0),
             ...initial.diagnostics,
