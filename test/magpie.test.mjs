@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createModels, InMemoryModelsStore, InMemoryCredentialStore, Type } from "@earendil-works/pi-ai";
 
-import { createMagpieProvider, discoverMagpieModels, parseMagpieModels } from "../dist/providers/magpie.js";
+import { createMagpieProvider, discoverMagpieModels, parseMagpieModels, renameToolIdsAfterSteer } from "../dist/providers/magpie.js";
 import { magpieCatalog, startMagpieServer } from "./fixtures/magpie-server.mjs";
 
 function run(command, args, options) {
@@ -274,6 +274,36 @@ test("Anthropic tools and tool results go through the built-in adapter", async (
   const second = await models.streamSimple(provider.getModels()[0], context, { maxTokens: 128 }).result();
   assert.equal(second.stopReason, "stop", second.errorMessage);
   assert.equal(server.state.requests.at(-1).body.messages.at(-1).content[0].type, "tool_result");
+});
+
+test("a steer message after a tool call renames that request's tool IDs, so the gateway keeps it (D74)", async (t) => {
+  const server = await serverFor(t);
+  const provider = createMagpieProvider(server.baseUrl, parseMagpieModels({ data: [magpieCatalog[0], magpieCatalog[1]] }, server.baseUrl));
+  const models = modelsWith(provider);
+  const [claude, codex] = provider.getModels();
+  const toolTurn = (steer) => {
+    const context = structuredClone(transcript);
+    context.messages.push(
+      { role: "assistant", content: [{ type: "toolCall", id: "toolu_1", name: "bash", arguments: { command: "sleep 1" } }], api: claude.api, provider: "magpie", model: claude.id, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: 2 },
+      { role: "toolResult", toolCallId: "toolu_1", toolName: "bash", content: [{ type: "text", text: "done" }], isError: false, timestamp: 3 },
+    );
+    if (steer) context.messages.push({ role: "user", content: steer, timestamp: 4 });
+    return context;
+  };
+  const ids = () => server.state.requests.at(-1).body.messages.flatMap((message) =>
+    typeof message.content === "string" ? [] : message.content.map((block) => block.id ?? block.tool_use_id).filter(Boolean));
+  await models.streamSimple(claude, toolTurn(), { maxTokens: 64 }).result();
+  assert.deepEqual(ids(), ["toolu_1", "toolu_1"]);
+  let seen;
+  await models.streamSimple(claude, toolTurn("The secret word is BANANA."), { maxTokens: 64, onPayload: (payload) => { seen = payload; } }).result();
+  assert.deepEqual(ids(), ["mmp_toolu_1", "mmp_toolu_1"]);
+  assert.equal(seen.messages.at(-2).content[0].tool_use_id, "mmp_toolu_1", "the caller's onPayload sees the request that is sent");
+  assert.match(JSON.stringify(server.state.requests.at(-1).body.messages.at(-1)), /BANANA/);
+  await models.streamSimple(claude, toolTurn("Steer"), { maxTokens: 64, onPayload: (payload) => ({ ...payload, max_tokens: 7 }) }).result();
+  assert.equal(server.state.requests.at(-1).body.max_tokens, 7, "a caller's replacement payload still wins");
+  await models.streamSimple(codex, toolTurn("Steer"), { maxTokens: 64 }).result();
+  assert.doesNotMatch(JSON.stringify(server.state.requests.at(-1).body), /mmp_toolu/, "only the Messages protocol is touched");
+  assert.equal(renameToolIdsAfterSteer({ messages: [{ role: "user", content: "hi" }] }), undefined);
 });
 
 test("image input, abort, malformed stream and context overflow retain Pi adapter semantics", async (t) => {

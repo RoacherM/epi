@@ -5,6 +5,12 @@ export declare const MAGPIE_DEFAULT_KEY = "magpie";
 export declare function magpieBaseUrl(): string;
 export declare function parseMagpieModels(value: unknown, baseUrl: string): Model<Api>[];
 export declare function discoverMagpieModels(baseUrl: string, signal: AbortSignal, apiKey?: string, timeoutMs?: number): Promise<Model<Api>[]>;
+/** Magpie's claude/ route continues its own upstream session when a request carries tool IDs it
+ * issued, and then forwards only the tool results: a steer message sent after them is dropped
+ * (dogfood D74, reproduced on the real gateway; its other routes are fine). Renaming the tool IDs
+ * in that one request makes the gateway take the whole request instead. Returns undefined when
+ * the request has no user text after the last tool call, so other requests go out unchanged. */
+export declare function renameToolIdsAfterSteer(payload: unknown): unknown;
 /** The store entry for a fresh catalog, or undefined when the stored one already matches it. */
 export declare function changedCatalogEntry(stored: ModelsStoreEntry | undefined, baseUrl: string, fresh: Model<Api>[]): ModelsStoreEntry | undefined;
 /** Native publication lets Pi own persistence, concurrent-refresh generations and diagnostics.

@@ -162,6 +162,50 @@ function apiStreams(api: Api): ProviderStreams {
   return streams[protocol];
 }
 
+type AnthropicBlock = { type: string; id?: string; tool_use_id?: string };
+type AnthropicMessage = { role: string; content: string | AnthropicBlock[] };
+
+const blocksOf = (message: AnthropicMessage): AnthropicBlock[] =>
+  typeof message.content === "string" ? [{ type: "text" }] : message.content;
+
+/** Magpie's claude/ route continues its own upstream session when a request carries tool IDs it
+ * issued, and then forwards only the tool results: a steer message sent after them is dropped
+ * (dogfood D74, reproduced on the real gateway; its other routes are fine). Renaming the tool IDs
+ * in that one request makes the gateway take the whole request instead. Returns undefined when
+ * the request has no user text after the last tool call, so other requests go out unchanged. */
+export function renameToolIdsAfterSteer(payload: unknown): unknown {
+  const messages = (payload as { messages?: AnthropicMessage[] }).messages;
+  if (!Array.isArray(messages)) return undefined;
+  const lastAssistant = messages.findLastIndex((message) => message.role === "assistant");
+  if (lastAssistant < 0 || !blocksOf(messages[lastAssistant]!).some((block) => block.type === "tool_use")) return undefined;
+  const steered = messages.slice(lastAssistant + 1).some((message) => blocksOf(message).some((block) => block.type === "text"));
+  if (!steered) return undefined;
+  const rename = (block: AnthropicBlock): AnthropicBlock =>
+    block.type === "tool_use" && block.id !== undefined ? { ...block, id: `mmp_${block.id}` }
+      : block.type === "tool_result" && block.tool_use_id !== undefined ? { ...block, tool_use_id: `mmp_${block.tool_use_id}` }
+        : block;
+  return {
+    ...(payload as object),
+    messages: messages.map((message) =>
+      typeof message.content === "string" ? message : { ...message, content: message.content.map(rename) }),
+  };
+}
+
+/** Applies the gateway workaround before any caller's own onPayload, which still sees the result. */
+function withGatewayFixes<T extends { onPayload?: (payload: unknown, model: Model<Api>) => unknown }>(
+  model: Model<Api>,
+  options: T | undefined,
+): T | undefined {
+  if (model.api !== "anthropic-messages") return options;
+  return {
+    ...options,
+    onPayload: async (payload: unknown, payloadModel: Model<Api>) => {
+      const fixed = renameToolIdsAfterSteer(payload);
+      return (await options?.onPayload?.(fixed ?? payload, payloadModel)) ?? fixed;
+    },
+  } as T;
+}
+
 /** The tag also keeps a cache from another gateway address out. */
 function cacheTag(baseUrl: string): string {
   return JSON.stringify([baseUrl]);
@@ -225,7 +269,7 @@ export function createMagpieProvider(
         update: () => { models = refreshed; },
       });
     },
-    stream: (model, context, options) => apiStreams(model.api).stream(model, context, options),
-    streamSimple: (model, context, options) => apiStreams(model.api).streamSimple(model, context, options),
+    stream: (model, context, options) => apiStreams(model.api).stream(model, context, withGatewayFixes(model, options)),
+    streamSimple: (model, context, options) => apiStreams(model.api).streamSimple(model, context, withGatewayFixes(model, options)),
   };
 }

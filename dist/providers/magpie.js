@@ -156,6 +156,42 @@ function apiStreams(api) {
         throw new Error("Unsupported Magpie model API");
     return streams[protocol];
 }
+const blocksOf = (message) => typeof message.content === "string" ? [{ type: "text" }] : message.content;
+/** Magpie's claude/ route continues its own upstream session when a request carries tool IDs it
+ * issued, and then forwards only the tool results: a steer message sent after them is dropped
+ * (dogfood D74, reproduced on the real gateway; its other routes are fine). Renaming the tool IDs
+ * in that one request makes the gateway take the whole request instead. Returns undefined when
+ * the request has no user text after the last tool call, so other requests go out unchanged. */
+export function renameToolIdsAfterSteer(payload) {
+    const messages = payload.messages;
+    if (!Array.isArray(messages))
+        return undefined;
+    const lastAssistant = messages.findLastIndex((message) => message.role === "assistant");
+    if (lastAssistant < 0 || !blocksOf(messages[lastAssistant]).some((block) => block.type === "tool_use"))
+        return undefined;
+    const steered = messages.slice(lastAssistant + 1).some((message) => blocksOf(message).some((block) => block.type === "text"));
+    if (!steered)
+        return undefined;
+    const rename = (block) => block.type === "tool_use" && block.id !== undefined ? { ...block, id: `mmp_${block.id}` }
+        : block.type === "tool_result" && block.tool_use_id !== undefined ? { ...block, tool_use_id: `mmp_${block.tool_use_id}` }
+            : block;
+    return {
+        ...payload,
+        messages: messages.map((message) => typeof message.content === "string" ? message : { ...message, content: message.content.map(rename) }),
+    };
+}
+/** Applies the gateway workaround before any caller's own onPayload, which still sees the result. */
+function withGatewayFixes(model, options) {
+    if (model.api !== "anthropic-messages")
+        return options;
+    return {
+        ...options,
+        onPayload: async (payload, payloadModel) => {
+            const fixed = renameToolIdsAfterSteer(payload);
+            return (await options?.onPayload?.(fixed ?? payload, payloadModel)) ?? fixed;
+        },
+    };
+}
 /** The tag also keeps a cache from another gateway address out. */
 function cacheTag(baseUrl) {
     return JSON.stringify([baseUrl]);
@@ -213,8 +249,8 @@ export function createMagpieProvider(baseUrl, initialModels, allowNetwork = true
                 update: () => { models = refreshed; },
             });
         },
-        stream: (model, context, options) => apiStreams(model.api).stream(model, context, options),
-        streamSimple: (model, context, options) => apiStreams(model.api).streamSimple(model, context, options),
+        stream: (model, context, options) => apiStreams(model.api).stream(model, context, withGatewayFixes(model, options)),
+        streamSimple: (model, context, options) => apiStreams(model.api).streamSimple(model, context, withGatewayFixes(model, options)),
     };
 }
 //# sourceMappingURL=magpie.js.map
