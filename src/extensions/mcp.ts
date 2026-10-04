@@ -213,7 +213,7 @@ async function mcpProblemLines(
  *   - `/mcp` with zero configured servers shows MMP's own message instead of Pi's (which names
  *     `.pi/mcp.json`, a path MMP never reads) -- done by wrapping the `pi` passed into Pi's factory
  *     so only the "mcp" registration is intercepted; every other call passes through untouched.
- *  *   - a server still connecting when the session shuts down is closed instead of holding the
+ *   - a server still connecting when the session shuts down is closed instead of holding the
  *     process open until its request timeout (dogfood D3, `trackingTransportFactory`).
  *   - outside the TUI, Pi's own MCP notifies reach stderr when there is no UI, and a failed or
  *     needs-sign-in server Pi had not reported by the end of the session is reported then

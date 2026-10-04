@@ -669,10 +669,11 @@ export class FileBrowser {
         const currentWidth = Math.max(12, Math.floor(inner * 0.34));
         const previewWidth = Math.max(8, inner - parentWidth - currentWidth - 2);
         const parentDir = dirname(this.cwd);
-        this.parentEntries = parentDir === this.cwd ? [] : this.listing(parentDir).entries;
+        const parentListing = parentDir === this.cwd ? { entries: [] } : this.listing(parentDir);
+        this.parentEntries = parentListing.entries;
         this.refresh();
         const visible = this.visible();
-        const parent = this.listColumn(this.parentEntries, basename(this.cwd), parentWidth, height, false);
+        const parent = this.listColumn(this.parentEntries, basename(this.cwd), parentWidth, height, false, parentListing.problem === undefined ? undefined : `${printable(basename(parentDir))} ${parentListing.problem}`);
         const problem = this.currentListing.problem;
         const current = this.listColumn(visible, visible[this.cursor]?.name, currentWidth, height, true, problem === undefined ? undefined : `${printable(basename(this.cwd))} ${problem}`);
         const preview = this.previewColumn(previewWidth, height);

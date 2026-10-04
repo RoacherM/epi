@@ -302,6 +302,26 @@ test("the folder being browsed is deleted: it says not found instead of (empty)"
   assert.doesNotMatch(shown(screens.gone), /\(empty\)/);
 });
 
+test("an unreadable parent folder says so in its pane instead of (empty)", (t) => {
+  let locked;
+  try {
+    const { screens } = runApp(t, [
+      ...open(" locked/inner"), ["waitFor", "visible.txt", { screen: true }], ["screen", "browser"], ...close,
+    ], { setup: (project) => {
+      locked = join(project, "locked");
+      mkdirSync(join(locked, "inner"), { recursive: true });
+      writeFileSync(join(locked, "inner", "visible.txt"), "x");
+      chmodSync(locked, 0o100); // can pass through it, cannot list it
+    } });
+    // The parent pane is narrow: the reason is cut, but it is there instead of "(empty)".
+    assert.match(shown(screens.browser), /│ locked cannot rea/);
+    assert.doesNotMatch(shown(screens.browser), /\(empty\)/);
+  } finally {
+    if (locked) chmodSync(locked, 0o755); // before the temp folder is removed
+  }
+});
+
+
 test("a name with a line break is not inserted; the others are, and the left-out one is named", (t) => {
   const { screens } = runApp(t, [
     ...open(), ["waitFor", "alpha.txt", { screen: true }],
