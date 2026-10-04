@@ -27,7 +27,7 @@
 // First, like dist/cli.js: MMP_* -> PI_* before any Pi module loads (src/pi-env.ts).
 import "../../dist/isolate-pi-env.js";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import xterm from "@xterm/headless";
@@ -178,6 +178,8 @@ for (const [kind, value, opts = {}] of steps) {
     mkdirSync(dirname(value.path), { recursive: true });
     writeFileSync(value.path, value.content);
   }
+  // Deletes a file or folder between steps, for views that must notice it is gone.
+  else if (kind === "rm") rmSync(value, { recursive: true, force: true });
   // Counts live processes matching `value.pattern` (a `pgrep -f` argument) mid-run, from outside
   // the app -- e.g. exactly one MCP stdio child surviving a /new or /reload (docs/mcp-design.md's
   // state checklist: connections must not leak or duplicate across a session-replacement path).

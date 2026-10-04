@@ -151,30 +151,13 @@ async function mcpProblemLines(completions, { includeConnecting }) {
         return includeConnecting && state.startsWith("connecting") ? [`  ${item.label}: still connecting`] : [];
     });
 }
-/** mmp:mcp is on by default (decision H3/K4), so the user may well have declared only the other
- * integration: the way out is turning mmp:mcp off (`turnOff`, from `builtInOffInstruction`). */
-function duplicateMcpCommandMessage(turnOff) {
-    return "Another extension also registers \"/mcp\" alongside the built-in mmp:mcp (on by default). " +
-        "Pi's builtin-replace mechanism does not apply to MMP's inline extensions, so both were renamed " +
-        `to "/mcp:1"/"/mcp:2". To keep the other MCP integration, turn mmp:mcp off: ${turnOff}. ` +
-        "Otherwise remove the other extension from its Manifest (\"mmp list\" shows which).";
-}
-/** `pi.getCommands()` returns each command's final, post-collision invocation name (private
- * disambiguation in Pi's `ExtensionRunner.resolveRegisteredCommands`): when two extensions both
- * register "mcp", Pi renames *both* to "mcp:1"/"mcp:2" rather than keeping one plain "mcp" --
- * verified in `core/extensions/runner.js`. That is MMP's signal to fail visibly (docs/mcp-design.md
- * §4): a Manifest extension that registers "/mcp" while mmp:mcp is on. */
-function hasDuplicateMcpCommand(pi) {
-    return pi.getCommands().some((command) => /^mcp:\d+$/.test(command.name));
-}
 /**
  * `mmp:mcp`: `createMcpExtension` (connections, OAuth, tool registration, `/mcp`) wired to MMP's own
- * config source, plus four MMP-only behaviors:
+ * config source, plus three MMP-only behaviors (a second "/mcp" from another extension is refused
+ * at startup like any duplicate command, src/tui/services.ts):
  *   - `/mcp` with zero configured servers shows MMP's own message instead of Pi's (which names
  *     `.pi/mcp.json`, a path MMP never reads) -- done by wrapping the `pi` passed into Pi's factory
  *     so only the "mcp" registration is intercepted; every other call passes through untouched.
- *   - a second extension also registering "/mcp" fails visibly at `session_start` instead of
- *     silently producing "/mcp:1"/"/mcp:2"; the error says how to turn mmp:mcp off (`turnOff`).
  *   - a server still connecting when the session shuts down is closed instead of holding the
  *     process open until its request timeout (dogfood D3, `trackingTransportFactory`).
  *   - outside the TUI, Pi's own MCP notifies reach stderr when there is no UI, and a failed or
@@ -191,7 +174,7 @@ function hasDuplicateMcpCommand(pi) {
  * default-already-correct shortcut concern (it is a plain string), so it is passed explicitly for
  * auditability, matching the design.
  */
-export function createMmpMcpExtension(source, turnOff = 'add "disable": ["mmp:mcp"] to the global mmp.json') {
+export function createMmpMcpExtension(source) {
     const { mmpHome } = source;
     const loadConfig = (ctx) => loadNativeMcpConfig(source, ctx.cwd);
     const logPath = join(mmpHome, "pi", "mcp.log");
@@ -328,24 +311,6 @@ export function createMmpMcpExtension(source, turnOff = 'add "disable": ["mmp:mc
             // every connection closed and closed the connected ones: what is left is a connect still in
             // flight (D3). Also covers /new and /reload, which shut the old session down the same way.
             pi.on("session_shutdown", () => transports.closeAll());
-            pi.on("session_start", () => {
-                if (hasDuplicateMcpCommand(pi)) {
-                    // Verified empirically (not just from source): throwing here is the one channel that
-                    // posts exactly once in every mode MMP runs Pi in. Every mode's bindExtensions wires an
-                    // onError, and Pi's own per-handler try/catch (core/extensions/runner.js's emit()) routes
-                    // a thrown session_start error there -- print mode's onError does console.error (visible
-                    // on stderr; print mode passes no uiContext, so ctx.ui.notify would be a silent no-op
-                    // there anyway), MMP's TUI (src/tui/app.ts) does transcript.notice (a persistent banner).
-                    // Calling ctx.ui.notify as well, in addition to throwing, used to double-post in the TUI:
-                    // both notify and onError land in the same transcript.notice sink there. ctx.shutdown() is
-                    // also not called: it calls app.ts's shutdownHandler (`() => void exit(0)`) in the TUI,
-                    // which would race the banner's render against process exit -- a running-but-visibly-
-                    // warned session is a better outcome than one that may exit before anyone reads why. None
-                    // of this changes the exit code in print mode (documented in docs/mcp-design.md §4, not
-                    // silently assumed).
-                    throw new Error(duplicateMcpCommandMessage(turnOff));
-                }
-            });
         },
     };
 }

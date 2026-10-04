@@ -59,8 +59,8 @@ Pi 自己的 ~/.mmp/pi/mcp.json ✗                          ├─ createCodemo
 
 Manifest 声明了第三方 MCP 扩展（例如 pi-mcp-adapter）而 `mmp:mcp` 开着（默认开，不用声明）时，两边都会注册 `/mcp`。Pi 的"可替换"机制只对内置扩展生效，对 MMP 的 inline 工厂不生效，所以这种情况要**启动时报错**，不静默丢掉其中一个。错误里说清楚怎么选：要留第三方那个，就在 Manifest 里加 `"disable": ["mmp:mcp"]`（`mmp:mcp` 写在某个文件的 `extensions` 里时，提示改成先从那里删掉，因为同一文件两边都写是配置错误）；否则从 Manifest 删掉第三方那个。
 
-- **怎么发现冲突**：Pi 对两个扩展注册同名命令的处理不是报错，是**都改名**（`core/extensions/runner.js` 的 `resolveRegisteredCommands`：某个命令名被注册超过一次时，两边都变成 `mcp:1`/`mcp:2`，不会有一份还叫 `mcp`）。`mmp:mcp` 自己的 `session_start` 里查 `pi.getCommands()`，看有没有 `/^mcp:\d+$/` 的名字，有就是冲突。命令注册全部发生在扩展加载阶段（同步，早于任何事件），所以不管冲突的扩展在 Manifest 里排第几，到 `session_start` 时都已经能看到。
-- **能见到多硬（2026-09-30 实测，不只是看源码；2026-09-30 补一次修正）**：这一步检测出来后能做的补救很有限——`ctx.ui.notify` 和 `ctx.shutdown()` 在 `-p`/print 模式下都是空操作（`modes/print-mode.js` 的 `bindExtensions` 既不传 `uiContext` 也不传 `shutdownHandler`）；扩展加载阶段的抛错（stage 1 `mmp:mcp` 那种）确实会让 Pi 直接 `process.exit(1)`，但那是在**所有**扩展加载完之前的检查点，等不到后面才声明冲突命令的扩展。所以现在的做法是在 `session_start` 里只 `throw`（不再额外调 `ctx.ui.notify`——最初两个都调，结果 MMP 的 TUI 里同一条消息出现两次：`ctx.ui.notify` 和 `onError` 在 `src/tui/app.ts` 里落的是同一个 `transcript.notice` 宿，`throw` 单独一个就够了）：不会改变退出码，但 Pi 自己的 `runner.emit()` 会把它交给每个模式都接了的 `onError`（print 模式打到 `console.error`；MMP 的 TUI 里是 `src/tui/app.ts` 的 `onError: (error) => transcript.notice(...)`，一条常驻提示；RPC/json 模式进事件流），可见，但不保证非零退出码——这是 Pi 架构的限制，测试（`test/mcp.test.mjs`）断言的是 stderr 上出现这条消息、TUI 里恰好出现一次，不是退出码。
+- **怎么发现冲突**（2026-10-04 起，决策 EXT2）：Pi 对两个扩展注册同名命令的处理不是报错，而是两边都改名成 `mcp:1`/`mcp:2`。MMP 在所有扩展加载完、建会话之前查每个扩展注册的命令，同名就作为启动错误（`src/tui/services.ts` 的 `duplicateCommandDiagnostics`）。这条规则对所有扩展一样，不只是 `/mcp`；错误里列出冲突的扩展，牵涉可以关掉的内置能力时附上怎么关。
+- ~~**能见到多硬**~~：2026-10-04 前 `mmp:mcp` 在 `session_start` 里检查并 `throw`，只显示一条错误、运行照常继续（`-p` 下退出码不变）。现在启动前就拒绝，这段做法已删掉。
 
 ## 5. 模型看到什么（曝光方式）
 

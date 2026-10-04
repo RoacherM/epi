@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { PREVIEW_VERSION } from "../dist/extensions/preview.js";
-import { clock, humanSize, kindOf, loadDoc, printable, readEntries } from "../dist/extensions/preview/files.js";
+import { clock, humanSize, kindOf, loadDoc, printable, readListing } from "../dist/extensions/preview/files.js";
 import { Player, stillJob } from "../dist/extensions/preview/media.js";
 
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
@@ -22,7 +22,7 @@ function tempDir(t) {
   return dir;
 }
 
-const entryOf = (dir, name) => readEntries(dir, true).find((entry) => entry.name === name);
+const entryOf = (dir, name) => readListing(dir, true).entries.find((entry) => entry.name === name);
 
 test("sizes and durations read the way the status line shows them", () => {
   assert.deepEqual([0, 1023, 1024, 1536, 5 * 1024 ** 3].map(humanSize), ["0B", "1023B", "1.0K", "1.5K", "5.0G"]);
@@ -38,12 +38,22 @@ test("a listing puts folders first, sorts names numerically, hides dot files unl
   chmodSync(join(dir, "run.sh"), 0o755);
   symlinkSync(join(dir, "does-not-exist"), join(dir, "broken"));
   symlinkSync(join(dir, "file2.txt"), join(dir, "link"));
-  assert.deepEqual(readEntries(dir, false).map((entry) => entry.name), ["sub", "file2.txt", "file10.txt", "link", "run.sh", "Zeta.md"]);
-  assert.ok(readEntries(dir, true).some((entry) => entry.name === ".hidden"));
+  assert.deepEqual(readListing(dir, false).entries.map((entry) => entry.name), ["sub", "file2.txt", "file10.txt", "link", "run.sh", "Zeta.md"]);
+  assert.ok(readListing(dir, true).entries.some((entry) => entry.name === ".hidden"));
   assert.equal(entryOf(dir, "run.sh").isExec, true);
   assert.equal(entryOf(dir, "link").isLink, true);
   assert.equal(entryOf(dir, "sub").isDir, true);
-  assert.deepEqual(readEntries(join(dir, "nope"), true), []);
+  // Gone, unreadable and empty are three different answers.
+  assert.deepEqual(readListing(join(dir, "nope"), true), { entries: [], problem: "not found" });
+  mkdirSync(join(dir, "locked"));
+  chmodSync(join(dir, "locked"), 0o000);
+  try {
+    assert.deepEqual(readListing(join(dir, "locked"), true), { entries: [], problem: "cannot read: permission denied" });
+  } finally {
+    chmodSync(join(dir, "locked"), 0o755); // before the temp folder is removed
+  }
+  mkdirSync(join(dir, "empty"));
+  assert.deepEqual(readListing(join(dir, "empty"), true), { entries: [] });
 });
 
 test("a document is text, Markdown source, or a hex dump; escape bytes cannot reach the terminal", (t) => {
@@ -174,6 +184,26 @@ test("an image without terminal graphics shows a text placeholder, and a video w
   assert.match(shown(screens.video), /ffmpeg not found: install ffmpeg to view video/);
 });
 
+// Every extension, built-in or not: two may not register the same command (src/tui/services.ts).
+test("an extension that also registers /preview stops startup with an error naming both", (t) => {
+  const root = tempDir(t);
+  const home = join(root, "home");
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  const other = join(root, "my-preview.mjs");
+  writeFileSync(other, 'export default function (pi) { pi.registerCommand("preview", { description: "mine", handler: async () => {} }); }\n');
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [other] }));
+  const result = spawnSync(process.execPath, [harness], {
+    cwd: root,
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_TUI_HARNESS: JSON.stringify({ steps: [["waitReady"]] }) },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.notEqual(result.status, 0, result.stdout);
+  // The path as the extension loader resolved it (on macOS /var is /private/var).
+  assert.match(result.stderr, /The command "\/preview" is registered by more than one extension: \S*my-preview\.mjs, <inline:mmp:preview>\./);
+  assert.doesNotMatch(result.stderr, /Or turn mmp:preview off/, "mmp:preview cannot be turned off; the error must not say it can");
+});
+
 test("the extension has its own version, apart from MMP's", () => {
   assert.match(PREVIEW_VERSION, /^\d+\.\d+\.\d+$/);
 });
@@ -248,6 +278,60 @@ test("a file rewritten while it is shown is shown with its new content", (t) => 
   assert.doesNotMatch(shown(screens.viewer), /first line/);
   assert.match(shown(screens.browser), /REWRITTEN BY THE AGENT/);
   assert.ok(project);
+});
+
+test("a file that is deleted while it is shown says it is not found, and leaves the listing", (t) => {
+  const { screens } = runApp(t, [
+    ...open(" alpha.txt"), ["waitFor", "first line", { screen: true }],
+    ["rm", "alpha.txt"], ["type", "j"], ["waitFor", "alpha.txt not found", { screen: true }], ["screen", "file"],
+    ["type", "q"], ["waitFor", "space mark", { screen: true }], ["screen", "browser"],
+    ...close,
+  ]);
+  assert.match(shown(screens.file), /alpha\.txt not found/);
+  assert.match(shown(screens.file), /q back/);
+  assert.doesNotMatch(shown(screens.browser), /alpha\.txt/);
+});
+
+test("the folder being browsed is deleted: it says not found instead of (empty)", (t) => {
+  const { screens } = runApp(t, [
+    ...open(" docs"), ["waitFor", "guide.md", { screen: true }],
+    ["rm", "docs"], ["type", "j"], ["waitFor", "docs not found", { screen: true }], ["screen", "gone"],
+    ...close,
+  ]);
+  assert.match(shown(screens.gone), /docs not found/);
+  assert.doesNotMatch(shown(screens.gone), /\(empty\)/);
+});
+
+test("an unreadable parent folder says so in its pane instead of (empty)", (t) => {
+  let locked;
+  try {
+    const { screens } = runApp(t, [
+      ...open(" locked/inner"), ["waitFor", "visible.txt", { screen: true }], ["screen", "browser"], ...close,
+    ], { setup: (project) => {
+      locked = join(project, "locked");
+      mkdirSync(join(locked, "inner"), { recursive: true });
+      writeFileSync(join(locked, "inner", "visible.txt"), "x");
+      chmodSync(locked, 0o100); // can pass through it, cannot list it
+    } });
+    // The parent pane is narrow: the reason is cut, but it is there instead of "(empty)".
+    assert.match(shown(screens.browser), /│ locked cannot rea/);
+    assert.doesNotMatch(shown(screens.browser), /\(empty\)/);
+  } finally {
+    if (locked) chmodSync(locked, 0o755); // before the temp folder is removed
+  }
+});
+
+
+test("a name with a line break is not inserted; the others are, and the left-out one is named", (t) => {
+  const { screens } = runApp(t, [
+    ...open(), ["waitFor", "alpha.txt", { screen: true }],
+    ["type", "j"], ["type", " "], ["type", "G"], ["type", " "], ["waitFor", "2 marked", { screen: true }],
+    ["type", "i"], ["waitGone", " preview "], ["waitFor", "cannot be inserted", { screen: true }], ["screen", "after"],
+    ["detach"],
+  ], { setup: (project) => writeFileSync(join(project, "zz\nbroken.txt"), "x") });
+  const after = shown(screens.after).replace(/\s+/g, " ");
+  assert.match(after, /❯ @alpha\.txt /);
+  assert.match(after, /"zz\\nbroken\.txt": a line break in the name, so it cannot be inserted as a reference/);
 });
 
 test("i quotes a path with spaces the way file completion does", (t) => {

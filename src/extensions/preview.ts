@@ -6,7 +6,7 @@ import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 
 /** The extension's own version, apart from MMP's (docs/architecture.md: built-in extensions are
  * versioned on their own; the change log is in docs/guide/preview.md, the tags are preview-v*). */
-export const PREVIEW_VERSION = "0.1.0";
+export const PREVIEW_VERSION = "0.1.1";
 
 /**
  * `/preview [path]`: the dedicated view for looking at files without leaving MMP for an editor:
@@ -57,7 +57,18 @@ export function createPreviewInlineExtension(): InlineExtension {
           );
           open = undefined;
           if (!result) return;
-          const refs = result.paths.map((path) => fileReference(FileBrowser.display(ctx.cwd, path))).join(" ");
+          // A line break would cut the reference in two in the message: the agent could not find the
+          // file. Such a name is left out and named instead (JSON-quoted, so it is safe to draw).
+          const paths = result.paths.map((path) => FileBrowser.display(ctx.cwd, path));
+          const unusable = paths.filter((path) => /[\r\n]/.test(path));
+          if (unusable.length > 0) {
+            ctx.ui.notify(
+              `${unusable.map((path) => JSON.stringify(path)).join(", ")}: a line break in the name, so it cannot be inserted as a reference`,
+              "warning",
+            );
+          }
+          const refs = paths.filter((path) => !unusable.includes(path)).map(fileReference).join(" ");
+          if (refs === "") return;
           const text = ctx.ui.getEditorText();
           ctx.ui.setEditorText(text && !text.endsWith(" ") ? `${text} ${refs} ` : `${text}${refs} `);
         },

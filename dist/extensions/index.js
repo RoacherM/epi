@@ -43,12 +43,11 @@ export function buildInlineExtensions(assembly, mmpHome, runtimeIdentity, resolv
                     // must be visible" (docs/mcp-design.md; this repo's existing --dry-run contract predates the
                     // Pi 0.99 upgrade and is kept here rather than downgraded to Pi's softer default).
                     const mcpConfigSource = { mmpHome, resolveAssembly };
-                    const turnOff = builtInOffInstruction("mmp:mcp", assembly);
                     const preflight = loadNativeMcpConfig(mcpConfigSource, process.cwd());
                     if (preflight.errors.length > 0) {
                         throw new MmpConfigError(`mmp:mcp: ${preflight.errors.join("; ")}`);
                     }
-                    extensions.push(createMmpMcpExtension(mcpConfigSource, turnOff));
+                    extensions.push(createMmpMcpExtension(mcpConfigSource));
                     // Both required alongside mmp:mcp (docs/mcp-design.md §2): codemode for the default
                     // exposure: "codemode" servers, tool-search for "deferred" exposure. Neither is Pi's own
                     // builtin (those are never loaded -- MMP always runs with noExtensions, which in 0.99 also

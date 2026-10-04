@@ -52,12 +52,20 @@ const NERD_ICONS: Record<string, string> = {
   ".zip": "\uf410", ".gz": "\uf410", ".tar": "\uf410", ".pdf": "\uf1c1", ".lock": "\uf023",
 };
 
-export function readEntries(dir: string, showHidden: boolean): Entry[] {
+/** A directory's entries, or why there are none to show: an empty directory and one that is gone
+ * or unreadable must not look the same. */
+export interface Listing {
+  entries: Entry[];
+  /** "not found", or "cannot read: <reason>". */
+  problem?: string;
+}
+
+export function readListing(dir: string, showHidden: boolean): Listing {
   let names: string[];
   try {
     names = readdirSync(dir);
-  } catch {
-    return [];
+  } catch (error) {
+    return { entries: [], problem: problemText(error) };
   }
   const entries: Entry[] = [];
   for (const name of names) {
@@ -84,15 +92,16 @@ export function readEntries(dir: string, showHidden: boolean): Entry[] {
       mode: stats.mode,
     });
   }
-  return entries.sort((a, b) =>
+  const sorted = entries.sort((a, b) =>
     a.isDir === b.isDir ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) : a.isDir ? -1 : 1,
   );
+  return { entries: sorted };
 }
 
 /** Brings an entry's size and times up to date. A listing is cached by its directory's mtime, which
  * does not change when a file is rewritten in place: the file being looked at would stay stale,
  * and that is the usual case (the agent just edited it). */
-export function restat(entry: Entry): void {
+export function restat(entry: Entry): boolean {
   try {
     const stats = statSync(entry.path);
     entry.size = stats.size;
@@ -100,9 +109,18 @@ export function restat(entry: Entry): void {
     entry.mode = stats.mode;
     entry.isFile = stats.isFile();
     entry.isDir = stats.isDirectory();
+    return true;
   } catch {
-    // gone: the next listing drops it, and reading it says why
+    return false; // gone
   }
+}
+
+/** Why a path cannot be shown, in words; drawn, so made printable. */
+export function problemText(error: unknown): string {
+  if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return "not found";
+  const code = (error as NodeJS.ErrnoException)?.code;
+  if (code === "EACCES" || code === "EPERM") return "cannot read: permission denied";
+  return printable(`cannot read: ${error instanceof Error ? error.message : String(error)}`);
 }
 
 export function kindOf(name: string): Kind {
@@ -209,7 +227,7 @@ export function loadDoc(entry: Entry): Doc {
       }
     }
   } catch (error) {
-    doc = { kind: "text", lines: [printable(`cannot read file: ${error instanceof Error ? error.message : String(error)}`)], truncated: false };
+    doc = { kind: "text", lines: [`${entry.label} ${problemText(error)}`], truncated: false };
   } finally {
     if (fd !== undefined) closeSync(fd);
   }

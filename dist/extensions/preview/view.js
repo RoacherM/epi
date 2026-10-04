@@ -6,7 +6,7 @@ import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { piTui } from "../../tui/pi-tui.js";
 import { centered, imageBody, pad, scrollbar, scrollFromBar } from "./draw.js";
 import { existsSync, statSync } from "node:fs";
-import { clock, HEX_BYTES, humanSize, icon, kindOf, loadDoc, localTime, MAX_TEXT_BYTES, permString, printable, readEntries, restat } from "./files.js";
+import { clock, HEX_BYTES, humanSize, icon, kindOf, loadDoc, localTime, MAX_TEXT_BYTES, permString, printable, readListing, restat } from "./files.js";
 import { audioWave, Player, probe, SEEK_SECONDS, StillCache, stillJob } from "./media.js";
 const { Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } = piTui;
 const HEIGHT_RATIO = 0.85;
@@ -170,8 +170,16 @@ class Viewer {
         this.height = height;
         const th = this.theme;
         const name = th.fg("accent", this.entry.label);
+        if (!restat(this.entry)) {
+            this.player?.stop();
+            this.player = undefined;
+            return {
+                title: name,
+                body: centered(th.fg("error", `${this.entry.label} not found`), width, height).map((line) => pad(line, width)),
+                status: ` ${th.fg("dim", "q back")}`,
+            };
+        }
         if (this.mode === "text") {
-            restat(this.entry);
             const doc = loadDoc(this.entry);
             const rows = this.textRows(width - 1);
             const max = Math.max(0, rows.length - height);
@@ -266,6 +274,7 @@ export class FileBrowser {
     layout;
     parentEntries = [];
     listings = new Map();
+    currentListing = { entries: [] };
     stills;
     constructor(tui, theme, start, done, 
     /** A file in `start` to show at once; closing its viewer leaves the browser on it. */
@@ -299,30 +308,32 @@ export class FileBrowser {
             mtime = statSync(dir).mtimeMs;
         }
         catch {
-            // gone or unreadable: readEntries gives an empty listing
+            // gone or unreadable: readListing says which
         }
         const key = `${dir}|${this.showHidden}`;
         const hit = this.listings.get(key);
         if (hit && hit.mtime === mtime)
-            return hit.entries;
-        const entries = readEntries(dir, this.showHidden);
-        this.listings.set(key, { mtime, entries });
+            return hit.listing;
+        const listing = readListing(dir, this.showHidden);
+        this.listings.set(key, { mtime, listing });
         if (this.listings.size > 32)
             this.listings.delete(this.listings.keys().next().value);
-        return entries;
+        return listing;
     }
     /** Follows the current directory when files appear or go away while the overlay is open. */
     refresh() {
         const fresh = this.listing(this.cwd);
-        if (fresh === this.entries)
+        if (fresh === this.currentListing)
             return;
         const selected = this.current()?.name;
-        this.entries = fresh;
+        this.currentListing = fresh;
+        this.entries = fresh.entries;
         const index = selected === undefined ? -1 : this.visible().findIndex((entry) => entry.name === selected);
         this.cursor = index >= 0 ? index : Math.min(this.cursor, Math.max(0, this.visible().length - 1));
     }
     load(select) {
-        this.entries = this.listing(this.cwd);
+        this.currentListing = this.listing(this.cwd);
+        this.entries = this.currentListing.entries;
         const target = select ?? this.lastCursor.get(this.cwd);
         const index = target ? this.visible().findIndex((entry) => entry.name === target) : -1;
         this.cursor = Math.max(0, index);
@@ -540,11 +551,16 @@ export class FileBrowser {
         return mark + th.fg(active ? color : "muted", body);
     }
     /** A file list; the active one keeps `this.scroll` in view and gets a scrollbar. Returns the first shown index too. */
-    listColumn(entries, selectedName, width, height, active) {
+    listColumn(entries, selectedName, width, height, active, 
+    /** Shown instead of "(empty)" when the directory is gone or unreadable. */
+    problem) {
         const lines = [];
         const listWidth = active ? width - 1 : width;
         let start = 0;
-        if (entries.length === 0) {
+        if (problem !== undefined) {
+            lines.push(this.theme.fg("error", pad(` ${problem}`, listWidth)));
+        }
+        else if (entries.length === 0) {
             lines.push(this.theme.fg("dim", pad(" (empty)", listWidth)));
         }
         else {
@@ -574,8 +590,7 @@ export class FileBrowser {
     previewColumn(width, height) {
         const th = this.theme;
         const entry = this.current();
-        if (entry)
-            restat(entry);
+        const exists = entry !== undefined && restat(entry);
         if (entry?.path !== this.previewFor) {
             this.previewFor = entry?.path ?? "";
             this.previewScroll = 0;
@@ -586,9 +601,16 @@ export class FileBrowser {
         if (!entry) {
             lines = [];
         }
+        else if (!exists) {
+            lines = [th.fg("error", ` ${entry.label} not found`)];
+        }
         else if (entry.isDir) {
             const children = this.listing(entry.path);
-            lines = children.length === 0 ? [th.fg("dim", " (empty)")] : children.map((child) => this.entryLine(child, inner, false, true));
+            lines = children.problem !== undefined
+                ? [th.fg("error", ` ${entry.label} ${children.problem}`)]
+                : children.entries.length === 0
+                    ? [th.fg("dim", " (empty)")]
+                    : children.entries.map((child) => this.entryLine(child, inner, false, true));
             scrollable = true;
         }
         else if (entry.isFile && kindOf(entry.name) !== "text") {
@@ -647,11 +669,13 @@ export class FileBrowser {
         const currentWidth = Math.max(12, Math.floor(inner * 0.34));
         const previewWidth = Math.max(8, inner - parentWidth - currentWidth - 2);
         const parentDir = dirname(this.cwd);
-        this.parentEntries = parentDir === this.cwd ? [] : this.listing(parentDir);
+        const parentListing = parentDir === this.cwd ? { entries: [] } : this.listing(parentDir);
+        this.parentEntries = parentListing.entries;
         this.refresh();
         const visible = this.visible();
-        const parent = this.listColumn(this.parentEntries, basename(this.cwd), parentWidth, height, false);
-        const current = this.listColumn(visible, visible[this.cursor]?.name, currentWidth, height, true);
+        const parent = this.listColumn(this.parentEntries, basename(this.cwd), parentWidth, height, false, parentListing.problem === undefined ? undefined : `${printable(basename(parentDir))} ${parentListing.problem}`);
+        const problem = this.currentListing.problem;
+        const current = this.listColumn(visible, visible[this.cursor]?.name, currentWidth, height, true, problem === undefined ? undefined : `${printable(basename(this.cwd))} ${problem}`);
         const preview = this.previewColumn(previewWidth, height);
         const currentStart = 2 + parentWidth;
         this.layout = {

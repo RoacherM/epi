@@ -1,5 +1,5 @@
 import { type AgentSessionRuntime, type InlineExtension, SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { ResolvedAssembly } from "../assembly.js";
+import { type ResolvedAssembly } from "../assembly.js";
 import { type ProjectIdentity } from "./project-guard.js";
 export interface MmpSessionOptions {
     cwd: string;

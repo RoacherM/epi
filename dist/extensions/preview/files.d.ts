@@ -20,11 +20,20 @@ export interface Entry {
 export type Kind = "text" | "image" | "video" | "quicklook";
 export declare const MAX_TEXT_BYTES: number;
 export declare const HEX_BYTES: number;
-export declare function readEntries(dir: string, showHidden: boolean): Entry[];
+/** A directory's entries, or why there are none to show: an empty directory and one that is gone
+ * or unreadable must not look the same. */
+export interface Listing {
+    entries: Entry[];
+    /** "not found", or "cannot read: <reason>". */
+    problem?: string;
+}
+export declare function readListing(dir: string, showHidden: boolean): Listing;
 /** Brings an entry's size and times up to date. A listing is cached by its directory's mtime, which
  * does not change when a file is rewritten in place: the file being looked at would stay stale,
  * and that is the usual case (the agent just edited it). */
-export declare function restat(entry: Entry): void;
+export declare function restat(entry: Entry): boolean;
+/** Why a path cannot be shown, in words; drawn, so made printable. */
+export declare function problemText(error: unknown): string;
 export declare function kindOf(name: string): Kind;
 export declare function humanSize(bytes: number): string;
 export declare function clock(seconds: number): string;

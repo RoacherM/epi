@@ -28,13 +28,13 @@ const NERD_ICONS = {
     ".mp4": "\uf03d", ".mov": "\uf03d", ".mkv": "\uf03d", ".webm": "\uf03d",
     ".zip": "\uf410", ".gz": "\uf410", ".tar": "\uf410", ".pdf": "\uf1c1", ".lock": "\uf023",
 };
-export function readEntries(dir, showHidden) {
+export function readListing(dir, showHidden) {
     let names;
     try {
         names = readdirSync(dir);
     }
-    catch {
-        return [];
+    catch (error) {
+        return { entries: [], problem: problemText(error) };
     }
     const entries = [];
     for (const name of names) {
@@ -63,7 +63,8 @@ export function readEntries(dir, showHidden) {
             mode: stats.mode,
         });
     }
-    return entries.sort((a, b) => a.isDir === b.isDir ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) : a.isDir ? -1 : 1);
+    const sorted = entries.sort((a, b) => a.isDir === b.isDir ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) : a.isDir ? -1 : 1);
+    return { entries: sorted };
 }
 /** Brings an entry's size and times up to date. A listing is cached by its directory's mtime, which
  * does not change when a file is rewritten in place: the file being looked at would stay stale,
@@ -76,10 +77,20 @@ export function restat(entry) {
         entry.mode = stats.mode;
         entry.isFile = stats.isFile();
         entry.isDir = stats.isDirectory();
+        return true;
     }
     catch {
-        // gone: the next listing drops it, and reading it says why
+        return false; // gone
     }
+}
+/** Why a path cannot be shown, in words; drawn, so made printable. */
+export function problemText(error) {
+    if (error?.code === "ENOENT")
+        return "not found";
+    const code = error?.code;
+    if (code === "EACCES" || code === "EPERM")
+        return "cannot read: permission denied";
+    return printable(`cannot read: ${error instanceof Error ? error.message : String(error)}`);
 }
 export function kindOf(name) {
     const ext = extname(name).toLowerCase();
@@ -180,7 +191,7 @@ export function loadDoc(entry) {
         }
     }
     catch (error) {
-        doc = { kind: "text", lines: [printable(`cannot read file: ${error instanceof Error ? error.message : String(error)}`)], truncated: false };
+        doc = { kind: "text", lines: [`${entry.label} ${problemText(error)}`], truncated: false };
     }
     finally {
         if (fd !== undefined)
