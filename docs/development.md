@@ -7,64 +7,125 @@
 - Pi 升级：设计见 `docs/pi-upgrade-design.md`（版本锁死、升级自动化，已定，见 `docs/decisions.md`）
 - 交互界面：设计见 `docs/tui-design.md`，代码在 `src/tui/`，是 `mmp` 唯一的交互入口（不再启动 Pi 经典交互界面），进度见设计文档第 15 节
 - 开发流程：角色分工、独立合并前审查、任务说明要求、Herdr 实测和对照 grok，见 `docs/dev-workflow.md`；给 agent 的入口见根目录 `AGENTS.md`，硬规则见 `docs/dev-workflow.md`
-- 最后更新：2026-10-01
+- 最后更新：2026-10-04（§1、§2 按决策 N1、MG2、H4 重写）
 
 ## 1. 产品定义
 
-MMP（Make My Pi）是在同一 Node.js 进程中使用锁定版本 Pi SDK 的定制 Harness。功能优先对齐 Pi；MMP 拥有 grok-build 风格的交互界面、配置装配、项目信任和能力选择。
+MMP（Make My Pi）是在同一 Node.js 进程中使用锁定版本 Pi SDK 的定制 Harness。Harness 指包在模型外面的那层程序：把用户的话、工具和上下文组织起来交给模型，再把结果呈现出来。功能优先对齐 Pi；MMP 拥有 grok-build 风格的交互界面、配置装配、项目信任和能力选择。
 
-定位（决策 H1、H2、H3，2026-10-02 对齐；OMP 对照见 [notes/omp-study.md](notes/omp-study.md)）：
+定位（决策 H1–H4；OMP 对照见 [notes/omp-study.md](notes/omp-study.md)）：
 
 - 跟着官方 Pi 走：用官方 Pi 包、锁定版本、自动升级门禁，**不 fork**（OMP 是硬 fork，手工移植上游，已落后半年）。
-- 先把外围做好（界面、CLI、配置、已有扩展）；harness 能力参照 OMP 的设计以后再补，遇到瓶颈才考虑修改 Pi 的行为（H2）。
+- **后续重心（H4，2026-10-04 用户定）：围绕 Pi 做好两件事，交互界面（TUI）和内置扩展。coding agent 的内核先不动。** 内核指 Pi 的模型调用、Agent 循环、会话、压缩和基础工具（§3.1 的清单）。新能力先问"能不能做成界面功能或内置扩展"；只有做不成时才单独评估要不要改 Pi 的行为（H2）。
 - 配置严格只属于 MMP：不读 Pi，也不读 Claude/Codex/Gemini/Cursor 的配置，不认用户给 Pi 设的 `PI_*` 环境变量（D63），项目配置要信任（H3/K3）。
 - 和 Pi 一样默认不审批；审批分级先不做（H3/K6）。
 
-| 层 | 所有权 | 入口 |
-|---|---|---|
-| Pi | 模型、Agent Loop、认证、Session、基础工具、Auto Compact、TUI 组件和 MCP runtime | 锁定的 Pi SDK |
-| MMP | CLI、交互应用、Manifest、信任边界、资源来源与运行时身份 | `src/host.ts`、`src/tui/` |
-| Extension | Task、Hooks 和显式选择的第三方能力；MCP 的配置接入 | `src/extensions/` |
-
-MMP 不调用 PATH 中的全局 `pi`，不复制 Agent Loop。交互应用由 MMP 调用 `createAgentSessionRuntime()` 并复用 pi-tui 组件；print/json/rpc 等模式仍通过 Pi 的 `main()` 运行。
-
-内置 `magpie` 模型 provider 由包内隐藏 factory 注册，使用 Pi native Provider、动态目录和公开的协议客户端；不属于 Manifest 的三个能力，也不新增 Manifest 字段。设计见 [magpie-design.md](magpie-design.md)，使用见 [guide/magpie.md](guide/magpie.md)。TUI、print/json/rpc、模型列表和 Task worker 共用这份 provider 实现。
-
-`mmp:runtime` 始终注入，用于运行时身份、Rules、Skills、`/mmp` 与启动信息。Task、MCP、Hooks 只有被 Manifest 声明后才装配。Skills 除 Manifest 外还从三个固定根目录发现，见 §7.1。
+MMP 不调用 PATH 中的全局 `pi`，不复制 Agent 循环。
 
 ## 2. 核心架构
 
-`src/cli.ts` 启动 `src/host.ts` 的 `runMmp()`：
-
-1. MMP 自己处理子命令、版本和帮助；帮助会加载已声明扩展以收集扩展参数。
-2. 解析全局路径、项目发现和 trust，生成 `ResolvedAssembly` 与 runtime identity。
-3. 创建内置 Extension factories 并校验其配置；`--dry-run` 到这里输出报告并退出，不执行 factories。
-4. 设置独立的 `<MMP_HOME>/pi` 状态目录；按运行模式分流。
-
-| 模式 | 实现 |
-|---|---|
-| 交互式 TTY（含 `--mode text`） | `src/tui/start.ts` → MMP TUI + Pi session runtime |
-| `--list-models` | `src/list-models.ts`，报告扩展诊断并使用 MMP 文案 |
-| print/json/rpc、非 TTY | `src/noninteractive.ts`：和交互模式同一个 `createMmpRuntime`，交给 Pi 导出的 `runPrintMode` / `runRpcMode`（决策 N1，[noninteractive-sdk-design.md](noninteractive-sdk-design.md)） |
-| `--export` | `piMain(piArgs, { extensionFactories })`：只转换会话文件，不建会话、不加载扩展 |
-| install/remove/uninstall/list/config/auth/mcp/update | MMP 自有子命令实现，不进入 Pi CLI 子命令 |
-
-资源隔离参数由 `src/host.ts` 的 `BASE_PI_RESOURCE_ARGS` 维护：
+### 2.1 四层
 
 ```text
---no-extensions
---no-skills
---no-prompt-templates
---no-themes
---no-context-files
---system-prompt ""
---append-system-prompt ""
---no-approve
+┌──────────────────────────────────────────────────────────────────────────┐
+│ 4  入口和界面（MMP 写）                                                   │
+│    mmp 命令行、子命令、交互界面 src/tui/、print/json/rpc 入口              │
+├──────────────────────────────────────────────────────────────────────────┤
+│ 3  内置扩展（MMP 写，用 Pi 公开的扩展接口）                                │
+│    mmp:runtime  mmp:task  mmp:mcp  mmp:hooks  Magpie provider             │
+│    ＋ Manifest 声明的第三方扩展                                            │
+├──────────────────────────────────────────────────────────────────────────┤
+│ 2  装配（MMP 写）                                                         │
+│    Manifest、项目信任、Rules/Skills 来源、运行时身份、统一的启动函数        │
+├──────────────────────────────────────────────────────────────────────────┤
+│ 1  内核（Pi SDK，锁定版本，不改）                                          │
+│    模型和 provider 运行时、认证、Agent 循环、会话、压缩、基础工具、         │
+│    MCP 协议栈、扩展生命周期、pi-tui 组件、print/rpc 模式运行器              │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-交互路径使用对应的受控 SDK services；外部扩展只从 Manifest 传入，Rules 和 Skills 由 `mmp:runtime` 注入。MMP 的 `--approve` 只影响项目 `.mmp`，不会授予 Pi 原生项目资源权限。非交互启动仍有已知 `.pi/settings.json` 读取限制，见 §8.1。
+| 层 | 谁写 | 代码 | 后续是否投入（H4） |
+|---|---|---|---|
+| 4 入口和界面 | MMP | `src/cli.ts`、`src/host.ts`、`src/args.ts`、`src/commands/`、`src/tui/`、`src/noninteractive.ts`、`src/list-models.ts` | **是**：界面是重心之一 |
+| 3 内置扩展 | MMP | `src/extensions/`、`src/providers/`、`src/task-runtime.ts`、`src/worker.ts`、`src/hooks-*.ts` | **是**：内置扩展是重心之二 |
+| 2 装配 | MMP | `src/manifest.ts`、`src/assembly.ts`、`src/project.ts`、`src/skill-discovery.ts`、`src/runtime-identity.ts`、`src/tui/services.ts`（`createMmpRuntime`）、`src/provider-startup.ts` | 按需：跟着上面两层的需要改 |
+| 1 内核 | Pi | `node_modules/@earendil-works/pi-coding-agent` 等，版本见 `package.json` | **否**：只升级，不改 |
 
-资源选择在 Session 创建前完成，不另建 bootstrap Extension、全局进程 registry 或 shell 包装层。
+第 3 层和第 1 层之间只走 Pi 公开的接口（`pi.registerTool`、`pi.registerCommand`、`pi.registerProvider`、`pi.on(...)`）。少数地方用到 Pi 没导出的内部接口，每一处都登记在 [pi-internals.md](pi-internals.md) 并有测试，Pi 升级时由门禁发现变化。
+
+### 2.2 启动流程
+
+`src/cli.ts` 调 `src/host.ts` 的 `runMmp()`：
+
+```text
+mmp <参数>
+ │
+ ├─ 子命令（install / remove / list / config / auth / mcp / update）→ MMP 自己实现，结束
+ ├─ --version / --help                                              → MMP 自己实现，结束
+ │
+ ├─ 1 解析路径、发现项目、判断信任      → ResolvedAssembly（这次运行用哪些 Rules、Skills、扩展）
+ ├─ 2 创建内置扩展的 factory 并校验配置 → --dry-run 到这里输出报告，结束
+ ├─ 3 设置独立的 <MMP_HOME>/pi 状态目录
+ │
+ └─ 4 按模式分流
+      ├─ 交互（终端）          src/tui/start.ts      ─┐
+      ├─ -p / json / rpc       src/noninteractive.ts ─┼─▶ createMmpRuntime ─▶ 会话
+      ├─ --list-models         src/list-models.ts    ─┘   （不建会话，只列模型）
+      ├─ task 子进程           src/worker.ts（独立进程，自己建会话）
+      └─ --export              Pi 的 main()（只转换会话文件）
+```
+
+所有会建会话或选模型的路径做同一串事（决策 N1、MG2，设计见 [noninteractive-sdk-design.md](noninteractive-sdk-design.md)）：
+
+| 步骤 | 做什么 | 代码 |
+|---|---|---|
+| 建 services | 加载扩展（内置的和 Manifest 声明的），扩展在这里注册工具、命令、provider。Pi 自己的扩展、skills、主题、上下文文件发现全部关掉 | `createAgentSessionServices`（Pi），由 `createMmpRuntime` 或 `worker.ts` 调用 |
+| 让 provider 就位 | 对所有由扩展注册的 provider：不离线时等一次联网刷新拿模型目录，再等一次只读刷新让认证状态就位 | `settleRegisteredProviders`（`src/provider-startup.ts`） |
+| 选会话 | `--session`、`-c`、`--fork`、`--no-session` 等；跨项目的会话拒绝 | `buildSessionManager`（`src/tui/services.ts`） |
+| 选模型 | 命令行参数 → 作用域模型 → 保存的默认模型 | `resolveInitialModel`（同上） |
+| 建会话 | 交给 Pi | `createAgentSessionFromServices`（Pi） |
+| 运行 | 交互：MMP 的界面。print/json：Pi 的 `runPrintMode`。rpc：Pi 的 `runRpcMode` | `src/tui/app.ts` / `src/noninteractive.ts` |
+
+资源隔离：Pi 的自动发现在每条路径上都关掉（`noExtensions`、`noSkills`、`noPromptTemplates`、`noThemes`、`noContextFiles`，system prompt 的自动发现用空值挡住），`SettingsManager` 一律按"项目不可信"创建，所以项目的 `.pi/` 和 `~/.pi/agent` 都不生效。只剩 `--export` 把同样含义的参数（`BASE_PI_RESOURCE_ARGS`）传给 Pi 的 `main()`。MMP 的 `--approve` 只影响项目 `.mmp`。
+
+资源选择在会话创建前完成，不另建 bootstrap 扩展、全局进程 registry 或 shell 包装层。
+
+### 2.3 内置扩展
+
+| 扩展 | 什么时候加载 | 提供什么 | 配置 | 设计文档 |
+|---|---|---|---|---|
+| `mmp:runtime` | 总是 | 运行时身份、把 Rules 和 Skills 注入 system prompt、`/mmp` 命令、启动信息 | Manifest | 本文 §10 |
+| `mmp:task` | 默认开，Manifest `"disable"` 可关 | 工具 `task`、`task_status`、`task_wait`、`task_cancel`、`todo`；子任务在独立进程 `src/worker.ts` 里跑 | `agents/` 目录 | 本文 §12，[guide/task.md](guide/task.md) |
+| `mmp:mcp` | 默认开，可关 | 把 MMP 的 `mcp.json` 交给 Pi 的原生 MCP；`/mcp` 面板；随它加载 `codemode` 和 `tool-search` 两个内联扩展 | `mcp.json` | [mcp-design.md](mcp-design.md) |
+| `mmp:hooks` | 默认开，可关 | 在会话事件上运行用户配置的 handler（命令、提示词、agent），可以拦截或改写 | `hooks.json` | 本文 §14，[guide/hooks.md](guide/hooks.md) |
+| Magpie provider | 总是，不进 Manifest，不能关 | 模型 provider `magpie`：本机网关的模型目录和四种协议 | 只有 API key（`/login`） | [magpie-design.md](magpie-design.md) |
+| 关闭的 stdout 保护 | 只在 print/json | 读 stdout 的一方提前关掉管道时安静结束 | 无 | `src/closed-stdout.ts`（D54） |
+| 第三方扩展 | Manifest 的 `extensions` 声明了才加载 | 由扩展自己决定 | Manifest | 本文 §6 |
+
+内置的三个能力（task、mcp、hooks）在没有配置时对模型不可见的规则见 §3.4。Skills 除 Manifest 外还从三个固定根目录发现，见 §7.1。
+
+### 2.4 交互界面
+
+界面是 MMP 自己的应用，用 pi-tui 的组件渲染，全屏模式。设计见 [tui-design.md](tui-design.md)。
+
+| 部分 | 代码 | 做什么 |
+|---|---|---|
+| 应用主体 | `src/tui/app.ts` | 布局、事件接线、提交分发、会话替换时的重新绑定 |
+| 外框 | `chrome.ts`、`src/startup-page.ts` | 顶栏、状态行、底栏、启动页 |
+| 对话区 | `transcript.ts`、`assistant-block.ts`、`bash-block.ts`、`tools/` | 用户消息、回答、思考块、每种工具的卡片 |
+| 输入 | `paste-chips.ts`、`key-handlers.ts`、`keybindings.ts`、`queued-messages.ts` | 编辑器、图片和粘贴标签、快捷键、排队的消息 |
+| 命令 | `commands.ts`、`session-commands.ts`、`settings-command.ts`、`info-commands.ts` 等 | `/login`、`/model`、`/resume`、`/settings`、`/compact` 等内置命令 |
+| 扩展宿主 | `ext-host.ts`、`dialogs.ts` | 实现 Pi 扩展界面接口的 28 个方法，扩展的对话框和面板在这里显示（决策 D4） |
+| 会话构造 | `services.ts` | `createMmpRuntime`；不依赖终端，非交互模式也用它 |
+
+### 2.5 后续工作放在哪一层
+
+| 想做的事 | 放哪 | 例子 |
+|---|---|---|
+| 显示、交互、快捷键、命令 | 第 4 层（界面） | 新的工具卡片、设置项、会话选择器 |
+| 新的工具、新的 provider、对会话事件的反应 | 第 3 层（内置扩展），用 Pi 的公开扩展接口 | web 搜索工具、写文件后的 LSP 诊断、新的模型网关 |
+| 配置怎么找、怎么合并、是否可信 | 第 2 层（装配） | Manifest 新字段、新的 skill 根目录 |
+| 改 Agent 循环、压缩、会话格式、工具执行语义 | 第 1 层：**现在不做**（H4） | 自定义压缩、审批分级、多 agent 协作运行时 |
 
 ## 3. 不可违反的边界
 
@@ -1146,7 +1207,6 @@ Benchmark 不是阶段 A/B 的实现内容，但阶段 A 的 JSON mode、stdout/
 
 尚未完成：
 
-- 非交互启动读取项目 `.pi/settings.json` 的隔离缺口（§8.1）；
 - 其他未关闭问题以 [dogfood-issues.md](dogfood-issues.md) 为准；
 - 尚未接入九项 benchmark 各自的 dataset、workspace image、provider-qualified `DeepSeek-V4-Flash-0731` 模型标识和官方 grader；
 - 尚未产出任何正式 benchmark 分数。
