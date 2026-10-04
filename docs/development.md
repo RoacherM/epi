@@ -13,10 +13,11 @@
 
 MMP（Make My Pi）是在同一 Node.js 进程中使用锁定版本 Pi SDK 的定制 Harness。Harness 指包在模型外面的那层程序：把用户的话、工具和上下文组织起来交给模型，再把结果呈现出来。功能优先对齐 Pi；MMP 拥有 grok-build 风格的交互界面、配置装配、项目信任和能力选择。
 
-定位（决策 H1–H4；OMP 对照见 [notes/omp-study.md](notes/omp-study.md)）：
+定位（决策 H1–H5；OMP 对照见 [notes/omp-study.md](notes/omp-study.md)）：
 
 - 跟着官方 Pi 走：用官方 Pi 包、锁定版本、自动升级门禁，**不 fork**（OMP 是硬 fork，手工移植上游，已落后半年）。
 - **后续重心（H4，2026-10-04 用户定）：围绕 Pi 做好两件事，交互界面（TUI）和内置扩展。coding agent 的内核先不动。** 内核指 Pi 的模型调用、Agent 循环、会话、压缩和基础工具（§3.1 的清单）。新能力先问"能不能做成界面功能或内置扩展"；只有做不成时才单独评估要不要改 Pi 的行为（H2）。
+- **长期定位（H5，2026-10-04 用户定）：agent 操作、人 review 的多模态工作台，TUI 版的 Agent OS。** 工作面（剪辑、浏览器、画布等）做成可选的内置或第三方扩展，界面要为它们留出常驻面板；讨论和未定的事见 [notes/multimodal-surface.md](notes/multimodal-surface.md)。这不改变 H4：内核仍不动。
 - 配置严格只属于 MMP：不读 Pi，也不读 Claude/Codex/Gemini/Cursor 的配置，不认用户给 Pi 设的 `PI_*` 环境变量（D63），项目配置要信任（H3/K3）。
 - 和 Pi 一样默认不审批；审批分级先不做（H3/K6）。
 

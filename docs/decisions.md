@@ -44,6 +44,7 @@
 | 2026-10-04 | N1 | 非交互模式（`-p`、json、rpc）和 task 子进程改走 SDK，和交互界面用同一个启动函数；`piMain` 只剩 `--export` 还用。取代 D3 里"print / json / rpc 仍走 `piMain`"的部分 | `piMain` 是黑盒：D80（选模型和 Pi 不等待的刷新竞争）和 D62（读项目 `.pi/settings.json`）都发生在它内部，MMP 修不了。不给 Pi 上游报 issue（用户定） | 只给 Magpie 打补丁；给上游报 issue 等修复 | 已定（已实现） | [noninteractive-sdk-design.md](noninteractive-sdk-design.md) |
 | 2026-10-04 | MG2 | Magpie 作为普通 provider 扩展处理，不加 fallback 或专门规则：所有模式在选模型前等一次 Pi 自己的刷新，范围是所有由扩展注册的 provider；删掉 MMP 自己的启动查询、自己写 `models-store.json` 和 `selectsMagpie` 这类判断。改掉 MG1 的"只有选中 Magpie 时启动才等待目录" | 用户决定（"用统一的方式处理这个provider"、"当然是A"）；原型实测 40/40（设计文档 5.2 节） | 只刷新这次选中的 provider（要照 Pi 的规则重写一份"选了谁"的判断） | 已定（已实现） | noninteractive-sdk-design.md 第 5 节 |
 | 2026-10-04 | H4 | 后续重心：围绕 Pi 做好交互界面（TUI）和内置扩展；coding agent 的内核先不动。新能力先做成界面功能或内置扩展，做不成时才单独评估改 Pi 的行为 | 用户决定（"后续就是围绕Pi做好TUI和做好内置的extensions。先不动codingagent的内核"）。和 H2 一致，把"外围"明确成两块 | 改 Agent 循环、压缩、会话格式；fork Pi | 已定 | development.md §1、§2.5 |
+| 2026-10-04 | H5 | 定位扩展：从"定制版 Pi"（M6）扩展为"agent 操作、人 review 的多模态工作台"，目标是 TUI 版的 Agent OS：在终端界面里预览、渲染、操作多媒体素材，直至操作浏览器。内核仍是 Pi，不 fork（H2、H4 不变）；工作面（Surface）做成可选扩展 | 用户决定（"我们后续肯定是要支持多模态工作台的"、"相当于是把它当成一个 Agent OS 的 TUI 版本"、"可以，记进去"）。界面要为后续的可扩展性做准备，不是能用就行 | 只做 coding 用的定制版 Pi | 已定（方向）。还没定：和 benchmark 主线的先后、第一个工作面选哪个、界面底座换不换（见下面待定表） | [notes/multimodal-surface.md](notes/multimodal-surface.md) |
 
 ## 待定
 
@@ -51,7 +52,8 @@
 |---|---|---|---|
 | — | 配色里标"我定"的几个颜色 | 看截图时确认 | [tui-theme.md](tui-theme.md) |
 | — | 重跑 benchmark 基线和真实模型冒烟（会花钱） | Pi 0.87 改了 system prompt 格式，旧基线不能直接比，建议重跑 | docs/development.md 第 20 节 |
-| — | 定位是否从"定制版 Pi"（M6）扩展为"agent 操作、人 review 的多模态工作台"（Surface：画布、浏览器、剪辑） | 内核仍用 Pi、不加 Manifest 字段；先做剪辑 Surface，再做浏览器，两个跑通后再抽框架；和 benchmark 主线的先后由你定 | [notes/multimodal-surface.md](notes/multimodal-surface.md) |
+| — | 多模态工作台（H5）和 benchmark 主线、dogfood 修复的先后；第一个工作面选剪辑还是浏览器 | 先做剪辑，再做浏览器，两个跑通后再抽框架；先后由你定 | [notes/multimodal-surface.md](notes/multimodal-surface.md) 第 5.4、6 节 |
+| — | 界面底座：继续用 pi-tui，还是换渲染库或把前端拆成独立进程 | 先定两个接口（工作面协议、面板接口），让工作面不直接依赖 pi-tui；换不换等有实测数据再定。验证原型用户决定现在不做 | [notes/multimodal-surface.md](notes/multimodal-surface.md) 第 7 节 |
 
 ## 已知遗留问题
 
