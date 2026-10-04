@@ -13,7 +13,7 @@ import { resolveMmpPaths } from "./paths.js";
 import { rewritePiOutput } from "./pi-output.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { installProviderCostValidation } from "./provider-validation.js";
-import { createMagpieInlineExtension, selectsMagpie } from "./providers/magpie-extension.js";
+import { createMagpieInlineExtension, mayNameMagpieModel, selectsMagpie } from "./providers/magpie-extension.js";
 import { createMmpRuntimeIdentity, } from "./runtime-identity.js";
 import { askProjectTrust, saveProjectTrustChoice, shouldAskProjectTrust } from "./trust-prompt.js";
 import { runMmpUpdateCommand, updateCheckDisabled } from "./update.js";
@@ -222,7 +222,7 @@ export async function runMmp(argv) {
             agentDir: prepared.agentDir,
             // Same test as Pi's ModelRuntime: any PI_OFFLINE value (bridged from MMP_OFFLINE) is offline.
             online: !modelArgs.offline && process.env.PI_OFFLINE === undefined,
-            discover: usingMagpie || isListModelsRun(prepared.piArgs),
+            discover: usingMagpie || isListModelsRun(prepared.piArgs) || (mayNameMagpieModel(modelArgs) && "if-unsaved"),
             required: usingMagpie,
             ...(!usingMagpie || modelArgs.apiKey === undefined ? {} : { apiKey: modelArgs.apiKey }),
         }),

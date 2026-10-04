@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
-import { changedCatalogEntry, createMagpieProvider, discoverMagpieModels, magpieBaseUrl } from "./magpie.js";
+import { changedCatalogEntry, createMagpieProvider, createWriteTracker, discoverMagpieModels, isGatewayAbsent, magpieBaseUrl, } from "./magpie.js";
 // Pi's file-backed models store (core/models-store.js, not exported; docs/pi-internals.md
 // `models-store-file`), the same file and lock ModelRuntime uses for <agentDir>/models-store.json.
 const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
@@ -13,15 +13,12 @@ function failureMessage(error) {
         return error.message;
     return "Magpie model discovery failed; check that the gateway is running and its key is configured";
 }
-function isGatewayAbsent(error) {
-    return error instanceof Error && typeof error.cause === "object" && error.cause !== null &&
-        "code" in error.cause && error.cause.code === "ECONNREFUSED";
-}
 /** Saved here, awaited, rather than by Pi's startup refreshes: Pi supersedes those, and a short
  * run (-p, --list-models) can exit mid-write, leaving models-store.json.lock behind; the next mmp
  * then waits up to 30 s for it to go stale. An unchanged catalog is not written at all. */
+const storeAt = (agentDir) => new FileModelsStore(join(agentDir, "models-store.json"));
 async function saveCatalog(agentDir, baseUrl, models) {
-    const store = new FileModelsStore(join(agentDir, "models-store.json"));
+    const store = storeAt(agentDir);
     const entry = changedCatalogEntry(await store.read("magpie"), baseUrl, models);
     if (!entry)
         return;
@@ -34,6 +31,11 @@ const isMagpieRef = (ref) => /^magpie(\/|$)/i.test(ref);
 /** Whether a run selects Magpie, so startup waits for its catalog. Like Pi: providers match
  * case-insensitively, and without model flags the model comes from the saved default or the
  * scoped models (`--models`, settings `enabledModels`), whose Magpie patterns need the catalog. */
+/** A --model without a provider that could be a Magpie ID ("claude/claude-opus-5-5"): every Magpie
+ * ID has an upstream prefix. */
+export function mayNameMagpieModel(flags) {
+    return flags.provider === undefined && flags.model?.includes("/") === true && !isMagpieRef(flags.model);
+}
 export function selectsMagpie(flags, settings) {
     if (flags.provider !== undefined || flags.model !== undefined) {
         return [flags.provider, flags.model].some((ref) => ref !== undefined && isMagpieRef(ref));
@@ -52,7 +54,10 @@ export function createMagpieInlineExtension(options) {
         hidden: true,
         factory: async (pi) => {
             let initialModels;
-            if (options.online && options.discover) {
+            const discover = options.discover === "if-unsaved"
+                ? (await storeAt(options.agentDir).read("magpie")) === undefined
+                : options.discover;
+            if (options.online && discover) {
                 try {
                     const credential = readStoredCredential("magpie", join(options.agentDir, "auth.json"));
                     const storedKey = credential?.type === "api_key" ? credential.key : undefined;
@@ -72,7 +77,9 @@ export function createMagpieInlineExtension(options) {
             loadedBefore = true;
             if (initialModels)
                 await saveCatalog(options.agentDir, baseUrl, initialModels);
-            pi.registerProvider(createMagpieProvider(baseUrl, initialModels, options.online));
+            const writes = createWriteTracker();
+            pi.on("session_shutdown", () => writes.close());
+            pi.registerProvider(createMagpieProvider(baseUrl, initialModels, options.online, writes));
         },
     };
 }

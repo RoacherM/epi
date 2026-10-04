@@ -13,8 +13,20 @@ export declare function discoverMagpieModels(baseUrl: string, signal: AbortSigna
 export declare function renameToolIdsAfterSteer(payload: unknown): unknown;
 /** The store entry for a fresh catalog, or undefined when the stored one already matches it. */
 export declare function changedCatalogEntry(stored: ModelsStoreEntry | undefined, baseUrl: string, fresh: Model<Api>[]): ModelsStoreEntry | undefined;
+/** Connection refused: nothing listens at the gateway address. */
+export declare function isGatewayAbsent(error: unknown): boolean;
+/** Catalog writes still running, so a session shutdown can wait for them: a process that exits
+ * while Pi is taking the models-store lock leaves models-store.json.lock behind, and the next mmp
+ * waits up to 30 s for it (Fable F5: rpc's background refresh, then the client closes stdin). */
+export declare function createWriteTracker(): {
+    readonly closed: boolean;
+    track<T>(write: Promise<T>): Promise<T>;
+    /** Waits for running writes; refreshes that finish later do not write. */
+    close(): Promise<void>;
+};
+export type WriteTracker = ReturnType<typeof createWriteTracker>;
 /** Native publication lets Pi own persistence, concurrent-refresh generations and diagnostics.
  * A startup catalog is already saved by the caller, so the cache-only refreshes Pi starts while
  * loading never write: Pi supersedes them, and a short run can exit during the detached write. */
-export declare function createMagpieProvider(baseUrl: string, initialModels?: Model<Api>[], allowNetwork?: boolean): Provider;
+export declare function createMagpieProvider(baseUrl: string, initialModels?: Model<Api>[], allowNetwork?: boolean, writes?: WriteTracker): Provider;
 //# sourceMappingURL=magpie.d.ts.map

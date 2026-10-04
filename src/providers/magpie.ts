@@ -223,6 +223,38 @@ export function changedCatalogEntry(
     : { models: fresh, checkedAt: Date.now(), etag: tag };
 }
 
+/** A refresh right after the startup lookup would fetch the same catalog again (rpc and the TUI
+ * both refresh once at startup). */
+const STARTUP_FRESH_MS = 10_000;
+
+/** Connection refused: nothing listens at the gateway address. */
+export function isGatewayAbsent(error: unknown): boolean {
+  return error instanceof Error && typeof error.cause === "object" && error.cause !== null &&
+    "code" in error.cause && error.cause.code === "ECONNREFUSED";
+}
+
+/** Catalog writes still running, so a session shutdown can wait for them: a process that exits
+ * while Pi is taking the models-store lock leaves models-store.json.lock behind, and the next mmp
+ * waits up to 30 s for it (Fable F5: rpc's background refresh, then the client closes stdin). */
+export function createWriteTracker() {
+  const pending = new Set<Promise<unknown>>();
+  let closed = false;
+  return {
+    get closed() { return closed; },
+    track<T>(write: Promise<T>): Promise<T> {
+      pending.add(write);
+      void write.then(() => pending.delete(write), () => pending.delete(write));
+      return write;
+    },
+    /** Waits for running writes; refreshes that finish later do not write. */
+    async close(): Promise<void> {
+      closed = true;
+      await Promise.allSettled([...pending]);
+    },
+  };
+}
+export type WriteTracker = ReturnType<typeof createWriteTracker>;
+
 /** Native publication lets Pi own persistence, concurrent-refresh generations and diagnostics.
  * A startup catalog is already saved by the caller, so the cache-only refreshes Pi starts while
  * loading never write: Pi supersedes them, and a short run can exit during the detached write. */
@@ -230,9 +262,11 @@ export function createMagpieProvider(
   baseUrl: string,
   initialModels?: Model<Api>[],
   allowNetwork = true,
+  writes: WriteTracker = createWriteTracker(),
 ): Provider {
   let models = initialModels ?? [];
   let pending = initialModels;
+  const freshUntil = initialModels ? Date.now() + STARTUP_FRESH_MS : 0;
   const cachedModels = (stored: ModelsStoreEntry | undefined): Model<Api>[] =>
     stored?.etag === cacheTag(baseUrl)
       ? stored.models.filter((model): model is Model<Api> => model.provider === "magpie" && (!model.type || model.type === "chat"))
@@ -247,8 +281,9 @@ export function createMagpieProvider(
         login: async ({ prompt }) => ({ type: "api_key", key: await prompt({ type: "secret", message: "Magpie API key (loopback accepts any value):" }) }),
         resolve: async ({ credential, signal }) => {
           signal.throwIfAborted();
-          if (credential && !credential.key) return undefined;
-          return { auth: { apiKey: credential?.key ?? MAGPIE_DEFAULT_KEY }, source: "Magpie gateway" };
+          if (credential === undefined) return { auth: { apiKey: MAGPIE_DEFAULT_KEY }, source: "default key for the local gateway" };
+          if (!credential.key) return undefined;
+          return { auth: { apiKey: credential.key }, source: "Magpie API key" };
         },
       },
     },
@@ -260,14 +295,24 @@ export function createMagpieProvider(
       } else if (context.stored) {
         if (!(await context.publish({ update: () => { models = cachedModels(context.stored); } }))) return;
       }
-      if (!allowNetwork || !context.allowNetwork || context.signal.aborted) return;
+      if (!allowNetwork || !context.allowNetwork || context.signal.aborted || Date.now() < freshUntil) return;
       const apiKey = context.credential?.type === "api_key" ? context.credential.key : undefined;
-      const refreshed = await discoverMagpieModels(baseUrl, context.signal, apiKey);
+      let refreshed: Model<Api>[];
+      try {
+        refreshed = await discoverMagpieModels(baseUrl, context.signal, apiKey);
+      } catch (error) {
+        // Nothing listening, no saved list, no key of the user's own: Magpie is not installed, which
+        // is not an error for someone who never used it (no warning in /model).
+        const neverUsed = context.stored === undefined && (apiKey === undefined || apiKey === MAGPIE_DEFAULT_KEY);
+        if (neverUsed && isGatewayAbsent(error)) return;
+        throw error;
+      }
+      if (writes.closed) return;
       const persist = changedCatalogEntry(context.stored, baseUrl, refreshed);
-      await context.publish({
+      await writes.track(context.publish({
         ...(persist ? { persist } : {}),
         update: () => { models = refreshed; },
-      });
+      }));
     },
     stream: (model, context, options) => apiStreams(model.api).stream(model, context, withGatewayFixes(model, options)),
     streamSimple: (model, context, options) => apiStreams(model.api).streamSimple(model, context, withGatewayFixes(model, options)),

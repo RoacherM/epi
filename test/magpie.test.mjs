@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createModels, InMemoryModelsStore, InMemoryCredentialStore, Type } from "@earendil-works/pi-ai";
 
-import { createMagpieProvider, discoverMagpieModels, parseMagpieModels, renameToolIdsAfterSteer } from "../dist/providers/magpie.js";
+import { createMagpieProvider, createWriteTracker, discoverMagpieModels, parseMagpieModels, renameToolIdsAfterSteer } from "../dist/providers/magpie.js";
 import { magpieCatalog, startMagpieServer } from "./fixtures/magpie-server.mjs";
 
 function run(command, args, options) {
@@ -174,6 +174,58 @@ test("Pi's cache-only refreshes never write; network refreshes write only a chan
   server.state.catalog = [{ id: "other/new" }];
   await modelsWith(createMagpieProvider(server.baseUrl), store).refresh({ allowNetwork: true });
   assert.deepEqual(writes, ["magpie", "magpie"]);
+});
+
+test("a session shutdown waits for a running catalog write, and later refreshes do not write (F5)", async (t) => {
+  const server = await serverFor(t);
+  const store = new InMemoryModelsStore();
+  let finishWrite;
+  const writeStarted = new Promise((resolve) => {
+    const write = store.write.bind(store);
+    store.write = async (...args) => { resolve(); await new Promise((done) => { finishWrite = done; }); return write(...args); };
+  });
+  const writes = createWriteTracker();
+  const models = modelsWith(createMagpieProvider(server.baseUrl, undefined, true, writes), store);
+  const refresh = models.refresh({ allowNetwork: true });
+  await writeStarted;
+  let closed = false;
+  const closing = writes.close().then(() => { closed = true; });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(closed, false, "shutdown must wait for the write");
+  finishWrite();
+  await closing;
+  await refresh;
+  assert.equal((await store.read("magpie")).models.length, 4);
+  server.state.catalog = [{ id: "after-shutdown" }];
+  await models.refresh({ allowNetwork: true });
+  assert.equal((await store.read("magpie")).models.length, 4, "no write after shutdown began");
+});
+
+test("refresh: a missing gateway is no error for someone who never used Magpie, but is for anyone else", async () => {
+  const absent = await closedUrl();
+  const fresh = modelsWith(createMagpieProvider(absent));
+  assert.equal((await fresh.refresh({ allowNetwork: true })).errors.size, 0);
+  const saved = new InMemoryModelsStore();
+  await saved.write("magpie", { models: [], checkedAt: 1, etag: JSON.stringify([absent]) });
+  assert.match((await modelsWith(createMagpieProvider(absent), saved).refresh({ allowNetwork: true })).errors.get("magpie").message, /fetch failed|Magpie/);
+  const credentials = new InMemoryCredentialStore();
+  await credentials.modify("magpie", async () => ({ type: "api_key", key: "users-own-key" }));
+  assert.equal((await modelsWith(createMagpieProvider(absent), new InMemoryModelsStore(), credentials).refresh({ allowNetwork: true })).errors.size, 1);
+});
+
+test("the key's label says whether it is the default or the user's own", async () => {
+  const { apiKey } = createMagpieProvider("http://127.0.0.1:1").auth;
+  const signal = new AbortController().signal;
+  assert.deepEqual(await apiKey.resolve({ signal }), { auth: { apiKey: "magpie" }, source: "default key for the local gateway" });
+  assert.deepEqual(await apiKey.resolve({ signal, credential: { type: "api_key", key: "k" } }), { auth: { apiKey: "k" }, source: "Magpie API key" });
+});
+
+test("a refresh right after the startup lookup does not fetch the catalog again", async (t) => {
+  const server = await serverFor(t);
+  const models = modelsWith(createMagpieProvider(server.baseUrl, parseMagpieModels({ data: magpieCatalog }, server.baseUrl)));
+  await models.refresh({ allowNetwork: true });
+  assert.deepEqual(catalogRequests(server), []);
+  assert.equal(models.getModels("magpie").length, 4);
 });
 
 test("successful pagination merges pages and overlapping refreshes publish only the newest catalog", async (t) => {
@@ -380,6 +432,22 @@ test("the saved default provider, scoped models and any provider casing all sele
     assert.equal(output.stdout.trim(), "MAGPIE_OK 你好", `${args.join(" ")}\n${output.stderr}`);
     assert.equal(catalogRequests(server).length, 1);
   }
+});
+
+test("--model without the magpie/ prefix finds a Magpie model on the first run, and is quiet without a gateway", async (t) => {
+  const server = await serverFor(t);
+  const fixture = setup(t, server.baseUrl);
+  for (const run of [1, 2]) {
+    server.state.requests.length = 0;
+    const output = await cliRun(fixture, ["--model", "claude/claude-opus-test", ...printArgs]);
+    assert.equal(output.stdout.trim(), "MAGPIE_OK 你好", output.stderr);
+    assert.equal(catalogRequests(server).length, run === 1 ? 1 : 0, "looked up only while no list is saved");
+  }
+  const quiet = setup(t, await closedUrl());
+  quiet.otherProvider(server.baseUrl);
+  const other = await cliRun(quiet, ["--model", "other/echo", ...printArgs]);
+  assert.equal(other.stdout.trim(), "MAGPIE_OK 你好");
+  assert.equal(other.stderr, "");
 });
 
 test("help, dry-run and offline (any MMP_OFFLINE value, like Pi) do not discover models", async (t) => {
