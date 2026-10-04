@@ -9,6 +9,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { EXTENSION_LOAD_FAILURE_HINT } from "../dist/pi-output.js";
+
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
@@ -80,6 +82,48 @@ test("--list-models reports an extension that fails to load and exits 1, like -p
   assert.equal(result.stdout, "", result.context);
   assert.match(result.stderr, /^Error: Failed to load extension ".*throws\.mjs": .*boom at load$/m, result.context);
   assert.doesNotMatch(result.stderr, /\bpi -ne\b/, result.context);
+  // D61: the same hint -p and the TUI end a load failure with.
+  assert.ok(result.stderr.trimEnd().endsWith(EXTENSION_LOAD_FAILURE_HINT), result.context);
+});
+
+// D61 (K4): a built-in is on without being declared, so a third-party tool of the same name shows up
+// as the built-in failing; Pi's raw error alone does not say how to turn the built-in off.
+test("--list-models says how to turn off a built-in that a third-party tool clashes with (D61)", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "mmp-list-models-clash-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const extension = join(root, "todo.mjs");
+  writeFileSync(
+    extension,
+    'export default function (pi) { pi.registerTool({ name: "todo", label: "x", description: "third-party", ' +
+      'parameters: { type: "object", properties: {} }, execute: async () => ({ content: [] }) }); }\n',
+  );
+  const result = listModels(t, [extension]);
+  assert.equal(result.status, 1, result.context);
+  assert.match(result.stderr, /^Error: Failed to load extension "<inline:mmp:task>"/m, result.context);
+  assert.match(
+    result.stderr,
+    /^Hint: mmp:task is built in and on by default; .*Turn mmp:task off: add "disable": \["mmp:task"\] to .*mmp\.json\./m,
+    result.context,
+  );
+});
+
+// D61: Pi applies the settings' httpProxy in every mode (main.js), before any extension loads.
+test("--list-models applies the httpProxy from MMP's settings.json, like -p and the TUI (D61)", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "mmp-list-models-proxy-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const extension = join(root, "proxy-probe.mjs");
+  writeFileSync(
+    extension,
+    'export default function () { process.stderr.write(`PROBE HTTP_PROXY=${process.env.HTTP_PROXY} HTTPS_PROXY=${process.env.HTTPS_PROXY}\\n`); }\n',
+  );
+  const result = listModels(t, [extension], [], {
+    setup(_root, home) {
+      mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
+      writeFileSync(join(home, ".mmp", "pi", "settings.json"), JSON.stringify({ httpProxy: "http://proxy.invalid:3128" }));
+    },
+  });
+  assert.equal(result.status, 0, result.context);
+  assert.match(result.stderr, /PROBE HTTP_PROXY=http:\/\/proxy\.invalid:3128 HTTPS_PROXY=http:\/\/proxy\.invalid:3128/, result.context);
 });
 
 test("--list-models with no models prints MMP's own hint, not Pi's /login text or doc links (D48)", (t) => {

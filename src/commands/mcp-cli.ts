@@ -16,6 +16,7 @@ import type { McpExposure, McpServerConfig, McpServerEntry } from "@earendil-wor
 import { MmpArgumentError } from "../errors.js";
 import { assertProjectTrustedFor, isHelpRequested } from "./manifest-cli.js";
 import { emptyStateMessage, loadNativeMcpConfig } from "../extensions/mcp.js";
+import { manifestDisables } from "../manifest.js";
 import { resolveMmpPaths } from "../paths.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "../project.js";
 
@@ -89,6 +90,7 @@ Other options:
 `;
 const HELP_HINT = 'Use "mmp mcp --help" for usage.';
 const DEFAULT_LOGIN_TIMEOUT_SECONDS = 300;
+const MAX_LOGIN_TIMEOUT_SECONDS = 2_147_483;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -234,7 +236,18 @@ function resolveListConfig(ctx: McpCliContext, approveOverride: boolean | undefi
     },
     ctx.cwd,
   );
-  return { loaded, untrustedNote };
+  return { loaded, untrustedNote, trustedProjectManifest: trusted ? candidate?.manifestPath : undefined };
+}
+
+/** Why `mmp mcp list` connects to nothing: `"disable": ["mmp:mcp"]` in a Manifest a session started
+ * here reads (global, and the project's when trusted) turns MCP off, and mcp.json is not read. */
+function mcpOffNote(trustedProjectManifest: string | undefined): string | undefined {
+  const manifests = [resolveMmpPaths(process.env).globalManifest, ...(trustedProjectManifest === undefined ? [] : [trustedProjectManifest])];
+  const disabledIn = manifests.filter((manifestPath) => manifestDisables(manifestPath, "mmp:mcp"));
+  return disabledIn.length === 0
+    ? undefined
+    : `mmp:mcp is turned off by "disable" in ${disabledIn.join(" and ")}, so sessions do not load MCP servers. ` +
+        'Remove "mmp:mcp" from "disable" to use them.';
 }
 
 const ADD_OPTIONS: Record<string, OptionKind> = {
@@ -447,34 +460,61 @@ async function loadRuntimeModule() {
   };
 }
 
+interface McpServerReport {
+  name: string;
+  scope: string;
+  source: string;
+  enabled: boolean;
+  exposure: McpExposure;
+  transport: string;
+  state: string;
+  tools: string[];
+  toolExposure?: Record<string, McpExposure>;
+  resources?: number;
+  resourceTemplates?: number;
+  error?: string;
+}
+
+const STATE_LABELS: Readonly<Record<string, string>> = { "needs-auth": "needs sign-in", "not-loaded": "not loaded" };
+
+/** `mmp mcp list`'s text form of each server, Pi's layout (extensions/mcp/cli.js). */
+function printReports(reports: readonly McpServerReport[]): void {
+  for (const report of reports) {
+    const state =
+      report.state === "connected"
+        ? `connected, ${report.tools.length} tool${report.tools.length === 1 ? "" : "s"}`
+        : (STATE_LABELS[report.state] ?? report.state);
+    console.log(`${report.name}: ${state} (${report.exposure}, ${report.scope})`);
+    console.log(`  ${report.transport}`);
+    if (report.state === "needs-auth") console.log(`  sign in with: mmp mcp login ${report.name}`);
+    if (report.tools.length > 0) {
+      const tools = report.tools.map((tool) => {
+        const exposure = report.toolExposure?.[tool];
+        return exposure ? `${tool} [${exposure}]` : tool;
+      });
+      console.log(`  tools: ${tools.join(", ")}`);
+    }
+    if (report.resources !== undefined) {
+      console.log(`  resources: ${report.resources}, URI templates: ${report.resourceTemplates ?? 0}`);
+    }
+    if (report.error) console.log(`  ${report.error.split("\n").join("\n  ")}`);
+  }
+}
+
 async function listCommand(args: readonly string[], ctx: McpCliContext): Promise<number> {
   const parsed = parseOptions(args, { json: "flag", ...APPROVE_OPTIONS });
   if (parsed.positional.length > 0) {
     throw new MmpArgumentError(`Usage: mmp mcp list [--json] [--approve|--no-approve]\n${HELP_HINT}`);
   }
   const json = parsed.values.has("json");
-  const { loaded, untrustedNote } = resolveListConfig(ctx, approveOverrideOf(parsed.values), "list");
+  const { loaded, untrustedNote, trustedProjectManifest } = resolveListConfig(ctx, approveOverrideOf(parsed.values), "list");
+  const offNote = mcpOffNote(trustedProjectManifest);
   const runtime = await loadRuntimeModule();
   const credentials = new runtime.McpOAuthCredentialStore();
 
-  interface Report {
-    name: string;
-    scope: string;
-    source: string;
-    enabled: boolean;
-    exposure: McpExposure;
-    transport: string;
-    state: string;
-    tools: string[];
-    toolExposure?: Record<string, McpExposure>;
-    resources?: number;
-    resourceTemplates?: number;
-    error?: string;
-  }
-
-  const reports: Report[] = await Promise.all(
-    loaded.servers.map(async (entry): Promise<Report> => {
-      const report: Report = {
+  const reports: McpServerReport[] = await Promise.all(
+    loaded.servers.map(async (entry): Promise<McpServerReport> => {
+      const report: McpServerReport = {
         name: entry.name,
         scope: entry.scope ?? "global",
         source: entry.source,
@@ -485,6 +525,7 @@ async function listCommand(args: readonly string[], ctx: McpCliContext): Promise
         tools: [],
       };
       if (!report.enabled) return report;
+      if (offNote !== undefined) return { ...report, state: "not-loaded" };
       const connection = new runtime.McpServerConnection({
         entry,
         cwd: ctx.cwd,
@@ -515,39 +556,35 @@ async function listCommand(args: readonly string[], ctx: McpCliContext): Promise
     }),
   );
 
-  const failed = loaded.errors.length > 0 || reports.some((report) => report.enabled && report.state !== "connected");
+  const unconnected = offNote === undefined && reports.some((report) => report.enabled && report.state !== "connected");
+  const failed = loaded.errors.length > 0 || unconnected;
   if (json) {
-    console.log(JSON.stringify({ servers: reports, errors: loaded.errors, ...(untrustedNote ? { note: untrustedNote } : {}) }, null, 2));
+    const notes = [untrustedNote, offNote].filter((note) => note !== undefined).join(" ");
+    console.log(JSON.stringify({ servers: reports, errors: loaded.errors, ...(notes ? { note: notes } : {}) }, null, 2));
     return failed ? 1 : 0;
   }
   if (reports.length === 0 && loaded.errors.length === 0) {
     console.log(emptyStateMessage(ctx.mmpHome, ctx.cwd));
   }
-  for (const report of reports) {
-    const state =
-      report.state === "connected"
-        ? `connected, ${report.tools.length} tool${report.tools.length === 1 ? "" : "s"}`
-        : report.state === "needs-auth"
-          ? "needs sign-in"
-          : report.state;
-    console.log(`${report.name}: ${state} (${report.exposure}, ${report.scope})`);
-    console.log(`  ${report.transport}`);
-    if (report.state === "needs-auth") console.log(`  sign in with: mmp mcp login ${report.name}`);
-    if (report.tools.length > 0) {
-      const tools = report.tools.map((tool) => {
-        const exposure = report.toolExposure?.[tool];
-        return exposure ? `${tool} [${exposure}]` : tool;
-      });
-      console.log(`  tools: ${tools.join(", ")}`);
-    }
-    if (report.resources !== undefined) {
-      console.log(`  resources: ${report.resources}, URI templates: ${report.resourceTemplates ?? 0}`);
-    }
-    if (report.error) console.log(`  ${report.error.split("\n").join("\n  ")}`);
-  }
-  for (const configError of loaded.errors) console.log(`config error: ${configError}`);
+  printReports(reports);
+  for (const configError of loaded.errors) console.error(`config error: ${configError}`);
   if (untrustedNote) console.log(untrustedNote);
+  if (offNote) console.log(offNote);
   return failed ? 1 : 0;
+}
+
+/** Pi's waitForRedirectUrl (extensions/mcp/cli.js) without its stdin prompt: resolves to undefined,
+ * which cancels the sign-in, after `timeoutMs`, or when the browser callback arrived (`signal`). */
+function waitOutSignIn(signal: AbortSignal, timeoutMs: number): Promise<undefined> {
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve(undefined);
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    signal.addEventListener("abort", finish, { once: true });
+  });
 }
 
 async function loginOrLogoutCommand(command: "login" | "logout", args: readonly string[], ctx: McpCliContext): Promise<number> {
@@ -587,8 +624,9 @@ async function loginOrLogoutCommand(command: "login" | "logout", args: readonly 
       return 0;
     }
     const timeoutSeconds = Number(parsed.values.get("timeout") ?? DEFAULT_LOGIN_TIMEOUT_SECONDS);
-    if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-      console.error("--timeout must be a positive number of seconds.");
+    // Above this, setTimeout overflows and fires at once.
+    if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || timeoutSeconds > MAX_LOGIN_TIMEOUT_SECONDS) {
+      console.error(`--timeout must be a positive number of seconds, at most ${MAX_LOGIN_TIMEOUT_SECONDS}.`);
       return 1;
     }
     try {
@@ -613,10 +651,7 @@ async function loginOrLogoutCommand(command: "login" | "logout", args: readonly 
           },
           // Non-interactive-friendly default: mmp mcp login is meant to be run by an agent through
           // bash (module comment), so it never blocks on stdin -- it waits out the timeout instead.
-          promptForRedirectUrl: (signal: AbortSignal) =>
-            new Promise<string | undefined>((resolve) => {
-              signal.addEventListener("abort", () => resolve(undefined), { once: true });
-            }),
+          promptForRedirectUrl: (signal: AbortSignal) => waitOutSignIn(signal, timeoutSeconds * 1000),
         },
       });
     } catch (signInError) {

@@ -85,6 +85,8 @@ mmp mcp logout <server> [--approve|--no-approve]
 - Pi 的 `runMcpCommand` 不能直接用：它写死了 `.pi/mcp.json`（`cli.js:127`）和 Pi 的信任存储（`cli.js:133`）。MMP 自己解析参数；读写配置复用 `config.js` 的 `addMcpServerConfig` / `removeMcpServerConfig` / `loadMcpConfig`；`list`、`login`、`logout` 复用 `runtime.js` 的 `McpServerConnection`、`signInMcpServer`、`McpOAuthCredentialStore`（都登记进 `pi-internals.md`）。
 - 写的是 `~/.mmp/mcp.json`，加 `-l` 写项目的 `.mmp/mcp.json`。`-l` 的信任规则和 `mmp install -l` 一样：项目不可信就拒绝，除非带 `--approve`（只对这一次有效）。
 - `list` 和 Pi 一样会真的连接每个服务，报告状态、工具数和错误；有配置错误或连接失败时退出码为 1。项目不可信时不读项目配置，并提示"not trusted"和 `--approve`。
+- 和 Pi 不同的两处（dogfood D73，主控定的）：`mmp:mcp` 被 `"disable"` 关掉时（全局 Manifest，或可信项目的 Manifest），`list` 不启动也不连接服务，每个服务显示 `not loaded`（`--json` 里是 `"state": "not-loaded"`），最后一行说明是哪个文件关掉的，退出码不因此变成 1；`config error:` 行写到 stderr（Pi 写到 stdout）。判断是否关掉只读 Manifest 的 `disable` 字段，不解析声明的路径，所以 Manifest 里某条 rule 路径不存在不会让 `list` 失败；Manifest 本身读不了时照常报错（不是合法 JSON、有未知字段、`version` 不对、`disable` 不是数组）；`disable` 里的名字是否合法、是否和 `extensions` 重复则不检查，这两种错由 `mmp list` 和会话启动报。
+- `login --timeout` 照 Pi 的 `waitForRedirectUrl`（`cli.js`）起计时器，到时取消登录并以退出码 1 结束（dogfood D71）。`--timeout` 最大 2147483 秒，再大 `setTimeout` 会溢出并立刻触发，所以直接拒绝（Pi 没有这个检查）。MMP 不读 stdin 里粘贴的回调地址，也不自己打开浏览器。
 - `login`、`logout` 和会话用同一份凭据（`<mmpHome>/pi/mcp-auth.json`），按服务名 + URL 存取（`McpOAuthCredentialStore` 的 `forServer(name, url)` / `remove(name, url)`，Pi 1.0）：两个服务指向同一个 URL 时各登各的；`logout` 也会删掉这个服务会接走的旧凭据（只按 URL 存的）。测试（`test/mcp-cli.test.mjs`）用一个本地的假 OAuth + MCP HTTP 服务走完整个登录流程。
 - `add` 的选项跟 Pi 1.0 的 `pi mcp add` 一致，包括 `--oauth-client-name`、`--description`（Pi 0.99.2 加的）。
 - `list`、`login`、`logout` 也读项目的 `.mmp/mcp.json`，所以同样接受 `-a`/`--approve`（这一次当作信任，读项目配置）和 `-na`/`--no-approve`（这一次当作不信任），都不写信任记录（决策 U4；dogfood D4）。

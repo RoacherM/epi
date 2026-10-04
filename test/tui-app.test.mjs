@@ -162,7 +162,10 @@ test("TUI v2 /login: cancelling the key prompt returns to the provider list", (t
     ["key", "esc"], ["waitFor", "Select provider to configure"], ["mark", "back"],
     ["type", "openai"], ["waitFor", { regex: "> openai[\\s\\S]*\\(1/\\d+\\)" }], ["key", "enter"],
     ["waitFor", "Enter OpenAI API key"], ["mark", "again"],
-    ["key", "esc"], ["wait", 200], ["key", "esc"], ["wait", 200], ["key", "ctrl+d"],
+    // Back out level by level: key prompt -> provider list -> method selector -> editor (D65).
+    ["key", "esc"], ["waitFor", "Select provider to configure"],
+    ["key", "esc"], ["waitFor", "Select authentication method"],
+    ["key", "esc"], editorCleared, ["key", "ctrl+d"],
   ], (home) => {
     try { auth = JSON.parse(readFileSync(join(home, ".mmp", "pi", "auth.json"), "utf8")); } catch { auth = {}; }
   });
@@ -170,6 +173,25 @@ test("TUI v2 /login: cancelling the key prompt returns to the provider list", (t
   assert.doesNotMatch(marks.back.slice(marks.keyPrompt.length), /Login to OpenAI failed|aborted/);
   assert.match(marks.again.slice(marks.back.length), /Enter OpenAI API key/);
   assert.equal(auth.openai, undefined);
+});
+
+// Dogfood D65, Pi's showLoginProviderSelector: Esc on the provider list reopens the method selector
+// it was reached from (`if (authType) this.showLoginAuthTypeSelector()`); Esc there closes /login.
+test("TUI v2 /login: Esc on the provider list returns to the method selector, like Pi (D65)", (t) => {
+  const { marks, text: out } = runApp(t, [], [
+    ["waitReady"], ["type", "/login"], ["key", "enter"], ["waitFor", "Sign in with an API key"],
+    ["key", "down"], ["wait", 200], ["key", "enter"], ["waitFor", "Select provider to configure"], ["mark", "providers"],
+    ["key", "esc"], ["waitFor", "Select authentication method"], ["mark", "method"],
+    // The reopened selector works: the account list this time, and Esc goes back again.
+    ["key", "enter"], ["waitFor", "GitHub Copilot"], ["mark", "accounts"],
+    ["key", "esc"], ["waitFor", "Select authentication method"],
+    ["key", "esc"], editorCleared, ["mark", "closed"],
+    ["key", "ctrl+d"],
+  ]);
+  assert.match(marks.method.slice(marks.providers.length), /Select authentication method:/);
+  assert.match(marks.accounts.slice(marks.method.length), /Select provider to configure:[\s\S]*GitHub Copilot/);
+  assert.doesNotMatch(marks.providers, /GitHub Copilot/, "the API key list is expected not to offer GitHub Copilot");
+  assert.match(out, /EXIT=0/);
 });
 
 // Pi's loginProvider passes `{ getDeviceId: () => settingsManager.getOrCreateDeviceId() }` to
@@ -205,7 +227,7 @@ test("TUI v2 /login: an ambient-only API-key provider shows a setup dialog, and 
     ["type", "ambient"], ["waitFor", { regex: "> ambient(?!\\w)[\\s\\S]*→ Ambient Probe|→ Ambient Probe[\\s\\S]*> ambient(?!\\w)" }], ["key", "enter"],
     ["waitFor", "Ambient Probe setup"], ["mark", "dialog"],
     ["key", "esc"], ["waitFor", "Select provider to configure"], ["mark", "back"],
-    ["key", "esc"], ["wait", 200],
+    ["key", "esc"], ["waitFor", "Select authentication method"], ["key", "esc"], editorCleared,
     // Started from an exact match there is no menu to go back to: Esc returns to the editor.
     ["type", "/login ambient probe"], ["key", "enter"], ["waitFor", "Ambient Probe setup"], ["mark", "direct"],
     ["key", "esc"], editorCleared, ["mark", "closed"],

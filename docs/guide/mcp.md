@@ -2,7 +2,7 @@
 
 [← 文档索引](README.md)
 
-`mmp:mcp` 默认开启（`"disable": ["mmp:mcp"]` 可关掉，关掉后不读 `mcp.json`），创建 `~/.mmp/mcp.json` 即可接入服务（格式和 Pi 自己的 `mcp.json` 逐字一致，见 Pi 的 `docs/mcp.md`）：
+`mmp:mcp` 默认开启（`"disable": ["mmp:mcp"]` 可关掉，关掉后不读 `mcp.json`，`mmp mcp list` 里每个服务显示 `not loaded`），创建 `~/.mmp/mcp.json` 即可接入服务（格式和 Pi 自己的 `mcp.json` 逐字一致，见 Pi 的 `docs/mcp.md`）：
 
 ```json
 {

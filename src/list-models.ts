@@ -18,8 +18,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 
-import { PROVIDER_LOGIN_HELP } from "./pi-output.js";
-import { configureHttp } from "./tui/services.js";
+import type { ResolvedAssembly } from "./assembly.js";
+import { extensionLoadFailureHint, PROVIDER_LOGIN_HELP } from "./pi-output.js";
+import { configureHttpAtStartup } from "./tui/services.js";
 
 type Diagnostic = { type: "error" | "warning" | "info"; message: string };
 type ParsedPiArgs = ReturnType<typeof parseArgs>;
@@ -76,7 +77,12 @@ function writeAndExit(stream: NodeJS.WriteStream, text: string, code: number): v
 
 export async function runListModels(
   piArgs: readonly string[],
-  options: { cwd: string; agentDir: string; externalExtensionPaths: string[]; extensionFactories: InlineExtension[] },
+  options: {
+    cwd: string;
+    agentDir: string;
+    assembly: Pick<ResolvedAssembly, "globalManifest" | "inlineExtensions" | "externalExtensions">;
+    extensionFactories: InlineExtension[];
+  },
 ): Promise<void> {
   const parsed: ParsedPiArgs = parseArgs([...piArgs]);
   const parseErrors = parsed.diagnostics.filter((diagnostic) => diagnostic.type === "error");
@@ -90,7 +96,8 @@ export async function runListModels(
   const { cwd, agentDir } = options;
   // BASE_PI_RESOURCE_ARGS carries --no-approve, so Pi's projectTrusted is always false here.
   const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
-  await configureHttp(settingsManager);
+  // Like main.js in every mode: the settings' httpProxy too, not only the dispatcher (dogfood D61).
+  configureHttpAtStartup(settingsManager);
   const services = await createAgentSessionServices({
     cwd,
     agentDir,
@@ -106,7 +113,7 @@ export async function runListModels(
       noContextFiles: true,
       systemPrompt: "",
       appendSystemPrompt: [""],
-      additionalExtensionPaths: options.externalExtensionPaths,
+      additionalExtensionPaths: options.assembly.externalExtensions.map((extension) => extension.value),
       extensionFactories: options.extensionFactories,
     },
   });
@@ -136,6 +143,10 @@ export async function runListModels(
     writeDiagnostic(diagnostic);
   }
   if (diagnostics.some((diagnostic) => diagnostic.type === "error")) {
+    // The hint `-p` and the TUI end a load failure with (main.js prints its own after the errors).
+    if (extensions.errors.length > 0) {
+      process.stderr.write(`${extensionLoadFailureHint(extensions.errors.map(({ path }) => path), options.assembly)}\n`);
+    }
     process.exit(1);
   }
 

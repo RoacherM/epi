@@ -273,7 +273,7 @@ export async function runMmp(argv) {
         await runListModels(prepared.piArgs, {
             cwd: process.cwd(),
             agentDir: prepared.agentDir,
-            externalExtensionPaths: prepared.assembly.externalExtensions.map((extension) => extension.value),
+            assembly: prepared.assembly,
             extensionFactories,
         });
         return;
