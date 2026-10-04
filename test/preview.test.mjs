@@ -3,7 +3,7 @@
 // and MMP_HOME, offline; the video case runs with an empty PATH so no real ffmpeg is used.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ import test from "node:test";
 
 import { PREVIEW_VERSION } from "../dist/extensions/preview.js";
 import { clock, humanSize, kindOf, loadDoc, readEntries } from "../dist/extensions/preview/files.js";
+import { Player } from "../dist/extensions/preview/media.js";
 
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const ONE_PIXEL_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jq1kAAAAASUVORK5CYII=", "base64");
@@ -173,4 +174,76 @@ test("an image without terminal graphics shows a text placeholder, and a video w
 
 test("the extension has its own version, apart from MMP's", () => {
   assert.match(PREVIEW_VERSION, /^\d+\.\d+\.\d+$/);
+});
+
+// A stand-in for ffmpeg and ffplay on PATH: the video call writes PNG frames as fast as the pipe
+// takes them (a real decode is faster than playback too), the others just stay alive. Each records
+// its pid so the test can see what is still running.
+function fakeMediaTools(t) {
+  const bin = tempDir(t);
+  const pids = join(bin, "pids");
+  const script = `#!${process.execPath}
+const fs = require("node:fs");
+fs.appendFileSync(${JSON.stringify(pids)}, process.pid + "\\n");
+const frame = Buffer.from(${JSON.stringify(ONE_PIXEL_PNG.toString("base64"))}, "base64");
+if (process.argv[1].endsWith("ffmpeg") && !process.argv.includes("-vn")) {
+  let sent = 0;
+  const pump = () => { while (sent < 400) { sent += 1; if (!process.stdout.write(frame)) return process.stdout.once("drain", pump); } };
+  pump();
+} else setInterval(() => {}, 1000);
+`;
+  for (const name of ["ffmpeg", "ffplay"]) {
+    writeFileSync(join(bin, name), script);
+    chmodSync(join(bin, name), 0o755);
+  }
+  const previous = process.env.PATH;
+  process.env.PATH = bin;
+  t.after(() => { process.env.PATH = previous; });
+  return () => (existsSync(pids) ? readFileSync(pids, "utf8").trim().split("\n").map(Number) : []);
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+// The picture has to stay with the sound: the position follows the clock, and frames that became
+// late while the process was busy are dropped instead of played back afterwards in slow motion.
+test("the player follows the clock, drops late frames after a stall, holds while paused, and leaves no process behind", async (t) => {
+  const pidsOf = fakeMediaTools(t);
+  let frames = 0;
+  const player = new Player("clip.mp4", 80, 24, false, () => { frames += 1; });
+  t.after(() => player.stop());
+  const started = Date.now();
+  player.play(0);
+  // The stand-in takes a moment to start; the clock check begins once it delivers.
+  const until = async (condition, what) => {
+    for (let waited = 0; !condition(); waited += 20) {
+      assert.ok(waited < 10_000, `timed out waiting for ${what}`);
+      await sleep(20);
+    }
+  };
+  await until(() => frames > 0, "the first frame");
+  await sleep(800);
+  const elapsed = () => (Date.now() - started) / 1000;
+  assert.ok(Math.abs(player.position - elapsed()) < 0.3, `position ${player.position} after ${elapsed()} s`);
+  assert.ok(frames >= 6, `only ${frames} frames drawn in the first second`);
+
+  const busyUntil = Date.now() + 700;
+  while (Date.now() < busyUntil); // the event loop is blocked: no tick, no redraw
+  await sleep(250);
+  assert.ok(Math.abs(player.position - elapsed()) < 0.3, `after a stall: position ${player.position}, clock ${elapsed()} s`);
+
+  player.toggle();
+  const paused = player.position;
+  await sleep(400);
+  assert.equal(player.position, paused);
+  player.toggle();
+  await sleep(300);
+  assert.ok(player.position > paused + 0.15, "did not go on after the pause");
+
+  // A frame source, a sound player and a level meter (started again by the resume above).
+  await until(() => pidsOf().length >= 3, "the media processes to start");
+  const pids = pidsOf();
+  player.stop();
+  await sleep(300);
+  assert.deepEqual(pids.filter(alive), [], "a media process outlived stop()");
 });

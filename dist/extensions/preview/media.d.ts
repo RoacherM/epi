@@ -34,8 +34,10 @@ interface PlayerSource {
     videoArgs?: string[];
     audioArgs?: string[];
 }
-/** Streams RGBA frames from ffmpeg and shows them at VIDEO_FPS. Pausing stops taking frames;
- * the pipe's backpressure then stalls ffmpeg, so no signals are needed. */
+/** Streams PNG frames from ffmpeg and shows them at VIDEO_FPS, by the clock: a frame that is late
+ * (a slow redraw, a busy terminal) is dropped, so the picture stays with the sound instead of
+ * falling behind it. Pausing stops taking frames; the pipe's backpressure then stalls ffmpeg, so
+ * no signals are needed. */
 export declare class Player {
     private readonly path;
     readonly width: number;
@@ -60,7 +62,11 @@ export declare class Player {
     private partial;
     private timer;
     private from;
+    /** Frames taken from the queue since `from`, drawn or dropped. */
     private shown;
+    /** Time spent playing since `from`, and when it was last added to. */
+    private playedMs;
+    private lastTick;
     private sourceDone;
     private needFrame;
     constructor(path: string, width: number, height: number, loop: boolean, onFrame: () => void, source?: PlayerSource);

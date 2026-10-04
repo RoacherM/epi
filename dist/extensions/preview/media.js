@@ -8,7 +8,13 @@ import { basename, extname, join } from "node:path";
 import { piTui } from "../../tui/pi-tui.js";
 import { kindOf } from "./files.js";
 const { getCellDimensions, getImageDimensions } = piTui;
-const VIDEO_FPS = 10;
+const VIDEO_FPS = 20;
+/** Longer side of a video frame in pixels. The terminal scales the frame to the pane, so a pane's
+ * full pixel size (2 MB of PNG per 1080p frame) only costs the terminal decoding time: at that size
+ * playback stuttered. */
+const FRAME_BOX_PX = 800;
+/** Bytes the terminal has not taken yet above which a frame is dropped instead of drawn. */
+const BACKLOG_BYTES = 1024 * 1024;
 export const SEEK_SECONDS = 5;
 const METER_SAMPLE_RATE = 8000;
 const METER_WINDOW_SECONDS = 0.05;
@@ -144,8 +150,10 @@ export function stillJob(entry) {
         return { base64, mimeType: "image/png", ...(dimensions ? { dimensions } : {}), ...(info ? { info } : {}) };
     };
 }
-/** Streams RGBA frames from ffmpeg and shows them at VIDEO_FPS. Pausing stops taking frames;
- * the pipe's backpressure then stalls ffmpeg, so no signals are needed. */
+/** Streams PNG frames from ffmpeg and shows them at VIDEO_FPS, by the clock: a frame that is late
+ * (a slow redraw, a busy terminal) is dropped, so the picture stays with the sound instead of
+ * falling behind it. Pausing stops taking frames; the pipe's backpressure then stalls ffmpeg, so
+ * no signals are needed. */
 export class Player {
     path;
     width;
@@ -170,7 +178,11 @@ export class Player {
     partial = Buffer.alloc(0);
     timer;
     from = 0;
+    /** Frames taken from the queue since `from`, drawn or dropped. */
     shown = 0;
+    /** Time spent playing since `from`, and when it was last added to. */
+    playedMs = 0;
+    lastTick = 0;
     sourceDone = false;
     needFrame = true;
     constructor(path, width, height, loop, onFrame, source = {}) {
@@ -186,6 +198,8 @@ export class Player {
         this.from = Math.max(0, from);
         this.position = this.from;
         this.shown = 0;
+        this.playedMs = 0;
+        this.lastTick = Date.now();
         this.ended = false;
         this.error = undefined;
         this.audioLevelDb = undefined;
@@ -197,8 +211,8 @@ export class Player {
         this.needFrame = true;
         let stderr = "";
         const cell = getCellDimensions();
-        const maxWidthPx = Math.max(16, Math.floor(this.width * cell.widthPx));
-        const maxHeightPx = Math.max(16, Math.floor(this.height * cell.heightPx));
+        const maxWidthPx = Math.max(16, Math.min(FRAME_BOX_PX, Math.floor(this.width * cell.widthPx)));
+        const maxHeightPx = Math.max(16, Math.min(FRAME_BOX_PX, Math.floor(this.height * cell.heightPx)));
         const vf = `fps=${VIDEO_FPS},scale=w='min(${maxWidthPx},iw)':h='min(${maxHeightPx},ih)':force_original_aspect_ratio=decrease`;
         const child = spawn("ffmpeg", [
             "-v", "error", "-nostdin", "-ss", String(this.from), ...(this.source.videoArgs ?? []), "-i", this.path, "-an",
@@ -238,17 +252,30 @@ export class Player {
         this.timer = setInterval(() => this.tick(), 1000 / VIDEO_FPS);
     }
     tick() {
+        const now = Date.now();
+        if (this.playing)
+            this.playedMs += now - this.lastTick;
+        this.lastTick = now;
         if (!this.playing && !this.needFrame)
             return;
+        // Frames the clock is already past: keep the newest of them and drop the rest.
+        const due = Math.floor((this.playedMs * VIDEO_FPS) / 1000);
+        while (this.playing && this.shown < due - 1 && this.queue.length > 1) {
+            this.queue.shift();
+            this.shown++;
+        }
         const next = this.queue.shift();
         if (next) {
-            this.frameBase64 = next;
-            this.needFrame = false;
             if (this.playing)
                 this.shown++;
             this.position = this.from + this.shown / VIDEO_FPS;
             if (this.queue.length < VIDEO_FPS)
                 this.child?.stdout.resume();
+            // The terminal is still taking earlier frames: skip this one rather than queue behind them.
+            if (!this.needFrame && process.stdout.writableLength > BACKLOG_BYTES)
+                return;
+            this.frameBase64 = next;
+            this.needFrame = false;
             this.onFrame();
         }
         else if (this.sourceDone) {
@@ -270,6 +297,7 @@ export class Player {
         }
         else {
             this.playing = !this.playing;
+            this.lastTick = Date.now();
             if (this.playing)
                 this.startAudio(this.position);
             else
