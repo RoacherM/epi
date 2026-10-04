@@ -13,6 +13,7 @@
 import { createAgentSessionServices, parseArgs, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 import { extensionLoadFailureHint, PROVIDER_LOGIN_HELP } from "./pi-output.js";
+import { settleRegisteredProviders } from "./provider-startup.js";
 import { configureHttpAtStartup } from "./tui/services.js";
 const NO_MODELS_MESSAGE = `No models available. ${PROVIDER_LOGIN_HELP}`;
 /** Whether piMain would take its `--list-models` branch for these args: it checks `--export` first
@@ -93,6 +94,8 @@ export async function runListModels(piArgs, options) {
         },
     });
     const { modelRuntime, resourceLoader } = services;
+    // A provider that is not running just has no models to list (`notRunning` is not reported).
+    const { warnings: providerWarnings } = await settleRegisteredProviders(modelRuntime);
     const extensions = resourceLoader.getExtensions();
     // main.js createRuntime's list, in its order.
     const diagnostics = [
@@ -109,6 +112,7 @@ export async function runListModels(piArgs, options) {
             type: "warning",
             message: `Extension package "${path}": ${warning}`,
         })),
+        ...providerWarnings,
     ];
     const seen = new Set();
     for (const diagnostic of diagnostics) {

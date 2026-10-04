@@ -210,3 +210,32 @@ D80 的验证（加 CPU 负载，默认模型是 Magpie、没有保存 key）：
 | task 子进程（`dist/worker.js`） | 55/60 通过 | 60/60 |
 
 这个竞争取决于 Pi 内部两次刷新读 `models.json` 的先后，写不出确定性的测试；我试过给 provider 的认证检查加 300ms 延迟，改动前也能通过。
+
+### 8.2 第二次合并：Magpie 作为普通 provider 扩展（T5、T6）
+
+删掉的：`selectsMagpie`、`mayNameMagpieModel`、扩展 factory 里的启动查询和 `saveCatalog`、`FileModelsStore` 这个内部接口（`pi-internals.md` 的 `models-store-file`）、provider 里的 `initialModels` / `pending` / `STARTUP_FRESH_MS` / `startupKey`。`magpie-extension.ts` 从 124 行变成 18 行，只剩注册。另外删掉了 `rewritePiOutput` 里抓加载错误、替换 Pi 提示的那一半，以及对应的内部接口登记 `pi-extension-load-hint`。
+
+统一的启动函数是 `src/provider-startup.ts` 的 `settleRegisteredProviders`，四条路径都调它：`createMmpRuntime`（TUI、print/json/rpc）、`worker.ts`、`list-models.ts`。
+
+做的过程中多定了三件事（**主控定**，都不按 provider 名字区分）：
+
+| 事 | 做法 | 原因 |
+|---|---|---|
+| 扩展 provider 的服务没运行（连接被拒绝） | 平时不提示；只有这次运行随后因为找不到 provider 或模型而失败时，才把这条刷新失败一起打印 | 每次启动都刷新所有扩展 provider，没装 Magpie 的人不该每次都看到警告；但第一次用 Magpie 而网关没开时，只报 `Unknown provider "magpie"` 会把一个失败表现成另一个（硬规则） |
+| 启动刷新的总超时 | 5 秒 | 第三方 provider 的刷新时长不可知，要有上限 |
+| `--api-key` | 不再用于 Magpie 的目录查询，只用于请求 | 查目录发生在选模型之前，这时还不知道 key 属于哪个 provider；其他 provider 也是这样。loopback 网关接受任意 key，所以默认 key 能查到目录；网关要求真实 key 时用 `/login` 保存 |
+
+MG2 带来的用户可见变化：
+
+- 用其他 provider 时，每次启动也请求一次 Magpie 目录（网关在运行时）。
+- 网关挂起不回应时，每次启动多等 2 秒并打印一条警告。
+- 启动后 10 秒内不重复查目录的窗口没有了：rpc 和 TUI 启动后的后台刷新会再请求一次。
+- 网关没运行、但有保存的列表、又选了 Magpie 的模型时：以前启动时有一条"检查网关是否在运行"的警告，现在没有，请求本身报 `Connection error.`。
+
+**实测**（加 CPU 负载）：
+
+| 检查 | 结果 |
+|---|---|
+| 全新目录下首次运行 `-p` 和 `--list-models` 各 30 次：成功、目录已保存、没有留下 `models-store.json.lock` | 60/60 |
+| 默认模型是 Magpie 的 `mmp -p hi` | 40/40 |
+| task 子进程 | 40/40 |

@@ -24,7 +24,7 @@ import { resolveMmpPaths } from "./paths.js";
 import { rewritePiOutput } from "./pi-output.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { installProviderCostValidation } from "./provider-validation.js";
-import { createMagpieInlineExtension, mayNameMagpieModel, selectsMagpie } from "./providers/magpie-extension.js";
+import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
 import {
   createMmpRuntimeIdentity,
   type MmpRuntimeIdentity,
@@ -173,7 +173,7 @@ async function collectExtensionHelpFlags(
     const prepared = prepareParsedMmpRun(args, environment, cwd);
     process.env.PI_CODING_AGENT_DIR = prepared.agentDir;
     const extensionFactories = [
-      createMagpieInlineExtension({ agentDir: prepared.agentDir, online: false, discover: false }),
+      createMagpieInlineExtension(),
       ...buildInlineExtensions(
         prepared.assembly,
         prepared.mmpHome,
@@ -288,17 +288,8 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
     disabled: updateCheckDisabled(process.env, args.passthrough),
   };
   // Building the inline extensions also validates their config (MCP, hooks), which --dry-run reports.
-  const modelArgs = parseArgs([...args.passthrough]);
-  const usingMagpie = selectsMagpie(modelArgs, SettingsManager.create(process.cwd(), prepared.agentDir, { projectTrusted: false }));
   const extensionFactories = [
-    createMagpieInlineExtension({
-      agentDir: prepared.agentDir,
-      // Same test as Pi's ModelRuntime: any PI_OFFLINE value (bridged from MMP_OFFLINE) is offline.
-      online: !modelArgs.offline && process.env.PI_OFFLINE === undefined,
-      discover: usingMagpie || isListModelsRun(prepared.piArgs) || (mayNameMagpieModel(modelArgs) && "if-unsaved"),
-      required: usingMagpie,
-      ...(!usingMagpie || modelArgs.apiKey === undefined ? {} : { apiKey: modelArgs.apiKey }),
-    }),
+    createMagpieInlineExtension(),
     ...buildInlineExtensions(
       prepared.assembly,
       prepared.mmpHome,
@@ -356,7 +347,7 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
     });
     return;
   }
-  rewritePiOutput(prepared.assembly);
+  rewritePiOutput();
   const parsedPiArgs = parseArgs([...prepared.piArgs]);
   // `--export` is the one run still left to Pi's CLI: it converts a session file and exits before
   // any session, extension or provider exists (decision N1).

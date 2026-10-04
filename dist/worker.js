@@ -2,7 +2,7 @@
 import { createAgentSession, createAgentSessionServices, resolveCliModel, SessionManager, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { readFileSync, unlinkSync } from "node:fs";
 import { settleRegisteredProviders } from "./provider-startup.js";
-import { createMagpieInlineExtension, selectsMagpie } from "./providers/magpie-extension.js";
+import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
 let activeSession;
 let interrupted = false;
 function emit(event) {
@@ -78,7 +78,6 @@ async function main() {
     const capsule = readCapsule(capsulePath);
     process.env.PI_CODING_AGENT_DIR = capsule.agentDir;
     const settingsManager = SettingsManager.create(capsule.cwd, capsule.agentDir, { projectTrusted: false });
-    const usingMagpie = selectsMagpie(capsule.model === undefined ? {} : { model: capsule.model }, settingsManager);
     const { modelRuntime, resourceLoader, diagnostics } = await createAgentSessionServices({
         cwd: capsule.cwd,
         agentDir: capsule.agentDir,
@@ -93,23 +92,21 @@ async function main() {
             appendSystemPrompt: [],
             systemPromptOverride: () => undefined,
             appendSystemPromptOverride: () => capsule.systemPrompt.length === 0 ? [] : [capsule.systemPrompt],
-            extensionFactories: [createMagpieInlineExtension({
-                    agentDir: capsule.agentDir,
-                    online: process.env.PI_OFFLINE === undefined,
-                    discover: usingMagpie,
-                    required: usingMagpie,
-                })],
+            extensionFactories: [createMagpieInlineExtension()],
         },
     });
     const errors = diagnostics.filter((diagnostic) => diagnostic.type === "error");
     if (errors.length > 0)
         throw new Error(errors.map((diagnostic) => diagnostic.message).join("; "));
-    await settleRegisteredProviders(modelRuntime);
+    const providers = await settleRegisteredProviders(modelRuntime);
+    for (const warning of providers.warnings) {
+        process.stderr.write(`Warning: ${warning.message}\n`);
+    }
     const resolvedModel = capsule.model === undefined
         ? undefined
         : resolveCliModel({ cliModel: capsule.model, modelRuntime });
     if (resolvedModel?.error !== undefined) {
-        throw new Error(resolvedModel.error);
+        throw new Error([resolvedModel.error, ...providers.notRunning.map((warning) => warning.message)].join("; "));
     }
     const { session } = await createAgentSession({
         cwd: capsule.cwd,

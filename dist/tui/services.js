@@ -355,11 +355,14 @@ export async function createMmpRuntime(options) {
                 extensionFactories: options.extensionFactories,
             },
         });
-        await settleRegisteredProviders(services.modelRuntime);
+        const providers = await settleRegisteredProviders(services.modelRuntime);
         const initial = await resolveInitialModel(parsed, services, sessionManager);
         const diagnostics = [
             ...services.diagnostics,
             ...collectExtensionDiagnostics(services),
+            ...providers.warnings,
+            // Why a provider or model was not found, when that is what went wrong.
+            ...(initial.diagnostics.some((diagnostic) => diagnostic.type === "error") ? providers.notRunning : []),
             ...initial.diagnostics,
         ];
         const initialModel = initial.options.model;

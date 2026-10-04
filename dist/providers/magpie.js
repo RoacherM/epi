@@ -211,11 +211,8 @@ export function changedCatalogEntry(stored, baseUrl, fresh) {
         ? undefined
         : { models: fresh, checkedAt: Date.now(), etag: tag };
 }
-/** A refresh right after the startup lookup would fetch the same catalog again (rpc and the TUI
- * both refresh once at startup). */
-const STARTUP_FRESH_MS = 10_000;
 /** Connection refused: nothing listens at the gateway address. */
-export function isGatewayAbsent(error) {
+function isGatewayAbsent(error) {
     return error instanceof Error && typeof error.cause === "object" && error.cause !== null &&
         "code" in error.cause && error.cause.code === "ECONNREFUSED";
 }
@@ -239,13 +236,21 @@ export function createWriteTracker() {
         },
     };
 }
-/** Native publication lets Pi own persistence, concurrent-refresh generations and diagnostics.
- * A startup catalog is already saved by the caller, so the cache-only refreshes Pi starts while
- * loading never write: Pi supersedes them, and a short run can exit during the detached write. */
-export function createMagpieProvider(baseUrl, initialModels, allowNetwork = true, writes = createWriteTracker(), startupKey = MAGPIE_DEFAULT_KEY) {
-    let models = initialModels ?? [];
-    let pending = initialModels;
-    const freshUntil = initialModels ? Date.now() + STARTUP_FRESH_MS : 0;
+/** What a failed catalog request tells the user; anything else points at the gateway itself. */
+function discoveryFailure(error, baseUrl) {
+    // Kept as the cause: startup says so only when it then fails (src/provider-startup.ts).
+    if (isGatewayAbsent(error))
+        return new Error(`Magpie is not running at ${baseUrl}`, { cause: error.cause });
+    if (error instanceof Error && error.name === "TimeoutError")
+        return new Error("Magpie model discovery timed out");
+    if (error instanceof Error && error.message.startsWith("Magpie "))
+        return error;
+    return new Error("Magpie model discovery failed; check that the gateway is running and its key is configured");
+}
+/** A plain Pi provider (decision MG2): Pi's own refresh brings the catalog in, saves it and
+ * restores the saved one; nothing here knows whether a run selected Magpie. */
+export function createMagpieProvider(baseUrl, writes = createWriteTracker()) {
+    let models = [];
     const cachedModels = (stored) => stored?.etag === cacheTag(baseUrl)
         ? stored.models.filter((model) => model.provider === "magpie" && (!model.type || model.type === "chat"))
         : [];
@@ -269,32 +274,17 @@ export function createMagpieProvider(baseUrl, initialModels, allowNetwork = true
         },
         getModels: () => models,
         refreshModels: async (context) => {
-            if (pending) {
-                const prefetched = pending;
-                if (!(await context.publish({ update: () => { models = prefetched; pending = undefined; } })))
-                    return;
-            }
-            else if (context.stored) {
-                if (!(await context.publish({ update: () => { models = cachedModels(context.stored); } })))
-                    return;
-            }
-            if (!allowNetwork || !context.allowNetwork || context.signal.aborted)
+            if (context.stored && !(await context.publish({ update: () => { models = cachedModels(context.stored); } })))
+                return;
+            if (!context.allowNetwork || context.signal.aborted)
                 return;
             const apiKey = context.credential?.type === "api_key" ? context.credential.key : undefined;
-            // A new key (/login refreshes right after saving one) may see another catalog.
-            if (Date.now() < freshUntil && (apiKey ?? MAGPIE_DEFAULT_KEY) === startupKey)
-                return;
             let refreshed;
             try {
                 refreshed = await discoverMagpieModels(baseUrl, context.signal, apiKey);
             }
             catch (error) {
-                // Nothing listening, no saved list, no key of the user's own: Magpie is not installed, which
-                // is not an error for someone who never used it (no warning in /model).
-                const neverUsed = context.stored === undefined && (apiKey === undefined || apiKey === MAGPIE_DEFAULT_KEY);
-                if (neverUsed && isGatewayAbsent(error))
-                    return;
-                throw error;
+                throw discoveryFailure(error, baseUrl);
             }
             if (writes.closed)
                 return;
