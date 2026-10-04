@@ -1,0 +1,87 @@
+# 多模态工作台方向讨论：agent 操作、人 review 的 Surface
+
+日期：2026-10-04。用户与主控的一次讨论记录，只做了调研，没有写代码。定位变化还没拍板，见第 6 节和 [decisions.md](../decisions.md) 的待定表。
+
+依据：仓库文档（`docs/decisions.md`、`docs/development.md` §1/§3/§17/§21、`docs/dogfood-issues.md`、`docs/notes/omp-study.md`）；Pi 1.0.0 包内文档（`docs/codemode.md`、`docs/models.md`、`docs/extensions.md`、`docs/tui.md`）；本机的 `~/.mmp/extensions/yazi`、`ydl` 和 `~/.mmp/mmp.json`。
+
+## 1. 起点
+
+用户提出：下一步是做一个在终端里完成多媒体创作的 coding agent workspace，yazi、ydl 是第一批尝试。
+
+现状（读代码确认）：
+
+- `~/.mmp/extensions/yazi/index.ts`（1306 行）是三栏文件浏览加查看器，能看文本、Markdown、二进制、图片、视频；`ydl/index.ts`（755 行）是 yt-dlp 的搜索、下载、播放界面，播放器复用 yazi 的 `Player`。
+- 两个扩展都只调用 `registerCommand`，没有 `registerTool`：只有人能用，agent 看不到。人和 agent 之间唯一的交接是按 `i` 把 `@path` 插进输入框。
+- 它们只由本机 `~/.mmp/mmp.json` 声明，不在仓库里，没有测试，也不随发版。
+
+## 2. 调研结论：这个方向目前不是主线
+
+- 文档定的主线是"先做好外围，跟着 Pi 走"：M6（定制版 Pi，功能对齐官方 Pi）、H2（K2、K5 先不做，先做好界面、CLI、配置、已有扩展）。
+- §21 的下一入口是 benchmark：给九项 benchmark 固定 runner、grader 和模型 ID，至今没有正式分数。
+- 多媒体在文档里只出现过一次，而且是排除：`guide/magpie.md` 写明 Magpie 的图片生成、视频端点不在范围内。381 个提交里没有一个涉及 yazi 或 ydl。
+- dogfood 还有未关的 P2（D74、D80 等）和 §8.1 的非交互隔离缺口。
+- 但这个方向和现有约束不冲突：§17 的非目标里没有排除多媒体，§3.4 的显式装配允许把它做成可选扩展。
+
+## 3. 用户给的原则
+
+1. **内置能力不过度设计。** 主控第一轮提出的"统一 `media/` 工作区加 manifest 或 sqlite 记录产物来历""时间线剪辑 DSL""一次规划四五个 agent 工具"都已收回：前者是在核心里加状态层，DSL 和 §17 的"Workflow/Chain DSL"是同一类，后者是需求没证明前就铺开。
+2. **coding 的内核仍是 Pi，演进发生在外围。** 不 fork，不改 Pi 行为，围绕内核做扩展、skill 和界面。
+3. **要的不是给人用的工具，而是 agent 能感知、能操作的基础框架。** 用户的三个例子：
+   - 画布：以前的画布组件给人用，以后主要给 agent 操作、给人 review。
+   - 浏览器：正确的做法是 agent 框架自己包含浏览器，所有状态和操作记录都进入 agent 的上下文。
+   - 剪辑：以后应该由 agent 自己剪。
+   Claude Code 的 artifacts 是雏形，但它是单向的（agent 生成，人看）；要的是 TUI 版本，agent 可感知、可交互。
+
+## 4. Pi 内核已有的多模态能力
+
+| 已有 | 出处 |
+|---|---|
+| 图片输入：附件、`read` 结果、工具结果里的图片都能给模型看，按 `inputLimits.images.resize` 缩放 | Pi `docs/models.md` |
+| 图片生成：codemode 里 `models.generateImages()`，结果用 `image()` 给模型看，**不存盘** | Pi `docs/codemode.md`、`docs/models.md` |
+| classifier 模型、virtual model 路由 | Pi `docs/models.md`、`docs/virtual-models.md` |
+| 扩展接口：`registerTool`、`appendEntry`（不进上下文的持久数据）、`sendMessage`（进上下文的自定义内容）、工具结果 `details`（跟着分支走的状态）、`ctx.ui.custom()` 覆盖层、`setWidget()` | Pi `docs/extensions.md`、`docs/tui.md` |
+
+缺的：视频和音频理解、生成结果落盘、渲染后的预览与带时间点的反馈、长任务进度、和对话并排常驻的视图。
+
+## 5. 构想：Surface（工作面）
+
+一个 Surface 是 agent 操作、人 review 的一块有状态的东西。闭环是：agent 用 act 改状态，用 observe 看快照；状态渲染成 TUI 视图给人；人的批注和小改、agent 的操作、外部变化都进事件日志；下一轮把日志里未读的部分以增量注入 agent 的上下文。
+
+### 5.1 五个部件
+
+| 部件 | 含义 | 用 Pi 的什么 |
+|---|---|---|
+| 状态 | 优先放文件（画布 JSON、时间线文件）；浏览器这类活状态由进程持有 | 工具结果 `details` |
+| observe | 给 agent 的快照：文字结构加一张图，之后只给增量 | 工具结果带图片 |
+| act | 带类型的操作；每种 Surface 一个工具，用 `op` 区分，避免工具膨胀 | `pi.registerTool()` |
+| 视图 | 给人 review：看、批注（选中区域或时间段说一句话）、小改、通过或打回 | `ctx.ui.custom()` / `setWidget()` |
+| 事件日志 | agent 操作、人的批注和修改、外部变化都记录；未读部分下一轮增量注入 | `pi.appendEntry()` 存，`pi.sendMessage()` 送进上下文 |
+
+结论：框架本身用 Pi 的扩展接口就能搭，内核不用改。MMP 核心只需要补一件通用的东西：**和对话并排的常驻侧栏**。Pi 的扩展界面只有覆盖层和小部件，这正是 MMP 自写界面层（T0）的用处。
+
+### 5.2 三个例子
+
+- **画布**：状态是场景 JSON，元素有 id；observe 给渲染图和元素列表；操作是增、删、移动、改样式；人选中元素批注，批注带元素 id 进日志。
+- **浏览器**：由 agent 框架通过 CDP 持有，跟会话一起启停；observe 给可访问性树、截图、console 和网络错误；操作是导航、点击、输入、执行脚本；日志记每次跳转、每条报错和人的点击。
+- **剪辑**：状态是时间线文件；observe 给每段素材的联系表、波形图、带时间戳的字幕；操作是切、修剪、插入、加字幕、渲染预览；人用 yazi 的播放器看预览、标时间段批注；最终渲染作为后台长任务。
+
+### 5.3 先要想清楚的问题
+
+1. **上下文预算**：截图贵。默认只给增量和文字结构，agent 主动 observe 才给图。
+2. **人和 agent 同时改**：操作带版本号，冲突时拒绝并返回最新快照；agent 运行期间人的修改排队，下一轮再让它看到。
+3. **终端图形**：依赖 kitty 图形协议（Ghostty 支持），不支持时退化成纯文字视图。
+
+### 5.4 落地顺序（避免先写框架）
+
+1. 剪辑 Surface：最贴近场景，复用 yazi 的播放器；检验"文件状态、按时间 review"。
+2. 浏览器 Surface：检验"活进程状态、外部变化进日志"，对 coding 也有直接用处（omp-study 列为缺口）。
+3. 两个都跑通后，抽出小库：事件日志、增量注入、快照预算、侧栏挂载。
+4. 画布作为第三个使用者，验证这个库够不够用。
+
+边界：不 fork Pi，不加 Manifest 字段，核心不内置媒体能力（ffmpeg、浏览器等不成为默认依赖），每个 Surface 是在 Manifest 里声明才加载的可选扩展；核心只接受通用改动（侧栏）。
+
+## 6. 待用户决定
+
+- 是否把定位从"定制版 Pi"（M6）扩展为"agent 操作、人 review 的多模态工作台"，并记入 `decisions.md`。
+- 如果立项，它和 §21 的 benchmark 主线、dogfood P2 修复的先后顺序。
+- 第一个 Surface 选剪辑还是浏览器（主控推荐剪辑）。

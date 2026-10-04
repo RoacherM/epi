@@ -50,6 +50,7 @@
 |---|---|---|---|
 | — | 配色里标"我定"的几个颜色 | 看截图时确认 | [tui-theme.md](tui-theme.md) |
 | — | 重跑 benchmark 基线和真实模型冒烟（会花钱） | Pi 0.87 改了 system prompt 格式，旧基线不能直接比，建议重跑 | docs/development.md 第 20 节 |
+| — | 定位是否从"定制版 Pi"（M6）扩展为"agent 操作、人 review 的多模态工作台"（Surface：画布、浏览器、剪辑） | 内核仍用 Pi、不加 Manifest 字段；先做剪辑 Surface，再做浏览器，两个跑通后再抽框架；和 benchmark 主线的先后由你定 | [notes/multimodal-surface.md](notes/multimodal-surface.md) |
 
 ## 已知遗留问题
 
