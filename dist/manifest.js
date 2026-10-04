@@ -71,6 +71,11 @@ function loadManifest(manifestPath) {
         loaded: true,
     };
 }
+/** Whether this Manifest's `"disable"` lists `name`. Reads the file only: a command that asks just
+ * this (`mmp mcp list`) is not stopped by a declared path that does not exist. */
+export function manifestDisables(manifestPath, name) {
+    return loadManifest(manifestPath).manifest.disable?.includes(name) === true;
+}
 function resolveExistingPath(declaredPath, manifestPath, kind) {
     const absolutePath = isAbsolute(declaredPath)
         ? declaredPath

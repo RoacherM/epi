@@ -47,5 +47,8 @@ export interface ResolvedManifest {
     externalExtensions: ResolvedResource[];
     disabledExtensions: ResolvedDisabledExtension[];
 }
+/** Whether this Manifest's `"disable"` lists `name`. Reads the file only: a command that asks just
+ * this (`mmp mcp list`) is not stopped by a declared path that does not exist. */
+export declare function manifestDisables(manifestPath: string, name: BuiltInExtensionName): boolean;
 export declare function resolveManifest(manifestPath: string, source: ResourceSource): ResolvedManifest;
 //# sourceMappingURL=manifest.d.ts.map

@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { MmpArgumentError } from "../errors.js";
 import { assertProjectTrustedFor, isHelpRequested } from "./manifest-cli.js";
 import { emptyStateMessage, loadNativeMcpConfig } from "../extensions/mcp.js";
-import { resolveManifest } from "../manifest.js";
+import { manifestDisables } from "../manifest.js";
 import { resolveMmpPaths } from "../paths.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "../project.js";
 const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
@@ -68,6 +68,7 @@ Other options:
 `;
 const HELP_HINT = 'Use "mmp mcp --help" for usage.';
 const DEFAULT_LOGIN_TIMEOUT_SECONDS = 300;
+const MAX_LOGIN_TIMEOUT_SECONDS = 2_147_483;
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
@@ -182,14 +183,8 @@ function resolveListConfig(ctx, approveOverride, command) {
 /** Why `mmp mcp list` connects to nothing: `"disable": ["mmp:mcp"]` in a Manifest a session started
  * here reads (global, and the project's when trusted) turns MCP off, and mcp.json is not read. */
 function mcpOffNote(trustedProjectManifest) {
-    const manifests = [
-        resolveManifest(resolveMmpPaths(process.env).globalManifest, "global"),
-        ...(trustedProjectManifest === undefined ? [] : [resolveManifest(trustedProjectManifest, "project")]),
-    ];
-    const disabledIn = manifests
-        .flatMap((manifest) => manifest.disabledExtensions)
-        .filter((extension) => extension.name === "mmp:mcp")
-        .map((extension) => extension.declaredIn);
+    const manifests = [resolveMmpPaths(process.env).globalManifest, ...(trustedProjectManifest === undefined ? [] : [trustedProjectManifest])];
+    const disabledIn = manifests.filter((manifestPath) => manifestDisables(manifestPath, "mmp:mcp"));
     return disabledIn.length === 0
         ? undefined
         : `mmp:mcp is turned off by "disable" in ${disabledIn.join(" and ")}, so sessions do not load MCP servers. ` +
@@ -360,6 +355,31 @@ async function loadRuntimeModule() {
     // runtime.lazy.js cost-avoidance for the exact same reason.
     return (await import(pathToFileURL(join(piDist, "extensions", "mcp", "runtime.js")).href));
 }
+const STATE_LABELS = { "needs-auth": "needs sign-in", "not-loaded": "not loaded" };
+/** `mmp mcp list`'s text form of each server, Pi's layout (extensions/mcp/cli.js). */
+function printReports(reports) {
+    for (const report of reports) {
+        const state = report.state === "connected"
+            ? `connected, ${report.tools.length} tool${report.tools.length === 1 ? "" : "s"}`
+            : (STATE_LABELS[report.state] ?? report.state);
+        console.log(`${report.name}: ${state} (${report.exposure}, ${report.scope})`);
+        console.log(`  ${report.transport}`);
+        if (report.state === "needs-auth")
+            console.log(`  sign in with: mmp mcp login ${report.name}`);
+        if (report.tools.length > 0) {
+            const tools = report.tools.map((tool) => {
+                const exposure = report.toolExposure?.[tool];
+                return exposure ? `${tool} [${exposure}]` : tool;
+            });
+            console.log(`  tools: ${tools.join(", ")}`);
+        }
+        if (report.resources !== undefined) {
+            console.log(`  resources: ${report.resources}, URI templates: ${report.resourceTemplates ?? 0}`);
+        }
+        if (report.error)
+            console.log(`  ${report.error.split("\n").join("\n  ")}`);
+    }
+}
 async function listCommand(args, ctx) {
     const parsed = parseOptions(args, { json: "flag", ...APPROVE_OPTIONS });
     if (parsed.positional.length > 0) {
@@ -426,31 +446,7 @@ async function listCommand(args, ctx) {
     if (reports.length === 0 && loaded.errors.length === 0) {
         console.log(emptyStateMessage(ctx.mmpHome, ctx.cwd));
     }
-    for (const report of reports) {
-        const state = report.state === "connected"
-            ? `connected, ${report.tools.length} tool${report.tools.length === 1 ? "" : "s"}`
-            : report.state === "needs-auth"
-                ? "needs sign-in"
-                : report.state === "not-loaded"
-                    ? "not loaded"
-                    : report.state;
-        console.log(`${report.name}: ${state} (${report.exposure}, ${report.scope})`);
-        console.log(`  ${report.transport}`);
-        if (report.state === "needs-auth")
-            console.log(`  sign in with: mmp mcp login ${report.name}`);
-        if (report.tools.length > 0) {
-            const tools = report.tools.map((tool) => {
-                const exposure = report.toolExposure?.[tool];
-                return exposure ? `${tool} [${exposure}]` : tool;
-            });
-            console.log(`  tools: ${tools.join(", ")}`);
-        }
-        if (report.resources !== undefined) {
-            console.log(`  resources: ${report.resources}, URI templates: ${report.resourceTemplates ?? 0}`);
-        }
-        if (report.error)
-            console.log(`  ${report.error.split("\n").join("\n  ")}`);
-    }
+    printReports(reports);
     for (const configError of loaded.errors)
         console.error(`config error: ${configError}`);
     if (untrustedNote)
@@ -507,8 +503,9 @@ async function loginOrLogoutCommand(command, args, ctx) {
             return 0;
         }
         const timeoutSeconds = Number(parsed.values.get("timeout") ?? DEFAULT_LOGIN_TIMEOUT_SECONDS);
-        if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-            console.error("--timeout must be a positive number of seconds.");
+        // Above this, setTimeout overflows and fires at once.
+        if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || timeoutSeconds > MAX_LOGIN_TIMEOUT_SECONDS) {
+            console.error(`--timeout must be a positive number of seconds, at most ${MAX_LOGIN_TIMEOUT_SECONDS}.`);
             return 1;
         }
         try {

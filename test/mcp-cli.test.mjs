@@ -400,6 +400,29 @@ test("mmp mcp list counts a project's \"disable\" only when the project is trust
   assert.equal(existsSync(marker), true, "an untrusted project's \"disable\" was applied");
 });
 
+// Review P2-1: asking whether mmp:mcp is off must not make list fail on an unrelated Manifest problem.
+test("mmp mcp list still lists when the Manifest declares a path that does not exist", (t) => {
+  for (const disable of [[], ["mmp:mcp"]]) {
+    const f = fixture(t);
+    run(f, ["add", "fixture", "--", "node", fixtureServerPath]);
+    writeFileSync(join(f.home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, rules: ["./missing-rule.md"], disable }));
+    const result = run(f, ["list"]);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, disable.length === 0 ? /^fixture: connected, 2 tools/m : /^fixture: not loaded/m);
+  }
+});
+
+test("mmp mcp login refuses a --timeout that setTimeout cannot hold, before connecting", (t) => {
+  const f = fixture(t);
+  run(f, ["add", "remote", "--url", "http://127.0.0.1:9/mcp"]);
+  for (const value of ["0", "abc", "2147484"]) {
+    const result = run(f, ["login", "remote", "--timeout", value]);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /--timeout must be a positive number of seconds, at most 2147483\./);
+    assert.doesNotMatch(result.stderr, /TimeoutOverflowWarning|failed to connect/);
+  }
+});
+
 test("mmp mcp list writes config errors to stderr, not stdout (D73)", (t) => {
   const f = fixture(t);
   mkdirSync(join(f.home, ".mmp"), { recursive: true });
