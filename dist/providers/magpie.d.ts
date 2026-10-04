@@ -9,7 +9,7 @@ export declare function discoverMagpieModels(baseUrl: string, signal: AbortSigna
  * issued, and then forwards only the tool results: a steer message sent after them is dropped
  * (dogfood D74, reproduced on the real gateway; its other routes are fine). Renaming the tool IDs
  * in that one request makes the gateway take the whole request instead. Returns undefined when
- * the request has no user text after the last tool call, so other requests go out unchanged. */
+ * the request has no user text or image after the last tool call, so other requests go out unchanged. */
 export declare function renameToolIdsAfterSteer(payload: unknown): unknown;
 /** The store entry for a fresh catalog, or undefined when the stored one already matches it. */
 export declare function changedCatalogEntry(stored: ModelsStoreEntry | undefined, baseUrl: string, fresh: Model<Api>[]): ModelsStoreEntry | undefined;
@@ -28,5 +28,5 @@ export type WriteTracker = ReturnType<typeof createWriteTracker>;
 /** Native publication lets Pi own persistence, concurrent-refresh generations and diagnostics.
  * A startup catalog is already saved by the caller, so the cache-only refreshes Pi starts while
  * loading never write: Pi supersedes them, and a short run can exit during the detached write. */
-export declare function createMagpieProvider(baseUrl: string, initialModels?: Model<Api>[], allowNetwork?: boolean, writes?: WriteTracker): Provider;
+export declare function createMagpieProvider(baseUrl: string, initialModels?: Model<Api>[], allowNetwork?: boolean, writes?: WriteTracker, startupKey?: string): Provider;
 //# sourceMappingURL=magpie.d.ts.map

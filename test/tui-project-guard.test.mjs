@@ -233,7 +233,7 @@ test("--no-project still allows resuming a session from the launch folder itself
   assert.match(out, /EXIT=0/);
 });
 
-test("rpc switch_session refuses another project's session and allows its own (D67)", async (t) => {
+test("rpc switch_session and startup --session in print/rpc refuse another project's session, allow its own (D67)", async (t) => {
   const server = await startMagpieServer();
   t.after(() => server.close());
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mmp-rpc-guard-")));
@@ -255,6 +255,23 @@ test("rpc switch_session refuses another project's session and allows its own (D
   }
   const [own, other] = ["a", "b"].map((project) => sessionsOf().find((file) => readFileSync(file, "utf8").includes(JSON.stringify(join(root, project)))));
   assert.ok(own && other, sessionsOf().join("\n"));
+
+  // Startup --session in print and rpc mode goes through piMain, not the TUI (Fable F4).
+  const startup = (args) => new Promise((resolve) => {
+    const run = spawn(process.execPath, [cliPath, ...model, ...args], { cwd: join(root, "a"), env, stdio: ["pipe", "ignore", "pipe"] });
+    let stderr = "";
+    run.stderr.on("data", (chunk) => (stderr += chunk));
+    run.stdin.end();
+    run.on("close", (code) => resolve({ code, stderr }));
+  });
+  for (const mode of [["-p", "hi"], ["--mode", "rpc"]]) {
+    const refusedStart = await startup(["--session", other, ...mode]);
+    assert.notEqual(refusedStart.code, 0, mode.join(" "));
+    assert.match(refusedStart.stderr, /belongs to a different project[\s\S]*--fork/);
+  }
+  const ownLength = readFileSync(own, "utf8").length;
+  assert.equal((await startup(["--session", own, "-p", "again"])).code, 0);
+  assert.ok(readFileSync(own, "utf8").length > ownLength, "its own project's session still opens");
 
   const child = spawn(process.execPath, [cliPath, ...model, "--mode", "rpc"], { cwd: join(root, "a"), env, stdio: ["pipe", "pipe", "pipe"] });
   t.after(() => child.kill());

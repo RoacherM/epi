@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
@@ -157,11 +158,17 @@ function apiStreams(api) {
     return streams[protocol];
 }
 const blocksOf = (message) => typeof message.content === "string" ? [{ type: "text" }] : message.content;
+/** Anthropic caps tool IDs at 64 characters (pi-ai's normalizeToolCallId fills them up to that
+ * for other providers' IDs), so a long ID becomes a hash instead of growing past the cap. */
+function renamedToolId(id) {
+    const prefixed = `mmp_${id}`;
+    return prefixed.length <= 64 ? prefixed : `mmp_${createHash("sha256").update(id).digest("hex").slice(0, 40)}`;
+}
 /** Magpie's claude/ route continues its own upstream session when a request carries tool IDs it
  * issued, and then forwards only the tool results: a steer message sent after them is dropped
  * (dogfood D74, reproduced on the real gateway; its other routes are fine). Renaming the tool IDs
  * in that one request makes the gateway take the whole request instead. Returns undefined when
- * the request has no user text after the last tool call, so other requests go out unchanged. */
+ * the request has no user text or image after the last tool call, so other requests go out unchanged. */
 export function renameToolIdsAfterSteer(payload) {
     const messages = payload.messages;
     if (!Array.isArray(messages))
@@ -169,11 +176,12 @@ export function renameToolIdsAfterSteer(payload) {
     const lastAssistant = messages.findLastIndex((message) => message.role === "assistant");
     if (lastAssistant < 0 || !blocksOf(messages[lastAssistant]).some((block) => block.type === "tool_use"))
         return undefined;
-    const steered = messages.slice(lastAssistant + 1).some((message) => blocksOf(message).some((block) => block.type === "text"));
+    const steered = messages.slice(lastAssistant + 1)
+        .some((message) => blocksOf(message).some((block) => block.type === "text" || block.type === "image"));
     if (!steered)
         return undefined;
-    const rename = (block) => block.type === "tool_use" && block.id !== undefined ? { ...block, id: `mmp_${block.id}` }
-        : block.type === "tool_result" && block.tool_use_id !== undefined ? { ...block, tool_use_id: `mmp_${block.tool_use_id}` }
+    const rename = (block) => block.type === "tool_use" && block.id !== undefined ? { ...block, id: renamedToolId(block.id) }
+        : block.type === "tool_result" && block.tool_use_id !== undefined ? { ...block, tool_use_id: renamedToolId(block.tool_use_id) }
             : block;
     return {
         ...payload,
@@ -234,7 +242,7 @@ export function createWriteTracker() {
 /** Native publication lets Pi own persistence, concurrent-refresh generations and diagnostics.
  * A startup catalog is already saved by the caller, so the cache-only refreshes Pi starts while
  * loading never write: Pi supersedes them, and a short run can exit during the detached write. */
-export function createMagpieProvider(baseUrl, initialModels, allowNetwork = true, writes = createWriteTracker()) {
+export function createMagpieProvider(baseUrl, initialModels, allowNetwork = true, writes = createWriteTracker(), startupKey = MAGPIE_DEFAULT_KEY) {
     let models = initialModels ?? [];
     let pending = initialModels;
     const freshUntil = initialModels ? Date.now() + STARTUP_FRESH_MS : 0;
@@ -270,9 +278,12 @@ export function createMagpieProvider(baseUrl, initialModels, allowNetwork = true
                 if (!(await context.publish({ update: () => { models = cachedModels(context.stored); } })))
                     return;
             }
-            if (!allowNetwork || !context.allowNetwork || context.signal.aborted || Date.now() < freshUntil)
+            if (!allowNetwork || !context.allowNetwork || context.signal.aborted)
                 return;
             const apiKey = context.credential?.type === "api_key" ? context.credential.key : undefined;
+            // A new key (/login refreshes right after saving one) may see another catalog.
+            if (Date.now() < freshUntil && (apiKey ?? MAGPIE_DEFAULT_KEY) === startupKey)
+                return;
             let refreshed;
             try {
                 refreshed = await discoverMagpieModels(baseUrl, context.signal, apiKey);

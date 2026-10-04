@@ -360,6 +360,16 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
     });
     return;
   }
+  const { refusePiMainCrossProjectSession } = await import("./tui/services.js");
+  await refusePiMainCrossProjectSession(
+    prepared.piArgs,
+    process.cwd(),
+    SettingsManager.create(process.cwd(), prepared.agentDir, { projectTrusted: false }),
+    {
+      root: findNearestProjectManifest(process.cwd(), prepared.assembly.globalManifest)?.root,
+      globalManifestPath: prepared.assembly.globalManifest,
+    },
+  );
   rewritePiOutput(prepared.assembly);
   // Before piMain: Pi's output guard binds process.stdout.write when it takes stdout over (D54).
   // Print/json only: an rpc client that stops reading is left to Pi as before, since the guard

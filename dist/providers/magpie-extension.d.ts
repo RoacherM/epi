@@ -16,6 +16,9 @@ export declare function mayNameMagpieModel(flags: {
     provider?: string;
     model?: string;
 }): boolean;
+/** Whether a run selects Magpie, so startup waits for its catalog. Like Pi: providers match
+ * case-insensitively, and without model flags the model comes from the saved default or the
+ * scoped models (`--models`, settings `enabledModels`), whose Magpie patterns need the catalog. */
 export declare function selectsMagpie(flags: {
     provider?: string;
     model?: string;

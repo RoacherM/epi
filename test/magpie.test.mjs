@@ -228,6 +228,19 @@ test("a refresh right after the startup lookup does not fetch the catalog again"
   assert.equal(models.getModels("magpie").length, 4);
 });
 
+test("a new key right after startup (/login) refreshes the catalog despite the startup window", async (t) => {
+  const server = await serverFor(t);
+  const credentials = new InMemoryCredentialStore();
+  const models = modelsWith(createMagpieProvider(server.baseUrl, parseMagpieModels({ data: [{ id: "old" }] }, server.baseUrl)), new InMemoryModelsStore(), credentials);
+  await models.refresh({ allowNetwork: true });
+  assert.deepEqual(catalogRequests(server), []);
+  await credentials.modify("magpie", async () => ({ type: "api_key", key: "new-key" }));
+  await models.refresh({ allowNetwork: true });
+  assert.equal(catalogRequests(server).length, 1);
+  assert.equal(catalogRequests(server)[0].headers["x-api-key"], "new-key");
+  assert.equal(models.getModels("magpie").length, 4);
+});
+
 test("successful pagination merges pages and overlapping refreshes publish only the newest catalog", async (t) => {
   const server = await serverFor(t);
   server.state.catalogHandler = (request, response) => {
@@ -356,6 +369,24 @@ test("a steer message after a tool call renames that request's tool IDs, so the 
   await models.streamSimple(codex, toolTurn("Steer"), { maxTokens: 64 }).result();
   assert.doesNotMatch(JSON.stringify(server.state.requests.at(-1).body), /mmp_toolu/, "only the Messages protocol is touched");
   assert.equal(renameToolIdsAfterSteer({ messages: [{ role: "user", content: "hi" }] }), undefined);
+});
+
+test("steer renaming keeps tool IDs within Anthropic's 64 characters and counts an image-only steer", () => {
+  const long = "call_" + "x".repeat(59);
+  const payload = (steer) => ({ messages: [
+    { role: "user", content: [{ type: "text", text: "go" }] },
+    { role: "assistant", content: [{ type: "tool_use", id: long, name: "bash", input: {} }, { type: "tool_use", id: "toolu_2", name: "bash", input: {} }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: long, content: "a" }, { type: "tool_result", tool_use_id: "toolu_2", content: "b" }] },
+    { role: "user", content: [steer] },
+  ] });
+  const renamed = renameToolIdsAfterSteer(payload({ type: "text", text: "steer" }));
+  const [first, second] = renamed.messages[1].content.map((block) => block.id);
+  assert.ok(first.length <= 64 && first.startsWith("mmp_"), first);
+  assert.equal(renamed.messages[2].content[0].tool_use_id, first);
+  assert.equal(second, "mmp_toolu_2");
+  assert.notEqual(renameToolIdsAfterSteer(payload({ type: "text", text: "steer" })).messages[1].content[0].id, renameToolIdsAfterSteer({ ...payload({ type: "text", text: "s" }), messages: payload({ type: "text", text: "s" }).messages.map((m) => JSON.parse(JSON.stringify(m).replaceAll(long, long.slice(0, -1) + "y"))) }).messages[1].content[0].id);
+  const image = renameToolIdsAfterSteer(payload({ type: "image", source: { type: "base64", media_type: "image/png", data: "x" } }));
+  assert.equal(image.messages[1].content[1].id, "mmp_toolu_2");
 });
 
 test("image input, abort, malformed stream and context overflow retain Pi adapter semantics", async (t) => {

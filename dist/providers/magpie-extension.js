@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
-import { changedCatalogEntry, createMagpieProvider, createWriteTracker, discoverMagpieModels, isGatewayAbsent, magpieBaseUrl, } from "./magpie.js";
+import { changedCatalogEntry, createMagpieProvider, createWriteTracker, discoverMagpieModels, isGatewayAbsent, MAGPIE_DEFAULT_KEY, magpieBaseUrl, } from "./magpie.js";
 // Pi's file-backed models store (core/models-store.js, not exported; docs/pi-internals.md
 // `models-store-file`), the same file and lock ModelRuntime uses for <agentDir>/models-store.json.
 const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
@@ -28,9 +28,6 @@ async function saveCatalog(agentDir, baseUrl, models) {
     await store.read("magpie");
 }
 const isMagpieRef = (ref) => /^magpie(\/|$)/i.test(ref);
-/** Whether a run selects Magpie, so startup waits for its catalog. Like Pi: providers match
- * case-insensitively, and without model flags the model comes from the saved default or the
- * scoped models (`--models`, settings `enabledModels`), whose Magpie patterns need the catalog. */
 /** The route prefixes of Magpie's own catalog IDs (claude/claude-opus-5-5, codex/gpt-6-sol, ...).
  * None is a Pi provider name, so a --model starting with one may name a Magpie model. A wider
  * test ("any a/b") made every --model provider/model run touch the loopback gateway. */
@@ -39,6 +36,9 @@ const MAGPIE_ROUTES = ["claude/", "codex/", "antigravity/", "group/"];
 export function mayNameMagpieModel(flags) {
     return flags.provider === undefined && MAGPIE_ROUTES.some((route) => flags.model?.startsWith(route) === true);
 }
+/** Whether a run selects Magpie, so startup waits for its catalog. Like Pi: providers match
+ * case-insensitively, and without model flags the model comes from the saved default or the
+ * scoped models (`--models`, settings `enabledModels`), whose Magpie patterns need the catalog. */
 export function selectsMagpie(flags, settings) {
     if (flags.provider !== undefined || flags.model !== undefined) {
         return [flags.provider, flags.model].some((ref) => ref !== undefined && isMagpieRef(ref));
@@ -57,6 +57,7 @@ export function createMagpieInlineExtension(options) {
         hidden: true,
         factory: async (pi) => {
             let initialModels;
+            let startupKey = MAGPIE_DEFAULT_KEY;
             const discover = options.discover === "if-unsaved"
                 ? (await storeAt(options.agentDir).read("magpie")) === undefined
                 : options.discover;
@@ -64,7 +65,8 @@ export function createMagpieInlineExtension(options) {
                 try {
                     const credential = readStoredCredential("magpie", join(options.agentDir, "auth.json"));
                     const storedKey = credential?.type === "api_key" ? credential.key : undefined;
-                    initialModels = await discoverMagpieModels(baseUrl, new AbortController().signal, options.apiKey ?? storedKey);
+                    startupKey = options.apiKey ?? storedKey ?? MAGPIE_DEFAULT_KEY;
+                    initialModels = await discoverMagpieModels(baseUrl, new AbortController().signal, startupKey);
                 }
                 catch (error) {
                     // Without a running gateway Magpie is simply not installed, unless the run asked for it.
@@ -82,7 +84,7 @@ export function createMagpieInlineExtension(options) {
                 await saveCatalog(options.agentDir, baseUrl, initialModels);
             const writes = createWriteTracker();
             pi.on("session_shutdown", () => writes.close());
-            pi.registerProvider(createMagpieProvider(baseUrl, initialModels, options.online, writes));
+            pi.registerProvider(createMagpieProvider(baseUrl, initialModels, options.online, writes, startupKey));
         },
     };
 }
