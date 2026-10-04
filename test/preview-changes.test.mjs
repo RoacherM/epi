@@ -224,6 +224,16 @@ test("Tab switches between the changes and the files, and a file changed while i
   assert.match(shown(screens.fresh), /app\.ts this session · \+1 -40/);
 });
 
+test("/preview opens on the files when the only recorded change changed nothing", (t) => {
+  const { screens } = runApp(t, [
+    ...firstTurn, ["rm", "notes.md"],
+    ["writeFile", { path: "app.ts", content: `${Array.from({ length: 40 }, (_, index) => (index === 4 ? "export function getSession() { return readToken(); }" : `const value${index + 1} = ${index + 1};`)).join("\n")}\n` }],
+    ["type", "/preview"], ["key", "enter"], ["waitFor", "app.ts", { screen: true }], ["screen", "opened"], ["detach"],
+  ]);
+  assert.doesNotMatch(shown(screens.opened), /changes ·/);
+  assert.match(shown(screens.opened), /· app\.ts/);
+});
+
 test("/preview with no changes yet opens on the files, and Tab says there are none", (t) => {
   const { screens } = runApp(t, [
     ["waitReady"], ["type", "/preview"], ["key", "enter"], ["waitFor", "app.ts", { screen: true }], ["screen", "files"],
@@ -231,6 +241,16 @@ test("/preview with no changes yet opens on the files, and Tab says there are no
   ]);
   assert.match(shown(screens.files), /· app\.ts/);
   assert.match(shown(screens.none), /The agent has not changed a file in this session/);
+});
+
+test("a file whose only change is its line endings or tabs is listed, and its view says so", (t) => {
+  const { screens } = runApp(t, [
+    ...firstTurn,
+    // app.ts back to its original text but with CRLF line endings: only the line endings differ.
+    ["writeFile", { path: "app.ts", content: `${Array.from({ length: 40 }, (_, index) => (index === 4 ? "export function getSession() { return readToken(); }" : `const value${index + 1} = ${index + 1};`)).join("\r\n")}\r\n` }],
+    ...openPreview, ["screen", "list"], ["key", "enter"], ["waitFor", "Only line endings", { screen: true }], ["detach"],
+  ]);
+  assert.match(shown(screens.list), /M {2}app\.ts/);
 });
 
 test("a file the agent's edit left as it was is not listed as changed", (t) => {

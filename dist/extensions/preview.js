@@ -40,10 +40,13 @@ export function createPreviewInlineExtension() {
                         ctx.ui.notify("/preview needs the interactive TUI", "error");
                         return;
                     }
+                    const [{ PreviewPage }, { FileBrowser }, { changedFiles }] = await Promise.all([
+                        import("./preview/page.js"), import("./preview/view.js"), import("./preview/changes.js"),
+                    ]);
                     // No argument: the agent's changes when there are any. A path: that folder or file.
                     let start;
                     if (args.trim() === "") {
-                        start = ledger.changes("session").length > 0 ? { side: "changes" } : { side: "files", dir: ctx.cwd };
+                        start = changedFiles(ledger, "session").length > 0 ? { side: "changes" } : { side: "files", dir: ctx.cwd };
                     }
                     else {
                         const target = resolve(ctx.cwd, args.trim().replace(/^~(?=$|\/)/, homedir()));
@@ -57,7 +60,6 @@ export function createPreviewInlineExtension() {
                         }
                         start = isDirectory ? { side: "files", dir: target } : { side: "files", dir: dirname(target), file: basename(target) };
                     }
-                    const [{ PreviewPage }, { FileBrowser }] = await Promise.all([import("./preview/page.js"), import("./preview/view.js")]);
                     const result = await ctx.ui.custom((tui, theme, _keybindings, done) => {
                         const page = new PreviewPage(tui, theme, ledger, ctx.cwd, done, start);
                         open = page;

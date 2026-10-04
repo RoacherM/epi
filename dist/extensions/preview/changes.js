@@ -43,6 +43,11 @@ function compare(path, before) {
     const diff = diffTexts(beforeText, afterText);
     if (diff === undefined)
         return { kind: "note", text: "Too many changes to show as a diff." };
+    // The diff compares lines as drawn (tabs as spaces, any line ending): a change of only those is
+    // still a change, and must not vanish from the list.
+    if (diff.rows.length === 0 && beforeText !== afterText) {
+        return { kind: "note", text: "Only line endings, tabs or the final newline changed.", modified: true };
+    }
     const status = before.kind === "absent" ? "new" : now.kind === "gone" ? "deleted" : "modified";
     return { kind: "diff", diff, status, after: afterText };
 }
@@ -131,7 +136,9 @@ export class ChangesList {
             this.scroll = this.cursor - height + 1;
         const rows = changes.slice(this.scroll, this.scroll + height).map((change, offset) => {
             const comparison = comparisonFor(change.path, change.before);
-            const mark = comparison.kind === "note" ? "?" : comparison.status === "new" ? "A" : comparison.status === "deleted" ? "D" : "M";
+            const mark = comparison.kind === "note"
+                ? (comparison.modified ? "M" : "?")
+                : comparison.status === "new" ? "A" : comparison.status === "deleted" ? "D" : "M";
             const stats = comparison.kind === "note" ? "" : `+${comparison.diff.added} -${comparison.diff.removed}`;
             const name = displayPath(this.cwd, change.path);
             // The numbers end one column before the edge on every row, selected or not.
