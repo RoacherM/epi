@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
@@ -156,6 +157,49 @@ function apiStreams(api) {
         throw new Error("Unsupported Magpie model API");
     return streams[protocol];
 }
+const blocksOf = (message) => typeof message.content === "string" ? [{ type: "text" }] : message.content;
+/** Anthropic caps tool IDs at 64 characters (pi-ai's normalizeToolCallId fills them up to that
+ * for other providers' IDs), so a long ID becomes a hash instead of growing past the cap. */
+function renamedToolId(id) {
+    const prefixed = `mmp_${id}`;
+    return prefixed.length <= 64 ? prefixed : `mmp_${createHash("sha256").update(id).digest("hex").slice(0, 40)}`;
+}
+/** Magpie's claude/ route continues its own upstream session when a request carries tool IDs it
+ * issued, and then forwards only the tool results: a steer message sent after them is dropped
+ * (dogfood D74, reproduced on the real gateway; its other routes are fine). Renaming the tool IDs
+ * in that one request makes the gateway take the whole request instead. Returns undefined when
+ * the request has no user text or image after the last tool call, so other requests go out unchanged. */
+export function renameToolIdsAfterSteer(payload) {
+    const messages = payload.messages;
+    if (!Array.isArray(messages))
+        return undefined;
+    const lastAssistant = messages.findLastIndex((message) => message.role === "assistant");
+    if (lastAssistant < 0 || !blocksOf(messages[lastAssistant]).some((block) => block.type === "tool_use"))
+        return undefined;
+    const steered = messages.slice(lastAssistant + 1)
+        .some((message) => blocksOf(message).some((block) => block.type === "text" || block.type === "image"));
+    if (!steered)
+        return undefined;
+    const rename = (block) => block.type === "tool_use" && block.id !== undefined ? { ...block, id: renamedToolId(block.id) }
+        : block.type === "tool_result" && block.tool_use_id !== undefined ? { ...block, tool_use_id: renamedToolId(block.tool_use_id) }
+            : block;
+    return {
+        ...payload,
+        messages: messages.map((message) => typeof message.content === "string" ? message : { ...message, content: message.content.map(rename) }),
+    };
+}
+/** Applies the gateway workaround before any caller's own onPayload, which still sees the result. */
+function withGatewayFixes(model, options) {
+    if (model.api !== "anthropic-messages")
+        return options;
+    return {
+        ...options,
+        onPayload: async (payload, payloadModel) => {
+            const fixed = renameToolIdsAfterSteer(payload);
+            return (await options?.onPayload?.(fixed ?? payload, payloadModel)) ?? fixed;
+        },
+    };
+}
 /** The tag also keeps a cache from another gateway address out. */
 function cacheTag(baseUrl) {
     return JSON.stringify([baseUrl]);
@@ -167,12 +211,41 @@ export function changedCatalogEntry(stored, baseUrl, fresh) {
         ? undefined
         : { models: fresh, checkedAt: Date.now(), etag: tag };
 }
+/** A refresh right after the startup lookup would fetch the same catalog again (rpc and the TUI
+ * both refresh once at startup). */
+const STARTUP_FRESH_MS = 10_000;
+/** Connection refused: nothing listens at the gateway address. */
+export function isGatewayAbsent(error) {
+    return error instanceof Error && typeof error.cause === "object" && error.cause !== null &&
+        "code" in error.cause && error.cause.code === "ECONNREFUSED";
+}
+/** Catalog writes still running, so a session shutdown can wait for them: a process that exits
+ * while Pi is taking the models-store lock leaves models-store.json.lock behind, and the next mmp
+ * waits up to 30 s for it (Fable F5: rpc's background refresh, then the client closes stdin). */
+export function createWriteTracker() {
+    const pending = new Set();
+    let closed = false;
+    return {
+        get closed() { return closed; },
+        track(write) {
+            pending.add(write);
+            void write.then(() => pending.delete(write), () => pending.delete(write));
+            return write;
+        },
+        /** Waits for running writes; refreshes that finish later do not write. */
+        async close() {
+            closed = true;
+            await Promise.allSettled([...pending]);
+        },
+    };
+}
 /** Native publication lets Pi own persistence, concurrent-refresh generations and diagnostics.
  * A startup catalog is already saved by the caller, so the cache-only refreshes Pi starts while
  * loading never write: Pi supersedes them, and a short run can exit during the detached write. */
-export function createMagpieProvider(baseUrl, initialModels, allowNetwork = true) {
+export function createMagpieProvider(baseUrl, initialModels, allowNetwork = true, writes = createWriteTracker(), startupKey = MAGPIE_DEFAULT_KEY) {
     let models = initialModels ?? [];
     let pending = initialModels;
+    const freshUntil = initialModels ? Date.now() + STARTUP_FRESH_MS : 0;
     const cachedModels = (stored) => stored?.etag === cacheTag(baseUrl)
         ? stored.models.filter((model) => model.provider === "magpie" && (!model.type || model.type === "chat"))
         : [];
@@ -186,9 +259,11 @@ export function createMagpieProvider(baseUrl, initialModels, allowNetwork = true
                 login: async ({ prompt }) => ({ type: "api_key", key: await prompt({ type: "secret", message: "Magpie API key (loopback accepts any value):" }) }),
                 resolve: async ({ credential, signal }) => {
                     signal.throwIfAborted();
-                    if (credential && !credential.key)
+                    if (credential === undefined)
+                        return { auth: { apiKey: MAGPIE_DEFAULT_KEY }, source: "default key for the local gateway" };
+                    if (!credential.key)
                         return undefined;
-                    return { auth: { apiKey: credential?.key ?? MAGPIE_DEFAULT_KEY }, source: "Magpie gateway" };
+                    return { auth: { apiKey: credential.key }, source: "Magpie API key" };
                 },
             },
         },
@@ -206,15 +281,31 @@ export function createMagpieProvider(baseUrl, initialModels, allowNetwork = true
             if (!allowNetwork || !context.allowNetwork || context.signal.aborted)
                 return;
             const apiKey = context.credential?.type === "api_key" ? context.credential.key : undefined;
-            const refreshed = await discoverMagpieModels(baseUrl, context.signal, apiKey);
+            // A new key (/login refreshes right after saving one) may see another catalog.
+            if (Date.now() < freshUntil && (apiKey ?? MAGPIE_DEFAULT_KEY) === startupKey)
+                return;
+            let refreshed;
+            try {
+                refreshed = await discoverMagpieModels(baseUrl, context.signal, apiKey);
+            }
+            catch (error) {
+                // Nothing listening, no saved list, no key of the user's own: Magpie is not installed, which
+                // is not an error for someone who never used it (no warning in /model).
+                const neverUsed = context.stored === undefined && (apiKey === undefined || apiKey === MAGPIE_DEFAULT_KEY);
+                if (neverUsed && isGatewayAbsent(error))
+                    return;
+                throw error;
+            }
+            if (writes.closed)
+                return;
             const persist = changedCatalogEntry(context.stored, baseUrl, refreshed);
-            await context.publish({
+            await writes.track(context.publish({
                 ...(persist ? { persist } : {}),
                 update: () => { models = refreshed; },
-            });
+            }));
         },
-        stream: (model, context, options) => apiStreams(model.api).stream(model, context, options),
-        streamSimple: (model, context, options) => apiStreams(model.api).streamSimple(model, context, options),
+        stream: (model, context, options) => apiStreams(model.api).stream(model, context, withGatewayFixes(model, options)),
+        streamSimple: (model, context, options) => apiStreams(model.api).streamSimple(model, context, withGatewayFixes(model, options)),
     };
 }
 //# sourceMappingURL=magpie.js.map

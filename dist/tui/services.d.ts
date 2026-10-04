@@ -19,5 +19,9 @@ export interface MmpSessionOptions {
 export declare function configureHttpAtStartup(settingsManager: SettingsManager): void;
 /** Pi's applyRuntimeSettings (rebind, /reload, /settings): the dispatcher with the idle timeout. */
 export declare function configureHttp(settingsManager: SettingsManager): void;
+/** The TUI's startup --session check for runs that go through piMain (print, json, rpc), which
+ * otherwise open another project's session with this project's Rules (dogfood D67, Fable F4).
+ * A --session nothing matches is left to Pi, which reports it. */
+export declare function refusePiMainCrossProjectSession(piArgs: readonly string[], cwd: string, settingsManager: SettingsManager, projectIdentity: ProjectIdentity): Promise<void>;
 export declare function createMmpRuntime(options: MmpSessionOptions): Promise<AgentSessionRuntime>;
 //# sourceMappingURL=services.d.ts.map

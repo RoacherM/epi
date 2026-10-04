@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createModels, InMemoryModelsStore, InMemoryCredentialStore, Type } from "@earendil-works/pi-ai";
 
-import { createMagpieProvider, discoverMagpieModels, parseMagpieModels } from "../dist/providers/magpie.js";
+import { createMagpieProvider, createWriteTracker, discoverMagpieModels, parseMagpieModels, renameToolIdsAfterSteer } from "../dist/providers/magpie.js";
 import { magpieCatalog, startMagpieServer } from "./fixtures/magpie-server.mjs";
 
 function run(command, args, options) {
@@ -176,6 +176,71 @@ test("Pi's cache-only refreshes never write; network refreshes write only a chan
   assert.deepEqual(writes, ["magpie", "magpie"]);
 });
 
+test("a session shutdown waits for a running catalog write, and later refreshes do not write (F5)", async (t) => {
+  const server = await serverFor(t);
+  const store = new InMemoryModelsStore();
+  let finishWrite;
+  const writeStarted = new Promise((resolve) => {
+    const write = store.write.bind(store);
+    store.write = async (...args) => { resolve(); await new Promise((done) => { finishWrite = done; }); return write(...args); };
+  });
+  const writes = createWriteTracker();
+  const models = modelsWith(createMagpieProvider(server.baseUrl, undefined, true, writes), store);
+  const refresh = models.refresh({ allowNetwork: true });
+  await writeStarted;
+  let closed = false;
+  const closing = writes.close().then(() => { closed = true; });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(closed, false, "shutdown must wait for the write");
+  finishWrite();
+  await closing;
+  await refresh;
+  assert.equal((await store.read("magpie")).models.length, 4);
+  server.state.catalog = [{ id: "after-shutdown" }];
+  await models.refresh({ allowNetwork: true });
+  assert.equal((await store.read("magpie")).models.length, 4, "no write after shutdown began");
+});
+
+test("refresh: a missing gateway is no error for someone who never used Magpie, but is for anyone else", async () => {
+  const absent = await closedUrl();
+  const fresh = modelsWith(createMagpieProvider(absent));
+  assert.equal((await fresh.refresh({ allowNetwork: true })).errors.size, 0);
+  const saved = new InMemoryModelsStore();
+  await saved.write("magpie", { models: [], checkedAt: 1, etag: JSON.stringify([absent]) });
+  assert.match((await modelsWith(createMagpieProvider(absent), saved).refresh({ allowNetwork: true })).errors.get("magpie").message, /fetch failed|Magpie/);
+  const credentials = new InMemoryCredentialStore();
+  await credentials.modify("magpie", async () => ({ type: "api_key", key: "users-own-key" }));
+  assert.equal((await modelsWith(createMagpieProvider(absent), new InMemoryModelsStore(), credentials).refresh({ allowNetwork: true })).errors.size, 1);
+});
+
+test("the key's label says whether it is the default or the user's own", async () => {
+  const { apiKey } = createMagpieProvider("http://127.0.0.1:1").auth;
+  const signal = new AbortController().signal;
+  assert.deepEqual(await apiKey.resolve({ signal }), { auth: { apiKey: "magpie" }, source: "default key for the local gateway" });
+  assert.deepEqual(await apiKey.resolve({ signal, credential: { type: "api_key", key: "k" } }), { auth: { apiKey: "k" }, source: "Magpie API key" });
+});
+
+test("a refresh right after the startup lookup does not fetch the catalog again", async (t) => {
+  const server = await serverFor(t);
+  const models = modelsWith(createMagpieProvider(server.baseUrl, parseMagpieModels({ data: magpieCatalog }, server.baseUrl)));
+  await models.refresh({ allowNetwork: true });
+  assert.deepEqual(catalogRequests(server), []);
+  assert.equal(models.getModels("magpie").length, 4);
+});
+
+test("a new key right after startup (/login) refreshes the catalog despite the startup window", async (t) => {
+  const server = await serverFor(t);
+  const credentials = new InMemoryCredentialStore();
+  const models = modelsWith(createMagpieProvider(server.baseUrl, parseMagpieModels({ data: [{ id: "old" }] }, server.baseUrl)), new InMemoryModelsStore(), credentials);
+  await models.refresh({ allowNetwork: true });
+  assert.deepEqual(catalogRequests(server), []);
+  await credentials.modify("magpie", async () => ({ type: "api_key", key: "new-key" }));
+  await models.refresh({ allowNetwork: true });
+  assert.equal(catalogRequests(server).length, 1);
+  assert.equal(catalogRequests(server)[0].headers["x-api-key"], "new-key");
+  assert.equal(models.getModels("magpie").length, 4);
+});
+
 test("successful pagination merges pages and overlapping refreshes publish only the newest catalog", async (t) => {
   const server = await serverFor(t);
   server.state.catalogHandler = (request, response) => {
@@ -276,6 +341,54 @@ test("Anthropic tools and tool results go through the built-in adapter", async (
   assert.equal(server.state.requests.at(-1).body.messages.at(-1).content[0].type, "tool_result");
 });
 
+test("a steer message after a tool call renames that request's tool IDs, so the gateway keeps it (D74)", async (t) => {
+  const server = await serverFor(t);
+  const provider = createMagpieProvider(server.baseUrl, parseMagpieModels({ data: [magpieCatalog[0], magpieCatalog[1]] }, server.baseUrl));
+  const models = modelsWith(provider);
+  const [claude, codex] = provider.getModels();
+  const toolTurn = (steer) => {
+    const context = structuredClone(transcript);
+    context.messages.push(
+      { role: "assistant", content: [{ type: "toolCall", id: "toolu_1", name: "bash", arguments: { command: "sleep 1" } }], api: claude.api, provider: "magpie", model: claude.id, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: 2 },
+      { role: "toolResult", toolCallId: "toolu_1", toolName: "bash", content: [{ type: "text", text: "done" }], isError: false, timestamp: 3 },
+    );
+    if (steer) context.messages.push({ role: "user", content: steer, timestamp: 4 });
+    return context;
+  };
+  const ids = () => server.state.requests.at(-1).body.messages.flatMap((message) =>
+    typeof message.content === "string" ? [] : message.content.map((block) => block.id ?? block.tool_use_id).filter(Boolean));
+  await models.streamSimple(claude, toolTurn(), { maxTokens: 64 }).result();
+  assert.deepEqual(ids(), ["toolu_1", "toolu_1"]);
+  let seen;
+  await models.streamSimple(claude, toolTurn("The secret word is BANANA."), { maxTokens: 64, onPayload: (payload) => { seen = payload; } }).result();
+  assert.deepEqual(ids(), ["mmp_toolu_1", "mmp_toolu_1"]);
+  assert.equal(seen.messages.at(-2).content[0].tool_use_id, "mmp_toolu_1", "the caller's onPayload sees the request that is sent");
+  assert.match(JSON.stringify(server.state.requests.at(-1).body.messages.at(-1)), /BANANA/);
+  await models.streamSimple(claude, toolTurn("Steer"), { maxTokens: 64, onPayload: (payload) => ({ ...payload, max_tokens: 7 }) }).result();
+  assert.equal(server.state.requests.at(-1).body.max_tokens, 7, "a caller's replacement payload still wins");
+  await models.streamSimple(codex, toolTurn("Steer"), { maxTokens: 64 }).result();
+  assert.doesNotMatch(JSON.stringify(server.state.requests.at(-1).body), /mmp_toolu/, "only the Messages protocol is touched");
+  assert.equal(renameToolIdsAfterSteer({ messages: [{ role: "user", content: "hi" }] }), undefined);
+});
+
+test("steer renaming keeps tool IDs within Anthropic's 64 characters and counts an image-only steer", () => {
+  const long = "call_" + "x".repeat(59);
+  const payload = (steer) => ({ messages: [
+    { role: "user", content: [{ type: "text", text: "go" }] },
+    { role: "assistant", content: [{ type: "tool_use", id: long, name: "bash", input: {} }, { type: "tool_use", id: "toolu_2", name: "bash", input: {} }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: long, content: "a" }, { type: "tool_result", tool_use_id: "toolu_2", content: "b" }] },
+    { role: "user", content: [steer] },
+  ] });
+  const renamed = renameToolIdsAfterSteer(payload({ type: "text", text: "steer" }));
+  const [first, second] = renamed.messages[1].content.map((block) => block.id);
+  assert.ok(first.length <= 64 && first.startsWith("mmp_"), first);
+  assert.equal(renamed.messages[2].content[0].tool_use_id, first);
+  assert.equal(second, "mmp_toolu_2");
+  assert.notEqual(renameToolIdsAfterSteer(payload({ type: "text", text: "steer" })).messages[1].content[0].id, renameToolIdsAfterSteer({ ...payload({ type: "text", text: "s" }), messages: payload({ type: "text", text: "s" }).messages.map((m) => JSON.parse(JSON.stringify(m).replaceAll(long, long.slice(0, -1) + "y"))) }).messages[1].content[0].id);
+  const image = renameToolIdsAfterSteer(payload({ type: "image", source: { type: "base64", media_type: "image/png", data: "x" } }));
+  assert.equal(image.messages[1].content[1].id, "mmp_toolu_2");
+});
+
 test("image input, abort, malformed stream and context overflow retain Pi adapter semantics", async (t) => {
   const server = await serverFor(t);
   const provider = createMagpieProvider(server.baseUrl, parseMagpieModels({ data: [magpieCatalog[0]] }, server.baseUrl));
@@ -350,6 +463,22 @@ test("the saved default provider, scoped models and any provider casing all sele
     assert.equal(output.stdout.trim(), "MAGPIE_OK 你好", `${args.join(" ")}\n${output.stderr}`);
     assert.equal(catalogRequests(server).length, 1);
   }
+});
+
+test("--model without the magpie/ prefix finds a Magpie model on the first run, and is quiet without a gateway", async (t) => {
+  const server = await serverFor(t);
+  const fixture = setup(t, server.baseUrl);
+  for (const run of [1, 2]) {
+    server.state.requests.length = 0;
+    const output = await cliRun(fixture, ["--model", "claude/claude-opus-test", ...printArgs]);
+    assert.equal(output.stdout.trim(), "MAGPIE_OK 你好", output.stderr);
+    assert.equal(catalogRequests(server).length, run === 1 ? 1 : 0, "looked up only while no list is saved");
+  }
+  const quiet = setup(t, await closedUrl());
+  quiet.otherProvider(server.baseUrl);
+  const other = await cliRun(quiet, ["--model", "other/echo", ...printArgs]);
+  assert.equal(other.stdout.trim(), "MAGPIE_OK 你好");
+  assert.equal(other.stderr, "");
 });
 
 test("help, dry-run and offline (any MMP_OFFLINE value, like Pi) do not discover models", async (t) => {

@@ -4,7 +4,8 @@
 // hot-loaded. These tests fail before the guard existed (a cross-project switch silently succeeds)
 // and pass after it (project-guard.ts, wired into session-commands.ts and app.ts).
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createInterface } from "node:readline";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +15,9 @@ import test from "node:test";
 import { crossProjectRefusal } from "../dist/tui/project-guard.js";
 import { prepareMmpRun } from "../dist/host.js";
 import { projectIdentityFromPrepared } from "../dist/tui/start.js";
+import { startMagpieServer } from "./fixtures/magpie-server.mjs";
 
+const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const runnerPath = fileURLToPath(new URL("./fixtures/sdk-path-runner.mjs", import.meta.url));
 const harnessPath = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const switchtoExtension = fileURLToPath(new URL("./fixtures/switchto-extension.mjs", import.meta.url));
@@ -228,4 +231,71 @@ test("--no-project still allows resuming a session from the launch folder itself
   assert.doesNotMatch(afterSwitch, /different project/);
   assert.doesNotMatch(afterSwitch, /SWITCH-CANCELLED/);
   assert.match(out, /EXIT=0/);
+});
+
+test("rpc switch_session and startup --session in print/rpc refuse another project's session, allow its own (D67)", async (t) => {
+  const server = await startMagpieServer();
+  t.after(() => server.close());
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mmp-rpc-guard-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const mmpHome = join(root, ".mmp");
+  mkdirSync(join(mmpHome, "pi"), { recursive: true });
+  writeFileSync(join(mmpHome, "pi", "models.json"), JSON.stringify({ providers: { other: { baseUrl: server.baseUrl + "/v1", api: "openai-completions", apiKey: "x", models: [{ id: "echo" }] } } }));
+  const env = { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" };
+  const model = ["--no-project", "--provider", "other", "--model", "echo", "--no-tools", "--thinking", "off"];
+  const sessionsOf = () => readdirSync(join(mmpHome, "pi", "sessions"), { recursive: true }).filter((name) => name.endsWith(".jsonl")).map((name) => join(mmpHome, "pi", "sessions", name));
+  for (const project of ["a", "b"]) {
+    mkdirSync(join(root, project, ".mmp"), { recursive: true });
+    writeFileSync(join(root, project, ".mmp", "mmp.json"), '{"version":1}');
+    // Async: the fake server lives in this process, so spawnSync would block its replies.
+    const printRun = spawn(process.execPath, [cliPath, ...model, "-p", "hi"], { cwd: join(root, project), env, stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    printRun.stderr.on("data", (chunk) => (stderr += chunk));
+    assert.equal(await new Promise((resolve) => printRun.on("close", resolve)), 0, stderr);
+  }
+  const [own, other] = ["a", "b"].map((project) => sessionsOf().find((file) => readFileSync(file, "utf8").includes(JSON.stringify(join(root, project)))));
+  assert.ok(own && other, sessionsOf().join("\n"));
+
+  // Startup --session in print and rpc mode goes through piMain, not the TUI (Fable F4).
+  const startup = (args) => new Promise((resolve) => {
+    const run = spawn(process.execPath, [cliPath, ...model, ...args], { cwd: join(root, "a"), env, stdio: ["pipe", "ignore", "pipe"] });
+    let stderr = "";
+    run.stderr.on("data", (chunk) => (stderr += chunk));
+    run.stdin.end();
+    run.on("close", (code) => resolve({ code, stderr }));
+  });
+  for (const mode of [["-p", "hi"], ["--mode", "rpc"]]) {
+    const refusedStart = await startup(["--session", other, ...mode]);
+    assert.notEqual(refusedStart.code, 0, mode.join(" "));
+    assert.match(refusedStart.stderr, /belongs to a different project[\s\S]*--fork/);
+  }
+  const ownLength = readFileSync(own, "utf8").length;
+  assert.equal((await startup(["--session", own, "-p", "again"])).code, 0);
+  assert.ok(readFileSync(own, "utf8").length > ownLength, "its own project's session still opens");
+
+  const child = spawn(process.execPath, [cliPath, ...model, "--mode", "rpc"], { cwd: join(root, "a"), env, stdio: ["pipe", "pipe", "pipe"] });
+  t.after(() => child.kill());
+  const notifies = [];
+  const waiters = [];
+  createInterface({ input: child.stdout }).on("line", (line) => {
+    const event = JSON.parse(line);
+    if (event.type === "extension_ui_request" && event.method === "notify") notifies.push(event.message);
+    for (const waiter of [...waiters]) if (waiter.match(event)) { waiters.splice(waiters.indexOf(waiter), 1); waiter.resolve(event); }
+  });
+  let id = 0;
+  const send = (command) => new Promise((resolve) => {
+    const requestId = `r${++id}`;
+    waiters.push({ match: (event) => event.type === "response" && event.id === requestId, resolve });
+    child.stdin.write(`${JSON.stringify({ ...command, id: requestId })}\n`);
+  });
+  const before = (await send({ type: "get_state" })).data.sessionFile;
+  const refused = await send({ type: "switch_session", sessionPath: other });
+  assert.equal(refused.data.cancelled, true, JSON.stringify(refused));
+  assert.equal((await send({ type: "get_state" })).data.sessionFile, before);
+  assert.ok(notifies.some((message) => message.includes("belongs to a different project")), notifies.join("\n"));
+  const allowed = await send({ type: "switch_session", sessionPath: own });
+  assert.equal(allowed.data.cancelled, false, JSON.stringify(allowed));
+  assert.equal((await send({ type: "get_state" })).data.sessionFile, own);
+  child.stdin.end();
+  await new Promise((resolve) => child.on("close", resolve));
 });

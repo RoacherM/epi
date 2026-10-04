@@ -132,6 +132,39 @@ async function resolveSessionArg(argument, cwd, sessionDir) {
     }
     return { type: "not_found" };
 }
+/** Unlike /resume mid-run, there's no current session to protect at startup, but a --session target
+ * from another project would still leave this process's Rules mismatched to its cwd -- same check
+ * /resume uses, applied whether the target came from a fuzzy id match or a literal path. */
+function refuseCrossProjectSession(argument, sessionPath, projectIdentity) {
+    const refusal = crossProjectRefusal(sessionPath, projectIdentity);
+    if (refusal !== undefined) {
+        // Pi's own CLI offers to fork a cross-project match in interactively (promptConfirm); MMP has
+        // no prompt this early, so it names the flag that does the same thing without one.
+        throw new MmpArgumentError(`${refusal}\nOr use --fork ${argument} to copy it into this project.`);
+    }
+}
+/** Pi's own resolution order (main.js ~536-539): --session-dir, then its ENV_SESSION_DIR
+ * (PI_CODING_AGENT_SESSION_DIR), then the sessionDir setting. MMP never reads Pi's variable here --
+ * a Pi user's own PI_CODING_AGENT_SESSION_DIR must not silently redirect MMP's sessions (no shared
+ * config, docs/cli-design.md §2) -- so this is MMP_SESSION_DIR instead, same semantics. `~` is
+ * expanded here; SessionManager's own statics expand it again (harmless). */
+function startupSessionDir(parsed, settingsManager) {
+    const envSessionDir = process.env.MMP_SESSION_DIR;
+    return (parsed.sessionDir !== undefined ? expandTilde(parsed.sessionDir) : undefined) ??
+        (envSessionDir !== undefined && envSessionDir !== "" ? expandTilde(envSessionDir) : undefined) ??
+        settingsManager.getSessionDir();
+}
+/** The TUI's startup --session check for runs that go through piMain (print, json, rpc), which
+ * otherwise open another project's session with this project's Rules (dogfood D67, Fable F4).
+ * A --session nothing matches is left to Pi, which reports it. */
+export async function refusePiMainCrossProjectSession(piArgs, cwd, settingsManager, projectIdentity) {
+    const parsed = parseArgs([...piArgs]);
+    if (parsed.session === undefined || parsed.noSession || parsed.fork !== undefined)
+        return;
+    const resolved = await resolveSessionArg(parsed.session, cwd, startupSessionDir(parsed, settingsManager));
+    if (resolved.type !== "not_found")
+        refuseCrossProjectSession(parsed.session, resolved.path, projectIdentity);
+}
 /** Mirrors Pi's createSessionManager (main.js), using only SessionManager's exported statics. */
 async function buildSessionManager(parsed, cwd, sessionDir, projectIdentity) {
     if (parsed.noSession) {
@@ -156,15 +189,7 @@ async function buildSessionManager(parsed, cwd, sessionDir, projectIdentity) {
         if (resolved.type === "not_found") {
             throw new MmpArgumentError(`No session found matching '${parsed.session}'`);
         }
-        // Unlike /resume mid-run, there's no current session to protect here, but a --session target
-        // from another project would still leave this process's Rules mismatched to its cwd -- same
-        // check /resume uses, applied whether the target came from a fuzzy id match or a literal path.
-        const refusal = crossProjectRefusal(resolved.path, projectIdentity);
-        if (refusal !== undefined) {
-            // Pi's own CLI offers to fork a cross-project match in interactively (promptConfirm); v2 has
-            // no prompt this early, so it names the flag that does the same thing without one.
-            throw new MmpArgumentError(`${refusal}\nOr use --fork ${parsed.session} to copy it into this project.`);
-        }
+        refuseCrossProjectSession(parsed.session, resolved.path, projectIdentity);
         return SessionManager.open(resolved.path, sessionDir);
     }
     if (parsed.continue === true) {
@@ -382,16 +407,7 @@ export async function createMmpRuntime(options) {
         }
         return { ...created, services, diagnostics };
     };
-    // Pi's own resolution order (main.js ~536-539): --session-dir, then its ENV_SESSION_DIR
-    // (PI_CODING_AGENT_SESSION_DIR), then the sessionDir setting. MMP never reads Pi's variable here --
-    // a Pi user's own PI_CODING_AGENT_SESSION_DIR must not silently redirect MMP's sessions (no shared
-    // config, docs/cli-design.md §2) -- so this is MMP_SESSION_DIR instead, same semantics. `~` is
-    // expanded here; SessionManager's own statics expand it again (harmless) for whatever they resolve
-    // without going through this function.
-    const envSessionDir = process.env.MMP_SESSION_DIR;
-    const sessionDir = (parsed.sessionDir !== undefined ? expandTilde(parsed.sessionDir) : undefined) ??
-        (envSessionDir !== undefined && envSessionDir !== "" ? expandTilde(envSessionDir) : undefined) ??
-        startupSettingsManager.getSessionDir();
+    const sessionDir = startupSessionDir(parsed, startupSettingsManager);
     const sessionManager = await buildSessionManager(parsed, options.cwd, sessionDir, options.projectIdentity);
     if (parsed.name !== undefined) {
         sessionManager.appendSessionInfo(parsed.name.trim());

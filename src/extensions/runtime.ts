@@ -4,6 +4,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import type { ResolvedAssembly } from "../assembly.js";
+import { findNearestProjectManifest } from "../project.js";
 import {
   createMmpRuntimeIdentity,
   createMmpRuntimeReport,
@@ -12,6 +13,7 @@ import {
   type MmpRuntimeIdentity,
 } from "../runtime-identity.js";
 import { renderMmpStartupPage } from "../startup-page.js";
+import { crossProjectRefusal, type ProjectIdentity } from "../tui/project-guard.js";
 import { readUpdateCache, refreshUpdateCache, updateNotice } from "../update.js";
 
 export interface UpdateCheckOptions {
@@ -90,6 +92,10 @@ export function createMmpRuntimeExtensions(
   // assembly (docs/development.md §9.3), not fall back to the startup one.
   let activeAssembly = initialAssembly;
   let activeIdentity = initialIdentity;
+  // The project this process was launched in; a switch may never leave it (see below). Read at
+  // the first switch, with the launch cwd taken now: Pi changes the cwd when a session moves.
+  const launchCwd = process.cwd();
+  let launchProject: ProjectIdentity | undefined;
 
   const runtime: InlineExtension = {
     name: "mmp:runtime",
@@ -146,6 +152,21 @@ export function createMmpRuntimeExtensions(
           );
         }
       }
+
+      // Dogfood D67: rpc's switch_session (and any other caller of Pi's switchSession) must refuse a
+      // session from another project, like the TUI's /resume does: Pi would rebuild the session in
+      // that project's cwd while this process keeps the launch project's Rules and extensions.
+      pi.on("session_before_switch", (event, context) => {
+        if (event.targetSessionFile === undefined) return undefined;
+        launchProject ??= {
+          root: findNearestProjectManifest(launchCwd, initialAssembly.globalManifest)?.root,
+          globalManifestPath: initialAssembly.globalManifest,
+        };
+        const refusal = crossProjectRefusal(event.targetSessionFile, launchProject);
+        if (refusal === undefined) return undefined;
+        context.ui.notify(refusal, "error");
+        return { cancel: true };
+      });
 
       pi.on("session_start", (event, context) => {
         if (event.reason !== "startup") {

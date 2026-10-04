@@ -15,14 +15,15 @@
 | 运行 | 启动时查询 | 失败时 |
 |---|---|---|
 | 选中 Magpie（`selectsMagpie`，和 Pi 一样 provider 不分大小写）：`--provider magpie`、`--model magpie/…`；没有模型参数时 `--models` 或 settings `enabledModels` 有 `magpie/…`，或 settings 默认 provider 是 magpie；Task worker 的模型是 `magpie/…`（没有模型时按同样的 settings 规则） | 是，超时 2 秒 | 警告：首次加载写 stderr（界面还没画）；`/new`、`/resume`、`/reload` 等重新加载时改为 session_start 后的 `ui.notify`，不覆盖全屏界面 |
+| `--model` 以 Magpie 的路由前缀开头（`claude/`、`codex/`、`antigravity/`、`group/`，`mayNameMagpieModel`）且没有 `--provider`，并且还没保存过 Magpie 列表 | 是 | 连接被拒绝不提示，其他错误警告。保存过列表后不再查询，Pi 的模型匹配能在列表里找到 `claude/…` 这类 ID |
 | `--list-models` | 是 | 连接被拒绝（本机没装 Magpie）不提示，其他错误警告 |
 | 其他运行 | 否，用保存的列表 | — |
-| `/model`、`/scoped-models`、rpc 的后台刷新 | Pi 的联网刷新 | Pi 报告 |
-
-已知遗留（Fable 审查 F5，P3）：rpc 模式用其他 provider 时，Pi 的后台联网刷新可能写入变化了的列表；rpc 客户端在约 2 秒内关闭 stdin 时，进程可能在写入中退出，留下锁文件。范围很窄，暂不处理。
+| `/model`、`/scoped-models`、rpc 和 TUI 启动后的后台刷新 | Pi 的联网刷新；启动查询后 10 秒内、用的还是启动时那个 key 时跳过，避免同一份目录查两次（`/login` 换了 key 后的刷新照常查询） | Pi 报告。例外：连接被拒绝、没保存过列表、用的是默认 key 时（从没用过 Magpie）不算错误 |
 | `--offline`、任意值的 `MMP_OFFLINE`、`--help`、`--dry-run` | 否 | — |
 
-理由（我定的）：用其他 provider 时不该为 Magpie 多等；离线判断和 Pi 的 `ModelRuntime` 一致（`PI_OFFLINE` 有值即离线）。
+理由（我定的）：用其他 provider 时不该为 Magpie 多等；离线判断和 Pi 的 `ModelRuntime` 一致（`PI_OFFLINE` 有值即离线）；没装 Magpie 的人不该在 `/model` 里看到 Magpie 的错误；只认 Magpie 的路由前缀，是因为放宽到任意 `a/b` 会让每次 `--model provider/model` 都去连本机网关（`test/pi-env.test.mjs` 的禁网检查发现）。
+
+`/login` 里 Magpie 的状态写明用的是哪个 key：没存 key 时是 "default key for the local gateway"，存了是 "Magpie API key"。
 
 ## 模型目录与协议
 
@@ -48,8 +49,17 @@
 - 启动时查到的列表由 MMP 的扩展 factory 自己写入并等待写完，写完再读一次；列表和已保存的一样就不写。
 - Pi 加载时触发的只读缓存刷新从不写入。原因：Pi 会用新的刷新取代旧的，被取代的刷新里的写入在后台继续；`-p`、`--list-models` 这类短进程退出时，如果 Pi 正在加锁，`models-store.json.lock` 会留下，下一个 mmp 要等最多 30 秒（CPU 负载下稳定复现）。写入后 Pi 的读缓存丢掉文件版本，下一次读又要加锁，所以写完立刻读一次。
 - 联网刷新（`/model` 等）由 Pi 发布并写入，列表没变时同样不写。
+- 联网刷新的写入登记在 provider 的 write tracker 里。扩展的 `session_shutdown` 处理等这些写入完成；关闭开始后才查到的列表不再写入。Pi 的 rpc 和 print 模式在 `process.exit` 前会先 dispose 运行时、等 `session_shutdown`，所以 rpc 客户端在后台刷新时关闭 stdin 也不会留下锁文件（Fable 审查 F5）。
 
 刷新失败保留已有列表，同时由 SDK 或启动警告报告错误。key、HTTP body、带密钥的 URL 不出现在错误消息里。factory 每次加载创建独立 provider 状态；在线刷新通过 SDK 的 generation-checked publication 防止过期响应覆盖新目录；中止不发布目录。
+
+## 网关的会话续接（D74）
+
+Magpie 的 `claude/` 路由在请求里带着它自己发过的 `tool_use` ID 时，会接着自己上游的会话走，只转发 tool result，同一轮里其他的用户文字被丢掉。所以 Alt+Enter 插话（steer）发到了网关，模型却看不到。用记录请求的代理实测：MMP 发出的请求里有这条消息；把 ID 换成网关不认识的，同样的请求就能被看到。Responses、Gemini 和 `antigravity/claude-*`（同样走 Messages）没有这个问题。
+
+处理（我定的）：Messages 协议的请求里，如果最后一个带工具调用的助手消息之后有用户文字，provider 通过 pi-ai 公开的 `onPayload` 给这一次请求的工具 ID 加 `mmp_` 前缀，网关就会处理整个请求。其他请求原样发出；调用方自己的 `onPayload` 仍然执行，看到的是改过的请求。改名后的 ID 不超过 Anthropic 的 64 字符上限：加前缀会超长时（例如从 Responses 模型切过来的长 ID），改用 ID 的 sha256 前 40 位。只有图片的插话也算插话。
+
+代价（Fable 审查 F2）：插话的那次请求和下一次请求的前缀都和缓存对不上，每次插话多两次完整的 prompt cache 未命中。插话不常用，可以接受。网关修好后可以删掉这段。
 
 ## 验证
 
