@@ -8,7 +8,9 @@ import type { TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi
 
 import { piTui } from "../../tui/pi-tui.js";
 import { centered, imageBody, pad, scrollbar, scrollFromBar } from "./draw.js";
-import { type Entry, clock, HEX_BYTES, humanSize, icon, kindOf, loadDoc, localTime, MAX_TEXT_BYTES, permString, readEntries } from "./files.js";
+import { statSync } from "node:fs";
+
+import { type Entry, clock, HEX_BYTES, humanSize, icon, kindOf, loadDoc, localTime, MAX_TEXT_BYTES, permString, printable, readEntries } from "./files.js";
 import { audioWave, Player, type Probe, probe, SEEK_SECONDS, StillCache, stillJob } from "./media.js";
 
 const { Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } = piTui;
@@ -30,6 +32,8 @@ class Viewer {
   private markdown = true;
   private rowsCache: { key: string; rows: string[] } | undefined;
   private info: Probe | undefined;
+  /** The probe has answered (or failed): a video waits for it, to play at the source's frame rate. */
+  private probed = false;
   private player: Player | undefined;
   /** Size of the last rendered body and where the video progress bar sits, for the mouse. */
   private width = 0;
@@ -42,16 +46,20 @@ class Viewer {
     readonly entry: Entry,
     private readonly stills: StillCache,
   ) {
-    const kind = kindOf(entry.name);
-    const gif = extname(entry.name).toLowerCase() === ".gif";
+    // Anything but a regular file is shown as the one-line note loadDoc gives for it.
+    const kind = entry.isFile ? kindOf(entry.name) : "text";
+    const gif = entry.isFile && extname(entry.name).toLowerCase() === ".gif";
     this.mode = kind === "video" || gif ? "video" : kind === "text" ? "text" : "image";
     if (this.mode !== "text" && kind !== "quicklook") {
       void probe(entry.path)
         .then((info) => {
           this.info = info;
-          this.tui.requestRender();
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          this.probed = true;
+          this.tui.requestRender();
+        });
     }
   }
 
@@ -155,7 +163,7 @@ class Viewer {
     this.width = width;
     this.height = height;
     const th = this.theme;
-    const name = th.fg("accent", this.entry.name);
+    const name = th.fg("accent", this.entry.label);
 
     if (this.mode === "text") {
       const doc = loadDoc(this.entry);
@@ -191,11 +199,17 @@ class Viewer {
 
     // video
     const frameHeight = Math.max(1, height - 1);
+    if (!this.probed) {
+      return { title, body: centered(th.fg("dim", "loading…"), width, height).map((line) => pad(line, width)), status: ` ${th.fg("dim", "q back")}` };
+    }
     if (!this.player || this.player.width !== width || this.player.height !== frameHeight) {
       const resumeAt = this.player?.position ?? 0;
       const playing = this.player?.playing ?? true;
       this.player?.stop();
-      this.player = new Player(this.entry.path, width, frameHeight, extname(this.entry.name).toLowerCase() === ".gif", () => this.tui.requestRender());
+      this.player = new Player(
+        this.entry.path, width, frameHeight, extname(this.entry.name).toLowerCase() === ".gif", () => this.tui.requestRender(),
+        this.info?.fps === undefined ? {} : { fps: this.info.fps },
+      );
       this.player.playing = playing;
       this.player.play(resumeAt);
     }
@@ -259,6 +273,7 @@ export class FileBrowser {
   private viewer: Viewer | undefined;
   private layout: Layout | undefined;
   private parentEntries: Entry[] = [];
+  private readonly listings = new Map<string, { mtime: number; entries: Entry[] }>();
   private readonly stills: StillCache;
 
   constructor(
@@ -271,18 +286,53 @@ export class FileBrowser {
   ) {
     this.cwd = start;
     this.stills = new StillCache(() => this.tui.requestRender());
+    if (file?.startsWith(".")) this.showHidden = true;
     this.load(file);
-    if (file !== undefined) this.open(this.current());
+    // Only the file that was asked for: when it is not in the listing, nothing else opens instead.
+    if (file !== undefined && this.current()?.name === file) this.open(this.current());
+  }
+
+  /** Stops whatever is playing. Called when the overlay closes and when the session shuts down. */
+  dispose(): void {
+    this.viewer?.dispose();
+    this.viewer = undefined;
   }
 
   private finish(result: PreviewResult): void {
-    this.viewer?.dispose();
-    this.viewer = undefined;
+    this.dispose();
     this.done(result);
   }
 
+  /** A directory's entries, read again only when the directory changed: render asks for the
+   * parent's and the previewed folder's on every frame, which was slow next to large directories. */
+  private listing(dir: string): Entry[] {
+    let mtime = -1;
+    try {
+      mtime = statSync(dir).mtimeMs;
+    } catch {
+      // gone or unreadable: readEntries gives an empty listing
+    }
+    const key = `${dir}|${this.showHidden}`;
+    const hit = this.listings.get(key);
+    if (hit && hit.mtime === mtime) return hit.entries;
+    const entries = readEntries(dir, this.showHidden);
+    this.listings.set(key, { mtime, entries });
+    if (this.listings.size > 32) this.listings.delete(this.listings.keys().next().value!);
+    return entries;
+  }
+
+  /** Follows the current directory when files appear or go away while the overlay is open. */
+  private refresh(): void {
+    const fresh = this.listing(this.cwd);
+    if (fresh === this.entries) return;
+    const selected = this.current()?.name;
+    this.entries = fresh;
+    const index = selected === undefined ? -1 : this.visible().findIndex((entry) => entry.name === selected);
+    this.cursor = index >= 0 ? index : Math.min(this.cursor, Math.max(0, this.visible().length - 1));
+  }
+
   private load(select?: string): void {
-    this.entries = readEntries(this.cwd, this.showHidden);
+    this.entries = this.listing(this.cwd);
     const target = select ?? this.lastCursor.get(this.cwd);
     const index = target ? this.visible().findIndex((entry) => entry.name === target) : -1;
     this.cursor = Math.max(0, index);
@@ -301,7 +351,7 @@ export class FileBrowser {
 
   private bodyHeight(): number {
     const rows = this.tui.terminal.rows;
-    return Math.max(5, Math.floor(rows * HEIGHT_RATIO) - 4); // border top, header, status, border bottom
+    return Math.max(3, Math.floor(rows * HEIGHT_RATIO) - 4); // border top, header, status, border bottom
   }
 
   private move(delta: number): void {
@@ -468,7 +518,7 @@ export class FileBrowser {
   private entryLine(entry: Entry, width: number, selected: boolean, active: boolean): string {
     const th = this.theme;
     const mark = this.marked.has(entry.path) ? th.fg("warning", "▍") : " ";
-    const name = `${icon(entry)} ${entry.name}${entry.isDir ? "/" : ""}${entry.isLink ? " →" : ""}`;
+    const name = `${icon(entry)} ${entry.label}${entry.isDir ? "/" : ""}${entry.isLink ? " →" : ""}`;
     const size = active && !entry.isDir ? humanSize(entry.size) : "";
     const nameWidth = Math.max(1, width - 1 - (size ? visibleWidth(size) + 1 : 0));
     let body = pad(name, nameWidth) + (size ? ` ${size}` : "");
@@ -522,10 +572,10 @@ export class FileBrowser {
     if (!entry) {
       lines = [];
     } else if (entry.isDir) {
-      const children = readEntries(entry.path, this.showHidden);
+      const children = this.listing(entry.path);
       lines = children.length === 0 ? [th.fg("dim", " (empty)")] : children.map((child) => this.entryLine(child, inner, false, true));
       scrollable = true;
-    } else if (kindOf(entry.name) !== "text") {
+    } else if (entry.isFile && kindOf(entry.name) !== "text") {
       const kind = kindOf(entry.name);
       const key = `${entry.path}|${entry.mtime.getTime()}|preview`;
       const still = this.stills.get(key, stillJob(entry));
@@ -563,7 +613,7 @@ export class FileBrowser {
     const border = (text: string) => th.fg("border", text);
     const sep = border("│");
     const home = homedir();
-    const tilde = (path: string) => (path.startsWith(home) ? `~${path.slice(home.length)}` : path);
+    const tilde = (path: string) => printable(path.startsWith(home) ? `~${path.slice(home.length)}` : path);
     const badge = th.style(" preview ", { bg: "selectedBg", fg: "accent", bold: true });
     const lines: string[] = [border(`╭${"─".repeat(inner)}╮`)];
 
@@ -582,7 +632,8 @@ export class FileBrowser {
     const previewWidth = Math.max(8, inner - parentWidth - currentWidth - 2);
 
     const parentDir = dirname(this.cwd);
-    this.parentEntries = parentDir === this.cwd ? [] : readEntries(parentDir, this.showHidden);
+    this.parentEntries = parentDir === this.cwd ? [] : this.listing(parentDir);
+    this.refresh();
     const visible = this.visible();
     const parent = this.listColumn(this.parentEntries, basename(this.cwd), parentWidth, height, false);
     const current = this.listColumn(visible, visible[this.cursor]?.name, currentWidth, height, true);

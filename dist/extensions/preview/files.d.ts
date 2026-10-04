@@ -1,7 +1,16 @@
+/** Text that is safe to draw: the terminal must never interpret what a file is called or contains.
+ * ESC becomes a visible mark; other C0 and C1 controls (a lone U+009B is CSI to some terminals),
+ * line breaks and bidi overrides are removed. Tabs are left to the caller. */
+export declare function printable(text: string): string;
 export interface Entry {
+    /** The name on disk, for file operations. */
     name: string;
+    /** The name as drawn (`printable`). */
+    label: string;
     path: string;
     isDir: boolean;
+    /** A regular file: only these are opened. A FIFO would block the read, a device has no end. */
+    isFile: boolean;
     isLink: boolean;
     isExec: boolean;
     size: number;

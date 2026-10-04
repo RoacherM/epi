@@ -3,6 +3,14 @@
 import { closeSync, lstatSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
 import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
+/** Text that is safe to draw: the terminal must never interpret what a file is called or contains.
+ * ESC becomes a visible mark; other C0 and C1 controls (a lone U+009B is CSI to some terminals),
+ * line breaks and bidi overrides are removed. Tabs are left to the caller. */
+export function printable(text) {
+    return text
+        .replace(/\x1b/g, "␛")
+        .replace(/[\x00-\x08\x0a-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, "");
+}
 export const MAX_TEXT_BYTES = 4 * 1024 * 1024;
 export const HEX_BYTES = 64 * 1024;
 const HIGHLIGHT_LIMIT = 256 * 1024;
@@ -44,8 +52,10 @@ export function readEntries(dir, showHidden) {
         }
         entries.push({
             name,
+            label: printable(name),
             path,
             isDir: stats.isDirectory(),
+            isFile: stats.isFile(),
             isLink,
             isExec: !stats.isDirectory() && (stats.mode & 0o111) !== 0,
             size: stats.size,
@@ -110,6 +120,8 @@ function hexDump(bytes) {
     return lines;
 }
 export function loadDoc(entry) {
+    if (!entry.isFile)
+        return { kind: "text", lines: ["not a regular file"], truncated: false };
     const cached = docCache.get(entry.path);
     if (cached && cached.mtime === entry.mtime.getTime())
         return cached.doc;
@@ -129,8 +141,9 @@ export function loadDoc(entry) {
                 .toString("utf8")
                 .replace(/\r\n?/g, "\n")
                 .replace(/\t/g, "    ")
-                .replace(/\x1b/g, "␛")
-                .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+                .split("\n")
+                .map(printable)
+                .join("\n");
             const lines = text.split("\n");
             if (lines.length > 1 && lines[lines.length - 1] === "")
                 lines.pop();

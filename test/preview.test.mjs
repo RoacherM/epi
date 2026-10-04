@@ -2,7 +2,7 @@
 // reads from disk, and runs of the real TUI app in the harness for the overlay itself. Temp HOME
 // and MMP_HOME, offline; the video case runs with an empty PATH so no real ffmpeg is used.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,8 +10,8 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { PREVIEW_VERSION } from "../dist/extensions/preview.js";
-import { clock, humanSize, kindOf, loadDoc, readEntries } from "../dist/extensions/preview/files.js";
-import { Player } from "../dist/extensions/preview/media.js";
+import { clock, humanSize, kindOf, loadDoc, printable, readEntries } from "../dist/extensions/preview/files.js";
+import { Player, stillJob } from "../dist/extensions/preview/media.js";
 
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const ONE_PIXEL_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jq1kAAAAASUVORK5CYII=", "base64");
@@ -65,7 +65,7 @@ test("a document is text, Markdown source, or a hex dump; escape bytes cannot re
   assert.deepEqual(loadDoc(changed).lines, ["changed"]);
 });
 
-function runApp(t, steps, { env = {}, files = {} } = {}) {
+function runApp(t, steps, { env = {}, files = {}, setup, rows } = {}) {
   const root = tempDir(t);
   const home = join(root, "home");
   mkdirSync(join(home, ".mmp"), { recursive: true });
@@ -75,9 +75,10 @@ function runApp(t, steps, { env = {}, files = {} } = {}) {
   writeFileSync(join(project, "alpha.txt"), "first line\nsecond line\n");
   writeFileSync(join(project, "docs", "guide.md"), "# Guide heading\n\n- bullet one\n");
   for (const [name, content] of Object.entries(files)) writeFileSync(join(project, name), content);
+  setup?.(project);
   const result = spawnSync(process.execPath, [harness], {
     cwd: project,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_TUI_HARNESS: JSON.stringify({ steps }), ...env },
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_TUI_HARNESS: JSON.stringify({ steps, ...(rows === undefined ? {} : { rows }) }), ...env },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -168,7 +169,8 @@ test("an image without terminal graphics shows a text placeholder, and a video w
     // Esc leaves the viewer for the browser; a second one closes the overlay.
     ["key", "esc"], ["waitFor", "space mark", { screen: true }], ...close,
   ], { env: { PATH: emptyPath }, files: { "pixel.png": ONE_PIXEL_PNG, "clip.mp4": "not really a video" } });
-  assert.match(shown(screens.image), /pixel\.png/);
+  assert.match(shown(screens.image), /pixel\.png 68B/);
+  assert.match(shown(screens.image), /\[Image: /, "no placeholder where the picture would be");
   assert.match(shown(screens.video), /ffmpeg not found: install ffmpeg to view video/);
 });
 
@@ -176,10 +178,87 @@ test("the extension has its own version, apart from MMP's", () => {
   assert.match(PREVIEW_VERSION, /^\d+\.\d+\.\d+$/);
 });
 
-// A stand-in for ffmpeg and ffplay on PATH: the video call writes PNG frames as fast as the pipe
-// takes them (a real decode is faster than playback too), the others just stay alive. Each records
+test("control characters are taken out of anything drawn: ESC shows as a mark, C1 and bidi controls go", () => {
+  assert.equal(printable("a\x1b[2Jb\x9b2Jc\u202edoc.exe\nx\ttab"), "a␛[2Jb2Jcdoc.exex\ttab");
+});
+
+// A file name is data: opening a folder (a cloned repo, an unpacked archive) must not let a name
+// clear the screen or reach the clipboard through OSC 52.
+test("file names with escape sequences or line breaks are drawn as text, never sent to the terminal", (t) => {
+  const { screens, marks } = runApp(t, [
+    ...open(), ["waitFor", "alpha.txt", { screen: true }], ["screen", "browser"], ["rawMark", "raw"],
+    ...close,
+  ], { setup(project) {
+    writeFileSync(join(project, "a\x1b[2Jcleared.txt"), "x");
+    writeFileSync(join(project, "b\x1b]52;c;aGk=\x07clip.txt"), "x");
+    writeFileSync(join(project, "c\nnewline.txt"), "x");
+  } });
+  const browser = shown(screens.browser);
+  assert.match(browser, /a␛\[2Jcleared\.txt/);
+  assert.match(browser, /b␛\]52;c;aGk=clip\.txt/);
+  assert.match(browser, /cnewline\.txt/);
+  assert.match(browser, /alpha\.txt/, "the listing was cleared off the screen");
+  assert.ok(!marks.raw.includes("\x1b]52;c;aGk="), "an OSC 52 sequence from a file name reached the terminal");
+});
+
+test("a named pipe in the listing is not opened: the app stays responsive", (t) => {
+  const { screens, exit } = runApp(t, [
+    ...open(), ["waitFor", "alpha.txt", { screen: true }],
+    ["type", "G"], ["waitFor", "not a regular file", { screen: true }], ["screen", "onPipe"],
+    ["key", "enter"], ["waitFor", "q back", { screen: true }], ["screen", "viewer"],
+    ["type", "q"], ["waitFor", "space mark", { screen: true }], ...close,
+  ], { setup: (project) => execFileSync("mkfifo", [join(project, "zz-pipe")]) });
+  assert.match(shown(screens.onPipe), /zz-pipe/);
+  assert.match(shown(screens.viewer), /not a regular file/);
+  assert.equal(exit, 0);
+});
+
+test("/preview <hidden file> opens that file, not the first entry of its folder", (t) => {
+  const { screens } = runApp(t, [
+    ...open(" .env.example"), ["waitFor", "q back", { screen: true }], ["screen", "viewer"],
+    ["type", "q"], ["waitFor", "space mark", { screen: true }], ["screen", "browser"], ...close,
+  ], { files: { ".env.example": "HIDDEN_CONTENT=1\n" } });
+  assert.match(shown(screens.viewer), /\.env\.example/);
+  assert.match(shown(screens.viewer), /HIDDEN_CONTENT=1/);
+  assert.match(shown(screens.browser), /\.env\.example/, "hidden files are not shown after opening one");
+});
+
+test("an image that is gone is reported as such, not as a missing ffmpeg", async (t) => {
+  const dir = tempDir(t);
+  writeFileSync(join(dir, "gone.png"), ONE_PIXEL_PNG);
+  const entry = entryOf(dir, "gone.png");
+  rmSync(join(dir, "gone.png"));
+  await assert.rejects(stillJob(entry)(), (error) => {
+    assert.match(error.message, /ENOENT/);
+    assert.doesNotMatch(error.message, /ffmpeg/);
+    return true;
+  });
+});
+
+test("i quotes a path with spaces the way file completion does", (t) => {
+  const { screens } = runApp(t, [
+    ...open(), ["waitFor", "two words.txt", { screen: true }],
+    ["type", "G"], ["type", "i"], ["waitGone", " preview "], ["waitFor", { regex: "❯ @" }, { screen: true }], ["screen", "inserted"],
+    ["detach"],
+  ], { files: { "two words.txt": "x\n" } });
+  assert.match(shown(screens.inserted), /❯ @"two words\.txt" /);
+});
+
+test("the overlay fits a 10-row terminal with its bottom border", (t) => {
+  const { screens } = runApp(t, [
+    ...open(), ["waitFor", "alpha.txt", { screen: true }], ["screen", "browser"], ...close,
+  ], { rows: 10 });
+  assert.match(shown(screens.browser), /╰─+╯/);
+});
+
+// Stand-ins for ffmpeg and ffplay on PATH. A freshly written executable can take a second to start
+// the first time (macOS checks new executables), so the tests below wait for playback to get going
+// and then compare positions, instead of assuming how soon the first frame arrives. The video call writes PNG frames as fast as the pipe
+// takes them (a real decode is faster than playback too). ffplay starts its "sound" 300 ms late and
+// then reports its clock on stderr the way the real one does with -stats; with `stats: false` it
+// stays silent, like a file without an audio stream that it still keeps open. Each process records
 // its pid so the test can see what is still running.
-function fakeMediaTools(t) {
+function fakeMediaTools(t, { ffplay = true, stats = true } = {}) {
   const bin = tempDir(t);
   const pids = join(bin, "pids");
   const script = `#!${process.execPath}
@@ -188,11 +267,17 @@ fs.appendFileSync(${JSON.stringify(pids)}, process.pid + "\\n");
 const frame = Buffer.from(${JSON.stringify(ONE_PIXEL_PNG.toString("base64"))}, "base64");
 if (process.argv[1].endsWith("ffmpeg") && !process.argv.includes("-vn")) {
   let sent = 0;
-  const pump = () => { while (sent < 400) { sent += 1; if (!process.stdout.write(frame)) return process.stdout.once("drain", pump); } };
+  const pump = () => { while (sent < 600) { sent += 1; if (!process.stdout.write(frame)) return process.stdout.once("drain", pump); } };
   pump();
+} else if (process.argv[1].endsWith("ffplay") && ${stats}) {
+  process.stderr.write("    nan M-A:    nan fd=   0 aq=    0KB vq=    0KB sq=    0B \\r");
+  setTimeout(() => {
+    const zero = Date.now();
+    setInterval(() => process.stderr.write(("   " + ((Date.now() - zero) / 1000).toFixed(2)) + " M-A:  0.000 fd=   0 aq=    9KB vq=    0KB sq=    0B \\r"), 30);
+  }, 300);
 } else setInterval(() => {}, 1000);
 `;
-  for (const name of ["ffmpeg", "ffplay"]) {
+  for (const name of ffplay ? ["ffmpeg", "ffplay"] : ["ffmpeg"]) {
     writeFileSync(join(bin, name), script);
     chmodSync(join(bin, name), 0o755);
   }
@@ -204,41 +289,45 @@ if (process.argv[1].endsWith("ffmpeg") && !process.argv.includes("-vn")) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+async function until(condition, what) {
+  for (let waited = 0; !condition(); waited += 20) {
+    assert.ok(waited < 10_000, `timed out waiting for ${what}`);
+    await sleep(20);
+  }
+}
 
-// The picture has to stay with the sound: the position follows the clock, and frames that became
-// late while the process was busy are dropped instead of played back afterwards in slow motion.
-test("the player follows the clock, drops late frames after a stall, holds while paused, and leaves no process behind", async (t) => {
+// The picture follows the sound: it waits for ffplay's clock to start, advances at the clip's own
+// speed, and after the process was busy it is back with the sound at once (late frames are dropped
+// instead of being played afterwards).
+test("the player follows the sound's clock, catches up after a stall, holds while paused, and leaves no process behind", async (t) => {
   const pidsOf = fakeMediaTools(t);
   let frames = 0;
-  const player = new Player("clip.mp4", 80, 24, false, () => { frames += 1; });
+  const player = new Player("clip.mp4", 80, 24, false, () => { frames += 1; }, { fps: 30 });
   t.after(() => player.stop());
   const started = Date.now();
-  player.play(0);
-  // The stand-in takes a moment to start; the clock check begins once it delivers.
-  const until = async (condition, what) => {
-    for (let waited = 0; !condition(); waited += 20) {
-      assert.ok(waited < 10_000, `timed out waiting for ${what}`);
-      await sleep(20);
-    }
-  };
-  await until(() => frames > 0, "the first frame");
-  await sleep(800);
   const elapsed = () => (Date.now() - started) / 1000;
-  assert.ok(Math.abs(player.position - elapsed()) < 0.3, `position ${player.position} after ${elapsed()} s`);
-  assert.ok(frames >= 6, `only ${frames} frames drawn in the first second`);
+  player.play(0);
+  await until(() => player.position > 0.2, "playback to get going");
+  // The sound started 300 ms (plus process start) after play(): the picture is that far behind the
+  // wall clock, not ahead of the sound.
+  const lag = elapsed() - player.position;
+  assert.ok(lag > 0.25 && lag < 3, `picture is ${lag} s behind the wall clock`);
+  const before = { position: player.position, at: elapsed(), frames };
+  await sleep(500);
+  assert.ok(Math.abs(player.position - before.position - (elapsed() - before.at)) < 0.15, "does not advance at the clip's speed");
+  assert.ok(frames - before.frames >= 10, `only ${frames - before.frames} frames drawn in half a second at 30 fps`);
 
   const busyUntil = Date.now() + 700;
   while (Date.now() < busyUntil); // the event loop is blocked: no tick, no redraw
   await sleep(250);
-  assert.ok(Math.abs(player.position - elapsed()) < 0.3, `after a stall: position ${player.position}, clock ${elapsed()} s`);
+  assert.ok(Math.abs(elapsed() - player.position - lag) < 0.3, `after a stall the lag went from ${lag} to ${elapsed() - player.position} s`);
 
   player.toggle();
   const paused = player.position;
   await sleep(400);
   assert.equal(player.position, paused);
   player.toggle();
-  await sleep(300);
-  assert.ok(player.position > paused + 0.15, "did not go on after the pause");
+  await until(() => player.position > paused + 0.15, "playback to go on after the pause");
 
   // A frame source, a sound player and a level meter (started again by the resume above).
   await until(() => pidsOf().length >= 3, "the media processes to start");
@@ -246,4 +335,37 @@ test("the player follows the clock, drops late frames after a stall, holds while
   player.stop();
   await sleep(300);
   assert.deepEqual(pids.filter(alive), [], "a media process outlived stop()");
+});
+
+test("without a sound clock the picture goes by the wall clock: at once when ffplay is missing, after a short wait when it stays silent", async (t) => {
+  const lagOnceGoing = async (player) => {
+    const started = Date.now();
+    player.play(0);
+    await until(() => player.position > 0.3, "playback to get going");
+    return (Date.now() - started) / 1000 - player.position;
+  };
+  fakeMediaTools(t, { ffplay: false });
+  const missing = new Player("clip.mp4", 80, 24, false, () => {}, { fps: 25 });
+  t.after(() => missing.stop());
+  const lagWithoutFfplay = await lagOnceGoing(missing);
+  missing.stop();
+  assert.ok(lagWithoutFfplay < 0.4, `no ffplay: picture is ${lagWithoutFfplay} s behind the wall clock`);
+
+  fakeMediaTools(t, { stats: false });
+  const silent = new Player("clip.mp4", 80, 24, false, () => {}, { fps: 25 });
+  t.after(() => silent.stop());
+  const lagWithSilentFfplay = await lagOnceGoing(silent);
+  assert.ok(lagWithSilentFfplay > 1.3 && lagWithSilentFfplay < 1.9, `silent ffplay: picture is ${lagWithSilentFfplay} s behind; the wait is 1.5 s`);
+});
+
+test("a looping GIF does not wait for sound", async (t) => {
+  const pidsOf = fakeMediaTools(t);
+  const gif = new Player("loop.gif", 40, 12, true, () => {}, { fps: 10 });
+  t.after(() => gif.stop());
+  const started = Date.now();
+  gif.play(0);
+  await until(() => gif.position > 0.3, "playback to get going");
+  const lag = (Date.now() - started) / 1000 - gif.position;
+  assert.ok(lag < 0.4, `picture is ${lag} s behind the wall clock`);
+  assert.equal(pidsOf().length, 1, "a GIF needs the frame source only");
 });

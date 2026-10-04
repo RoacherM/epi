@@ -10,10 +10,20 @@ export const PREVIEW_VERSION = "0.1.0";
  * interface feature for the interactive TUI, not a Manifest capability: it registers one command
  * and nothing the model sees. The view (pi-tui components, ffmpeg handling) loads on first use.
  */
+/** `@path` for the editor; quoted the way Pi's own file completion writes a path with spaces. */
+function fileReference(path) {
+    return /\s/.test(path) ? `@"${path}"` : `@${path}`;
+}
 export function createPreviewInlineExtension() {
     return {
         name: "mmp:preview",
         factory: (pi) => {
+            // The overlay that is open, so a session that ends under it stops its video and sound.
+            let open;
+            pi.on("session_shutdown", () => {
+                open?.dispose();
+                open = undefined;
+            });
             pi.registerCommand("preview", {
                 description: "Browse and view files (text, Markdown, images, video); i inserts @path into the editor",
                 handler: async (args, ctx) => {
@@ -31,10 +41,17 @@ export function createPreviewInlineExtension() {
                         return;
                     }
                     const { FileBrowser } = await import("./preview/view.js");
-                    const result = await ctx.ui.custom((tui, theme, _keybindings, done) => isDirectory ? new FileBrowser(tui, theme, target, done) : new FileBrowser(tui, theme, dirname(target), done, basename(target)), { overlay: true, overlayOptions: { width: "92%", maxHeight: "85%", anchor: "center" } });
+                    const result = await ctx.ui.custom((tui, theme, _keybindings, done) => {
+                        const browser = isDirectory
+                            ? new FileBrowser(tui, theme, target, done)
+                            : new FileBrowser(tui, theme, dirname(target), done, basename(target));
+                        open = browser;
+                        return browser;
+                    }, { overlay: true, overlayOptions: { width: "92%", maxHeight: "85%", anchor: "center" } });
+                    open = undefined;
                     if (!result)
                         return;
-                    const refs = result.paths.map((path) => `@${FileBrowser.display(ctx.cwd, path)}`).join(" ");
+                    const refs = result.paths.map((path) => fileReference(FileBrowser.display(ctx.cwd, path))).join(" ");
                     const text = ctx.ui.getEditorText();
                     ctx.ui.setEditorText(text && !text.endsWith(" ") ? `${text} ${refs} ` : `${text}${refs} `);
                 },

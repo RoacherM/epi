@@ -7,7 +7,15 @@ import { findNearestProjectManifest } from "../project.js";
 import { runTuiApp } from "./app.js";
 import { createMmpRuntime } from "./services.js";
 import { detectAppearance, installMmpTheme } from "./theme.js";
-/** Same Manifest assembly as the piMain path, handed to the SDK instead of Pi's CLI. */
+/** Extensions that are interface features (/preview) load only for the interactive TUI: print,
+ * json and rpc have no screen to put them on. They go before mmp:system-prompt, which has to stay
+ * last (extensions/index.ts). */
+function withInterfaceExtensions(extensionFactories) {
+    const last = extensionFactories.findIndex((extension) => extension.name === "mmp:system-prompt");
+    const at = last < 0 ? extensionFactories.length : last;
+    return [...extensionFactories.slice(0, at), createPreviewInlineExtension(), ...extensionFactories.slice(at)];
+}
+/** The Manifest assembly, handed to the SDK. */
 export async function createRuntimeFromPrepared(prepared, cwd, 
 // Mirrors host.ts's own construction (same flag, same default undefined updateCheck) so a caller
 // that builds a runtime straight from `prepared` (tests; host.ts always passes its own factories
@@ -17,9 +25,7 @@ extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, 
         cwd,
         agentDir: prepared.agentDir,
         piArgs: prepared.args.passthrough,
-        // /preview is an interface feature, so only this path gets it. It goes before the last factory,
-        // mmp:system-prompt, which has to stay last (extensions/index.ts).
-        extensionFactories: [...extensionFactories.slice(0, -1), createPreviewInlineExtension(), ...extensionFactories.slice(-1)],
+        extensionFactories: withInterfaceExtensions(extensionFactories),
         externalExtensionPaths: prepared.assembly.externalExtensions.map((extension) => extension.value),
         assembly: prepared.assembly,
         projectIdentity: projectIdentityFromPrepared(prepared, cwd),

@@ -1,7 +1,7 @@
 // Pixels and sound: stills for images, video frames through ffmpeg, Quick Look thumbnails for
 // formats the terminal cannot draw, and a player that streams frames at a fixed rate. ffmpeg,
 // ffprobe and ffplay are looked up on PATH when a video is opened; nothing here is needed otherwise.
-import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, extname, join } from "node:path";
@@ -14,11 +14,17 @@ import { type Entry, kindOf } from "./files.js";
 
 const { getCellDimensions, getImageDimensions } = piTui;
 
-const VIDEO_FPS = 20;
+/** Frames per second when the source does not say, and the most that is drawn: a 60 fps source is
+ * shown at 30. */
+const DEFAULT_FPS = 24;
+const MAX_FPS = 30;
 /** Longer side of a video frame in pixels. The terminal scales the frame to the pane, so a pane's
  * full pixel size (2 MB of PNG per 1080p frame) only costs the terminal decoding time: at that size
- * playback stuttered. */
-const FRAME_BOX_PX = 800;
+ * playback stuttered. Sharpness is traded for the source's own frame rate. */
+const FRAME_BOX_PX = 640;
+/** How long the picture waits for the sound to start before it goes by the wall clock instead
+ * (no audio stream, or no ffplay). */
+const AUDIO_WAIT_MS = 1500;
 /** Bytes the terminal has not taken yet above which a frame is dropped instead of drawn. */
 const BACKLOG_BYTES = 1024 * 1024;
 export const SEEK_SECONDS = 5;
@@ -28,9 +34,38 @@ const METER_HISTORY = 2000;
 const METER_FLOOR_DB = -90;
 const METER_RANGE_DB = 12;
 
-export function mediaErrorText(error: unknown): string {
-  if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return "ffmpeg not found: install ffmpeg to view video";
+function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** A program that could not be started. Only a failed spawn means "not installed": a missing media
+ * file is ENOENT too, and must not be reported as a missing ffmpeg. */
+function spawnErrorText(command: string, error: unknown): string {
+  return (error as NodeJS.ErrnoException)?.code === "ENOENT"
+    ? `${command} not found: install ffmpeg to view video`
+    : errorText(error);
+}
+
+/** Every media child still running. They are killed when MMP exits, whatever the overlay was
+ * doing: ffplay has no pipe to MMP and would otherwise go on playing sound. */
+const liveChildren = new Set<ChildProcess>();
+let exitHookInstalled = false;
+
+function track<T extends ChildProcess>(child: T): T {
+  if (!exitHookInstalled) {
+    exitHookInstalled = true;
+    process.once("exit", stopMediaProcesses);
+  }
+  liveChildren.add(child);
+  const forget = () => liveChildren.delete(child);
+  child.once("close", forget);
+  child.once("error", forget);
+  return child;
+}
+
+export function stopMediaProcesses(): void {
+  for (const child of liveChildren) child.kill("SIGKILL");
+  liveChildren.clear();
 }
 
 export interface Probe {
@@ -38,11 +73,13 @@ export interface Probe {
   height?: number;
   codec?: string;
   duration?: number;
+  /** Frames per second of the video stream. */
+  fps?: number;
 }
 
 function run(command: string, args: string[], timeoutMs = 20_000): Promise<Buffer> {
   return new Promise((resolveRun, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = track(spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] }));
     const chunks: Buffer[] = [];
     let stderr = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
@@ -50,7 +87,7 @@ function run(command: string, args: string[], timeoutMs = 20_000): Promise<Buffe
     child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
     child.on("error", (error) => {
       clearTimeout(timer);
-      reject(error);
+      reject(new Error(spawnErrorText(command, error)));
     });
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -60,12 +97,19 @@ function run(command: string, args: string[], timeoutMs = 20_000): Promise<Buffe
   });
 }
 
+/** ffprobe's "30000/1001" as a number; undefined for "0/0" or anything else that is not a rate. */
+function frameRate(text: string | undefined): number | undefined {
+  const [numerator, denominator = "1"] = (text ?? "").split("/");
+  const rate = Number(numerator) / Number(denominator);
+  return Number.isFinite(rate) && rate > 0 ? rate : undefined;
+}
+
 export async function probe(path: string): Promise<Probe> {
   const out = await run("ffprobe", [
     "-v", "error", "-select_streams", "v:0",
-    "-show_entries", "stream=width,height,codec_name:format=duration", "-of", "json", path,
+    "-show_entries", "stream=width,height,codec_name,avg_frame_rate:format=duration", "-of", "json", path,
   ]);
-  const json = JSON.parse(out.toString()) as { streams?: { width?: number; height?: number; codec_name?: string }[]; format?: { duration?: string } };
+  const json = JSON.parse(out.toString()) as { streams?: { width?: number; height?: number; codec_name?: string; avg_frame_rate?: string }[]; format?: { duration?: string } };
   const stream = json.streams?.[0];
   const duration = Number(json.format?.duration);
   return {
@@ -73,6 +117,7 @@ export async function probe(path: string): Promise<Probe> {
     ...(stream?.height === undefined ? {} : { height: stream.height }),
     ...(stream?.codec_name === undefined ? {} : { codec: stream.codec_name }),
     ...(Number.isFinite(duration) && duration > 0 ? { duration } : {}),
+    ...(frameRate(stream?.avg_frame_rate) === undefined ? {} : { fps: frameRate(stream?.avg_frame_rate)! }),
   };
 }
 
@@ -128,7 +173,7 @@ export class StillCache {
   private start(key: string, job: () => Promise<Still>): void {
     this.busy = true;
     void job()
-      .catch((error: unknown): Still => ({ error: mediaErrorText(error) }))
+      .catch((error: unknown): Still => ({ error: errorText(error) }))
       .then((still) => {
         this.cache.set(key, still);
         if (this.cache.size > 64) this.cache.delete(this.cache.keys().next().value!);
@@ -165,15 +210,18 @@ export function stillJob(entry: Entry): () => Promise<Still> {
 
 /** Inputs for a stream whose audio lives elsewhere or needs request headers (web video). */
 interface PlayerSource {
+  /** The source's frame rate (ffprobe); DEFAULT_FPS when unknown. */
+  fps?: number;
   audio?: string;
   videoArgs?: string[];
   audioArgs?: string[];
 }
 
-/** Streams PNG frames from ffmpeg and shows them at VIDEO_FPS, by the clock: a frame that is late
- * (a slow redraw, a busy terminal) is dropped, so the picture stays with the sound instead of
- * falling behind it. Pausing stops taking frames; the pipe's backpressure then stalls ffmpeg, so
- * no signals are needed. */
+/** Streams PNG frames from ffmpeg and shows them at the source's frame rate, following the sound:
+ * ffplay reports where its audio is (`-stats`), and the frame for that moment is drawn. A frame
+ * that is late (a slow redraw, a busy terminal) is dropped, so the picture never falls behind.
+ * Until the sound starts the first frame waits; without sound the wall clock is used. Pausing
+ * stops taking frames; the pipe's backpressure then stalls ffmpeg, so no signals are needed. */
 export class Player {
   frameBase64: string | undefined;
   position = 0;
@@ -195,9 +243,15 @@ export class Player {
   private from = 0;
   /** Frames taken from the queue since `from`, drawn or dropped. */
   private shown = 0;
-  /** Time spent playing since `from`, and when it was last added to. */
-  private playedMs = 0;
-  private lastTick = 0;
+  private readonly fps: number;
+  /** A position in the clip known at a wall-clock time: the last one ffplay reported, or where the
+   * wall clock took over. Undefined while waiting for the sound to start, and while paused. */
+  private anchor: { position: number; at: number } | undefined;
+  /** Where this audio run started in the clip, ffplay's first reported clock, and when it was started. */
+  private audioFrom = 0;
+  private audioClockZero: number | undefined;
+  private audioStartedAt = 0;
+  private statsPartial = "";
   private sourceDone = false;
   private needFrame = true;
 
@@ -208,15 +262,17 @@ export class Player {
     private readonly loop: boolean,
     private readonly onFrame: () => void,
     private readonly source: PlayerSource = {},
-  ) {}
+  ) {
+    const fps = source.fps ?? DEFAULT_FPS;
+    this.fps = fps / Math.ceil(fps / MAX_FPS);
+  }
 
   play(from: number): void {
     this.stop();
     this.from = Math.max(0, from);
     this.position = this.from;
     this.shown = 0;
-    this.playedMs = 0;
-    this.lastTick = Date.now();
+    this.anchor = undefined;
     this.ended = false;
     this.error = undefined;
     this.audioLevelDb = undefined;
@@ -231,12 +287,12 @@ export class Player {
     const cell = getCellDimensions();
     const maxWidthPx = Math.max(16, Math.min(FRAME_BOX_PX, Math.floor(this.width * cell.widthPx)));
     const maxHeightPx = Math.max(16, Math.min(FRAME_BOX_PX, Math.floor(this.height * cell.heightPx)));
-    const vf = `fps=${VIDEO_FPS},scale=w='min(${maxWidthPx},iw)':h='min(${maxHeightPx},ih)':force_original_aspect_ratio=decrease`;
-    const child = spawn("ffmpeg", [
+    const vf = `fps=${this.fps},scale=w='min(${maxWidthPx},iw)':h='min(${maxHeightPx},ih)':force_original_aspect_ratio=decrease`;
+    const child = track(spawn("ffmpeg", [
       "-v", "error", "-nostdin", "-ss", String(this.from), ...(this.source.videoArgs ?? []), "-i", this.path, "-an",
       "-vf", vf,
       "-f", "image2pipe", "-vcodec", "png", "-compression_level", "3", "-",
-    ], { stdio: ["ignore", "pipe", "pipe"] });
+    ], { stdio: ["ignore", "pipe", "pipe"] }));
     this.child = child;
     if (this.playing) this.startAudio(this.from);
     child.stdout.on("data", (chunk: Buffer) => {
@@ -248,12 +304,12 @@ export class Player {
         buffer = frame.rest;
       }
       this.partial = Buffer.from(buffer);
-      if (this.queue.length > 3 * VIDEO_FPS) child.stdout.pause();
+      if (this.queue.length > 3 * this.fps) child.stdout.pause();
     });
     child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
     child.on("error", (error) => {
       if (this.child !== child) return;
-      this.error = mediaErrorText(error);
+      this.error = spawnErrorText("ffmpeg", error);
       this.onFrame();
     });
     child.on("close", (code) => {
@@ -261,25 +317,31 @@ export class Player {
       this.sourceDone = true;
       if (code !== 0 && this.shown === 0 && this.queue.length === 0) this.error ??= stderr.trim().split("\n").pop() || "ffmpeg failed";
     });
-    this.timer = setInterval(() => this.tick(), 1000 / VIDEO_FPS);
+    this.timer = setInterval(() => this.tick(), 1000 / this.fps);
+  }
+
+  /** Where playback is now, or undefined while the first frame waits for the sound. */
+  private clipTime(now: number): number | undefined {
+    if (!this.anchor && now - this.audioStartedAt >= AUDIO_WAIT_MS) this.anchor = { position: this.position, at: now };
+    return this.anchor ? this.anchor.position + (now - this.anchor.at) / 1000 : undefined;
   }
 
   private tick(): void {
-    const now = Date.now();
-    if (this.playing) this.playedMs += now - this.lastTick;
-    this.lastTick = now;
     if (!this.playing && !this.needFrame) return;
+    const time = this.playing ? this.clipTime(Date.now()) : undefined;
+    if (time === undefined && !this.needFrame) return;
     // Frames the clock is already past: keep the newest of them and drop the rest.
-    const due = Math.floor((this.playedMs * VIDEO_FPS) / 1000);
-    while (this.playing && this.shown < due - 1 && this.queue.length > 1) {
+    const due = time === undefined ? 0 : Math.floor((time - this.from) * this.fps);
+    while (this.shown < due - 1 && this.queue.length > 1) {
       this.queue.shift();
       this.shown++;
     }
+    if (time !== undefined && this.shown >= due && !this.needFrame) return; // ahead of the sound
     const next = this.queue.shift();
     if (next) {
-      if (this.playing) this.shown++;
-      this.position = this.from + this.shown / VIDEO_FPS;
-      if (this.queue.length < VIDEO_FPS) this.child?.stdout.resume();
+      if (time !== undefined) this.shown++;
+      this.position = this.from + this.shown / this.fps;
+      if (this.queue.length < this.fps) this.child?.stdout.resume();
       // The terminal is still taking earlier frames: skip this one rather than queue behind them.
       if (!this.needFrame && process.stdout.writableLength > BACKLOG_BYTES) return;
       this.frameBase64 = next;
@@ -303,7 +365,7 @@ export class Player {
       this.play(0);
     } else {
       this.playing = !this.playing;
-      this.lastTick = Date.now();
+      this.anchor = undefined;
       if (this.playing) this.startAudio(this.position);
       else this.stopAudio();
     }
@@ -327,22 +389,41 @@ export class Player {
     const start = String(Math.max(0, from));
     const input = this.source.audio ?? this.path;
     const inputArgs = this.source.audioArgs ?? [];
-    const audio = spawn("ffplay", [
-      "-nodisp", "-autoexit", "-loglevel", "quiet", "-ss", start, ...inputArgs, "-i", input,
-    ], { stdio: "ignore" });
+    this.audioFrom = Math.max(0, from);
+    this.audioClockZero = undefined;
+    this.audioStartedAt = Date.now();
+    this.statsPartial = "";
+    if (this.loop) {
+      // A GIF has no sound to follow or to meter.
+      this.anchor = { position: this.audioFrom, at: this.audioStartedAt };
+      return;
+    }
+    // -stats makes ffplay print its audio clock a few dozen times a second, also at loglevel quiet.
+    const audio = track(spawn("ffplay", [
+      "-nodisp", "-autoexit", "-loglevel", "quiet", "-stats", "-ss", start, ...inputArgs, "-i", input,
+    ], { stdio: ["ignore", "ignore", "pipe"] }));
     this.audio = audio;
+    audio.stderr?.on("data", (chunk: Buffer) => {
+      if (this.audio === audio) this.readAudioClock(chunk.toString());
+    });
     audio.on("error", () => {
-      if (this.audio === audio) this.audio = undefined;
+      if (this.audio !== audio) return;
+      this.audio = undefined;
+      // No ffplay: nothing to wait for, the wall clock takes over now.
+      if (this.playing && !this.anchor) this.anchor = { position: this.position, at: Date.now() };
     });
     audio.on("close", () => {
-      if (this.audio === audio) this.audio = undefined;
+      if (this.audio !== audio) return;
+      this.audio = undefined;
+      // It ended without ever reporting a clock (no audio stream): do not wait out the timeout.
+      if (this.playing && !this.anchor) this.anchor = { position: this.position, at: Date.now() };
     });
 
     // Real-time mono PCM; the level of each short window becomes one column of the wave.
-    const meter = spawn("ffmpeg", [
+    const meter = track(spawn("ffmpeg", [
       "-v", "error", "-nostdin", "-ss", start, "-re", ...inputArgs, "-i", input, "-vn",
       "-ac", "1", "-ar", String(METER_SAMPLE_RATE), "-f", "s16le", "-",
-    ], { stdio: ["ignore", "pipe", "ignore"] });
+    ], { stdio: ["ignore", "pipe", "ignore"] }));
     this.audioMeter = meter;
     meter.stdout?.on("data", (chunk: Buffer) => this.handleMeter(chunk));
     meter.on("error", () => {
@@ -351,6 +432,22 @@ export class Player {
     meter.on("close", () => {
       if (this.audioMeter === meter) this.audioMeter = undefined;
     });
+  }
+
+  /** ffplay's status lines are "   2.32 M-A:  0.000 ..." ("nan" until the sound starts), separated
+   * by carriage returns. The number is its audio clock; whether it counts from the seek point or
+   * from the start of the file depends on the container, so only its change since the first
+   * report is used. */
+  private readAudioClock(text: string): void {
+    const lines = (this.statsPartial + text).split(/[\r\n]/);
+    this.statsPartial = lines.pop() ?? "";
+    const now = Date.now();
+    for (const line of lines) {
+      const clock = /^\s*(-?\d+(?:\.\d+)?)\s+\S-\S:/.exec(line)?.[1];
+      if (clock === undefined) continue;
+      this.audioClockZero ??= Number(clock);
+      if (this.playing) this.anchor = { position: this.audioFrom + Number(clock) - this.audioClockZero, at: now };
+    }
   }
 
   private handleMeter(chunk: Buffer): void {

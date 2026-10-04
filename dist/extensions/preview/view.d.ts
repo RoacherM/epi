@@ -25,11 +25,19 @@ export declare class FileBrowser {
     private viewer;
     private layout;
     private parentEntries;
+    private readonly listings;
     private readonly stills;
     constructor(tui: TUI, theme: Theme, start: string, done: (result: PreviewResult) => void, 
     /** A file in `start` to show at once; closing its viewer leaves the browser on it. */
     file?: string);
+    /** Stops whatever is playing. Called when the overlay closes and when the session shuts down. */
+    dispose(): void;
     private finish;
+    /** A directory's entries, read again only when the directory changed: render asks for the
+     * parent's and the previewed folder's on every frame, which was slow next to large directories. */
+    private listing;
+    /** Follows the current directory when files appear or go away while the overlay is open. */
+    private refresh;
     private load;
     private visible;
     private current;
