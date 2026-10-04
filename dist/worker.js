@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createAgentSession, createAgentSessionServices, resolveCliModel, SessionManager, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { readFileSync, unlinkSync } from "node:fs";
+import { settleRegisteredProviders } from "./provider-startup.js";
 import { createMagpieInlineExtension, selectsMagpie } from "./providers/magpie-extension.js";
 let activeSession;
 let interrupted = false;
@@ -103,6 +104,7 @@ async function main() {
     const errors = diagnostics.filter((diagnostic) => diagnostic.type === "error");
     if (errors.length > 0)
         throw new Error(errors.map((diagnostic) => diagnostic.message).join("; "));
+    await settleRegisteredProviders(modelRuntime);
     const resolvedModel = capsule.model === undefined
         ? undefined
         : resolveCliModel({ cliModel: capsule.model, modelRuntime });

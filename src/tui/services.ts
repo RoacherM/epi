@@ -1,5 +1,6 @@
-// Terminal-free construction of the Pi session for MMP's own interactive host. Everything that
-// decides what the model sees lives here, so it can be tested without a terminal.
+// Terminal-free construction of the Pi session, for every mode that runs one: MMP's interactive
+// host and print/json/rpc (src/noninteractive.ts; decision N1). Everything that decides what the
+// model sees lives here, so it can be tested without a terminal.
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
@@ -25,6 +26,7 @@ import {
 import type { ResolvedAssembly } from "../assembly.js";
 import { MmpArgumentError } from "../errors.js";
 import { extensionLoadFailureHint } from "../pi-output.js";
+import { settleRegisteredProviders } from "../provider-startup.js";
 import { crossProjectRefusal, type ProjectIdentity } from "./project-guard.js";
 
 export interface MmpSessionOptions {
@@ -39,10 +41,27 @@ export interface MmpSessionOptions {
   /** The project this process assembled its manifest from; --session/--fork targets from another
    * project are refused up front, the same way a later /resume would be (project-guard.ts). */
   projectIdentity: ProjectIdentity;
+  /** Where startup warnings go before a session exists. Default: stderr, as `mmp: <message>`. */
+  warn?: (message: string) => void;
+}
+
+/** The initial runtime's error diagnostics. `message` is what the TUI path prints; a host that
+ * prints diagnostics its own way (print/json/rpc: Pi's `Error: ` / `Warning: ` lines) reads the rest. */
+export class StartupDiagnosticsError extends Error {
+  constructor(
+    message: string,
+    /** Every startup diagnostic, in Pi's order, warnings included. */
+    readonly diagnostics: readonly Diagnostic[],
+    /** `extensionLoadFailureHint`, when an extension failed to load. */
+    readonly hint: string | undefined,
+  ) {
+    super(message);
+    this.name = "StartupDiagnosticsError";
+  }
 }
 
 type ParsedPiArgs = ReturnType<typeof parseArgs>;
-type Diagnostic = { type: "error" | "warning" | "info"; message: string };
+export type Diagnostic = { type: "error" | "warning" | "info"; message: string };
 
 // pi-internals row `http-dispatcher` (dogfood D38): Pi's own core/http-dispatcher.js, not in the
 // package "exports" map, so imported by file path. The package root already loaded it (through
@@ -215,27 +234,13 @@ function startupSessionDir(parsed: ParsedPiArgs, settingsManager: SettingsManage
     settingsManager.getSessionDir();
 }
 
-/** The TUI's startup --session check for runs that go through piMain (print, json, rpc), which
- * otherwise open another project's session with this project's Rules (dogfood D67, Fable F4).
- * A --session nothing matches is left to Pi, which reports it. */
-export async function refusePiMainCrossProjectSession(
-  piArgs: readonly string[],
-  cwd: string,
-  settingsManager: SettingsManager,
-  projectIdentity: ProjectIdentity,
-): Promise<void> {
-  const parsed = parseArgs([...piArgs]);
-  if (parsed.session === undefined || parsed.noSession || parsed.fork !== undefined) return;
-  const resolved = await resolveSessionArg(parsed.session, cwd, startupSessionDir(parsed, settingsManager));
-  if (resolved.type !== "not_found") refuseCrossProjectSession(parsed.session, resolved.path, projectIdentity);
-}
-
 /** Mirrors Pi's createSessionManager (main.js), using only SessionManager's exported statics. */
 async function buildSessionManager(
   parsed: ParsedPiArgs,
   cwd: string,
   sessionDir: string | undefined,
   projectIdentity: ProjectIdentity,
+  warn: (message: string) => void,
 ): Promise<SessionManager> {
   if (parsed.noSession) {
     return SessionManager.inMemory(cwd, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
@@ -275,9 +280,7 @@ async function buildSessionManager(
     if (existing !== undefined) {
       return SessionManager.open(existing, sessionDir);
     }
-    process.stderr.write(
-      `mmp: no project session found with id '${parsed.sessionId}'; creating a new session with that id.\n`,
-    );
+    warn(`No project session found with id '${parsed.sessionId}'; creating a new session with that id.`);
   }
   return SessionManager.create(cwd, sessionDir, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
 }
@@ -416,8 +419,9 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
   validateSessionFlagCombinations(parsed);
   // Non-fatal parse diagnostics (e.g. an invalid --thinking level falls back to the default
   // instead of erroring); Pi's own CLI prints these too instead of dropping them.
+  const warn = options.warn ?? ((message: string) => void process.stderr.write(`mmp: ${message}\n`));
   for (const diagnostic of parsed.diagnostics) {
-    process.stderr.write(`mmp: ${diagnostic.message}\n`);
+    warn(diagnostic.message);
   }
   // Mirrors main.js's own `--offline` handling (Pi's `offline` flag only takes effect via piMain,
   // which the TUI v2 path never calls).
@@ -450,10 +454,7 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
         extensionFactories: options.extensionFactories,
       },
     });
-    // Registering an extension's native provider starts an un-awaited auth refresh inside Pi. If it
-    // queues after createAgentSessionServices' own awaited refresh, that awaited pass is discarded and
-    // the initial model is picked from a stale snapshot. A refresh started now is the latest one.
-    await services.modelRuntime.refresh({ allowNetwork: false });
+    await settleRegisteredProviders(services.modelRuntime);
     const initial = await resolveInitialModel(parsed, services, sessionManager);
     const diagnostics: Diagnostic[] = [
       ...services.diagnostics,
@@ -488,10 +489,11 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
     if (errors.length > 0) {
       const lines = errors.map((diagnostic) => diagnostic.message);
       const extensionErrors = services.resourceLoader.getExtensions().errors;
-      if (extensionErrors.length > 0) {
-        lines.push(extensionLoadFailureHint(extensionErrors.map(({ path }) => path), options.assembly));
-      }
-      throw new Error(lines.join("\n"));
+      const hint = extensionErrors.length > 0
+        ? extensionLoadFailureHint(extensionErrors.map(({ path }) => path), options.assembly)
+        : undefined;
+      if (hint !== undefined) lines.push(hint);
+      throw new StartupDiagnosticsError(lines.join("\n"), diagnostics, hint);
     }
 
     const created = await createAgentSessionFromServices({
@@ -514,7 +516,7 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
   };
 
   const sessionDir = startupSessionDir(parsed, startupSettingsManager);
-  const sessionManager = await buildSessionManager(parsed, options.cwd, sessionDir, options.projectIdentity);
+  const sessionManager = await buildSessionManager(parsed, options.cwd, sessionDir, options.projectIdentity, warn);
   if (parsed.name !== undefined) {
     sessionManager.appendSessionInfo(parsed.name.trim());
   }

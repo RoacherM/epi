@@ -771,6 +771,13 @@ const registry = [
         /return process\.stdout\.write\.bind\(process\.stdout\);/,
         `${guardPath}'s getRawStdoutWrite no longer falls back to process.stdout.write`,
       );
+      // src/noninteractive.ts takes stdout over itself and hands it back after print/json.
+      assert.match(guardText, /export function restoreStdout\(\) \{/, `${guardPath} no longer exports restoreStdout`);
+      assert.match(
+        readFileSync(join(piDist, "modes", "print-mode.js"), "utf8"),
+        /import \{[^}]*writeRawStdout[^}]*\} from "\.\.\/core\/output-guard\.js";/,
+        "modes/print-mode.js no longer writes through core/output-guard.js -- src/noninteractive.ts's takeOverStdout would not cover its output",
+      );
       const printPath = join(piDist, "modes", "print-mode.js");
       const printText = readFileSync(printPath, "utf8");
       assert.match(
@@ -1047,6 +1054,7 @@ const KNOWN_DEEP_PATHS = new Map([
   ["core/trust-manager.js", "trust-requiring-resources"],
   ["core/resource-loader.js", "context-file-candidates"],
   ["core/http-dispatcher.js", "http-dispatcher"],
+  ["core/output-guard.js", "output-guard-stdout-write"],
   ["@earendil-works/pi-tui", "pi-tui-nested-copy"],
   ["diff", "pi-diff-package"],
   ["extensions/mcp/config.js", "mcp-native-config-loader"],

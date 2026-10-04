@@ -85,7 +85,7 @@ mmp -p / --mode json / --mode rpc
 | `rewritePiOutput` 里"替换 Pi 的登录指引文字" | **保留**。模式运行器在运行中仍会打印 Pi 的文字（例如中途的 "No API key found"） |
 | `guardClosedStdout`（D54） | 保留，安装时机不变（接管 stdout 之前） |
 | `piMain` 这个依赖 | 只剩 `--export` 还用（见 5.4） |
-| `createMmpRuntime` 放在 `src/tui/` | 挪到 `src/` 下（它不再只属于界面）。**主控定** |
+| `createMmpRuntime` 放在 `src/tui/` | 不挪（见第 6 节 T1） |
 
 ### 3.3 状态清单
 
@@ -167,7 +167,7 @@ Pi 内置的 provider（Anthropic、OpenAI 等）不在这次刷新里：它们�
 
 | 任务 | 内容 | 依赖 |
 |---|---|---|
-| T1 | 把 `createMmpRuntime` 及其辅助函数从 `src/tui/services.ts` 挪到 `src/`，不改行为 | 无 |
+| ~~T1~~ | ~~把 `createMmpRuntime` 及其辅助函数从 `src/tui/services.ts` 挪到 `src/`~~ 不做（主控定）：纯挪文件，会改一批测试的 import 路径，对行为没有帮助。文件头注释已写明它现在服务所有模式 | — |
 | T2 | 新的非交互入口（3 节的第 2、4、5、7 步）+ print/json 接上 `runPrintMode`；输出对比批次 | T1 |
 | T3 | rpc 接上 `runRpcMode`；rpc 的对比批次 | T2 |
 | T4 | `worker.ts` 改用同一个启动函数 | T1 |
@@ -184,3 +184,29 @@ T2 完成、T3 没完成的中间状态下，rpc 仍走 `piMain`，两条路径�
 | Pi 升级改了 `runPrintMode` / `runRpcMode` 的签名或 `output-guard.js` | 都是 Pi 包根导出的函数（前两个）或登记过的内部接口（后一个），升级门禁有测试 |
 | `main.js` 以后新增的启动步骤 MMP 不会自动跟上 | 这是 SDK 路径本来就有的代价，交互路径已经在承担；升级时对照 `main.js` 的 diff（`pi-upgrade-design.md` 的流程里加一条） |
 | `createMmpRuntime` 里有只适合界面的假设 | 3.3 节的清单逐条核对并加测试 |
+
+## 8. 实现记录
+
+### 8.1 第一次合并：print / json / rpc 和 task 子进程（T2–T4）
+
+**实测**（对比脚本跑 50 个场景，改动前后各一遍，路径、ID、时间归一化后逐字段比较，202 个字段）：
+
+| 结果 | 字段数 | 说明 |
+|---|---|---|
+| 一致 | 197 | 包括 `-p`、json、rpc 的全部正常输出、退出码、会话文件数 |
+| 有意变化（D62） | 2 | 项目 `.pi/settings.json` 的 `sessionDir` 不再生效：会话写回 `~/.mmp/pi/sessions` |
+| 文案变化 | 3 | `--session`、`--fork` 找不到会话，以及 `--fork --session-id` 撞上已有会话时，Pi 打印不带前缀的 `No session found matching …` / `Session already exists …`；现在和其他参数错误一样带 `Error: ` 前缀。退出码仍是 1。**主控定**：不为这三条单独保留无前缀的写法 |
+
+另外两处没在对比批次里、但行为变了：
+
+- `--use-theme`、`--tui-mode` 在非交互模式下以前被 Pi 静默忽略，现在和交互模式一样报"not supported by MMP"。
+- 启动诊断在终端上不再带颜色（Pi 用 chalk 上色；输出到管道或文件时本来就没有颜色）。
+
+D80 的验证（加 CPU 负载，默认模型是 Magpie、没有保存 key）：
+
+| 路径 | 改动前 | 改动后 |
+|---|---|---|
+| `mmp -p hi` | 47/60 通过 | 60/60 |
+| task 子进程（`dist/worker.js`） | 55/60 通过 | 60/60 |
+
+这个竞争取决于 Pi 内部两次刷新读 `models.json` 的先后，写不出确定性的测试；我试过给 provider 的认证检查加 300ms 延迟，改动前也能通过。
