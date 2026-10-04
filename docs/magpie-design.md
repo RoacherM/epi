@@ -15,13 +15,13 @@
 | 运行 | 启动时查询 | 失败时 |
 |---|---|---|
 | 选中 Magpie（`selectsMagpie`，和 Pi 一样 provider 不分大小写）：`--provider magpie`、`--model magpie/…`；没有模型参数时 `--models` 或 settings `enabledModels` 有 `magpie/…`，或 settings 默认 provider 是 magpie；Task worker 的模型是 `magpie/…`（没有模型时按同样的 settings 规则） | 是，超时 2 秒 | 警告：首次加载写 stderr（界面还没画）；`/new`、`/resume`、`/reload` 等重新加载时改为 session_start 后的 `ui.notify`，不覆盖全屏界面 |
-| `--model x/y` 且没有 `--provider`、不带 `magpie/`（`mayNameMagpieModel`），并且还没保存过 Magpie 列表 | 是 | 连接被拒绝不提示，其他错误警告。保存过列表后不再查询，Pi 的模型匹配能在列表里找到 `claude/…` 这类 ID |
+| `--model` 以 Magpie 的路由前缀开头（`claude/`、`codex/`、`antigravity/`、`group/`，`mayNameMagpieModel`）且没有 `--provider`，并且还没保存过 Magpie 列表 | 是 | 连接被拒绝不提示，其他错误警告。保存过列表后不再查询，Pi 的模型匹配能在列表里找到 `claude/…` 这类 ID |
 | `--list-models` | 是 | 连接被拒绝（本机没装 Magpie）不提示，其他错误警告 |
 | 其他运行 | 否，用保存的列表 | — |
 | `/model`、`/scoped-models`、rpc 和 TUI 启动后的后台刷新 | Pi 的联网刷新；启动查询后 10 秒内跳过，避免同一份目录查两次 | Pi 报告。例外：连接被拒绝、没保存过列表、用的是默认 key 时（从没用过 Magpie）不算错误 |
 | `--offline`、任意值的 `MMP_OFFLINE`、`--help`、`--dry-run` | 否 | — |
 
-理由（我定的）：用其他 provider 时不该为 Magpie 多等；离线判断和 Pi 的 `ModelRuntime` 一致（`PI_OFFLINE` 有值即离线）；没装 Magpie 的人不该在 `/model` 里看到 Magpie 的错误。
+理由（我定的）：用其他 provider 时不该为 Magpie 多等；离线判断和 Pi 的 `ModelRuntime` 一致（`PI_OFFLINE` 有值即离线）；没装 Magpie 的人不该在 `/model` 里看到 Magpie 的错误；只认 Magpie 的路由前缀，是因为放宽到任意 `a/b` 会让每次 `--model provider/model` 都去连本机网关（`test/pi-env.test.mjs` 的禁网检查发现）。
 
 `/login` 里 Magpie 的状态写明用的是哪个 key：没存 key 时是 "default key for the local gateway"，存了是 "Magpie API key"。
 

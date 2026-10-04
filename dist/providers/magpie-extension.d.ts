@@ -11,11 +11,7 @@ interface MagpieExtensionOptions {
     required?: boolean;
     apiKey?: string;
 }
-/** Whether a run selects Magpie, so startup waits for its catalog. Like Pi: providers match
- * case-insensitively, and without model flags the model comes from the saved default or the
- * scoped models (`--models`, settings `enabledModels`), whose Magpie patterns need the catalog. */
-/** A --model without a provider that could be a Magpie ID ("claude/claude-opus-5-5"): every Magpie
- * ID has an upstream prefix. */
+/** A --model without a provider that names a Magpie model without the magpie/ prefix. */
 export declare function mayNameMagpieModel(flags: {
     provider?: string;
     model?: string;

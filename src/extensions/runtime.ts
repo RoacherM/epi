@@ -92,11 +92,10 @@ export function createMmpRuntimeExtensions(
   // assembly (docs/development.md §9.3), not fall back to the startup one.
   let activeAssembly = initialAssembly;
   let activeIdentity = initialIdentity;
-  // The project this process assembled at launch; a switch may never leave it (see below).
-  const launchProject: ProjectIdentity = {
-    root: findNearestProjectManifest(process.cwd(), initialAssembly.globalManifest)?.root,
-    globalManifestPath: initialAssembly.globalManifest,
-  };
+  // The project this process was launched in; a switch may never leave it (see below). Read at
+  // the first switch, with the launch cwd taken now: Pi changes the cwd when a session moves.
+  const launchCwd = process.cwd();
+  let launchProject: ProjectIdentity | undefined;
 
   const runtime: InlineExtension = {
     name: "mmp:runtime",
@@ -159,6 +158,10 @@ export function createMmpRuntimeExtensions(
       // that project's cwd while this process keeps the launch project's Rules and extensions.
       pi.on("session_before_switch", (event, context) => {
         if (event.targetSessionFile === undefined) return undefined;
+        launchProject ??= {
+          root: findNearestProjectManifest(launchCwd, initialAssembly.globalManifest)?.root,
+          globalManifestPath: initialAssembly.globalManifest,
+        };
         const refusal = crossProjectRefusal(event.targetSessionFile, launchProject);
         if (refusal === undefined) return undefined;
         context.ui.notify(refusal, "error");

@@ -31,10 +31,13 @@ const isMagpieRef = (ref) => /^magpie(\/|$)/i.test(ref);
 /** Whether a run selects Magpie, so startup waits for its catalog. Like Pi: providers match
  * case-insensitively, and without model flags the model comes from the saved default or the
  * scoped models (`--models`, settings `enabledModels`), whose Magpie patterns need the catalog. */
-/** A --model without a provider that could be a Magpie ID ("claude/claude-opus-5-5"): every Magpie
- * ID has an upstream prefix. */
+/** The route prefixes of Magpie's own catalog IDs (claude/claude-opus-5-5, codex/gpt-6-sol, ...).
+ * None is a Pi provider name, so a --model starting with one may name a Magpie model. A wider
+ * test ("any a/b") made every --model provider/model run touch the loopback gateway. */
+const MAGPIE_ROUTES = ["claude/", "codex/", "antigravity/", "group/"];
+/** A --model without a provider that names a Magpie model without the magpie/ prefix. */
 export function mayNameMagpieModel(flags) {
-    return flags.provider === undefined && flags.model?.includes("/") === true && !isMagpieRef(flags.model);
+    return flags.provider === undefined && MAGPIE_ROUTES.some((route) => flags.model?.startsWith(route) === true);
 }
 export function selectsMagpie(flags, settings) {
     if (flags.provider !== undefined || flags.model !== undefined) {
