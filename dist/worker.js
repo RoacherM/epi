@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createAgentSession, createAgentSessionServices, resolveCliModel, SessionManager, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { readFileSync, unlinkSync } from "node:fs";
-import { settleRegisteredProviders } from "./provider-startup.js";
+import { notRunningWarnings, settleRegisteredProviders } from "./provider-startup.js";
 import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
 let activeSession;
 let interrupted = false;
@@ -105,8 +105,11 @@ async function main() {
     const resolvedModel = capsule.model === undefined
         ? undefined
         : resolveCliModel({ cliModel: capsule.model, modelRuntime });
+    for (const warning of notRunningWarnings(providers, settingsManager.getDefaultProvider(), resolvedModel?.error !== undefined)) {
+        process.stderr.write(`Warning: ${warning.message}\n`);
+    }
     if (resolvedModel?.error !== undefined) {
-        throw new Error([resolvedModel.error, ...providers.notRunning.map((warning) => warning.message)].join("; "));
+        throw new Error(resolvedModel.error);
     }
     const { session } = await createAgentSession({
         cwd: capsule.cwd,

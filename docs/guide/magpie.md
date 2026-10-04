@@ -25,7 +25,7 @@ Magpie 唯一的配置是 API key，和其他 provider 的 API key 放在同一�
 2. 选 **Sign in with an API key**，再选 **Magpie**；
 3. 输入 key。
 
-key 保存在 MMP 独立的 `~/.mmp/pi/auth.json`。也可以单次运行时用 `--api-key <key>` 传入（只在选中 Magpie 时用于 Magpie，其他 provider 的 key 不会发给 Magpie）。用 `/logout` 删除。
+key 保存在 MMP 独立的 `~/.mmp/pi/auth.json`。也可以单次运行时用 `--api-key <key>` 传入：它只用于这次选中的模型的请求，不用于查询模型目录（查目录用保存的 key 或默认值），其他 provider 的 key 不会发给 Magpie。用 `/logout` 删除。
 
 没有保存 key 时使用默认值 `magpie`，`/login` 里显示为 "default key for the local gateway"；本机 loopback 网关接受任意 key，所以本机使用通常不需要 `/login`。
 
@@ -35,17 +35,17 @@ key 保存在 MMP 独立的 `~/.mmp/pi/auth.json`。也可以单次运行时用 
 
 MMP 通过 `/v1/models` 获取模型列表，不会后台轮询、启动 Magpie 或自动下载模型。查询目录的时机：
 
-| 时机 | 是否等待目录 |
+| 时机 | 行为 |
 |---|---|
-| 选中 Magpie 启动（`--provider magpie`（大小写不限）、`--model magpie/…`、`--models` 或 settings `enabledModels` 里有 `magpie/…`，或没有模型参数时 settings 默认 provider 是 magpie；Task worker 的模型是 `magpie/…`） | 等待，最多 2 秒；失败时警告 |
-| `--model` 以 `claude/`、`codex/`、`antigravity/`、`group/` 开头、不带 `magpie/`，且还没保存过 Magpie 列表 | 等待；本机没有网关时不提示 |
-| `mmp --list-models` | 等待；本机没有网关（连接被拒绝）时不提示 |
-| 用其他 provider 启动 | 不查询，用上次保存的列表 |
-| 打开 `/model`、`/scoped-models` | 刷新（启动时刚查过的 10 秒内不重复查）。从没用过 Magpie 且本机没有网关时不报错 |
+| 每次启动（交互、`-p`、json、rpc、Task worker、`--list-models`），不管这次用哪个 provider | 查询一次，最多等 2 秒；列表有变化就保存 |
+| 网关没运行或没安装 | 不提示，用上次保存的列表。如果这次运行要用 Magpie 却找不到模型（参数、默认模型或 `--models` 指向 Magpie），会提示 `Magpie is not running at …` |
+| 查询失败（超时、HTTP 错误、目录格式不对） | 警告，用上次保存的列表 |
+| `--offline`、`MMP_OFFLINE` | 不查询，用上次保存的列表 |
+| 打开 `/model`、`/scoped-models`，以及启动后的后台刷新 | 再查询一次 |
 
 Magpie 新增或删除模型后，下一次查询同步列表。
 
-命令行指定 Magpie 模型最好带 `magpie/` 前缀或 `--provider magpie`。只写 `--model claude/claude-opus-5-5` 也能用：第一次运行会查询目录并保存，之后从保存的列表里匹配。
+命令行指定 Magpie 模型最好带 `magpie/` 前缀或 `--provider magpie`。只写 `--model claude/claude-opus-5-5` 也能用：Pi 的模型匹配能在目录里找到这个 ID。
 
 协议选择顺序：
 

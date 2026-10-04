@@ -1015,3 +1015,15 @@ test("every join(piDist, ...)/importFromPi/createRequire(piEntry).resolve deep r
     .map((usage) => `${usage.file.slice(root.length + 1)}: join(piDist, ${JSON.stringify(usage.path)}) has no docs/pi-internals.md row -- add one and a case in KNOWN_DEEP_PATHS here`);
   assert.deepEqual(unregistered, []);
 });
+
+// src/tui/services.ts copies this rule (assertValidSessionId is not exported from the package root)
+// so that an invalid --session-id is refused before anything looks it up, as Pi's main() does.
+test("Pi's session id rule is the one MMP checks --session-id against", () => {
+  const piRule = /export function assertValidSessionId\(id\) \{\s*if \(!(\/.*\/)\.test\(id\)\) \{\s*throw new Error\("([^"]*)"\);/.exec(
+    readFileSync(join(piDist, "core", "session-manager.js"), "utf8"),
+  );
+  assert.ok(piRule, "core/session-manager.js no longer defines assertValidSessionId this way");
+  const mmp = readFileSync(join(root, "src", "tui", "services.ts"), "utf8");
+  assert.ok(mmp.includes(`if (!${piRule[1]}.test(id))`), `MMP's copy differs from Pi's pattern ${piRule[1]}`);
+  assert.ok(mmp.includes(JSON.stringify(piRule[2])), "MMP's copy differs from Pi's message");
+});

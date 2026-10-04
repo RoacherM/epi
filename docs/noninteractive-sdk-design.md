@@ -228,7 +228,6 @@ D80 的验证（加 CPU 负载，默认模型是 Magpie、没有保存 key）：
 | 启动失败时的无效 settings 警告 | 打印 | 相同（审查发现失败路径漏了，已修） | 已修 |
 | `@file` 图片在提示里的文字 | `<file name="x.png"></file>` | 相同（审查发现 MMP 写的是 `image file`，模型看到的文字不一样；已改成 Pi 的写法，交互模式也一起改了） | 已修 |
 | `@file` 是需要转换格式的图片（如 BMP） | 转换说明写在 `<file>` 标签里 | 转换说明在用户消息之后（由会话统一处理） | 留着：图片内容相同，只有说明的位置不同 |
-| `@file` 读不了（权限、是目录） | `Error: Could not read file …` | `mmp: EACCES …` / `mmp: EISDIR …` | 留着 |
 
 ### 8.2 第二次合并：Magpie 作为普通 provider 扩展（T5、T6）
 
@@ -258,3 +257,20 @@ MG2 带来的用户可见变化：
 | 全新目录下首次运行 `-p` 和 `--list-models` 各 30 次：成功、目录已保存、没有留下 `models-store.json.lock` | 60/60 |
 | 默认模型是 Magpie 的 `mmp -p hi` | 40/40 |
 | task 子进程 | 40/40 |
+
+### 8.3 第二轮审查后的修正（Fable 审查，第二部分的两条 P1）
+
+| 发现 | 原因 | 修法 |
+|---|---|---|
+| rpc 首次运行、客户端约 0.5 秒内关闭 stdin，会留下 `models-store.json.lock`，下一次运行等 30 秒（基线没有这个问题） | 启动时保存目录后，Pi 的存储丢掉了文件版本号，rpc 的后台刷新要重新加锁读一次，进程在这次读里退出。旧代码在自己写完后专门读了一次；我在 5.2 的原型里只测了 `-p` 那样的短进程，没测 rpc | `settleRegisteredProviders` 在联网刷新之后总是再等一次只读刷新，把这次加锁的读放在启动里做完。审查的复现：修复前 4/4 留锁，修复后 0/4；`test/magpie.test.mjs` 有对应测试，修复前失败 |
+| Magpie 是通过设置里的默认模型、`--models` 模式或 worker 的默认模型选中时，网关没运行的原因不显示：悄悄改用别的 provider，或只报 `No API key found` / `No models match pattern` | 我只在"模型参数解析报错"时才打印 | `notRunningWarnings`：模型选择出了任何问题（报错或警告）、会话没有模型、或保存的默认 provider 就是没运行的那个时，都打印 |
+| 扩展用 `pi.registerProvider("anthropic", { baseUrl })` 覆盖内置 provider 时，启动刷新会去连 `pi.dev` 取那个内置 provider 的远程目录 | `getRegisteredProviderIds()` 也包含这种配置式覆盖 | 联网刷新只针对以完整 provider 对象注册的（`getRegisteredNativeProvider`） |
+| 等 3 次后认证状态仍没稳定时没有任何提示 | — | 打印一条警告 |
+
+8.2 里漏列的用户可见变化：
+
+- 全新目录、网关在运行、没指定任何模型时，现在会直接用上 Magpie 的模型（以前报 `No API key found` 退出 1）。
+- 每次换会话（`/new`、`/resume`、rpc 的 `new_session`）都会再请求一次目录；网关挂起时每次多等 2 秒。
+- 如果 `127.0.0.1:3425` 上跑的不是 Magpie，每次运行都会有一条警告，而且保存的 Magpie key 会发给它（以前只在选中 Magpie 或 `--list-models` 时才会）。
+
+没做的：等待-核对循环本身没有测试（审查 A-3）。现有的 D80 夹具只强制一次迟到的刷新，触发不了循环；审查用的是进程预加载脚本加 7 个 provider 的时序，没法做成不依赖时间的测试。

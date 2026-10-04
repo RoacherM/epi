@@ -11,7 +11,7 @@ import {
 import { readFileSync, unlinkSync } from "node:fs";
 
 import type { TaskCapsule } from "./task-runtime.js";
-import { settleRegisteredProviders } from "./provider-startup.js";
+import { notRunningWarnings, settleRegisteredProviders } from "./provider-startup.js";
 import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
 
 interface WorkerResultEvent {
@@ -140,8 +140,11 @@ async function main(): Promise<void> {
   const resolvedModel = capsule.model === undefined
     ? undefined
     : resolveCliModel({ cliModel: capsule.model, modelRuntime });
+  for (const warning of notRunningWarnings(providers, settingsManager.getDefaultProvider(), resolvedModel?.error !== undefined)) {
+    process.stderr.write(`Warning: ${warning.message}\n`);
+  }
   if (resolvedModel?.error !== undefined) {
-    throw new Error([resolvedModel.error, ...providers.notRunning.map((warning) => warning.message)].join("; "));
+    throw new Error(resolvedModel.error);
   }
 
   const { session } = await createAgentSession({

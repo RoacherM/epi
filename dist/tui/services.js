@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createAgentSessionFromServices, createAgentSessionRuntime, createAgentSessionServices, parseArgs, resolveCliModel, resolveModelScopeWithDiagnostics, SessionManager, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { MmpArgumentError } from "../errors.js";
 import { extensionLoadFailureHint } from "../pi-output.js";
-import { settleRegisteredProviders } from "../provider-startup.js";
+import { notRunningWarnings, settleRegisteredProviders } from "../provider-startup.js";
 import { crossProjectRefusal } from "./project-guard.js";
 /** The initial runtime's error diagnostics. `message` is what the TUI path prints; a host that
  * prints diagnostics its own way (print/json/rpc: Pi's `Error: ` / `Warning: ` lines) reads the rest. */
@@ -383,8 +383,7 @@ export async function createMmpRuntime(options) {
             ...services.diagnostics,
             ...collectExtensionDiagnostics(services),
             ...providers.warnings,
-            // Why a provider or model was not found, when that is what went wrong.
-            ...(initial.diagnostics.some((diagnostic) => diagnostic.type === "error") ? providers.notRunning : []),
+            ...notRunningWarnings(providers, services.settingsManager.getDefaultProvider(), initial.diagnostics.length > 0),
             ...initial.diagnostics,
         ];
         const initialModel = initial.options.model;
@@ -436,6 +435,12 @@ export async function createMmpRuntime(options) {
         // point) motivated Pi to add it.
         if (created.session.model !== undefined && initial.cliThinkingOverride) {
             created.session.setThinkingLevel(created.session.thinkingLevel);
+        }
+        // No model at all (Pi's `unknown` placeholder) and nothing said why yet: a provider that is not
+        // running may be the reason.
+        if (created.session.model === undefined || created.session.model.provider === "unknown") {
+            const said = new Set(diagnostics.map((diagnostic) => diagnostic.message));
+            diagnostics.push(...notRunningWarnings(providers, undefined, true).filter(({ message }) => !said.has(message)));
         }
         return { ...created, services, diagnostics };
     };

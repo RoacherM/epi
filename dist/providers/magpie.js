@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { isConnectionRefused } from "../provider-startup.js";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { googleGenerativeAIApi } from "@earendil-works/pi-ai/api/google-generative-ai.lazy";
 const DISCOVERY_TIMEOUT_MS = 2000;
 /** Loopback Magpie accepts any key; `/login` stores a real one in auth.json, which takes precedence. */
-export const MAGPIE_DEFAULT_KEY = "magpie";
+const MAGPIE_DEFAULT_KEY = "magpie";
 /** Test seam: MMP_TEST_MAGPIE_URL points MMP at a local fake gateway instead of the real one. */
 export function magpieBaseUrl() {
     return process.env.MMP_TEST_MAGPIE_URL ?? "http://127.0.0.1:3425";
@@ -205,16 +206,11 @@ function cacheTag(baseUrl) {
     return JSON.stringify([baseUrl]);
 }
 /** The store entry for a fresh catalog, or undefined when the stored one already matches it. */
-export function changedCatalogEntry(stored, baseUrl, fresh) {
+function changedCatalogEntry(stored, baseUrl, fresh) {
     const tag = cacheTag(baseUrl);
     return stored?.etag === tag && JSON.stringify(stored.models) === JSON.stringify(fresh)
         ? undefined
         : { models: fresh, checkedAt: Date.now(), etag: tag };
-}
-/** Connection refused: nothing listens at the gateway address. */
-function isGatewayAbsent(error) {
-    return error instanceof Error && typeof error.cause === "object" && error.cause !== null &&
-        "code" in error.cause && error.cause.code === "ECONNREFUSED";
 }
 /** Catalog writes still running, so a session shutdown can wait for them: a process that exits
  * while Pi is taking the models-store lock leaves models-store.json.lock behind, and the next mmp
@@ -239,7 +235,7 @@ export function createWriteTracker() {
 /** What a failed catalog request tells the user; anything else points at the gateway itself. */
 function discoveryFailure(error, baseUrl) {
     // Kept as the cause: startup says so only when it then fails (src/provider-startup.ts).
-    if (isGatewayAbsent(error))
+    if (isConnectionRefused(error))
         return new Error(`Magpie is not running at ${baseUrl}`, { cause: error.cause });
     if (error instanceof Error && error.name === "TimeoutError")
         return new Error("Magpie model discovery timed out");

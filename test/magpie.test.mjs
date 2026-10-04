@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -518,6 +518,61 @@ test("a gateway that is not running is silent, until the run fails to find the M
     assert.doesNotMatch(error.message, /MAGPIE_OK|Unknown provider|not found/);
     return true;
   });
+});
+
+// The other ways a run can depend on Magpie: the saved default, a scope pattern, the worker's
+// default. Each used to end as a different failure, or as a quiet switch to another model.
+test("a gateway that is not running is named when settings or a pattern select Magpie", async (t) => {
+  const server = await serverFor(t);
+  const absent = await closedUrl();
+  const notRunning = new RegExp(`Warning: Model list refresh failed for magpie: Magpie is not running at ${absent}`);
+  const magpieDefault = { defaultProvider: "magpie", defaultModel: "claude/claude-opus-test" };
+  const withSettings = (settings, other) => {
+    const fixture = setup(t, absent);
+    writeFileSync(join(fixture.mmpHome, "pi", "settings.json"), JSON.stringify(settings));
+    if (other) fixture.otherProvider(server.baseUrl);
+    return fixture;
+  };
+  // Another provider is available: the run goes on with it, and says why it is not Magpie.
+  const fallback = await cliRun(withSettings(magpieDefault, true), printArgs);
+  assert.equal(fallback.stdout.trim(), "MAGPIE_OK 你好");
+  assert.match(fallback.stderr, notRunning);
+  // Nothing else to use.
+  await assert.rejects(cliRun(withSettings(magpieDefault, false), printArgs), notRunning);
+  await assert.rejects(cliRun(withSettings({}, false), printArgs), notRunning);
+  // A scope pattern that matches nothing because the list is missing.
+  const scoped = await cliRun(withSettings({}, true), ["--models", "magpie/claude/*", ...printArgs]);
+  assert.match(scoped.stderr, notRunning);
+  assert.match(scoped.stderr, /Warning: No models match pattern "magpie\/claude\/\*"/);
+  // The task worker, model from settings.
+  const fixture = withSettings(magpieDefault, false);
+  const capsulePath = join(fixture.home, "capsule.json");
+  writeFileSync(capsulePath, JSON.stringify({ version: 1, task: "hi", cwd: fixture.home, agentDir: join(fixture.mmpHome, "pi"), systemPrompt: "", tools: [] }));
+  await assert.rejects(run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000 }), notRunning);
+});
+
+// The catalog saved at startup must not leave Pi's store needing its lock again: rpc refreshes in
+// the background, and a client that closes stdin early ended the process inside that read,
+// leaving models-store.json.lock for the next mmp to wait 30 s on.
+test("rpc on a first run leaves no lock file in the agent directory when the client closes stdin early", async (t) => {
+  const server = await serverFor(t);
+  const fauxEcho = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
+  for (const delay of [0, 100, 250]) {
+    const fixture = setup(t, server.baseUrl);
+    writeFileSync(join(fixture.mmpHome, "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
+    await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [cli, "--no-project", "--thinking", "off", "--no-tools", "--no-session", "--model", "mmp-faux/echo", "--mode", "rpc"], { cwd: fixture.home, env: fixture.env, stdio: ["pipe", "pipe", "pipe"] });
+      const timer = setTimeout(() => child.kill("SIGKILL"), 25000);
+      child.stdout.resume();
+      child.stderr.resume();
+      setTimeout(() => child.stdin.end(), delay);
+      child.on("error", reject);
+      child.on("close", () => { clearTimeout(timer); resolve(); });
+    });
+    const agentDir = join(fixture.mmpHome, "pi");
+    assert.equal(existsSync(join(agentDir, "models-store.json")), true, `delay ${delay}: the catalog was not saved`);
+    assert.deepEqual(readdirSync(agentDir).filter((file) => file.includes(".lock")), [], `stdin closed after ${delay} ms`);
+  }
 });
 
 test("catalog failure is visible, retains saved models, and doesn't break another provider", async (t) => {

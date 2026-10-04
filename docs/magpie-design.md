@@ -20,7 +20,7 @@
 | 情况 | 行为 |
 |---|---|
 | 网关在运行 | 每次启动请求一次目录，不管这次选的是哪个 provider |
-| 网关没运行或没安装（连接被拒绝） | 不提示，用保存的列表。只有这次运行随后因为找不到 provider 或模型而失败时，才在错误前加一行 `Warning: Model list refresh failed for magpie: Magpie is not running at …`，否则用户只会看到 `Unknown provider "magpie"`（硬规则：一个失败不能表现成另一个）。这一条对所有扩展 provider 一样，按"连接被拒绝"判断，不按名字（我定的） |
+| 网关没运行或没安装（连接被拒绝） | 不提示，用保存的列表。这次运行依赖 Magpie 时（模型参数或模式解析出了问题、会话没有模型、或保存的默认 provider 是 magpie），加一行 `Warning: Model list refresh failed for magpie: Magpie is not running at …`，否则用户只会看到 `Unknown provider "magpie"`（硬规则：一个失败不能表现成另一个）。这一条对所有扩展 provider 一样，按"连接被拒绝"判断，不按名字（我定的） |
 | 其他失败（超时、HTTP 错误、目录格式不对） | 每次都警告：`Warning: Model list refresh failed for magpie: …; using its last saved model list, if any.`，继续用保存的列表 |
 | 用保存的列表选中了 Magpie 的模型，但网关没运行 | 请求本身失败，报连接错误 |
 | `--offline`、任意值的 `MMP_OFFLINE` | 不联网，只用保存的列表 |
@@ -54,7 +54,7 @@
 
 - 列表由 Pi 发布并写入（provider 的 `refreshModels` 调 `context.publish`），MMP 不自己写这个文件，也不再引用 Pi 没导出的 `FileModelsStore`。列表没变时不写。
 - 只读缓存的刷新从不写入。
-- 启动时的联网刷新是等待完成的，所以 `-p`、`--list-models` 这类短进程退出时写入已经结束，不会留下 `models-store.json.lock`（实测：原型加 CPU 负载 40 次，见 [noninteractive-sdk-design.md](noninteractive-sdk-design.md) 5.2 节）。
+- 启动时的联网刷新是等待完成的，所以 `-p`、`--list-models` 这类短进程退出时写入已经结束。写入后 Pi 的读缓存丢掉文件版本，下一次读又要加锁，所以紧接着再等一次只读刷新，把这次读也放在启动里做完。否则 rpc 的后台刷新会去做这次读，客户端马上关闭 stdin 时进程在读的中途退出，留下 `models-store.json.lock`，下一个 mmp 要等最多 30 秒（Fable 第二轮审查复现，见 [noninteractive-sdk-design.md](noninteractive-sdk-design.md) 8.3 节）。
 - 启动之后的联网刷新（`/model`、rpc 的后台刷新）的写入登记在 provider 的 write tracker 里。扩展的 `session_shutdown` 处理等这些写入完成；关闭开始后才查到的列表不再写入。Pi 的 rpc 和 print 模式在 `process.exit` 前会先 dispose 运行时、等 `session_shutdown`，所以 rpc 客户端在后台刷新时关闭 stdin 也不会留下锁文件（Fable 审查 F5）。
 
 刷新失败保留已有列表，同时由 SDK 或启动警告报告错误（网关没运行的情况见上表）。key、HTTP body、带密钥的 URL 不出现在错误消息里。factory 每次加载创建独立 provider 状态；在线刷新通过 SDK 的 generation-checked publication 防止过期响应覆盖新目录；中止不发布目录。
