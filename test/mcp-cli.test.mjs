@@ -353,6 +353,63 @@ test("mmp mcp list exits 1 when a configured server is broken", (t) => {
   assert.equal(result.status, 1, result.stdout);
 });
 
+// D73: with mmp:mcp off a session never reads mcp.json, so list must not start the servers or call
+// them connected. The server here leaves a marker file if it is ever started.
+function disabledMcpFixture(t, disableIn) {
+  const f = fixture(t);
+  const marker = join(f.root, "server-started");
+  const server = { command: "node", args: ["-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "")`] };
+  mkdirSync(join(f.home, ".mmp"), { recursive: true });
+  mkdirSync(join(f.project, ".mmp"), { recursive: true });
+  writeFileSync(globalMcpPath(f), JSON.stringify({ mcpServers: { marker: server } }));
+  const off = { version: 1, disable: ["mmp:mcp"] };
+  writeFileSync(join(f.home, ".mmp", "mmp.json"), JSON.stringify(disableIn === "global" ? off : { version: 1 }));
+  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify(disableIn === "project" ? off : { version: 1 }));
+  return { f, marker };
+}
+
+test("mmp mcp list with mmp:mcp disabled says so and does not start or connect any server (D73)", (t) => {
+  const { f, marker } = disabledMcpFixture(t, "global");
+  const result = run(f, ["list"]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /^marker: not loaded \(codemode, global\)$/m);
+  assert.ok(
+    result.stdout.includes(`mmp:mcp is turned off by "disable" in ${join(f.home, ".mmp", "mmp.json")}, so sessions do not load MCP servers.`),
+    result.stdout,
+  );
+  assert.equal(existsSync(marker), false, "the server was started");
+
+  const json = run(f, ["list", "--json"]);
+  assert.equal(json.status, 0, json.stdout + json.stderr);
+  const parsed = JSON.parse(json.stdout);
+  assert.equal(parsed.servers[0].state, "not-loaded");
+  assert.match(parsed.note, /mmp:mcp is turned off by "disable"/);
+  assert.equal(existsSync(marker), false, "the server was started by --json");
+});
+
+test("mmp mcp list counts a project's \"disable\" only when the project is trusted (D73)", (t) => {
+  const { f, marker } = disabledMcpFixture(t, "project");
+  const trusted = run(f, ["list", "--approve"]);
+  assert.equal(trusted.status, 0, trusted.stdout + trusted.stderr);
+  assert.match(trusted.stdout, /^marker: not loaded /m);
+  assert.match(trusted.stdout, /mmp:mcp is turned off by "disable" in .*project.*mmp\.json/);
+  assert.equal(existsSync(marker), false, "the server was started");
+  // Untrusted: the project Manifest is not read, so MCP is on and the server is started.
+  const untrusted = run(f, ["list"]);
+  assert.doesNotMatch(untrusted.stdout, /mmp:mcp is turned off/);
+  assert.equal(existsSync(marker), true, "an untrusted project's \"disable\" was applied");
+});
+
+test("mmp mcp list writes config errors to stderr, not stdout (D73)", (t) => {
+  const f = fixture(t);
+  mkdirSync(join(f.home, ".mmp"), { recursive: true });
+  writeFileSync(globalMcpPath(f), "{ not json");
+  const result = run(f, ["list"]);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stderr, /^config error: /m);
+  assert.doesNotMatch(result.stdout, /config error/);
+});
+
 test("mmp mcp list shows MMP's own empty-state message and an untrusted-project note", (t) => {
   const f = fixture(t);
   mkdirSync(join(f.project, ".mmp"), { recursive: true });
@@ -540,4 +597,20 @@ test("mmp mcp login/logout keep OAuth credentials per server, even for two serve
   assert.match(logout.stdout, /Signed out of MCP server "remote"\./);
   assert.equal(stored()[entry[0]], undefined, JSON.stringify(stored()));
   assert.deepEqual(await states(), { remote: "needs-auth", other: "needs-auth" });
+});
+
+// D71: --timeout was validated but no timer ran, so an unfinished sign-in waited forever. Nobody
+// opens the authorization URL here.
+test("mmp mcp login gives up after --timeout when the sign-in is not completed (D71)", async (t) => {
+  const f = fixture(t);
+  const oauth = await startOAuthMcpServer();
+  t.after(() => oauth.close());
+  run(f, ["add", "remote", "--url", oauth.url]);
+  const started = Date.now();
+  const login = await runAsync(f, ["login", "remote", "--timeout", "1"]);
+  const context = `status=${login.status} after ${Date.now() - started}ms\nstdout:\n${login.stdout}\nstderr:\n${login.stderr}`;
+  assert.equal(login.status, 1, context);
+  assert.match(login.stdout, /Sign in to MCP server "remote" in your browser:/, context);
+  assert.match(login.stderr, /Sign-in to MCP server "remote" was cancelled or not completed within 1 seconds\./, context);
+  assert.deepEqual(oauth.issuedTokens, [], context);
 });

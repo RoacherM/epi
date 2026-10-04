@@ -72,11 +72,13 @@ export async function runLogin(host: CommandHost, providerRef: string): Promise<
   const authType = types.size === 1 ? [...types][0] : await chooseAuthType(host, matches[0]?.name);
   if (authType === undefined) return;
   const options = candidates.filter((option) => option.authType === authType);
+  const backToAuthType = () => runLogin(host, providerRef);
   if (matches.length > 0 && options.length === 1 && options[0] !== undefined) {
-    await startLogin(host, options[0], () => runLogin(host, providerRef));
+    await startLogin(host, options[0], backToAuthType);
     return;
   }
-  await chooseProvider(host, options, matches.length > 0 ? undefined : providerRef.trim());
+  // Pi's showLoginProviderSelector: Esc on the list goes back to the method selector it came from.
+  await chooseProvider(host, options, matches.length > 0 ? undefined : providerRef.trim(), types.size === 1 ? undefined : backToAuthType);
 }
 
 async function chooseAuthType(host: CommandHost, providerName: string | undefined): Promise<LoginOption["authType"] | undefined> {
@@ -86,7 +88,12 @@ async function chooseAuthType(host: CommandHost, providerName: string | undefine
   return choice === ACCOUNT_LABEL ? "oauth" : "api_key";
 }
 
-async function chooseProvider(host: CommandHost, options: LoginOption[], search: string | undefined): Promise<void> {
+async function chooseProvider(
+  host: CommandHost,
+  options: LoginOption[],
+  search: string | undefined,
+  onBack?: () => Promise<void>,
+): Promise<void> {
   if (options.length === 0) {
     host.notice("No providers offer this login method.", "warning");
     return;
@@ -97,10 +104,10 @@ async function chooseProvider(host: CommandHost, options: LoginOption[], search:
     const selector = new OAuthSelectorComponent("login", options, (providerId, authType) => {
       restore();
       const option = options.find((candidate) => candidate.id === providerId && candidate.authType === authType);
-      void (option === undefined ? Promise.resolve() : startLogin(host, option, () => chooseProvider(host, options, search))).then(resolve);
+      void (option === undefined ? Promise.resolve() : startLogin(host, option, () => chooseProvider(host, options, search, onBack))).then(resolve);
     }, () => {
       restore();
-      resolve();
+      resolve(onBack?.());
     }, ref === "" ? undefined : ref);
     restore = host.takeEditorSlot(selector);
   });

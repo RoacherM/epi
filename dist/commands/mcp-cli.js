@@ -13,6 +13,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { MmpArgumentError } from "../errors.js";
 import { assertProjectTrustedFor, isHelpRequested } from "./manifest-cli.js";
 import { emptyStateMessage, loadNativeMcpConfig } from "../extensions/mcp.js";
+import { resolveManifest } from "../manifest.js";
 import { resolveMmpPaths } from "../paths.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "../project.js";
 const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
@@ -176,7 +177,23 @@ function resolveListConfig(ctx, approveOverride, command) {
             ? { projectManifest: { loaded: true, root: candidate.root, path: candidate.manifestPath, trusted: true } }
             : { projectManifest: undefined },
     }, ctx.cwd);
-    return { loaded, untrustedNote };
+    return { loaded, untrustedNote, trustedProjectManifest: trusted ? candidate?.manifestPath : undefined };
+}
+/** Why `mmp mcp list` connects to nothing: `"disable": ["mmp:mcp"]` in a Manifest a session started
+ * here reads (global, and the project's when trusted) turns MCP off, and mcp.json is not read. */
+function mcpOffNote(trustedProjectManifest) {
+    const manifests = [
+        resolveManifest(resolveMmpPaths(process.env).globalManifest, "global"),
+        ...(trustedProjectManifest === undefined ? [] : [resolveManifest(trustedProjectManifest, "project")]),
+    ];
+    const disabledIn = manifests
+        .flatMap((manifest) => manifest.disabledExtensions)
+        .filter((extension) => extension.name === "mmp:mcp")
+        .map((extension) => extension.declaredIn);
+    return disabledIn.length === 0
+        ? undefined
+        : `mmp:mcp is turned off by "disable" in ${disabledIn.join(" and ")}, so sessions do not load MCP servers. ` +
+            'Remove "mmp:mcp" from "disable" to use them.';
 }
 const ADD_OPTIONS = {
     local: "flag",
@@ -349,7 +366,8 @@ async function listCommand(args, ctx) {
         throw new MmpArgumentError(`Usage: mmp mcp list [--json] [--approve|--no-approve]\n${HELP_HINT}`);
     }
     const json = parsed.values.has("json");
-    const { loaded, untrustedNote } = resolveListConfig(ctx, approveOverrideOf(parsed.values), "list");
+    const { loaded, untrustedNote, trustedProjectManifest } = resolveListConfig(ctx, approveOverrideOf(parsed.values), "list");
+    const offNote = mcpOffNote(trustedProjectManifest);
     const runtime = await loadRuntimeModule();
     const credentials = new runtime.McpOAuthCredentialStore();
     const reports = await Promise.all(loaded.servers.map(async (entry) => {
@@ -365,6 +383,8 @@ async function listCommand(args, ctx) {
         };
         if (!report.enabled)
             return report;
+        if (offNote !== undefined)
+            return { ...report, state: "not-loaded" };
         const connection = new runtime.McpServerConnection({
             entry,
             cwd: ctx.cwd,
@@ -396,9 +416,11 @@ async function listCommand(args, ctx) {
         await connection.close();
         return report;
     }));
-    const failed = loaded.errors.length > 0 || reports.some((report) => report.enabled && report.state !== "connected");
+    const unconnected = offNote === undefined && reports.some((report) => report.enabled && report.state !== "connected");
+    const failed = loaded.errors.length > 0 || unconnected;
     if (json) {
-        console.log(JSON.stringify({ servers: reports, errors: loaded.errors, ...(untrustedNote ? { note: untrustedNote } : {}) }, null, 2));
+        const notes = [untrustedNote, offNote].filter((note) => note !== undefined).join(" ");
+        console.log(JSON.stringify({ servers: reports, errors: loaded.errors, ...(notes ? { note: notes } : {}) }, null, 2));
         return failed ? 1 : 0;
     }
     if (reports.length === 0 && loaded.errors.length === 0) {
@@ -409,7 +431,9 @@ async function listCommand(args, ctx) {
             ? `connected, ${report.tools.length} tool${report.tools.length === 1 ? "" : "s"}`
             : report.state === "needs-auth"
                 ? "needs sign-in"
-                : report.state;
+                : report.state === "not-loaded"
+                    ? "not loaded"
+                    : report.state;
         console.log(`${report.name}: ${state} (${report.exposure}, ${report.scope})`);
         console.log(`  ${report.transport}`);
         if (report.state === "needs-auth")
@@ -428,10 +452,25 @@ async function listCommand(args, ctx) {
             console.log(`  ${report.error.split("\n").join("\n  ")}`);
     }
     for (const configError of loaded.errors)
-        console.log(`config error: ${configError}`);
+        console.error(`config error: ${configError}`);
     if (untrustedNote)
         console.log(untrustedNote);
+    if (offNote)
+        console.log(offNote);
     return failed ? 1 : 0;
+}
+/** Pi's waitForRedirectUrl (extensions/mcp/cli.js) without its stdin prompt: resolves to undefined,
+ * which cancels the sign-in, after `timeoutMs`, or when the browser callback arrived (`signal`). */
+function waitOutSignIn(signal, timeoutMs) {
+    return new Promise((resolve) => {
+        const finish = () => {
+            clearTimeout(timer);
+            signal.removeEventListener("abort", finish);
+            resolve(undefined);
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        signal.addEventListener("abort", finish, { once: true });
+    });
 }
 async function loginOrLogoutCommand(command, args, ctx) {
     const parsed = parseOptions(args, command === "login" ? { timeout: "value", ...APPROVE_OPTIONS } : APPROVE_OPTIONS);
@@ -495,9 +534,7 @@ async function loginOrLogoutCommand(command, args, ctx) {
                     },
                     // Non-interactive-friendly default: mmp mcp login is meant to be run by an agent through
                     // bash (module comment), so it never blocks on stdin -- it waits out the timeout instead.
-                    promptForRedirectUrl: (signal) => new Promise((resolve) => {
-                        signal.addEventListener("abort", () => resolve(undefined), { once: true });
-                    }),
+                    promptForRedirectUrl: (signal) => waitOutSignIn(signal, timeoutSeconds * 1000),
                 },
             });
         }

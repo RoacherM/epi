@@ -12,8 +12,8 @@
 // is not exported; docs/tui-design.md).
 import { createAgentSessionServices, parseArgs, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
-import { PROVIDER_LOGIN_HELP } from "./pi-output.js";
-import { configureHttp } from "./tui/services.js";
+import { extensionLoadFailureHint, PROVIDER_LOGIN_HELP } from "./pi-output.js";
+import { configureHttpAtStartup } from "./tui/services.js";
 const NO_MODELS_MESSAGE = `No models available. ${PROVIDER_LOGIN_HELP}`;
 /** Whether piMain would take its `--list-models` branch for these args: it checks `--export` first
  * (and `--help`/`--version`, which MMP already handles before reaching here). */
@@ -71,7 +71,8 @@ export async function runListModels(piArgs, options) {
     const { cwd, agentDir } = options;
     // BASE_PI_RESOURCE_ARGS carries --no-approve, so Pi's projectTrusted is always false here.
     const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
-    await configureHttp(settingsManager);
+    // Like main.js in every mode: the settings' httpProxy too, not only the dispatcher (dogfood D61).
+    configureHttpAtStartup(settingsManager);
     const services = await createAgentSessionServices({
         cwd,
         agentDir,
@@ -87,7 +88,7 @@ export async function runListModels(piArgs, options) {
             noContextFiles: true,
             systemPrompt: "",
             appendSystemPrompt: [""],
-            additionalExtensionPaths: options.externalExtensionPaths,
+            additionalExtensionPaths: options.assembly.externalExtensions.map((extension) => extension.value),
             extensionFactories: options.extensionFactories,
         },
     });
@@ -118,6 +119,10 @@ export async function runListModels(piArgs, options) {
         writeDiagnostic(diagnostic);
     }
     if (diagnostics.some((diagnostic) => diagnostic.type === "error")) {
+        // The hint `-p` and the TUI end a load failure with (main.js prints its own after the errors).
+        if (extensions.errors.length > 0) {
+            process.stderr.write(`${extensionLoadFailureHint(extensions.errors.map(({ path }) => path), options.assembly)}\n`);
+        }
         process.exit(1);
     }
     const loadError = modelRuntime.getError();
