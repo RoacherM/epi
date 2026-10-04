@@ -5,6 +5,7 @@ import { type AgentSessionRuntime, type InlineExtension, parseArgs } from "@eare
 
 import { passthroughHasFlag } from "../args.js";
 import { buildInlineExtensions } from "../extensions/index.js";
+import { createPreviewInlineExtension } from "../extensions/preview.js";
 import { buildTuiInitialMessages } from "../file-arguments.js";
 import type { PreparedMmpRun } from "../host.js";
 import { findNearestProjectManifest } from "../project.js";
@@ -13,7 +14,16 @@ import type { ProjectIdentity } from "./project-guard.js";
 import { createMmpRuntime } from "./services.js";
 import { detectAppearance, installMmpTheme } from "./theme.js";
 
-/** Same Manifest assembly as the piMain path, handed to the SDK instead of Pi's CLI. */
+/** Extensions that are interface features (/preview) load only for the interactive TUI: print,
+ * json and rpc have no screen to put them on. They go before mmp:system-prompt, which has to stay
+ * last (extensions/index.ts). */
+function withInterfaceExtensions(extensionFactories: InlineExtension[]): InlineExtension[] {
+  const last = extensionFactories.findIndex((extension) => extension.name === "mmp:system-prompt");
+  const at = last < 0 ? extensionFactories.length : last;
+  return [...extensionFactories.slice(0, at), createPreviewInlineExtension(), ...extensionFactories.slice(at)];
+}
+
+/** The Manifest assembly, handed to the SDK. */
 export async function createRuntimeFromPrepared(
   prepared: PreparedMmpRun,
   cwd: string,
@@ -33,7 +43,7 @@ export async function createRuntimeFromPrepared(
     cwd,
     agentDir: prepared.agentDir,
     piArgs: prepared.args.passthrough,
-    extensionFactories,
+    extensionFactories: withInterfaceExtensions(extensionFactories),
     externalExtensionPaths: prepared.assembly.externalExtensions.map((extension) => extension.value),
     assembly: prepared.assembly,
     projectIdentity: projectIdentityFromPrepared(prepared, cwd),

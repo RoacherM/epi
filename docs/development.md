@@ -13,13 +13,7 @@
 
 MMP（Make My Pi）是在同一 Node.js 进程中使用锁定版本 Pi SDK 的定制 Harness。Harness 指包在模型外面的那层程序：把用户的话、工具和上下文组织起来交给模型，再把结果呈现出来。功能优先对齐 Pi；MMP 拥有 grok-build 风格的交互界面、配置装配、项目信任和能力选择。
 
-定位（决策 H1–H5；OMP 对照见 [notes/omp-study.md](notes/omp-study.md)）：
-
-- 跟着官方 Pi 走：用官方 Pi 包、锁定版本、自动升级门禁，**不 fork**（OMP 是硬 fork，手工移植上游，已落后半年）。
-- **后续重心（H4，2026-10-04 用户定）：围绕 Pi 做好两件事，交互界面（TUI）和内置扩展。coding agent 的内核先不动。** 内核指 Pi 的模型调用、Agent 循环、会话、压缩和基础工具（§3.1 的清单）。新能力先问"能不能做成界面功能或内置扩展"；只有做不成时才单独评估要不要改 Pi 的行为（H2）。
-- **定位（H5，2026-10-04 用户定）：本地的主力 TUI 工具。** 多模态素材的生产和创作是要提前准备的方向，不是现在的定位：做功能时为它留余地（例如界面能加常驻面板、功能不绑死在只适合文字的假设上），时机成熟再改造。讨论和未定的事见 [notes/multimodal-surface.md](notes/multimodal-surface.md)。这不改变 H4：内核仍不动。
-- 配置严格只属于 MMP：不读 Pi，也不读 Claude/Codex/Gemini/Cursor 的配置，不认用户给 Pi 设的 `PI_*` 环境变量（D63），项目配置要信任（H3/K3）。
-- 和 Pi 一样默认不审批；审批分级先不做（H3/K6）。
+定位和原则见 [architecture.md](architecture.md)（只讲原则的架构设计），来历见 [decisions.md](decisions.md) 的 H1–H6。本文是实现层面的说明和契约。
 
 MMP 不调用 PATH 中的全局 `pi`，不复制 Agent 循环。
 
@@ -48,7 +42,7 @@ MMP 不调用 PATH 中的全局 `pi`，不复制 Agent 循环。
 | 层 | 谁写 | 代码 | 后续是否投入（H4） |
 |---|---|---|---|
 | 4 入口和界面 | MMP | `src/cli.ts`、`src/host.ts`、`src/args.ts`、`src/commands/`、`src/tui/`、`src/noninteractive.ts`、`src/list-models.ts` | **是**：界面是重心之一 |
-| 3 内置扩展 | MMP | `src/extensions/`、`src/providers/`、`src/task-runtime.ts`、`src/worker.ts`、`src/hooks-*.ts` | **是**：内置扩展是重心之二 |
+| 3 内置扩展 | MMP | `src/extensions/`（含 `preview/`）、`src/providers/`、`src/task-runtime.ts`、`src/worker.ts`、`src/hooks-*.ts` | **是**：内置扩展是重心之二 |
 | 2 装配 | MMP | `src/manifest.ts`、`src/assembly.ts`、`src/project.ts`、`src/skill-discovery.ts`、`src/runtime-identity.ts`、`src/tui/services.ts`（`createMmpRuntime`）、`src/provider-startup.ts` | 按需：跟着上面两层的需要改 |
 | 1 内核 | Pi | `node_modules/@earendil-works/pi-coding-agent` 等，版本见 `package.json` | **否**：只升级，不改 |
 
@@ -100,6 +94,7 @@ mmp <参数>
 | `mmp:mcp` | 默认开，可关 | 把 MMP 的 `mcp.json` 交给 Pi 的原生 MCP；`/mcp` 面板；随它加载 `codemode` 和 `tool-search` 两个内联扩展 | `mcp.json` | [mcp-design.md](mcp-design.md) |
 | `mmp:hooks` | 默认开，可关 | 在会话事件上运行用户配置的 handler（命令、提示词、agent），可以拦截或改写 | `hooks.json` | 本文 §14，[guide/hooks.md](guide/hooks.md) |
 | Magpie provider | 总是，不进 Manifest，不能关 | 模型 provider `magpie`：本机网关的模型目录和四种协议 | 只有 API key（`/login`） | [magpie-design.md](magpie-design.md) |
+| `mmp:preview` | 只在交互模式，不进 Manifest，不能关 | `/preview [路径]`：三栏文件浏览加查看器（文本、Markdown、二进制、图片、视频）。只注册一个命令，模型看不到。有自己的版本号 | 无（视频要本机有 ffmpeg） | [guide/preview.md](guide/preview.md) |
 | 关闭的 stdout 保护 | 只在 print/json | 读 stdout 的一方提前关掉管道时安静结束 | 无 | `src/closed-stdout.ts`（D54） |
 | 第三方扩展 | Manifest 的 `extensions` 声明了才加载 | 由扩展自己决定 | Manifest | 本文 §6 |
 
@@ -118,15 +113,6 @@ mmp <参数>
 | 命令 | `commands.ts`、`session-commands.ts`、`settings-command.ts`、`info-commands.ts` 等 | `/login`、`/model`、`/resume`、`/settings`、`/compact` 等内置命令 |
 | 扩展宿主 | `ext-host.ts`、`dialogs.ts` | 实现 Pi 扩展界面接口的 28 个方法，扩展的对话框和面板在这里显示（决策 D4） |
 | 会话构造 | `services.ts` | `createMmpRuntime`；不依赖终端，非交互模式也用它 |
-
-### 2.5 后续工作放在哪一层
-
-| 想做的事 | 放哪 | 例子 |
-|---|---|---|
-| 显示、交互、快捷键、命令 | 第 4 层（界面） | 新的工具卡片、设置项、会话选择器 |
-| 新的工具、新的 provider、对会话事件的反应 | 第 3 层（内置扩展），用 Pi 的公开扩展接口 | web 搜索工具、写文件后的 LSP 诊断、新的模型网关 |
-| 配置怎么找、怎么合并、是否可信 | 第 2 层（装配） | Manifest 新字段、新的 skill 根目录 |
-| 改 Agent 循环、压缩、会话格式、工具执行语义 | 第 1 层：**现在不做**（H4） | 自定义压缩、审批分级、多 agent 协作运行时 |
 
 ## 3. 不可违反的边界
 

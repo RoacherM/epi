@@ -2,7 +2,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { type AgentSessionRuntime, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { PreparedMmpRun } from "../host.js";
 import type { ProjectIdentity } from "./project-guard.js";
-/** Same Manifest assembly as the piMain path, handed to the SDK instead of Pi's CLI. */
+/** The Manifest assembly, handed to the SDK. */
 export declare function createRuntimeFromPrepared(prepared: PreparedMmpRun, cwd: string, extensionFactories?: InlineExtension[]): Promise<AgentSessionRuntime>;
 /** The project this process assembled its manifest from (project-guard.ts): fixed for the whole
  * run, since manifest extensions cannot be hot-loaded (DEVELOPMENT.md §8.2).

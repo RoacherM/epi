@@ -6,7 +6,7 @@
 
 MMP 不调用 PATH 中的 `pi`，使用独立的 `~/.mmp/pi` 运行目录，不继承 `~/.pi/agent` 的配置。Rules 与 Extensions 由 MMP Manifest 显式声明；Skills 还会从三个固定目录自动发现（见下面的 [Manifest](#manifest)）。MMP 不自动加载项目 `.agents/`、`AGENTS.md` 或 `CLAUDE.md`。
 
-已知隔离限制：交互模式不读取项目 `.pi/settings.json`；仍经过 Pi CLI 的非交互模式在启动查找会话时会读取该文件，可能影响会话目录。这是尚未消除的上游启动行为，见 [决策 D3](../decisions.md)，不要依赖项目 `.pi/` 配置 MMP。
+所有模式都不读取项目的 `.pi/settings.json`（0.1.9 起；此前非交互模式在启动查找会话时会读取，见 [决策 N1](../decisions.md)）。
 
 ## 配置布局
 

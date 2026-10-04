@@ -1,12 +1,21 @@
 import { parseArgs } from "@earendil-works/pi-coding-agent";
 import { passthroughHasFlag } from "../args.js";
 import { buildInlineExtensions } from "../extensions/index.js";
+import { createPreviewInlineExtension } from "../extensions/preview.js";
 import { buildTuiInitialMessages } from "../file-arguments.js";
 import { findNearestProjectManifest } from "../project.js";
 import { runTuiApp } from "./app.js";
 import { createMmpRuntime } from "./services.js";
 import { detectAppearance, installMmpTheme } from "./theme.js";
-/** Same Manifest assembly as the piMain path, handed to the SDK instead of Pi's CLI. */
+/** Extensions that are interface features (/preview) load only for the interactive TUI: print,
+ * json and rpc have no screen to put them on. They go before mmp:system-prompt, which has to stay
+ * last (extensions/index.ts). */
+function withInterfaceExtensions(extensionFactories) {
+    const last = extensionFactories.findIndex((extension) => extension.name === "mmp:system-prompt");
+    const at = last < 0 ? extensionFactories.length : last;
+    return [...extensionFactories.slice(0, at), createPreviewInlineExtension(), ...extensionFactories.slice(at)];
+}
+/** The Manifest assembly, handed to the SDK. */
 export async function createRuntimeFromPrepared(prepared, cwd, 
 // Mirrors host.ts's own construction (same flag, same default undefined updateCheck) so a caller
 // that builds a runtime straight from `prepared` (tests; host.ts always passes its own factories
@@ -16,7 +25,7 @@ extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, 
         cwd,
         agentDir: prepared.agentDir,
         piArgs: prepared.args.passthrough,
-        extensionFactories,
+        extensionFactories: withInterfaceExtensions(extensionFactories),
         externalExtensionPaths: prepared.assembly.externalExtensions.map((extension) => extension.value),
         assembly: prepared.assembly,
         projectIdentity: projectIdentityFromPrepared(prepared, cwd),
