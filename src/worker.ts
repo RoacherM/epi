@@ -140,11 +140,14 @@ async function main(): Promise<void> {
   const resolvedModel = capsule.model === undefined
     ? undefined
     : resolveCliModel({ cliModel: capsule.model, modelRuntime });
-  for (const warning of notRunningWarnings(providers, settingsManager.getDefaultProvider(), resolvedModel?.error !== undefined)) {
-    process.stderr.write(`Warning: ${warning.message}\n`);
-  }
+  // In the reported error, not on stderr: the task tool hands the model the error and keeps stderr
+  // as an artifact only (task-runtime.ts).
+  const notRunning = (choiceFailed: boolean): string =>
+    notRunningWarnings(providers, settingsManager.getDefaultProvider(), choiceFailed)
+      .map((warning) => `; ${warning.message}`)
+      .join("");
   if (resolvedModel?.error !== undefined) {
-    throw new Error(resolvedModel.error);
+    throw new Error(`${resolvedModel.error}${notRunning(true)}`);
   }
 
   const { session } = await createAgentSession({
@@ -161,6 +164,11 @@ async function main(): Promise<void> {
     ...(capsule.tools === undefined ? {} : { tools: capsule.tools }),
   });
   activeSession = session;
+  // Pi's `unknown` placeholder: no model could be picked. Say so with the cause when a provider
+  // that is not running explains it, instead of the prompt's "No API key found".
+  if ((session.model === undefined || session.model.provider === "unknown") && notRunning(true) !== "") {
+    throw new Error(`No model available${notRunning(true)}`);
+  }
   emit({ type: "started", pid: process.pid });
 
   try {

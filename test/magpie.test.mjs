@@ -548,7 +548,11 @@ test("a gateway that is not running is named when settings or a pattern select M
   const fixture = withSettings(magpieDefault, false);
   const capsulePath = join(fixture.home, "capsule.json");
   writeFileSync(capsulePath, JSON.stringify({ version: 1, task: "hi", cwd: fixture.home, agentDir: join(fixture.mmpHome, "pi"), systemPrompt: "", tools: [] }));
-  await assert.rejects(run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000 }), notRunning);
+  // In the worker's reported error (what the task tool passes on), not only on stderr.
+  await assert.rejects(
+    run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000 }),
+    new RegExp(`"error":"No model available; Model list refresh failed for magpie: Magpie is not running at ${absent}`),
+  );
 });
 
 // The catalog saved at startup must not leave Pi's store needing its lock again: rpc refreshes in
