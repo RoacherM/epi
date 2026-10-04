@@ -21,6 +21,10 @@ export type Kind = "text" | "image" | "video" | "quicklook";
 export declare const MAX_TEXT_BYTES: number;
 export declare const HEX_BYTES: number;
 export declare function readEntries(dir: string, showHidden: boolean): Entry[];
+/** Brings an entry's size and times up to date. A listing is cached by its directory's mtime, which
+ * does not change when a file is rewritten in place: the file being looked at would stay stale,
+ * and that is the usual case (the agent just edited it). */
+export declare function restat(entry: Entry): void;
 export declare function kindOf(name: string): Kind;
 export declare function humanSize(bytes: number): string;
 export declare function clock(seconds: number): string;

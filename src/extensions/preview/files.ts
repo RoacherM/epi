@@ -89,6 +89,22 @@ export function readEntries(dir: string, showHidden: boolean): Entry[] {
   );
 }
 
+/** Brings an entry's size and times up to date. A listing is cached by its directory's mtime, which
+ * does not change when a file is rewritten in place: the file being looked at would stay stale,
+ * and that is the usual case (the agent just edited it). */
+export function restat(entry: Entry): void {
+  try {
+    const stats = statSync(entry.path);
+    entry.size = stats.size;
+    entry.mtime = stats.mtime;
+    entry.mode = stats.mode;
+    entry.isFile = stats.isFile();
+    entry.isDir = stats.isDirectory();
+  } catch {
+    // gone: the next listing drops it, and reading it says why
+  }
+}
+
 export function kindOf(name: string): Kind {
   const ext = extname(name).toLowerCase();
   if (IMAGE_EXT.has(ext)) return "image";
@@ -142,7 +158,7 @@ export interface Doc {
   truncated: boolean;
 }
 
-const docCache = new Map<string, { mtime: number; doc: Doc }>();
+const docCache = new Map<string, { mtime: number; size: number; doc: Doc }>();
 
 function hexDump(bytes: Buffer): string[] {
   const lines: string[] = [];
@@ -158,7 +174,7 @@ function hexDump(bytes: Buffer): string[] {
 export function loadDoc(entry: Entry): Doc {
   if (!entry.isFile) return { kind: "text", lines: ["not a regular file"], truncated: false };
   const cached = docCache.get(entry.path);
-  if (cached && cached.mtime === entry.mtime.getTime()) return cached.doc;
+  if (cached && cached.mtime === entry.mtime.getTime() && cached.size === entry.size) return cached.doc;
 
   let doc: Doc;
   let fd: number | undefined;
@@ -193,11 +209,11 @@ export function loadDoc(entry: Entry): Doc {
       }
     }
   } catch (error) {
-    doc = { kind: "text", lines: [`cannot read file: ${error instanceof Error ? error.message : String(error)}`], truncated: false };
+    doc = { kind: "text", lines: [printable(`cannot read file: ${error instanceof Error ? error.message : String(error)}`)], truncated: false };
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
-  docCache.set(entry.path, { mtime: entry.mtime.getTime(), doc });
+  docCache.set(entry.path, { mtime: entry.mtime.getTime(), size: entry.size, doc });
   if (docCache.size > 16) docCache.delete(docCache.keys().next().value!);
   return doc;
 }

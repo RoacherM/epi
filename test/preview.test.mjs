@@ -235,6 +235,21 @@ test("an image that is gone is reported as such, not as a missing ffmpeg", async
   });
 });
 
+// The usual reason to look at a file: the agent just changed it.
+test("a file rewritten while it is shown is shown with its new content", (t) => {
+  let project;
+  const { screens } = runApp(t, [
+    ...open(" alpha.txt"), ["waitFor", "first line", { screen: true }],
+    ["writeFile", { path: "alpha.txt", content: "REWRITTEN BY THE AGENT\nand a third line\nmore\n" }],
+    ["type", "j"], ["waitFor", "REWRITTEN BY THE AGENT", { screen: true }], ["screen", "viewer"],
+    ["type", "q"], ["waitFor", "space mark", { screen: true }], ["screen", "browser"], ...close,
+  ], { setup: (dir) => { project = dir; } });
+  assert.match(shown(screens.viewer), /alpha\.txt 3 lines/);
+  assert.doesNotMatch(shown(screens.viewer), /first line/);
+  assert.match(shown(screens.browser), /REWRITTEN BY THE AGENT/);
+  assert.ok(project);
+});
+
 test("i quotes a path with spaces the way file completion does", (t) => {
   const { screens } = runApp(t, [
     ...open(), ["waitFor", "two words.txt", { screen: true }],
@@ -262,9 +277,13 @@ function fakeMediaTools(t, { ffplay = true, stats = true } = {}) {
   const bin = tempDir(t);
   const pids = join(bin, "pids");
   const script = `#!${process.execPath}
+if (process.argv.includes("--warm-up")) process.exit(0);
 const fs = require("node:fs");
 fs.appendFileSync(${JSON.stringify(pids)}, process.pid + "\\n");
-const frame = Buffer.from(${JSON.stringify(ONE_PIXEL_PNG.toString("base64"))}, "base64");
+// A frame the size of a real one (PNG signature, one 150 KB chunk, IEND), so that pipe chunks cut
+// frames in the middle the way they do with real video.
+const chunk = (type, size) => Buffer.concat([Buffer.from([size >>> 24, (size >>> 16) & 255, (size >>> 8) & 255, size & 255]), Buffer.from(type), Buffer.alloc(size + 4)]);
+const frame = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("frAm", 150000), chunk("IEND", 0)]);
 if (process.argv[1].endsWith("ffmpeg") && !process.argv.includes("-vn")) {
   let sent = 0;
   const pump = () => { while (sent < 600) { sent += 1; if (!process.stdout.write(frame)) return process.stdout.once("drain", pump); } };
@@ -280,6 +299,9 @@ if (process.argv[1].endsWith("ffmpeg") && !process.argv.includes("-vn")) {
   for (const name of ffplay ? ["ffmpeg", "ffplay"] : ["ffmpeg"]) {
     writeFileSync(join(bin, name), script);
     chmodSync(join(bin, name), 0o755);
+    // The first run of a new executable can take over a second (macOS checks it); do that here,
+    // not in the middle of a timing check.
+    execFileSync(join(bin, name), ["--warm-up"]);
   }
   const previous = process.env.PATH;
   process.env.PATH = bin;
@@ -335,6 +357,26 @@ test("the player follows the sound's clock, catches up after a stall, holds whil
   player.stop();
   await sleep(300);
   assert.deepEqual(pids.filter(alive), [], "a media process outlived stop()");
+});
+
+// Seeking replaces the frame source while the old one still has output on its way. That output
+// used to be mixed into the new stream: the picture ended a few frames later.
+test("a seek during playback goes on playing from the new position", async (t) => {
+  fakeMediaTools(t);
+  const player = new Player("clip.mp4", 80, 24, false, () => {}, { fps: 30 });
+  t.after(() => player.stop());
+  player.play(0);
+  await until(() => player.position > 0.3, "playback to get going");
+  player.seek(5);
+  await until(() => player.position > 5.3, "playback to go on after the seek");
+  for (const _again of [1, 2, 3]) {
+    player.seek(player.position + 5);
+    await sleep(50);
+  }
+  const from = player.position;
+  await until(() => player.position > from + 0.5, "playback to go on after three quick seeks");
+  assert.equal(player.ended, false);
+  assert.equal(player.error, undefined);
 });
 
 test("without a sound clock the picture goes by the wall clock: at once when ffplay is missing, after a short wait when it stays silent", async (t) => {

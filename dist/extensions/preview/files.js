@@ -65,6 +65,22 @@ export function readEntries(dir, showHidden) {
     }
     return entries.sort((a, b) => a.isDir === b.isDir ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) : a.isDir ? -1 : 1);
 }
+/** Brings an entry's size and times up to date. A listing is cached by its directory's mtime, which
+ * does not change when a file is rewritten in place: the file being looked at would stay stale,
+ * and that is the usual case (the agent just edited it). */
+export function restat(entry) {
+    try {
+        const stats = statSync(entry.path);
+        entry.size = stats.size;
+        entry.mtime = stats.mtime;
+        entry.mode = stats.mode;
+        entry.isFile = stats.isFile();
+        entry.isDir = stats.isDirectory();
+    }
+    catch {
+        // gone: the next listing drops it, and reading it says why
+    }
+}
 export function kindOf(name) {
     const ext = extname(name).toLowerCase();
     if (IMAGE_EXT.has(ext))
@@ -123,7 +139,7 @@ export function loadDoc(entry) {
     if (!entry.isFile)
         return { kind: "text", lines: ["not a regular file"], truncated: false };
     const cached = docCache.get(entry.path);
-    if (cached && cached.mtime === entry.mtime.getTime())
+    if (cached && cached.mtime === entry.mtime.getTime() && cached.size === entry.size)
         return cached.doc;
     let doc;
     let fd;
@@ -164,13 +180,13 @@ export function loadDoc(entry) {
         }
     }
     catch (error) {
-        doc = { kind: "text", lines: [`cannot read file: ${error instanceof Error ? error.message : String(error)}`], truncated: false };
+        doc = { kind: "text", lines: [printable(`cannot read file: ${error instanceof Error ? error.message : String(error)}`)], truncated: false };
     }
     finally {
         if (fd !== undefined)
             closeSync(fd);
     }
-    docCache.set(entry.path, { mtime: entry.mtime.getTime(), doc });
+    docCache.set(entry.path, { mtime: entry.mtime.getTime(), size: entry.size, doc });
     if (docCache.size > 16)
         docCache.delete(docCache.keys().next().value);
     return doc;

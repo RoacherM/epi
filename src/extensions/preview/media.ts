@@ -10,7 +10,7 @@ import type { Readable } from "node:stream";
 import type { ImageDimensions } from "@earendil-works/pi-tui";
 
 import { piTui } from "../../tui/pi-tui.js";
-import { type Entry, kindOf } from "./files.js";
+import { type Entry, kindOf, printable } from "./files.js";
 
 const { getCellDimensions, getImageDimensions } = piTui;
 
@@ -34,8 +34,9 @@ const METER_HISTORY = 2000;
 const METER_FLOOR_DB = -90;
 const METER_RANGE_DB = 12;
 
+/** An error as text that can be drawn: messages from Node and from ffmpeg quote the file's path. */
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return printable(error instanceof Error ? error.message : String(error));
 }
 
 /** A program that could not be started. Only a failed spawn means "not installed": a missing media
@@ -92,7 +93,7 @@ function run(command: string, args: string[], timeoutMs = 20_000): Promise<Buffe
     child.on("close", (code) => {
       clearTimeout(timer);
       if (code === 0) resolveRun(Buffer.concat(chunks));
-      else reject(new Error(stderr.trim().split("\n").pop() || `${command} exited with ${code}`));
+      else reject(new Error(printable(stderr.trim().split("\n").pop() || `${command} exited with ${code}`)));
     });
   });
 }
@@ -104,11 +105,14 @@ function frameRate(text: string | undefined): number | undefined {
   return Number.isFinite(rate) && rate > 0 ? rate : undefined;
 }
 
+/** How long the viewer waits for ffprobe before it plays at the default frame rate. */
+const PROBE_TIMEOUT_MS = 3000;
+
 export async function probe(path: string): Promise<Probe> {
   const out = await run("ffprobe", [
     "-v", "error", "-select_streams", "v:0",
     "-show_entries", "stream=width,height,codec_name,avg_frame_rate:format=duration", "-of", "json", path,
-  ]);
+  ], PROBE_TIMEOUT_MS);
   const json = JSON.parse(out.toString()) as { streams?: { width?: number; height?: number; codec_name?: string; avg_frame_rate?: string }[]; format?: { duration?: string } };
   const stream = json.streams?.[0];
   const duration = Number(json.format?.duration);
@@ -296,6 +300,9 @@ export class Player {
     this.child = child;
     if (this.playing) this.startAudio(this.from);
     child.stdout.on("data", (chunk: Buffer) => {
+      // A child replaced by a seek still delivers what it had buffered: mixed into the new child's
+      // stream it broke the frame boundaries, and the rest of the file was decoded into memory.
+      if (this.child !== child) return;
       let buffer = this.partial.length > 0 ? Buffer.concat([this.partial, chunk]) : chunk;
       while (true) {
         const frame = takePngFrame(buffer);
@@ -315,9 +322,10 @@ export class Player {
     child.on("close", (code) => {
       if (this.child !== child) return;
       this.sourceDone = true;
-      if (code !== 0 && this.shown === 0 && this.queue.length === 0) this.error ??= stderr.trim().split("\n").pop() || "ffmpeg failed";
+      if (code !== 0 && this.shown === 0 && this.queue.length === 0) this.error ??= printable(stderr.trim().split("\n").pop() || "ffmpeg failed");
     });
-    this.timer = setInterval(() => this.tick(), 1000 / this.fps);
+    // At least ten ticks a second, so a slow source still shows its first frame promptly.
+    this.timer = setInterval(() => this.tick(), Math.min(100, 1000 / this.fps));
   }
 
   /** Where playback is now, or undefined while the first frame waits for the sound. */
@@ -348,12 +356,14 @@ export class Player {
       this.needFrame = false;
       this.onFrame();
     } else if (this.sourceDone) {
-      if (this.loop && this.shown > 0 && !this.error) {
+      // A one-frame GIF has nothing to loop: restarting it would spawn ffmpeg again every tick.
+      if (this.loop && this.shown > 1 && !this.error) {
         this.play(0);
       } else {
         this.ended = true;
         this.playing = false;
         clearInterval(this.timer);
+        this.stopAudio(); // a longer audio track would go on sounding under the stopped picture
         this.onFrame();
       }
     }

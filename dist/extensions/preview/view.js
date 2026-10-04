@@ -5,8 +5,8 @@ import { basename, dirname, extname, relative } from "node:path";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { piTui } from "../../tui/pi-tui.js";
 import { centered, imageBody, pad, scrollbar, scrollFromBar } from "./draw.js";
-import { statSync } from "node:fs";
-import { clock, HEX_BYTES, humanSize, icon, kindOf, loadDoc, localTime, MAX_TEXT_BYTES, permString, printable, readEntries } from "./files.js";
+import { existsSync, statSync } from "node:fs";
+import { clock, HEX_BYTES, humanSize, icon, kindOf, loadDoc, localTime, MAX_TEXT_BYTES, permString, printable, readEntries, restat } from "./files.js";
 import { audioWave, Player, probe, SEEK_SECONDS, StillCache, stillJob } from "./media.js";
 const { Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } = piTui;
 const HEIGHT_RATIO = 0.85;
@@ -132,7 +132,7 @@ class Viewer {
     textRows(width) {
         const doc = loadDoc(this.entry);
         const rendered = doc.markdown !== undefined && this.markdown;
-        const key = `${width}|${this.wrap}|${rendered}`;
+        const key = `${width}|${this.wrap}|${rendered}|${this.entry.mtime.getTime()}|${this.entry.size}`;
         if (this.rowsCache?.key === key)
             return this.rowsCache.rows;
         let rows;
@@ -171,6 +171,7 @@ class Viewer {
         const th = this.theme;
         const name = th.fg("accent", this.entry.label);
         if (this.mode === "text") {
+            restat(this.entry);
             const doc = loadDoc(this.entry);
             const rows = this.textRows(width - 1);
             const max = Math.max(0, rows.length - height);
@@ -370,7 +371,8 @@ export class FileBrowser {
         this.cd(parent, basename(this.cwd));
     }
     insert() {
-        const paths = this.marked.size > 0 ? [...this.marked] : this.current() ? [this.current().path] : [];
+        // A marked file that was deleted since is left out.
+        const paths = this.marked.size > 0 ? [...this.marked].filter((path) => existsSync(path)) : this.current() ? [this.current().path] : [];
         this.finish(paths.length > 0 ? { paths } : undefined);
     }
     handleInput(data) {
@@ -572,6 +574,8 @@ export class FileBrowser {
     previewColumn(width, height) {
         const th = this.theme;
         const entry = this.current();
+        if (entry)
+            restat(entry);
         if (entry?.path !== this.previewFor) {
             this.previewFor = entry?.path ?? "";
             this.previewScroll = 0;
