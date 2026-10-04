@@ -21,7 +21,7 @@ import { fuzzyFilter } from "@earendil-works/pi-tui";
 import type { ResolvedAssembly } from "./assembly.js";
 import { extensionLoadFailureHint, PROVIDER_LOGIN_HELP } from "./pi-output.js";
 import { settleRegisteredProviders } from "./provider-startup.js";
-import { configureHttpAtStartup } from "./tui/services.js";
+import { configureHttpAtStartup, settingsDiagnostics } from "./tui/services.js";
 
 type Diagnostic = { type: "error" | "warning" | "info"; message: string };
 type ParsedPiArgs = ReturnType<typeof parseArgs>;
@@ -125,10 +125,7 @@ export async function runListModels(
   // main.js createRuntime's list, in its order.
   const diagnostics: Diagnostic[] = [
     ...services.diagnostics,
-    ...services.settingsManager.drainErrors().map(({ scope, path, error }) => ({
-      type: "warning" as const,
-      message: path ? `Invalid settings file ${path}: ${error.message}` : `Invalid ${scope} settings: ${error.message}`,
-    })),
+    ...settingsDiagnostics(services.settingsManager),
     ...extensions.errors.map(({ path, error }) => ({
       type: "error" as const,
       message: `Failed to load extension "${path}": ${error}`,

@@ -1,7 +1,7 @@
 type FlagArity = "none" | "value";
 /**
  * "forward": validated for arity/unknown-flag purposes only, then pushed verbatim into
- * `passthrough` for Pi's own parser (piMain, or MMP's TUI's `parseArgs` call) to interpret and
+ * `passthrough` for Pi's own parser (`parseArgs`, called by src/tui/services.ts on every path) to interpret and
  * validate the value of -- MMP does not duplicate Pi's own value validation (enum checks, etc.),
  * so error text for a bad value stays exactly what Pi would say.
  * "mmp": consumed here, never forwarded (dry-run, no-project, approve/no-approve, version, help).
@@ -20,7 +20,7 @@ interface FlagTableEntry {
  * in none of those is held back instead (Pi's own `parseArgs` `unknownFlags`, cli/args.js) and
  * forwarded on both paths -- it may be one an extension registers with `pi.registerFlag`, which
  * only loading extensions can confirm; downstream (agent-session-services.js's
- * applyExtensionFlagValues, run on both the TUI path and piMain) errors by name if nothing claims
+ * applyExtensionFlagValues, run for the TUI and for print/json/rpc alike) errors by name if nothing claims
  * it.
  */
 export declare const MMP_FLAG_TABLE: readonly FlagTableEntry[];

@@ -55,7 +55,8 @@ export async function processFileArguments(fileArgs: readonly string[], cwd: str
     if (mimeType) {
       imagePaths.push(absolutePath);
       images.push({ type: "image", mimeType, data: readFileSync(absolutePath).toString("base64") });
-      text += `<file name="${absolutePath}">image file</file>\n`;
+      // Pi's processFileArguments writes an empty element for an image it attaches unchanged.
+      text += `<file name="${absolutePath}"></file>\n`;
       continue;
     }
     const content = readFileSync(absolutePath, "utf8").replace(/^﻿/, "");

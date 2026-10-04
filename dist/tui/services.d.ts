@@ -38,5 +38,7 @@ export type Diagnostic = {
 export declare function configureHttpAtStartup(settingsManager: SettingsManager): void;
 /** Pi's applyRuntimeSettings (rebind, /reload, /settings): the dispatcher with the idle timeout. */
 export declare function configureHttp(settingsManager: SettingsManager): void;
+/** main.js's collectSettingsDiagnostics: settings files that could not be read or parsed. */
+export declare function settingsDiagnostics(settingsManager: SettingsManager): Diagnostic[];
 export declare function createMmpRuntime(options: MmpSessionOptions): Promise<AgentSessionRuntime>;
 //# sourceMappingURL=services.d.ts.map

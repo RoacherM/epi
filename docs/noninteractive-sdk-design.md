@@ -209,7 +209,26 @@ D80 的验证（加 CPU 负载，默认模型是 Magpie、没有保存 key）：
 | `mmp -p hi` | 47/60 通过 | 60/60 |
 | task 子进程（`dist/worker.js`） | 55/60 通过 | 60/60 |
 
-这个竞争取决于 Pi 内部两次刷新读 `models.json` 的先后，写不出确定性的测试；我试过给 provider 的认证检查加 300ms 延迟，改动前也能通过。
+我原来认为这个竞争写不出确定性的测试。Fable 审查给出了做法：把 Pi 注册 provider 时启动的那次刷新拖后 60ms、每次可用性检查拖慢 250ms，改动前 `-p`、json、rpc 0/5，改动后 5/5。已做成夹具 `test/fixtures/slow-registration-refresh.mjs` 和 `test/magpie.test.mjs` 里的测试。
+
+审查还发现两个扩展同时注册 provider 时一次等待不够：第二次不等待的刷新可能在等待期间把结果作废，默认的 Magpie 模型被跳过，运行悄悄改用另一个模型。所以 `settleRegisteredProviders` 在刷新之后核对"Pi 的快照说没有认证、provider 自己的检查说有"这种状态，不对就再刷新，最多 3 次（**主控定**）。审查的强制时序复现：修复前 0/4，修复后 4/4。
+
+### 8.1.1 审查后补上的差异清单（第一轮 Fable 审查，P2-1）
+
+除了上面三条 `Error: ` 前缀，非交互模式下还有这些和 `piMain` 不同（都由 MMP 自己的 `buildSessionManager` 决定，和交互模式一致）：
+
+| 情况 | 以前（Pi） | 现在 | 处理 |
+|---|---|---|---|
+| `--resume` | 打开 Pi 的会话选择器 | 报错退出 1，提示用 `--continue` 或 `--session <id>` | 审查 P1：之前被静默忽略、新建了会话。选择器只有 MMP 的界面有 |
+| `--session` 指向别的项目的会话 | `mmp: …` 退出 2（MMP 的预检查） | `Error: …` 退出 1 | 和其他会话错误一致（**主控定**） |
+| 会话的 cwd 已不存在 | `Stored session working directory does not exist … Session file: …` | `Error: Session working directory does not exist … Use --fork …` | 用 MMP 交互模式已有的文案 |
+| `--session <id 前缀>` 匹配到同项目另一个目录的会话 | 询问 `Fork this session into current directory? [y/N]` | 直接打开那个会话，在它自己的目录运行 | 和交互模式一致；非交互模式本来就不该等输入 |
+| 无效的 `--session-id`（如 `../evil`） | `Error: Session id must be …` | 相同（审查发现先打印了"creating a new session"再报错，已改成先校验） | 已修 |
+| `--fork <不存在或损坏的文件>` | `Error: Cannot fork …` | 相同（审查发现前缀变成了 `mmp:`，已修） | 已修 |
+| 启动失败时的无效 settings 警告 | 打印 | 相同（审查发现失败路径漏了，已修） | 已修 |
+| `@file` 图片在提示里的文字 | `<file name="x.png"></file>` | 相同（审查发现 MMP 写的是 `image file`，模型看到的文字不一样；已改成 Pi 的写法，交互模式也一起改了） | 已修 |
+| `@file` 是需要转换格式的图片（如 BMP） | 转换说明写在 `<file>` 标签里 | 转换说明在用户消息之后（由会话统一处理） | 留着：图片内容相同，只有说明的位置不同 |
+| `@file` 读不了（权限、是目录） | `Error: Could not read file …` | `mmp: EACCES …` / `mmp: EISDIR …` | 留着 |
 
 ### 8.2 第二次合并：Magpie 作为普通 provider 扩展（T5、T6）
 

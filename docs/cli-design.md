@@ -20,20 +20,20 @@ MMP 是**改名叫 mmp 的定制版 Pi**：
 | 运行方式 | 走哪条路 |
 |---|---|
 | 交互（stdin、stdout 都是终端，且没有 `-p`、`--mode json/rpc`、`--help`、`--list-models`、`--export`；`--mode text` 也算交互，和 Pi 的 `resolveAppMode` 一致，dogfood D53） | MMP 自己的界面（`src/tui/`）；Pi 自己的交互界面永远不会启动 |
-| 非交互：`-p`、`--mode json`、`--mode rpc`、`--export`、非终端 | 底层用 Pi 的实现（`piMain`），对外参数和帮助是 MMP 的。读 stdout 的一方提前关掉管道（`\| head -c1`、`\| true`）算正常结束：不再写 stdout，停掉这次运行、跳过剩下的 `-p` 消息，照常关闭会话（`session_shutdown` 跑完），按这次运行本来的退出码安静退出（dogfood D54，`src/closed-stdout.ts`） |
+| 非交互：`-p`、`--mode json`、`--mode rpc`、`--export`、非终端 | 会话由 MMP 用 SDK 搭（和交互模式同一个 `createMmpRuntime`），输入输出用 Pi 导出的 `runPrintMode` / `runRpcMode`（`src/noninteractive.ts`，决策 N1）；只有 `--export` 还交给 Pi 的 `main()`。对外参数和帮助是 MMP 的。`--resume` 要打开会话选择器，只有交互模式有，非交互模式下报错。读 stdout 的一方提前关掉管道（`\| head -c1`、`\| true`）算正常结束：不再写 stdout，停掉这次运行、跳过剩下的 `-p` 消息，照常关闭会话（`session_shutdown` 跑完），按这次运行本来的退出码安静退出（dogfood D54，`src/closed-stdout.ts`） |
 | `--list-models [search]` | MMP 自己实现（`src/list-models.ts`，dogfood D48）：Pi 的这条路不报扩展诊断、空列表时打印 Pi 的 `/login` 文案和文档链接 |
 | 子命令：`mmp update / install / remove / uninstall / list / config / auth / mcp` | MMP 自己的子命令（第 3 节） |
 
 ## 2. 参数清单
 
-MMP 自己维护这份清单。清单外的短参数（`-x`）一律报错退出。清单外的长参数（`--foo`）不会立刻报错：和 Pi 自己的 `parseArgs`（`unknownFlags`）一样先原样保留，交给两条路径各自的运行时（`-p` 等非交互走 `piMain`；MMP 自己的界面走 `src/tui/services.ts`）在扩展加载完之后核对——某个已加载的扩展用 `pi.registerFlag` 声明过这个参数就接受，否则在启动界面前按参数名报错退出（Pi 的 `agent-session-services.js` `applyExtensionFlagValues`）。`mmp --help` 打印 MMP 自己的帮助文本，覆盖下表所有参数，不附上 Pi 的帮助；如果 Manifest 里的扩展注册了参数，额外打印一段"Extension options"（和 Pi 自己的 `--help` 一样，为此会先加载一遍扩展——只加载扩展，不建会话/连模型；加载失败就跳过这一段，`--help` 本身始终成功）。
+MMP 自己维护这份清单。清单外的短参数（`-x`）一律报错退出。清单外的长参数（`--foo`）不会立刻报错：和 Pi 自己的 `parseArgs`（`unknownFlags`）一样先原样保留，交给运行时（所有模式都走 `src/tui/services.ts`）在扩展加载完之后核对——某个已加载的扩展用 `pi.registerFlag` 声明过这个参数就接受，否则在启动界面前按参数名报错退出（Pi 的 `agent-session-services.js` `applyExtensionFlagValues`）。`mmp --help` 打印 MMP 自己的帮助文本，覆盖下表所有参数，不附上 Pi 的帮助；如果 Manifest 里的扩展注册了参数，额外打印一段"Extension options"（和 Pi 自己的 `--help` 一样，为此会先加载一遍扩展——只加载扩展，不建会话/连模型；加载失败就跳过这一段，`--help` 本身始终成功）。
 
 Manifest 里的扩展启动时加载失败，两条路径都和 Pi 一样报错退出（退出码 1）：显示 Pi 的原始错误 `Failed to load extension "<path>": ...`，后面跟 MMP 自己的提示 `Hint: Fix the extension, or remove it from the Manifest that declares it ("mmp list" shows which).`。失败的是内置能力（`<inline:mmp:task>` 等；`<inline:codemode>`、`<inline:tool-search>` 随 `mmp:mcp` 加载，按 `mmp:mcp` 算，提示写 "loaded with mmp:mcp"。常见原因是第三方扩展注册了同名工具，例如 `todo`、`codemode`、`tool_search`）时，提示换成怎么关掉它：`"disable": ["mmp:task"]` 加到哪个文件（它写在某个文件的 `extensions` 里时，先从那里删掉），或者删掉冲突的那个扩展（K4）。Pi 原来的提示 `Start without extensions using "pi -ne"` 不会出现（MMP 没有 `-ne`）：`piMain` 路径在 stderr 上把这一行换掉（`src/pi-output.ts`，登记在 docs/pi-internals.md `pi-extension-load-hint`），MMP 自己的界面在 `src/tui/services.ts` 里把加载错误当作启动错误（D45；之前界面会跳过失败的扩展直接启动，什么都不显示）。只有启动时的第一个运行时会因此退出；`/new`、`/resume`、`/fork`、`/import` 会重新加载扩展，这时的加载错误和 Pi 一样作为提示显示在对话里，界面继续运行。
 
 | 参数 | 和 Pi 对齐 | 说明 |
 |---|---|---|
 | `--provider`、`--model`、`--thinking`、`--api-key`、`--models` | 是 | |
-| `-c/--continue`、`-r/--resume`、`--session`、`--session-id`、`--fork`、`--session-dir`、`--no-session`、`-n/--name` | 是 | `--session-dir` 和 Pi 一样展开 `~`；没给时依次看 `MMP_SESSION_DIR`（MMP 自己的变量，语义和 Pi 的 `PI_CODING_AGENT_SESSION_DIR` 一样，但从不读取后者——Pi 装置设置的这个变量不会泄漏进 MMP）、设置里的 `sessionDir`。两条运行路径（`piMain` 和 `src/tui/services.ts`）用同一份解析结果：启动时 `PI_CODING_AGENT_SESSION_DIR` 被清掉，再按 `MMP_SESSION_DIR` 重新赋值（§2.1） |
+| `-c/--continue`、`-r/--resume`、`--session`、`--session-id`、`--fork`、`--session-dir`、`--no-session`、`-n/--name` | 是 | `--session-dir` 和 Pi 一样展开 `~`；没给时依次看 `MMP_SESSION_DIR`（MMP 自己的变量，语义和 Pi 的 `PI_CODING_AGENT_SESSION_DIR` 一样，但从不读取后者——Pi 装置设置的这个变量不会泄漏进 MMP）、设置里的 `sessionDir`。所有模式都由 `src/tui/services.ts` 解析，读的是 `MMP_SESSION_DIR` |
 | `-t/--tools`、`-xt/--exclude-tools`、`-nt/--no-tools`、`-nbt/--no-builtin-tools` | 是 | |
 | `-p/--print`、`--mode text/json/rpc` | 是 | benchmark 的标准入口 `mmp --mode json --no-session --no-approve -p "…"`（docs/development.md 第 20 节）保持不变。print/json 跑完后 MMP 等 stdout、stderr 写完就 `process.exit`（退出码不变）：Pi 这里只设 `process.exitCode` 再返回，扩展占着定时器/句柄时进程不退出（dogfood D50，和 Pi 不同）；rpc 和其他已经自己退出的路径不受影响 |
 | `--list-models [search]` | 是 | 输出表格和 Pi 一样。扩展诊断（注册 provider 失败、扩展加载失败）和 `-p` 一样打到 stderr，有错误就退出 1；没有模型时打印 MMP 自己的提示（`/login` 或在 Manifest 里声明 provider 扩展）。不加载 Pi 内置的 llama.cpp 扩展（和交互界面一样）。表格总是写到 stdout，和 `-p`/`--mode` 同用时也是（Pi 那时写到 stderr）；多余或缺值的扩展参数现在和 `-p` 一样报错退出 1 |

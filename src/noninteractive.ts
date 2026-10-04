@@ -20,7 +20,7 @@ import { processFileArguments } from "./file-arguments.js";
 import type { PreparedMmpRun } from "./host.js";
 import { PROVIDER_LOGIN_HELP } from "./pi-output.js";
 import { findNearestProjectManifest } from "./project.js";
-import { type Diagnostic, createMmpRuntime, StartupDiagnosticsError } from "./tui/services.js";
+import { type Diagnostic, createMmpRuntime, settingsDiagnostics, StartupDiagnosticsError } from "./tui/services.js";
 
 // pi-internals row `output-guard-stdout-write`: Pi's core/output-guard.js is not exported. The
 // mode runners write through it, so the takeover has to be this same module instance.
@@ -110,6 +110,55 @@ async function createRuntime(
   }
 }
 
+/** main.js: rpc refreshes the model catalogs in the background once it is up. */
+function refreshCatalogsInBackground(runtime: AgentSessionRuntime): void {
+  if (process.env.PI_OFFLINE !== undefined) return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  void runtime.services.modelRuntime
+    .refresh({ signal: controller.signal })
+    .catch(() => {})
+    .finally(() => clearTimeout(timeout));
+}
+
+/** What main.js checks before a session exists. `--resume` opens Pi's session picker there, which
+ * only MMP's TUI has; dropping the flag would quietly start a new session instead. */
+function refuseUnsupportedArgs(parsed: ParsedPiArgs, mode: "rpc" | "json" | "text"): void {
+  if (mode === "rpc" && parsed.fileArgs.length > 0) {
+    exitWithError("Error: @file arguments are not supported in RPC mode");
+  }
+  if (parsed.resume === true) {
+    exitWithError("Error: --resume opens the session selector, which needs a terminal. Use --continue, or --session <id>.");
+  }
+}
+
+async function runPrint(runtime: AgentSessionRuntime, parsed: ParsedPiArgs, mode: "json" | "text", cwd: string): Promise<void> {
+  const prompts = await prepareMessages(parsed, cwd).catch((error: unknown) => {
+    if (error instanceof MmpPreflightError) exitWithError(`Error: ${error.message}`);
+    throw error;
+  });
+  reportStartup(runtime);
+  const exitCode = await runPrintMode(runtime, {
+    mode,
+    messages: prompts.messages,
+    ...(prompts.initialMessage === undefined ? {} : { initialMessage: prompts.initialMessage }),
+    ...(prompts.initialImages === undefined ? {} : { initialImages: prompts.initialImages }),
+  });
+  restoreStdout();
+  if (exitCode !== 0) process.exitCode = exitCode;
+}
+
+/** main.js after the runtime exists: the theme, every startup diagnostic, and no run without a model. */
+function reportStartup(runtime: AgentSessionRuntime): void {
+  const { settingsManager } = runtime.services;
+  // Extensions read the theme through Pi's process-wide one, also without a terminal.
+  initTheme(settingsManager.getTheme(), false);
+  reportDiagnostics([...settingsDiagnostics(settingsManager), ...runtime.diagnostics]);
+  if (!runtime.session.model) {
+    exitWithError(`No models available. ${PROVIDER_LOGIN_HELP}`);
+  }
+}
+
 export async function runNonInteractive(
   prepared: PreparedMmpRun,
   extensionFactories: InlineExtension[],
@@ -119,48 +168,13 @@ export async function runNonInteractive(
   const mode = parsed.mode === "rpc" ? "rpc" : parsed.mode === "json" ? "json" : "text";
   // From here stdout belongs to the mode runner; anything else written to it goes to stderr.
   takeOverStdout();
-  if (mode === "rpc" && parsed.fileArgs.length > 0) {
-    exitWithError("Error: @file arguments are not supported in RPC mode");
-  }
+  refuseUnsupportedArgs(parsed, mode);
   const runtime = await createRuntime(prepared, extensionFactories, cwd);
-  const { settingsManager, modelRuntime } = runtime.services;
-  let prompts: Awaited<ReturnType<typeof prepareMessages>> | undefined;
   if (mode !== "rpc") {
-    try {
-      prompts = await prepareMessages(parsed, cwd);
-    } catch (error) {
-      if (error instanceof MmpPreflightError) exitWithError(`Error: ${error.message}`);
-      throw error;
-    }
-  }
-  // Extensions read the theme through Pi's process-wide one, also without a terminal.
-  initTheme(settingsManager.getTheme(), false);
-  reportDiagnostics([
-    ...settingsManager.drainErrors().map(({ scope, path, error }): Diagnostic => ({
-      type: "warning",
-      message: path ? `Invalid settings file ${path}: ${error.message}` : `Invalid ${scope} settings: ${error.message}`,
-    })),
-    ...runtime.diagnostics,
-  ]);
-  if (!runtime.session.model) {
-    exitWithError(`No models available. ${PROVIDER_LOGIN_HELP}`);
-  }
-  if (mode === "rpc") {
-    // main.js: rpc refreshes the model catalogs in the background once it is up.
-    if (process.env.PI_OFFLINE === undefined) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15_000);
-      void modelRuntime.refresh({ signal: controller.signal }).catch(() => {}).finally(() => clearTimeout(timeout));
-    }
-    await runRpcMode(runtime);
+    await runPrint(runtime, parsed, mode, cwd);
     return;
   }
-  const exitCode = await runPrintMode(runtime, {
-    mode,
-    messages: prompts?.messages ?? [],
-    ...(prompts?.initialMessage === undefined ? {} : { initialMessage: prompts.initialMessage }),
-    ...(prompts?.initialImages === undefined ? {} : { initialImages: prompts.initialImages }),
-  });
-  restoreStdout();
-  if (exitCode !== 0) process.exitCode = exitCode;
+  reportStartup(runtime);
+  refreshCatalogsInBackground(runtime);
+  await runRpcMode(runtime);
 }

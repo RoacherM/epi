@@ -365,8 +365,8 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
   );
   // Deviation from Pi (dogfood D50): after print/json mode, Pi's main.js only sets process.exitCode
   // and returns, so a loaded extension holding a timer or handle keeps the process alive, on success
-  // and on failure. Every other piMain path (rpc, --export, errors) already calls process.exit and
-  // never gets here. Exit once stdout and stderr are flushed, as Pi's package commands do "so bad
+  // and on failure. rpc and every error exit call process.exit themselves and never get here.
+  // Exit once stdout and stderr are flushed, as Pi's package commands do "so bad
   // extensions cannot keep one-shot commands alive".
   await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
   await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));

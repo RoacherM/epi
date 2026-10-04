@@ -109,8 +109,8 @@ function expandTilde(value: string): string {
 /**
  * Which Pi CLI arguments MMP's TUI host understands, in one place, so it's easy to see what's
  * missing. `isInteractivePiRun` (../interactive.ts) already keeps `--print`/`-p`, `--mode json/rpc`,
- * `--help`/`-h`, `--list-models` and `--export` off this path entirely (those go through piMain's
- * print/non-interactive modes instead of reaching here). Resource flags (`--extension`,
+ * `--help`/`-h`, `--list-models` and `--export` off the TUI (print/json/rpc reach this module through
+ * ../noninteractive.ts instead; `--resume` is refused there, since it needs the TUI's selector). Resource flags (`--extension`,
  * `--skill`, `--theme`, `--system-prompt`, ...) are rejected even earlier, in parseMmpArgs
  * (../args.ts), before Pi's own parser ever sees them.
  *
@@ -150,9 +150,20 @@ function validateSupportedPiArgs(parsed: ParsedPiArgs): void {
   }
 }
 
+/** Pi's assertValidSessionId (core/session-manager.js, not exported from the package root), checked
+ * as early as Pi's main.js does: before anything looks the id up. */
+function assertValidSessionId(id: string): void {
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(id)) {
+    throw new MmpArgumentError(
+      "Session id must be non-empty, contain only alphanumeric characters, '-', '_', and '.', and start and end with an alphanumeric character",
+    );
+  }
+}
+
 /** Mirrors Pi's validateForkFlags/validateSessionIdFlags (main.js): reject flag combinations that
  * would otherwise have one silently win over the other. */
 function validateSessionFlagCombinations(parsed: ParsedPiArgs): void {
+  if (parsed.sessionId !== undefined) assertValidSessionId(parsed.sessionId);
   if (parsed.fork !== undefined) {
     const conflicts = [
       parsed.session !== undefined ? "--session" : undefined,
@@ -257,12 +268,17 @@ async function buildSessionManager(
     }
     // --fork always lands in this cwd's project (forkFrom's targetCwd, below), regardless of which
     // project the source session came from, so it needs no project-identity check.
-    return SessionManager.forkFrom(
-      resolved.path,
-      cwd,
-      sessionDir,
-      parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined,
-    );
+    try {
+      return SessionManager.forkFrom(
+        resolved.path,
+        cwd,
+        sessionDir,
+        parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined,
+      );
+    } catch (error) {
+      // Pi's forkSessionOrExit: a source that is missing or not a session file is the user's argument.
+      throw new MmpArgumentError(error instanceof Error ? error.message : String(error));
+    }
   }
   if (parsed.session !== undefined) {
     const resolved = await resolveSessionArg(parsed.session, cwd, sessionDir);
@@ -283,6 +299,14 @@ async function buildSessionManager(
     warn(`No project session found with id '${parsed.sessionId}'; creating a new session with that id.`);
   }
   return SessionManager.create(cwd, sessionDir, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
+}
+
+/** main.js's collectSettingsDiagnostics: settings files that could not be read or parsed. */
+export function settingsDiagnostics(settingsManager: SettingsManager): Diagnostic[] {
+  return settingsManager.drainErrors().map(({ scope, path, error }): Diagnostic => ({
+    type: "warning",
+    message: path ? `Invalid settings file ${path}: ${error.message}` : `Invalid ${scope} settings: ${error.message}`,
+  }));
 }
 
 /** createAgentSessionServices leaves extension load results out of its diagnostics; Pi's main.js
@@ -423,8 +447,8 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
   for (const diagnostic of parsed.diagnostics) {
     warn(diagnostic.message);
   }
-  // Mirrors main.js's own `--offline` handling (Pi's `offline` flag only takes effect via piMain,
-  // which the TUI v2 path never calls).
+  // Mirrors main.js's own `--offline` handling (Pi's `offline` flag only takes effect in its own main(),
+  // which no session ever goes through).
   if (parsed.offline) {
     process.env.PI_OFFLINE = "1";
   }
@@ -442,7 +466,7 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
       modelRuntimeSignal: AbortSignal.timeout(15_000),
       extensionFlagValues: parsed.unknownFlags,
       resourceLoaderOptions: {
-        // Same isolation as BASE_PI_RESOURCE_ARGS on the piMain path.
+        // Same isolation as BASE_PI_RESOURCE_ARGS gives the one run still left to piMain (--export).
         noExtensions: true,
         noSkills: true,
         noPromptTemplates: true,
@@ -496,7 +520,11 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
         ? extensionLoadFailureHint(extensionErrors.map(({ path }) => path), options.assembly)
         : undefined;
       if (hint !== undefined) lines.push(hint);
-      throw new StartupDiagnosticsError(lines.join("\n"), diagnostics, hint);
+      throw new StartupDiagnosticsError(
+        lines.join("\n"),
+        [...settingsDiagnostics(services.settingsManager), ...diagnostics],
+        hint,
+      );
     }
 
     const created = await createAgentSessionFromServices({

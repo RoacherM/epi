@@ -2,7 +2,7 @@
 // are the behaviours that path owns itself; what a prompt prints is covered by the other suites.
 // Every run spawns the real dist/cli.js with a temp HOME/MMP_HOME, offline.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,16 +11,17 @@ import test from "node:test";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const fauxEcho = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
+const noisy = fileURLToPath(new URL("./fixtures/noisy-stdout-extension.mjs", import.meta.url));
 const MODEL = ["--no-project", "--model", "mmp-faux/echo"];
 
-function fixture(t) {
+function fixture(t, extensions = [fauxEcho]) {
   const root = mkdtempSync(join(tmpdir(), "mmp-noninteractive-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(join(home, ".mmp"), { recursive: true });
   mkdirSync(project, { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
   return { root, home, project };
 }
 
@@ -71,6 +72,8 @@ test("piped stdin, @file text and the first message become one prompt; later mes
 test("argument and session errors are `Error: ...` on stderr with exit 1 and nothing on stdout", (t) => {
   const f = fixture(t);
   for (const [args, message] of [
+    [["--resume", "-p", "hi"], "Error: --resume opens the session selector, which needs a terminal. Use --continue, or --session <id>.\n"],
+    [["--fork", join(f.project, "nope.jsonl"), "-p", "hi"], `Error: Cannot fork: source session file is empty or invalid: ${join(f.project, "nope.jsonl")}\n`],
     [["--session", "deadbeef", "-p", "hi"], "Error: No session found matching 'deadbeef'\n"],
     [["--fork", "a", "--session", "b", "-p", "hi"], "Error: --fork cannot be combined with --session\n"],
     [["--bogus-flag", "-p", "hi"], "Error: Unknown option: --bogus-flag\n"],
@@ -93,4 +96,89 @@ test("a run with no model at all stops before the prompt, in print and json", (t
     assert.match(result.stderr, /Log in to a provider with \/login inside mmp/, result.context);
     assert.doesNotMatch(result.stdout + result.stderr, /pi-coding-agent|Use \/login to log into a provider/, result.context);
   }
+});
+
+// Pi's main() validated the id before looking it up; a lookup first printed "creating a new session
+// with that id" and then failed.
+test("an invalid --session-id is refused before anything looks it up", (t) => {
+  const f = fixture(t);
+  const result = run(f, [...MODEL, "--session-id", "../evil", "-p", "hi"]);
+  assert.equal(result.status, 1, result.context);
+  assert.match(result.stderr, /^Error: Session id must be non-empty, contain only alphanumeric characters/, result.context);
+  assert.doesNotMatch(result.stderr, /creating a new session/, result.context);
+});
+
+// What src/noninteractive.ts's takeOverStdout is for: stdout carries the mode's output only.
+test("an extension's own stdout writes go to stderr, in print and in json", (t) => {
+  const f = fixture(t, [fauxEcho, noisy]);
+  const print = run(f, [...MODEL, "--no-session", "-p", "hi"]);
+  assert.equal(print.status, 0, print.context);
+  assert.equal(print.stdout, "ECHO:hi\n", print.context);
+  for (const stage of ["factory-console.log", "factory-stdout.write", "session_start", "agent_end", "session_shutdown"]) {
+    assert.ok(print.stderr.includes(`NOISE-${stage}`), `${stage}\n${print.context}`);
+  }
+  const json = run(f, [...MODEL, "--no-session", "--mode", "json", "hi"]);
+  assert.equal(json.status, 0, json.context);
+  assert.doesNotMatch(json.stdout, /NOISE/, json.context);
+  for (const line of json.stdout.trimEnd().split("\n")) assert.doesNotThrow(() => JSON.parse(line), line.slice(0, 200));
+});
+
+// main.js prints every startup diagnostic in these modes, warnings of a run that goes on included.
+test("a startup warning is printed on stderr and the run goes on", (t) => {
+  const f = fixture(t);
+  mkdirSync(join(f.home, ".mmp", "pi"), { recursive: true });
+  writeFileSync(join(f.home, ".mmp", "pi", "settings.json"), "{ not json");
+  const result = run(f, [...MODEL, "--models", "no-such-model-*", "--no-session", "-p", "hi"]);
+  assert.equal(result.status, 0, result.context);
+  assert.equal(result.stdout, "ECHO:hi\n", result.context);
+  assert.match(result.stderr, /^Warning: Invalid settings file .*settings\.json: /m, result.context);
+  assert.match(result.stderr, /^Warning: No models match pattern "no-such-model-\*"$/m, result.context);
+});
+
+function rpc(f, args, commands) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [cli, ...args, "--mode", "rpc"], {
+      cwd: f.project,
+      env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: join(f.home, ".mmp"), MMP_OFFLINE: "1" },
+    });
+    const killTimer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    let stdout = "";
+    let stderr = "";
+    let seen = 0;
+    let step = 0;
+    const next = () => (step < commands.length ? child.stdin.write(`${JSON.stringify(commands[step].send)}\n`) : child.stdin.end());
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      while (step < commands.length && stdout.slice(seen).includes(commands[step].until)) {
+        seen = stdout.length;
+        step += 1;
+        next();
+      }
+    });
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("close", (status) => {
+      clearTimeout(killTimer);
+      resolve({ status, stdout, stderr, context: `status=${status}\nstdout:\n${stdout.slice(0, 2000)}\nstderr:\n${stderr}` });
+    });
+    next();
+  });
+}
+
+test("rpc answers commands, runs a prompt, replaces the session, and exits 0 when stdin closes", async (t) => {
+  const f = fixture(t, [fauxEcho, noisy]);
+  const result = await rpc(f, MODEL, [
+    { send: { id: "1", type: "get_state" }, until: '"id":"1"' },
+    { send: { id: "2", type: "prompt", message: "hi" }, until: '"type":"agent_end"' },
+    { send: { id: "3", type: "new_session" }, until: '"id":"3"' },
+    { send: { id: "4", type: "prompt", message: "again" }, until: '"type":"agent_end"' },
+  ]);
+  assert.equal(result.status, 0, result.context);
+  const lines = result.stdout.trimEnd().split("\n").map((line) => JSON.parse(line));
+  const state = lines.find((line) => line.id === "1");
+  assert.equal(state.success, true, result.context);
+  assert.equal(state.data.model.provider, "mmp-faux");
+  assert.equal(lines.find((line) => line.id === "3").success, true, result.context);
+  assert.match(result.stdout, /ECHO:hi/);
+  assert.match(result.stdout, /ECHO:again/);
+  assert.doesNotMatch(result.stdout, /NOISE/, "an extension's stdout write reached the rpc client");
 });

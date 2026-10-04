@@ -456,6 +456,21 @@ test("the saved default provider, scoped models and any provider casing all sele
   }
 });
 
+// Dogfood D80. The fixture extension forces the order that otherwise needs a busy machine; before
+// the wait in src/provider-startup.ts the saved default was skipped: "No API key found for the
+// selected model" through Pi's main(), and in the task worker.
+test("the saved Magpie default is picked even when Pi's registration refresh finishes late (D80)", async (t) => {
+  const server = await serverFor(t);
+  const slowRefresh = fileURLToPath(new URL("./fixtures/slow-registration-refresh.mjs", import.meta.url));
+  for (const mode of [["-p", "hi"], ["--mode", "json", "hi"]]) {
+    const fixture = setup(t, server.baseUrl);
+    writeFileSync(join(fixture.mmpHome, "mmp.json"), JSON.stringify({ version: 1, extensions: [slowRefresh] }));
+    writeFileSync(join(fixture.mmpHome, "pi", "settings.json"), JSON.stringify({ defaultProvider: "magpie", defaultModel: "claude/claude-opus-test" }));
+    const output = await cliRun(fixture, ["--thinking", "off", "--no-tools", "--no-session", ...mode]);
+    assert.match(output.stdout, /MAGPIE_OK 你好/, output.stderr);
+  }
+});
+
 test("--model without the magpie/ prefix finds a Magpie model on the first run", async (t) => {
   const server = await serverFor(t);
   const fixture = setup(t, server.baseUrl);

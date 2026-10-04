@@ -14,7 +14,7 @@ import { createAgentSessionServices, parseArgs, SettingsManager, } from "@earend
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 import { extensionLoadFailureHint, PROVIDER_LOGIN_HELP } from "./pi-output.js";
 import { settleRegisteredProviders } from "./provider-startup.js";
-import { configureHttpAtStartup } from "./tui/services.js";
+import { configureHttpAtStartup, settingsDiagnostics } from "./tui/services.js";
 const NO_MODELS_MESSAGE = `No models available. ${PROVIDER_LOGIN_HELP}`;
 /** Whether piMain would take its `--list-models` branch for these args: it checks `--export` first
  * (and `--help`/`--version`, which MMP already handles before reaching here). */
@@ -100,10 +100,7 @@ export async function runListModels(piArgs, options) {
     // main.js createRuntime's list, in its order.
     const diagnostics = [
         ...services.diagnostics,
-        ...services.settingsManager.drainErrors().map(({ scope, path, error }) => ({
-            type: "warning",
-            message: path ? `Invalid settings file ${path}: ${error.message}` : `Invalid ${scope} settings: ${error.message}`,
-        })),
+        ...settingsDiagnostics(services.settingsManager),
         ...extensions.errors.map(({ path, error }) => ({
             type: "error",
             message: `Failed to load extension "${path}": ${error}`,
