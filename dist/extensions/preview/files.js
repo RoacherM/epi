@@ -1,7 +1,7 @@
 // Files as the preview shows them: directory listings and text documents (plain, highlighted,
 // Markdown source, or a hex dump for binaries).
 import { closeSync, lstatSync, openSync, readdirSync, readSync, statSync } from "node:fs";
-import { extname, join } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
 /** Text that is safe to draw: the terminal must never interpret what a file is called or contains.
  * ESC becomes a visible mark; other C0 and C1 controls (a lone U+009B is CSI to some terminals),
@@ -82,6 +82,11 @@ export function restat(entry) {
     catch {
         return false; // gone
     }
+}
+/** An entry for one path, as a listing would give it; undefined when it is gone. */
+export function entryFor(path) {
+    const parent = dirname(path);
+    return readListing(parent, true).entries.find((entry) => entry.path === path);
 }
 /** Why a path cannot be shown, in words; drawn, so made printable. */
 export function problemText(error) {

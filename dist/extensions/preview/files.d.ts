@@ -32,6 +32,8 @@ export declare function readListing(dir: string, showHidden: boolean): Listing;
  * does not change when a file is rewritten in place: the file being looked at would stay stale,
  * and that is the usual case (the agent just edited it). */
 export declare function restat(entry: Entry): boolean;
+/** An entry for one path, as a listing would give it; undefined when it is gone. */
+export declare function entryFor(path: string): Entry | undefined;
 /** Why a path cannot be shown, in words; drawn, so made printable. */
 export declare function problemText(error: unknown): string;
 export declare function kindOf(name: string): Kind;

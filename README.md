@@ -23,9 +23,24 @@ MMP (Make My Pi) 是基于 Pi SDK 的可定制终端编程助手。自有 grok �
 - **建在 Pi 上**：模型、Agent Loop、Session 用锁定版本的 Pi SDK，功能和 Pi 对齐。
 - **配置只属于 MMP**：独立的 `~/.mmp`，不读 Pi 或其他工具的配置，不认 `PI_*` 环境变量；项目配置要先信任。
 - **显式装配**：Rules、Skills、Extensions 由 Manifest 声明；内建 Task（子任务）、MCP、Hooks 默认开启，可以关掉。
-- **不用离开终端去审查**：`/preview` 在 MMP 里看文件、Markdown、图片和视频。
+- **不用离开终端去审查**：`/preview` 看 agent 改了什么（diff），以及文件、Markdown、图片和视频。
 
 ## 最近更新
+
+**0.1.12：在 MMP 里看 agent 改了什么**
+
+agent 改完文件后输入 `/preview`，直接看到改了哪些文件和每个文件的 diff，不用切到编辑器或 `git diff`。
+
+```text
+/preview          打开"改动"：agent 改过的文件，M 修改 / A 新建，右边是增删行数
+回车              看这个文件的 diff；]c [c 跳到下一段、上一段改动
+/needle  :120     在 diff 里搜索；跳到第 120 行
+t                 只看上一轮的改动
+d                 看完整文件
+Tab               切到文件浏览
+```
+
+整页打开，最下面一行显示 agent 是否还在运行。只看不改：这一版没有编辑功能。完整说明见 [Preview](docs/guide/preview.md)。
 
 **0.1.11：预览的小修正，以及命令不能重名**
 

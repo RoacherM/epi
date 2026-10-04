@@ -1,8 +1,58 @@
 import { type Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { type Entry } from "./files.js";
+import { StillCache } from "./media.js";
 export type PreviewResult = {
     paths: string[];
 } | undefined;
+/** Rows the page itself takes around a view's body: the top border, the title row, the key row,
+ * the bottom border, and the agent status line under it (page.ts). */
+export declare const PAGE_CHROME_ROWS = 5;
+export interface ViewFrame {
+    title: string;
+    body: string[];
+    status: string;
+}
+/** Where each file's view was scrolled to, kept for this MMP process (docs/preview-design.md §3.3). */
+export declare const lastScroll: Map<string, number>;
+export declare class Viewer {
+    private readonly tui;
+    private readonly theme;
+    readonly entry: Entry;
+    private readonly stills;
+    readonly mode: "text" | "image" | "video";
+    private scroll;
+    private wrap;
+    private markdown;
+    private rowsCache;
+    private readonly finder;
+    private prompt;
+    private message;
+    private info;
+    /** The probe has answered (or failed): a video waits for it, to play at the source's frame rate. */
+    private probed;
+    private player;
+    /** Size of the last rendered body and where the video progress bar sits, for the mouse. */
+    private width;
+    private height;
+    private progress;
+    constructor(tui: TUI, theme: Theme, entry: Entry, stills: StillCache);
+    dispose(): void;
+    /** Typing a search or a line number: every key goes to the prompt, not to the view. */
+    get busy(): boolean;
+    /** `/` and `:` in the text view (docs/preview-design.md §3.3). True when the key was taken. */
+    private handleSearchKeys;
+    private submitPrompt;
+    private findNext;
+    /** Returns "back" or "insert" when the browser should act. */
+    handleInput(data: string): "back" | "insert" | undefined;
+    /** `x`/`y` are relative to the body; `y === height` is the status row. */
+    handleMouse(event: TuiMouseEvent, x: number, y: number): void;
+    private textRows;
+    /** The key row: the prompt while typing, else a message or the key hints, and the position. */
+    private statusLine;
+    render(width: number, height: number): ViewFrame;
+}
 export declare class FileBrowser {
     private readonly tui;
     private readonly theme;
@@ -43,6 +93,8 @@ export declare class FileBrowser {
     private visible;
     private current;
     private bodyHeight;
+    /** No viewer, filter or search is open: Tab may switch the page to the changes. */
+    get atRoot(): boolean;
     private move;
     private cd;
     private open;

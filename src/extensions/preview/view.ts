@@ -12,25 +12,34 @@ import { existsSync, statSync } from "node:fs";
 
 import { type Entry, clock, HEX_BYTES, humanSize, icon, kindOf, loadDoc, localTime, MAX_TEXT_BYTES, permString, printable, readListing, restat, type Listing } from "./files.js";
 import { audioWave, Player, type Probe, probe, SEEK_SECONDS, StillCache, stillJob } from "./media.js";
+import { Finder, LinePrompt } from "./search.js";
 
 const { Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } = piTui;
 
 export type PreviewResult = { paths: string[] } | undefined;
 
-const HEIGHT_RATIO = 0.85;
+/** Rows the page itself takes around a view's body: the top border, the title row, the key row,
+ * the bottom border, and the agent status line under it (page.ts). */
+export const PAGE_CHROME_ROWS = 5;
 
-interface ViewFrame {
+export interface ViewFrame {
   title: string;
   body: string[];
   status: string;
 }
 
-class Viewer {
+/** Where each file's view was scrolled to, kept for this MMP process (docs/preview-design.md §3.3). */
+export const lastScroll = new Map<string, number>();
+
+export class Viewer {
   readonly mode: "text" | "image" | "video";
   private scroll = 0;
   private wrap = true;
   private markdown = true;
-  private rowsCache: { key: string; rows: string[] } | undefined;
+  private rowsCache: { key: string; rows: string[]; lineStarts: number[] | undefined } | undefined;
+  private readonly finder = new Finder();
+  private prompt: LinePrompt | undefined;
+  private message = "";
   private info: Probe | undefined;
   /** The probe has answered (or failed): a video waits for it, to play at the source's frame rate. */
   private probed = false;
@@ -50,6 +59,7 @@ class Viewer {
     const kind = entry.isFile ? kindOf(entry.name) : "text";
     const gif = entry.isFile && extname(entry.name).toLowerCase() === ".gif";
     this.mode = kind === "video" || gif ? "video" : kind === "text" ? "text" : "image";
+    this.scroll = lastScroll.get(`view:${entry.path}`) ?? 0;
     if (this.mode !== "text" && kind !== "quicklook") {
       void probe(entry.path)
         .then((info) => {
@@ -64,12 +74,60 @@ class Viewer {
   }
 
   dispose(): void {
+    lastScroll.set(`view:${this.entry.path}`, this.scroll);
     this.player?.stop();
     this.player = undefined;
   }
 
+  /** Typing a search or a line number: every key goes to the prompt, not to the view. */
+  get busy(): boolean {
+    return this.prompt !== undefined;
+  }
+
+  /** `/` and `:` in the text view (docs/preview-design.md §3.3). True when the key was taken. */
+  private handleSearchKeys(data: string): boolean {
+    if (this.prompt) {
+      const done = this.prompt.handleInput(data);
+      if (done === "submit") this.submitPrompt(this.prompt);
+      if (done !== undefined) this.prompt = undefined;
+      return true;
+    }
+    if (data === "/" || data === ":") {
+      this.prompt = new LinePrompt(data);
+      this.message = "";
+      return true;
+    }
+    if (data === "n" || data === "N") {
+      this.findNext(data === "N");
+      return true;
+    }
+    return false;
+  }
+
+  private submitPrompt(prompt: LinePrompt): void {
+    if (prompt.kind === "/") {
+      this.finder.query = prompt.text;
+      this.findNext(false, this.scroll - 1);
+      return;
+    }
+    const line = Number.parseInt(prompt.text, 10);
+    const starts = this.rowsCache?.lineStarts;
+    if (!Number.isFinite(line) || line < 1) this.message = `not a line number: ${printable(prompt.text)}`;
+    else if (!starts) this.message = "line numbers are in the raw view: press r first";
+    else this.scroll = starts[Math.min(line, starts.length) - 1] ?? 0;
+  }
+
+  private findNext(backwards: boolean, from = this.scroll): void {
+    if (this.finder.query === "") return;
+    const row = this.finder.next(this.rowsCache?.rows ?? [], from, backwards);
+    if (row === undefined) this.message = `not found: ${printable(this.finder.query)}`;
+    else this.scroll = row;
+  }
+
   /** Returns "back" or "insert" when the browser should act. */
   handleInput(data: string): "back" | "insert" | undefined {
+    if (this.mode === "text" && this.handleSearchKeys(data)) return undefined;
+    this.message = "";
     if (matchesKey(data, "escape") || data === "q" || matchesKey(data, "backspace")) return "back";
     if (data === "i") return "insert";
 
@@ -129,6 +187,7 @@ class Viewer {
     const rendered = doc.markdown !== undefined && this.markdown;
     const key = `${width}|${this.wrap}|${rendered}|${this.entry.mtime.getTime()}|${this.entry.size}`;
     if (this.rowsCache?.key === key) return this.rowsCache.rows;
+    let lineStarts: number[] | undefined;
 
     let rows: string[] | undefined;
     if (rendered) {
@@ -143,11 +202,13 @@ class Viewer {
     }
     if (!rows) {
       rows = [];
+      lineStarts = [];
       const gutter = String(doc.lines.length).length;
       const contentWidth = Math.max(1, width - gutter - 1);
       for (const [index, line] of doc.lines.entries()) {
         const colored = doc.highlighted?.[index] ?? this.theme.fg("toolOutput", line);
         const segments = line === "" ? [""] : this.wrap ? wrapTextWithAnsi(colored, contentWidth) : [truncateToWidth(colored, contentWidth, "…")];
+        lineStarts.push(rows.length);
         for (const [part, segment] of segments.entries()) {
           const number = part === 0 ? String(index + 1).padStart(gutter) : " ".repeat(gutter);
           rows.push(`${this.theme.fg("dim", number)} ${segment}`);
@@ -155,8 +216,16 @@ class Viewer {
       }
     }
     if (doc.truncated) rows.push(this.theme.fg("warning", ` … file is larger than ${humanSize(doc.kind === "hex" ? HEX_BYTES : MAX_TEXT_BYTES)}; the rest is not shown`));
-    this.rowsCache = { key, rows };
+    this.rowsCache = { key, rows, lineStarts };
     return rows;
+  }
+
+  /** The key row: the prompt while typing, else a message or the key hints, and the position. */
+  private statusLine(hints: string, position: string): string {
+    const th = this.theme;
+    if (this.prompt) return ` ${th.fg("accent", `${this.prompt.kind}${printable(this.prompt.text)}▏`)}`;
+    const left = this.message ? th.fg("warning", this.message) : th.fg("dim", hints);
+    return ` ${left}  ${th.fg("accent", position)}`;
   }
 
   render(width: number, height: number): ViewFrame {
@@ -181,7 +250,9 @@ class Viewer {
       const max = Math.max(0, rows.length - height);
       this.scroll = Math.max(0, Math.min(max, this.scroll));
       const bar = scrollbar(th, rows.length, height, this.scroll, height);
-      const body = Array.from({ length: height }, (_, row) => pad(rows[this.scroll + row] ?? "", width - 1) + bar[row]);
+      const invert = (text: string) => th.inverse(text);
+      const body = Array.from({ length: height }, (_, row) =>
+        pad(this.finder.highlight(rows[this.scroll + row] ?? "", invert), width - 1) + bar[row]);
       const last = Math.min(rows.length, this.scroll + height);
       const percent = max === 0 ? 100 : Math.round((this.scroll / max) * 100);
       const md = doc.markdown !== undefined ? ` · r ${this.markdown ? "raw" : "render"}` : "";
@@ -189,7 +260,7 @@ class Viewer {
       return {
         title: `${name} ${th.fg("dim", `${label} · ${humanSize(this.entry.size)}`)}`,
         body,
-        status: ` ${th.fg("dim", `j/k scroll · space/b page · g/G ends · w wrap ${this.wrap ? "off" : "on"}${md} · i insert · q back`)}  ${th.fg("accent", `${this.scroll + 1}-${last}/${rows.length} ${percent}%`)}`,
+        status: this.statusLine(`j/k scroll · / search · : line · g/G ends · w wrap ${this.wrap ? "off" : "on"}${md} · i insert · q back`, `${this.scroll + 1}-${last}/${rows.length} ${percent}%`),
       };
     }
 
@@ -363,8 +434,12 @@ export class FileBrowser {
   }
 
   private bodyHeight(): number {
-    const rows = this.tui.terminal.rows;
-    return Math.max(3, Math.floor(rows * HEIGHT_RATIO) - 4); // border top, header, status, border bottom
+    return Math.max(3, this.tui.terminal.rows - PAGE_CHROME_ROWS);
+  }
+
+  /** No viewer, filter or search is open: Tab may switch the page to the changes. */
+  get atRoot(): boolean {
+    return this.viewer === undefined && !this.filtering;
   }
 
   private move(delta: number): void {
@@ -406,6 +481,10 @@ export class FileBrowser {
     this.message = "";
     if (this.viewer) {
       const action = this.viewer.handleInput(data);
+      if (this.viewer.busy) {
+        this.tui.requestRender();
+        return;
+      }
       if (action === "insert") {
         this.finish({ paths: [this.viewer.entry.path] });
         return;
