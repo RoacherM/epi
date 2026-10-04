@@ -41,6 +41,8 @@
 | 2026-09-30 | T3 | 界面细节："选中即复制"保持开启（和 Pi 一致）；用户消息块不显示 Pi 追加的图片缩放/格式转换说明（模型照常收到，"Image omitted" 这类失败说明照常显示） | 用户决定 | 关闭选中即复制；原样显示说明 | 已定（D9 随任务 D11 实现中） | [dogfood-issues.md](dogfood-issues.md) D9 |
 | 2026-09-30 | T4 | 图片标签 `[Image #N]` 留在发给模型的文字里；整个会话统一编号，下一张 = 会话里出现过的最大编号 + 1；没有编号的图片显示 `[Image]`；没有图片数据的标签显示成暗色删除线，发送时提示 | 用户确认（"我觉得没啥问题"）；做法参照 Claude Code，用户可以直接说"第 2 张图" | 按计数推算、按图片内容匹配预留（D11 前两轮，过于复杂且仍会错位） | 已定（D11 实现中） | [dogfood-issues.md](dogfood-issues.md) D11 |
 | 2026-10-03 | MG1 | MMP 内置 `magpie` provider（不进 Manifest，不是 `disable` 的第四项）；唯一配置是 API key，放在 `/login` 的 API key 登录项（存 `pi/auth.json`），没有 `magpie.json`，地址固定 `127.0.0.1:3425`；只有选中 Magpie 或 `--list-models` 时启动才等待目录 | 用户决定（"magpie的配置只需要填入api-key即可（放在api那一项配置中"）；启动策略是主控按审查结果定的：用其他 provider 时不为 Magpie 多等 | `magpie.json` 配置地址、超时、逐模型协议和开关；每次启动都查询目录 | 已定 | [magpie-design.md](magpie-design.md) |
+| 2026-10-04 | N1 | 非交互模式（`-p`、json、rpc）和 task 子进程改走 SDK，和交互界面用同一个启动函数；`piMain` 只剩 `--export` 还用。取代 D3 里"print / json / rpc 仍走 `piMain`"的部分 | `piMain` 是黑盒：D80（选模型和 Pi 不等待的刷新竞争）和 D62（读项目 `.pi/settings.json`）都发生在它内部，MMP 修不了。不给 Pi 上游报 issue（用户定） | 只给 Magpie 打补丁；给上游报 issue 等修复 | 已定（实现中） | [noninteractive-sdk-design.md](noninteractive-sdk-design.md) |
+| 2026-10-04 | MG2 | Magpie 作为普通 provider 扩展处理，不加 fallback 或专门规则：所有模式在选模型前等一次 Pi 自己的刷新，范围是所有由扩展注册的 provider；删掉 MMP 自己的启动查询、自己写 `models-store.json` 和 `selectsMagpie` 这类判断。改掉 MG1 的"只有选中 Magpie 时启动才等待目录" | 用户决定（"用统一的方式处理这个provider"、"当然是A"）；原型实测 40/40（设计文档 5.2 节） | 只刷新这次选中的 provider（要照 Pi 的规则重写一份"选了谁"的判断） | 已定（实现中） | noninteractive-sdk-design.md 第 5 节 |
 
 ## 待定
 
