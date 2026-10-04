@@ -46,18 +46,26 @@ function compare(path, before) {
     const status = before.kind === "absent" ? "new" : now.kind === "gone" ? "deleted" : "modified";
     return { kind: "diff", diff, status, after: afterText };
 }
-/** Diffs by path, scope and file version: rendering asks for every listed file on every frame. */
-const comparisons = new Map();
-function comparisonFor(path, before, scope) {
-    const key = `${scope}|${stamp(path)}|${before.kind === "text" ? before.text.length : before.kind}`;
-    const hit = comparisons.get(`${scope}|${path}`);
-    if (hit && hit.key === key && hit.comparison)
+/** Diffs by snapshot and file version: rendering asks for every listed file on every frame. Keyed
+ * on the snapshot object itself, so a new snapshot (a new turn, a new session) never reuses a diff
+ * made against an older one, even when the text has the same length. */
+const comparisons = new WeakMap();
+function comparisonFor(path, before) {
+    const now = stamp(path);
+    const hit = comparisons.get(before);
+    if (hit && hit.stamp === now)
         return hit.comparison;
     const comparison = compare(path, before);
-    comparisons.set(`${scope}|${path}`, { key, comparison });
-    if (comparisons.size > 128)
-        comparisons.delete(comparisons.keys().next().value);
+    comparisons.set(before, { stamp: now, comparison });
     return comparison;
+}
+/** The files that differ from before in the scope. A failed edit, or a write of the same text, is
+ * recorded before the tool runs but changed nothing: it is not listed. */
+export function changedFiles(ledger, scope) {
+    return ledger.changes(scope).filter((change) => {
+        const comparison = comparisonFor(change.path, change.before);
+        return comparison.kind === "note" || comparison.diff.rows.length > 0;
+    });
 }
 function displayPath(cwd, path) {
     const rel = relative(cwd, path);
@@ -77,10 +85,10 @@ export class ChangesList {
         this.cwd = cwd;
     }
     selected() {
-        return this.ledger.changes(this.scope)[this.cursor]?.path;
+        return changedFiles(this.ledger, this.scope)[this.cursor]?.path;
     }
     handleInput(data) {
-        const count = this.ledger.changes(this.scope).length;
+        const count = changedFiles(this.ledger, this.scope).length;
         if (matchesKey(data, "escape") || data === "q")
             return { kind: "back" };
         if (data === "j" || matchesKey(data, "down"))
@@ -109,7 +117,7 @@ export class ChangesList {
     }
     render(width, height) {
         const th = this.theme;
-        const changes = this.ledger.changes(this.scope);
+        const changes = changedFiles(this.ledger, this.scope);
         this.cursor = Math.max(0, Math.min(this.cursor, changes.length - 1));
         const title = `${th.fg("accent", "changes")} ${th.fg("dim", `· ${SCOPE_LABEL[this.scope]} · ${changes.length} file${changes.length === 1 ? "" : "s"}`)}`;
         const hints = "j/k move · enter diff · t session/turn · i insert · tab files · q close";
@@ -122,7 +130,7 @@ export class ChangesList {
         if (this.cursor >= this.scroll + height)
             this.scroll = this.cursor - height + 1;
         const rows = changes.slice(this.scroll, this.scroll + height).map((change, offset) => {
-            const comparison = comparisonFor(change.path, change.before, this.scope);
+            const comparison = comparisonFor(change.path, change.before);
             const mark = comparison.kind === "note" ? "?" : comparison.status === "new" ? "A" : comparison.status === "deleted" ? "D" : "M";
             const stats = comparison.kind === "note" ? "" : `+${comparison.diff.added} -${comparison.diff.removed}`;
             const name = displayPath(this.cwd, change.path);
@@ -247,7 +255,10 @@ export class DiffView {
     findNext(backwards, from) {
         if (this.finder.query === "")
             return;
-        const row = this.finder.next(this.cache?.contents ?? [], from, backwards);
+        const cache = this.cache;
+        // Folded-line markers are not text of the file.
+        const searchable = cache ? cache.contents.map((content, at) => (cache.comparison.kind === "diff" && cache.comparison.diff.rows[cache.rowOf[at]]?.kind === "gap" ? "" : content)) : [];
+        const row = this.finder.next(searchable, from, backwards);
         if (row === undefined)
             this.message = `not found: ${printable(this.finder.query)}`;
         else
@@ -285,7 +296,7 @@ export class DiffView {
         const before = this.before();
         const comparison = before === undefined
             ? { kind: "note", text: "This file is no longer in the list of changes." }
-            : comparisonFor(this.path, before, this.scope);
+            : comparisonFor(this.path, before);
         const key = `${width}|${this.wrap}`;
         if (this.cache && this.cache.key === key && this.cache.comparison === comparison)
             return this.cache;
@@ -354,7 +365,9 @@ export class DiffView {
             const row = this.scroll + at;
             if (row >= total)
                 return " ".repeat(width);
-            return pad((cache.gutters[row] ?? "") + this.finder.highlight(cache.contents[row] ?? "", invert), width - 1) + bar[at];
+            const isGap = cache.comparison.kind === "diff" && cache.comparison.diff.rows[cache.rowOf[row]]?.kind === "gap";
+            const content = cache.contents[row] ?? "";
+            return pad((cache.gutters[row] ?? "") + (isGap ? content : this.finder.highlight(content, invert)), width - 1) + bar[at];
         });
         const label = status === "new" ? "new file" : status === "deleted" ? "deleted" : SCOPE_LABEL[this.scope];
         return {

@@ -10,8 +10,13 @@ const CONTEXT = 3;
 /** Above this many edits the diff is not computed: a full rewrite of a large file would block the
  * screen for seconds. The full file can still be shown. */
 const MAX_EDIT_LENGTH = 5000;
+/** Word emphasis is skipped for a pair of lines longer than this together: the word diff has no
+ * limit of its own and grows with the square of the length (a 50 KB minified line took 3 s). */
+const MAX_EMPHASIS_CHARS = 2000;
 /** Text as it is drawn: one form for both sides, so the diff matches what the viewer shows. */
 export function displayLines(text) {
+    if (text === "")
+        return []; // an empty or absent file has no lines, not one empty line
     const lines = text.replace(/\r\n?/g, "\n").split("\n").map((line) => printable(line.replace(/\t/g, "    ")));
     if (lines.length > 1 && lines[lines.length - 1] === "")
         lines.pop();
@@ -20,6 +25,8 @@ export function displayLines(text) {
 /** Changed parts of a removed line and the added line paired with it; none when the lines have
  * too little in common for the emphasis to help. */
 function emphasize(removed, added) {
+    if (removed.text.length + added.text.length > MAX_EMPHASIS_CHARS)
+        return;
     const parts = diffWordsWithSpace(removed.text, added.text);
     const common = parts.filter((part) => !part.added && !part.removed).reduce((sum, part) => sum + part.value.length, 0);
     if (common * 3 < Math.max(removed.text.length, added.text.length))
@@ -63,7 +70,8 @@ function emphasizeRuns(rows, from) {
 export function diffTexts(before, after) {
     const oldLines = displayLines(before);
     const newLines = displayLines(after);
-    const patch = structuredPatch("", "", `${oldLines.join("\n")}\n`, `${newLines.join("\n")}\n`, "", "", {
+    const asText = (lines) => (lines.length === 0 ? "" : `${lines.join("\n")}\n`);
+    const patch = structuredPatch("", "", asText(oldLines), asText(newLines), "", "", {
         context: CONTEXT,
         maxEditLength: MAX_EDIT_LENGTH,
     });

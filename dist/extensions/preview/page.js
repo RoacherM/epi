@@ -1,5 +1,5 @@
 import { piTui } from "../../tui/pi-tui.js";
-import { ChangesList } from "./changes.js";
+import { ChangesList, changedFiles } from "./changes.js";
 import { pad } from "./draw.js";
 import { entryFor } from "./files.js";
 import { StillCache } from "./media.js";
@@ -127,7 +127,7 @@ export class PreviewPage {
     /** The last line: whether the agent is working, and how many files it changed. */
     agentLine(width) {
         const th = this.theme;
-        const count = this.ledger.changes("session").length;
+        const count = changedFiles(this.ledger, "session").length;
         const state = this.ledger.running ? th.fg("accent", "● agent running") : th.fg("dim", "○ agent idle");
         const changed = th.fg("dim", ` · ${count} file${count === 1 ? "" : "s"} changed this session`);
         return pad(` ${state}${changed}`, width);

@@ -13,6 +13,11 @@ import { ChangeLedger } from "../dist/extensions/preview/ledger.js";
 import { Finder } from "../dist/extensions/preview/search.js";
 
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
+const summary = (diff) => ({
+  added: diff.added,
+  removed: diff.removed,
+  rows: diff.rows.map((row) => `${row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " "}${row.newNo ?? row.oldNo} ${row.text}`),
+});
 const fauxEdit = fileURLToPath(new URL("./fixtures/faux-edit-tool.mjs", import.meta.url));
 
 function tempDir(t) {
@@ -41,6 +46,8 @@ test("the ledger keeps each file as it was before the agent's first change, per 
   ledger.onAgentStart();
   assert.equal(ledger.running, true);
   ledger.onToolCall("edit", { path: "a.txt" }, dir);
+  writeFileSync(join(dir, "a.txt"), "second edit\n");
+  ledger.onToolCall("edit", { path: "a.txt" }, dir); // again in the same turn: the turn's first copy stays
   assert.deepEqual(ledger.changes("turn"), [{ path: join(dir, "a.txt"), before: { kind: "text", text: "first edit\n" } }]);
   assert.deepEqual(ledger.changes("session")[0].before, { kind: "text", text: "original\n" });
   writeFileSync(join(dir, "big.txt"), Buffer.alloc(5 * 1024 * 1024, 97));
@@ -70,6 +77,26 @@ test("a diff has line numbers on both sides, gaps for unchanged lines, the chang
   assert.equal(diff.changeStarts.length, 2);
   assert.equal(diff.rows[diff.changeStarts[1]].text, "added");
   assert.deepEqual(diff.rows.at(-1), { kind: "gap", text: "2" });
+});
+
+test("a new, a deleted and an empty file count their real lines, not a phantom empty line", () => {
+  assert.deepEqual(summary(diffTexts("", "# Notes\n\nwritten\n")), { added: 3, removed: 0, rows: ["+1 # Notes", "+2 ", "+3 written"] });
+  assert.deepEqual(summary(diffTexts("x\ny\n", "")), { added: 0, removed: 2, rows: ["-1 x", "-2 y"] });
+  assert.deepEqual(summary(diffTexts("", "")), { added: 0, removed: 0, rows: [] });
+  assert.deepEqual(summary(diffTexts("a", "a\nb")), { added: 1, removed: 0, rows: [" 1 a", "+2 b"] });
+});
+
+// A minified file, a one-line JSON, a lockfile line: the word diff of two long lines used to take
+// seconds to minutes and froze the whole TUI.
+test("two long changed lines are diffed at once, without word emphasis", () => {
+  // Many words, so the word diff has real work to do (one long word would be quick either way).
+  const long = (seed) => Array.from({ length: 8_000 }, (_, index) => `w${(index * seed) % 997}`).join(" ");
+  const started = Date.now();
+  const diff = diffTexts(`${long(7)}\n`, `${long(11)}\n`);
+  assert.ok(Date.now() - started < 1000, `took ${Date.now() - started} ms`);
+  assert.equal(diff.added, 1);
+  assert.equal(diff.removed, 1);
+  assert.equal(diff.rows.some((row) => row.emphasis !== undefined), false);
 });
 
 test("a diff treats CRLF, tabs and control characters the way the viewer draws them, and gives up on huge rewrites", () => {
@@ -124,7 +151,7 @@ test("/preview after the agent changed files opens on its changes: each file wit
   const list = shown(screens.list);
   assert.match(list, /changes · this session · 2 files/);
   assert.match(list, /M {2}app\.ts +\+3 -2 /);
-  assert.match(list, /A {2}notes\.md +\+2 -0 /);
+  assert.match(list, /A {2}notes\.md +\+3 -0 /);
   assert.match(list, /○ agent idle · 2 files changed this session/);
 });
 
@@ -139,26 +166,24 @@ test("Enter shows the diff: both line numbers, - and + rows, unchanged lines fol
 });
 
 test("in a diff taller than the screen, ]c [c move between changes, / searches, and : goes to a line", (t) => {
-  // 10 rows leave 5 for the diff, which has 20: the view has to scroll.
-  const top = (screen) => screen.find((row) => /^│ ?\d* +\d* [ +-] |⋯/.test(row)) ?? "";
+  // 10 rows leave 5 for the diff, which has 20: the view has to scroll. Each step waits for what
+  // only that scroll position shows.
   const { screens } = runApp(t, [
-    ...firstTurn, ...openPreview, ["key", "enter"], ["waitFor", "+3 -2", { screen: true }],
-    ["type", "]"], ["type", "c"], ["wait", 100], ["screen", "firstChange"],
-    ["type", "]"], ["type", "c"], ["wait", 100], ["screen", "secondChange"],
-    ["type", "["], ["type", "c"], ["wait", 100], ["screen", "backToFirst"],
-    ["type", "/"], ["type", "added"], ["key", "enter"], ["wait", 100], ["screen", "found"],
-    ["type", "g"], ["type", ":"], ["type", "33"], ["key", "enter"], ["wait", 100], ["screen", "line33"],
-    ["type", "/"], ["type", "nowhere"], ["key", "enter"], ["wait", 100], ["screen", "notFound"],
+    ...firstTurn, ...openPreview, ["key", "enter"], ["waitFor", "1 unchanged line", { screen: true }],
+    ["type", "]"], ["type", "c"], ["waitGone", "1 unchanged line"], ["screen", "firstChange"],
+    ["type", "]"], ["type", "c"], ["waitFor", "- const value30 = 30;", { screen: true }], ["screen", "secondChange"],
+    ["type", "["], ["type", "c"], ["waitFor", "getSession", { screen: true }], ["screen", "backToFirst"],
+    ["type", "/"], ["type", "added"], ["key", "enter"], ["waitFor", "const added = true", { screen: true }], ["screen", "found"],
+    ["type", "g"], ["waitFor", "1 unchanged line", { screen: true }],
+    ["type", ":"], ["type", "33"], ["key", "enter"], ["waitFor", { regex: "32 33 +const value32" }, { screen: true }],
+    ["type", "/"], ["type", "nowhere"], ["key", "enter"], ["waitFor", "not found: nowhere", { screen: true }],
+    // Fold markers are not file text: "/unchanged" finds nothing although "⋯ N unchanged lines" is shown.
+    ["type", "g"], ["type", "/"], ["type", "unchanged"], ["key", "enter"], ["waitFor", "not found: unchanged", { screen: true }],
     ["detach"],
   ], { rows: 10 });
-  assert.match(top(screens.firstChange), / 5 +- export function getSession/);
-  assert.match(top(screens.secondChange), /30 +- const value30 = 30;/);
-  assert.match(top(screens.backToFirst), / 5 +- export function getSession/);
-  // Near the end the view cannot scroll further: the line is on screen, not necessarily at the top.
-  assert.match(shown(screens.found), /31 \+ const added = true;/);
+  assert.match(shown(screens.firstChange), / 5 +- export function getSession/);
+  assert.doesNotMatch(shown(screens.secondChange), /getSession/);
   assert.doesNotMatch(shown(screens.found), /getSession/);
-  assert.match(shown(screens.line33), /32 33 +const value32 = 32;/);
-  assert.match(shown(screens.notFound), /not found: nowhere/);
 });
 
 test("d opens the whole file, q steps back to the diff and then the list, i inserts the reference", (t) => {
@@ -206,4 +231,15 @@ test("/preview with no changes yet opens on the files, and Tab says there are no
   ]);
   assert.match(shown(screens.files), /· app\.ts/);
   assert.match(shown(screens.none), /The agent has not changed a file in this session/);
+});
+
+test("a file the agent's edit left as it was is not listed as changed", (t) => {
+  const { screens } = runApp(t, [
+    ...firstTurn,
+    ["writeFile", { path: "notes.md", content: "" }], ["rm", "notes.md"],
+    ...openPreview.slice(0, 2), ["waitFor", "changes ·", { screen: true }], ["screen", "list"], ["detach"],
+  ]);
+  // notes.md was new and is gone again: no difference from before, so it is not a change.
+  assert.match(shown(screens.list), /changes · this session · 1 file/);
+  assert.doesNotMatch(shown(screens.list), /notes\.md/);
 });

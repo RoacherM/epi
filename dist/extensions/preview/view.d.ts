@@ -24,6 +24,7 @@ export declare class Viewer {
     private scroll;
     private wrap;
     private markdown;
+    /** `gutters` (line numbers) and `contents` make up `rows`; search looks at the contents only. */
     private rowsCache;
     private readonly finder;
     private prompt;

@@ -1,5 +1,5 @@
 import { type Theme } from "@earendil-works/pi-coding-agent";
-import type { ChangeLedger, Scope } from "./ledger.js";
+import type { Change, ChangeLedger, Scope } from "./ledger.js";
 import { type ViewFrame } from "./view.js";
 /** What a view asks the page to do after a key. */
 export type ViewAction = {
@@ -21,6 +21,9 @@ export interface PageView {
     readonly busy?: boolean;
     dispose?(): void;
 }
+/** The files that differ from before in the scope. A failed edit, or a write of the same text, is
+ * recorded before the tool runs but changed nothing: it is not listed. */
+export declare function changedFiles(ledger: ChangeLedger, scope: Scope): Change[];
 export declare class ChangesList implements PageView {
     private readonly ledger;
     private readonly theme;

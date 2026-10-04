@@ -24,6 +24,7 @@ export class Viewer {
     scroll = 0;
     wrap = true;
     markdown = true;
+    /** `gutters` (line numbers) and `contents` make up `rows`; search looks at the contents only. */
     rowsCache;
     finder = new Finder();
     prompt;
@@ -106,7 +107,7 @@ export class Viewer {
     findNext(backwards, from = this.scroll) {
         if (this.finder.query === "")
             return;
-        const row = this.finder.next(this.rowsCache?.rows ?? [], from, backwards);
+        const row = this.finder.next(this.rowsCache?.contents ?? [], from, backwards);
         if (row === undefined)
             this.message = `not found: ${printable(this.finder.query)}`;
         else
@@ -198,6 +199,7 @@ export class Viewer {
         if (this.rowsCache?.key === key)
             return this.rowsCache.rows;
         let lineStarts;
+        let gutters;
         let rows;
         if (rendered) {
             try {
@@ -213,6 +215,7 @@ export class Viewer {
         if (!rows) {
             rows = [];
             lineStarts = [];
+            gutters = [];
             const gutter = String(doc.lines.length).length;
             const contentWidth = Math.max(1, width - gutter - 1);
             for (const [index, line] of doc.lines.entries()) {
@@ -221,14 +224,17 @@ export class Viewer {
                 lineStarts.push(rows.length);
                 for (const [part, segment] of segments.entries()) {
                     const number = part === 0 ? String(index + 1).padStart(gutter) : " ".repeat(gutter);
-                    rows.push(`${this.theme.fg("dim", number)} ${segment}`);
+                    gutters.push(`${this.theme.fg("dim", number)} `);
+                    rows.push(segment);
                 }
             }
         }
         if (doc.truncated)
             rows.push(this.theme.fg("warning", ` … file is larger than ${humanSize(doc.kind === "hex" ? HEX_BYTES : MAX_TEXT_BYTES)}; the rest is not shown`));
-        this.rowsCache = { key, rows, lineStarts };
-        return rows;
+        const contents = rows;
+        const allGutters = rows.map((_, index) => gutters?.[index] ?? "");
+        this.rowsCache = { key, rows: contents.map((content, index) => allGutters[index] + content), gutters: allGutters, contents, lineStarts };
+        return this.rowsCache.rows;
     }
     /** The key row: the prompt while typing, else a message or the key hints, and the position. */
     statusLine(hints, position) {
@@ -259,7 +265,13 @@ export class Viewer {
             this.scroll = Math.max(0, Math.min(max, this.scroll));
             const bar = scrollbar(th, rows.length, height, this.scroll, height);
             const invert = (text) => th.inverse(text);
-            const body = Array.from({ length: height }, (_, row) => pad(this.finder.highlight(rows[this.scroll + row] ?? "", invert), width - 1) + bar[row]);
+            const cache = this.rowsCache;
+            const body = Array.from({ length: height }, (_, row) => {
+                const at = this.scroll + row;
+                if (at >= rows.length)
+                    return " ".repeat(width - 1) + bar[row];
+                return pad((cache.gutters[at] ?? "") + this.finder.highlight(cache.contents[at] ?? "", invert), width - 1) + bar[row];
+            });
             const last = Math.min(rows.length, this.scroll + height);
             const percent = max === 0 ? 100 : Math.round((this.scroll / max) * 100);
             const md = doc.markdown !== undefined ? ` · r ${this.markdown ? "raw" : "render"}` : "";

@@ -157,18 +157,20 @@ test("/preview on a path that does not exist says so and opens nothing", (t) => 
 });
 
 test("the file viewer searches with / and n, goes to a line with :, and says when there is no match", (t) => {
-  const long = Array.from({ length: 80 }, (_, index) => (index === 59 ? "the needle is here" : `filler ${index + 1}`)).join("\n");
+  // No digits in the text, so "/45" can only match the line-number column, which it must not.
+  const long = Array.from({ length: 80 }, (_, index) => (index === 59 ? "the needle is here" : "filler")).join("\n");
   const firstBodyRow = (screen) => screen.find((row) => /^│\s*\d+ /.test(row)) ?? "";
   const { screens } = runApp(t, [
     ...open(" long.txt"), ["waitFor", "80 lines", { screen: true }],
-    ["type", "/"], ["type", "needle"], ["key", "enter"], ["wait", 100], ["screen", "found"],
-    ["type", "g"], ["type", ":"], ["type", "40"], ["key", "enter"], ["wait", 100], ["screen", "line40"],
-    ["type", "/"], ["type", "absent"], ["key", "enter"], ["wait", 100], ["screen", "missing"],
+    ["type", "/"], ["type", "needle"], ["key", "enter"], ["waitFor", "60 the needle", { screen: true }], ["screen", "found"],
+    ["type", "g"], ["type", ":"], ["type", "40"], ["key", "enter"], ["waitFor", { regex: "│40 filler" }, { screen: true }], ["screen", "line40"],
+    ["type", "/"], ["type", "absent"], ["key", "enter"], ["waitFor", "not found: absent", { screen: true }],
+    ["type", "/"], ["type", "45"], ["key", "enter"], ["waitFor", "not found: 45", { screen: true }],
     ["detach"],
   ], { files: { "long.txt": `${long}\n` }, rows: 20 });
   assert.match(firstBodyRow(screens.found), /60 the needle is here/);
-  assert.match(firstBodyRow(screens.line40), /40 filler 40/);
-  assert.match(shown(screens.missing), /not found: absent/);
+  assert.match(firstBodyRow(screens.line40), /40 filler/);
+
 });
 
 test("a filter narrows the listing, and marked files are inserted together", (t) => {
