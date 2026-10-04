@@ -35,7 +35,8 @@ test("an image file is noted by path, not inlined as text content", async (t) =>
   const { text, imagePaths } = await processFileArguments(["pic.png"], dir);
   assert.equal(imagePaths.length, 1);
   assert.match(imagePaths[0], /pic\.png$/);
-  assert.match(text, /<file name="[^"]*pic\.png">/);
+  // Pi's own text for an attached image (cli/file-processor.js): an empty element.
+  assert.match(text, /^<file name="[^"]*pic\.png"><\/file>\n$/);
   assert.doesNotMatch(text, new RegExp(ONE_PIXEL_PNG.toString("base64").slice(0, 10)));
 });
 

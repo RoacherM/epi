@@ -13,7 +13,8 @@
 import { createAgentSessionServices, parseArgs, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 import { extensionLoadFailureHint, PROVIDER_LOGIN_HELP } from "./pi-output.js";
-import { configureHttpAtStartup } from "./tui/services.js";
+import { settleRegisteredProviders } from "./provider-startup.js";
+import { configureHttpAtStartup, settingsDiagnostics } from "./tui/services.js";
 const NO_MODELS_MESSAGE = `No models available. ${PROVIDER_LOGIN_HELP}`;
 /** Whether piMain would take its `--list-models` branch for these args: it checks `--export` first
  * (and `--help`/`--version`, which MMP already handles before reaching here). */
@@ -93,14 +94,13 @@ export async function runListModels(piArgs, options) {
         },
     });
     const { modelRuntime, resourceLoader } = services;
+    // A provider that is not running just has no models to list (`notRunning` is not reported).
+    const { warnings: providerWarnings } = await settleRegisteredProviders(modelRuntime);
     const extensions = resourceLoader.getExtensions();
     // main.js createRuntime's list, in its order.
     const diagnostics = [
         ...services.diagnostics,
-        ...services.settingsManager.drainErrors().map(({ scope, path, error }) => ({
-            type: "warning",
-            message: path ? `Invalid settings file ${path}: ${error.message}` : `Invalid ${scope} settings: ${error.message}`,
-        })),
+        ...settingsDiagnostics(services.settingsManager),
         ...extensions.errors.map(({ path, error }) => ({
             type: "error",
             message: `Failed to load extension "${path}": ${error}`,
@@ -109,6 +109,7 @@ export async function runListModels(piArgs, options) {
             type: "warning",
             message: `Extension package "${path}": ${warning}`,
         })),
+        ...providerWarnings,
     ];
     const seen = new Set();
     for (const diagnostic of diagnostics) {

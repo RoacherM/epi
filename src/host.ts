@@ -24,7 +24,7 @@ import { resolveMmpPaths } from "./paths.js";
 import { rewritePiOutput } from "./pi-output.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { installProviderCostValidation } from "./provider-validation.js";
-import { createMagpieInlineExtension, mayNameMagpieModel, selectsMagpie } from "./providers/magpie-extension.js";
+import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
 import {
   createMmpRuntimeIdentity,
   type MmpRuntimeIdentity,
@@ -173,7 +173,7 @@ async function collectExtensionHelpFlags(
     const prepared = prepareParsedMmpRun(args, environment, cwd);
     process.env.PI_CODING_AGENT_DIR = prepared.agentDir;
     const extensionFactories = [
-      createMagpieInlineExtension({ agentDir: prepared.agentDir, online: false, discover: false }),
+      createMagpieInlineExtension(),
       ...buildInlineExtensions(
         prepared.assembly,
         prepared.mmpHome,
@@ -288,17 +288,8 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
     disabled: updateCheckDisabled(process.env, args.passthrough),
   };
   // Building the inline extensions also validates their config (MCP, hooks), which --dry-run reports.
-  const modelArgs = parseArgs([...args.passthrough]);
-  const usingMagpie = selectsMagpie(modelArgs, SettingsManager.create(process.cwd(), prepared.agentDir, { projectTrusted: false }));
   const extensionFactories = [
-    createMagpieInlineExtension({
-      agentDir: prepared.agentDir,
-      // Same test as Pi's ModelRuntime: any PI_OFFLINE value (bridged from MMP_OFFLINE) is offline.
-      online: !modelArgs.offline && process.env.PI_OFFLINE === undefined,
-      discover: usingMagpie || isListModelsRun(prepared.piArgs) || (mayNameMagpieModel(modelArgs) && "if-unsaved"),
-      required: usingMagpie,
-      ...(!usingMagpie || modelArgs.apiKey === undefined ? {} : { apiKey: modelArgs.apiKey }),
-    }),
+    createMagpieInlineExtension(),
     ...buildInlineExtensions(
       prepared.assembly,
       prepared.mmpHome,
@@ -333,13 +324,9 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
   }
 
   process.env.PI_CODING_AGENT_DIR = prepared.agentDir;
-  // PI_CODING_AGENT_SESSION_DIR, which Pi's main.js reads on the piMain path below, already holds
-  // MMP_SESSION_DIR and never the user's own value (src/pi-env.ts), so piMain's resolution
-  // (--session-dir, then its env var, then the sessionDir setting) agrees with services.ts's
-  // identical MMP_SESSION_DIR-based resolution on the TUI path below.
   // Every interactive run takes MMP's own TUI (docs/tui-design.md); no environment switch.
-  // `--help` and `--list-models` are MMP's own too (above/below); all other runs (print/json/rpc,
-  // --export, Pi CLI subcommands, non-TTY) keep going through piMain unchanged (docs/decisions.md D3).
+  // `--help` and `--list-models` are MMP's own too (above/below); print/json/rpc and non-TTY runs
+  // go through src/noninteractive.ts, and only `--export` is left to piMain (docs/decisions.md N1).
   if (isInteractivePiRun(args.passthrough, process.stdin.isTTY === true, process.stdout.isTTY === true)) {
     const tui = await import("./tui/start.js");
     // A failed startup (bind() rejecting) is reported here rather than by cli.ts, so it exits too.
@@ -360,27 +347,26 @@ export async function runMmp(argv: readonly string[]): Promise<void> {
     });
     return;
   }
-  const { refusePiMainCrossProjectSession } = await import("./tui/services.js");
-  await refusePiMainCrossProjectSession(
-    prepared.piArgs,
-    process.cwd(),
-    SettingsManager.create(process.cwd(), prepared.agentDir, { projectTrusted: false }),
-    {
-      root: findNearestProjectManifest(process.cwd(), prepared.assembly.globalManifest)?.root,
-      globalManifestPath: prepared.assembly.globalManifest,
-    },
-  );
-  rewritePiOutput(prepared.assembly);
-  // Before piMain: Pi's output guard binds process.stdout.write when it takes stdout over (D54).
+  rewritePiOutput();
+  const parsedPiArgs = parseArgs([...prepared.piArgs]);
+  // `--export` is the one run still left to Pi's CLI: it converts a session file and exits before
+  // any session, extension or provider exists (decision N1).
+  if (parsedPiArgs.export !== undefined) {
+    await piMain(prepared.piArgs, { extensionFactories });
+    return;
+  }
+  // Before stdout is taken over: Pi's output guard binds process.stdout.write then (D54).
   // Print/json only: an rpc client that stops reading is left to Pi as before, since the guard
   // would keep the process running with its prompts dropped and nothing on stderr.
-  const piExtensions =
-    parseArgs([...prepared.piArgs]).mode === "rpc" ? extensionFactories : [...extensionFactories, guardClosedStdout()];
-  await piMain(prepared.piArgs, { extensionFactories: piExtensions });
+  const { runNonInteractive } = await import("./noninteractive.js");
+  await runNonInteractive(
+    prepared,
+    parsedPiArgs.mode === "rpc" ? extensionFactories : [...extensionFactories, guardClosedStdout()],
+  );
   // Deviation from Pi (dogfood D50): after print/json mode, Pi's main.js only sets process.exitCode
   // and returns, so a loaded extension holding a timer or handle keeps the process alive, on success
-  // and on failure. Every other piMain path (rpc, --export, errors) already calls process.exit and
-  // never gets here. Exit once stdout and stderr are flushed, as Pi's package commands do "so bad
+  // and on failure. rpc and every error exit call process.exit themselves and never get here.
+  // Exit once stdout and stderr are flushed, as Pi's package commands do "so bad
   // extensions cannot keep one-shot commands alive".
   await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
   await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));

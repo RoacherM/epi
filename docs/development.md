@@ -45,7 +45,8 @@ MMP 不调用 PATH 中的全局 `pi`，不复制 Agent Loop。交互应用由 MM
 |---|---|
 | 交互式 TTY（含 `--mode text`） | `src/tui/start.ts` → MMP TUI + Pi session runtime |
 | `--list-models` | `src/list-models.ts`，报告扩展诊断并使用 MMP 文案 |
-| print/json/rpc、export、非 TTY | `piMain(piArgs, { extensionFactories })` |
+| print/json/rpc、非 TTY | `src/noninteractive.ts`：和交互模式同一个 `createMmpRuntime`，交给 Pi 导出的 `runPrintMode` / `runRpcMode`（决策 N1，[noninteractive-sdk-design.md](noninteractive-sdk-design.md)） |
+| `--export` | `piMain(piArgs, { extensionFactories })`：只转换会话文件，不建会话、不加载扩展 |
 | install/remove/uninstall/list/config/auth/mcp/update | MMP 自有子命令实现，不进入 Pi CLI 子命令 |
 
 资源隔离参数由 `src/host.ts` 的 `BASE_PI_RESOURCE_ARGS` 维护：
@@ -319,7 +320,7 @@ Pi 已公开：
 
 Pi 原生 trust 会保护 `.pi/settings.json`、`.pi` project resources、项目 package 和 `.agents/skills`。但 `.mmp/mmp.json` 不是 Pi 原生资源，因此 MMP 仍需在读取其内容前显式套用同一个 trust 决策。
 
-**已知限制**：交互路径的 `SettingsManager` 使用 `projectTrusted: false`，不读取项目 `.pi/settings.json`。非交互 `piMain` 路径的 bootstrap 配置使用 `projectTrusted: false`，但后续 `startupSettingsManager` 未传该选项，默认仍读取该文件并用于 `sessionDir` 查找；`--no-approve` 只阻止运行阶段应用项目设置。此项隔离目标尚未完全达成，不能把交互路径的保证推广到所有模式，见 `docs/tui-design.md` 3.3 节和决策 D3。
+所有会建会话的路径（交互、print/json/rpc、task 子进程）的 `SettingsManager` 都用 `projectTrusted: false` 创建，不读取项目 `.pi/settings.json`（2026-10-04 起，决策 N1；此前非交互模式经 `piMain` 仍会读取并用于 `sessionDir` 查找，dogfood D62）。
 
 **已修复（2026-09-29）**：以前 MMP 会把自己的 `--approve` 原样转给 Pi，`mmp --approve` 时项目 `.pi/settings.json` 会在运行阶段整份生效（实测：项目设置指定的模型被选中）。现在 MMP 不再转发，并固定给 Pi 传 `--no-approve`，由 `test/ambient-isolation.test.mjs` 覆盖。
 
@@ -429,7 +430,7 @@ PI_CODING_AGENT_DIR=~/.mmp/pi
 - 不启动 shell；
 - 不 spawn Pi 主进程；
 - 不通过环境变量传递配置 JSON 或 secret；
-- 等待当前模式的 runtime 清理完成；非交互 `piMain()` 返回后刷新输出再退出；
+- 等待当前模式的 runtime 清理完成；非交互模式在 `runPrintMode` 返回后刷新输出再退出；
 - Pi SDK 初始化失败直接以非零状态失败，禁止 fallback 到全局 Pi。
 
 ## 10. Effective Assembly
@@ -792,7 +793,7 @@ node --test test/hooks.test.mjs
 - 设置 Node.js `>=22.19.0`；
 - 实现 MMP 参数分流和保留 resource flags；
 - 设置独立 `PI_CODING_AGENT_DIR`；
-- 通过 `piMain(args, { extensionFactories })` 同进程启动 Pi；
+- 通过 `piMain(args, { extensionFactories })` 同进程启动 Pi（2026-10-04 起只剩 `--export` 这样做，其余模式走 SDK，决策 N1）；
 - 强制 `--no-*`，包括 `--no-context-files`。
 
 验证：

@@ -12,7 +12,7 @@
 | 2026-09-29 | T1 | 先设计、后写代码 | 你的要求 | — | 已定 | — |
 | 2026-09-29 | D1 | 新界面在同一进程里调用 Pi SDK，用 pi-tui 渲染 | 扩展的 `custom()` 必须返回 pi-tui 组件；MMP 内置的 MCP adapter 调用了 3 次 `custom()` | RPC 子进程；换 Ink / ratatui | 按推荐推进 | tui-design 第 1 节 |
 | 2026-09-29 | D2 | v1 只做全屏模式 | 固定顶栏和单块折叠要求历史记录由程序自己管理 | inline 模式 | 按推荐推进 | tui-design 第 1 节 |
-| 2026-09-29 | D3 | 只有交互模式走 MMP 自己的启动流程，print / json / rpc / 子命令仍走 `piMain` | 非交互模式和 benchmark 保持不变 | 全部模式都由 MMP 分发 | 按推荐推进。**重新评估的触发条件**：非交互模式在启动阶段仍会读项目 `.pi/settings.json`（tui-design 3.3 节），只有非交互模式也改走 SDK 才能消除。2026-10-01：`--help` 和 `--list-models` 也改由 MMP 自己实现（dogfood D48：Pi 的路径吞掉扩展诊断、打印 Pi 文案），其余非交互模式仍走 `piMain` | tui-design 第 1 节 |
+| 2026-09-29 | D3 | 只有交互模式走 MMP 自己的启动流程，print / json / rpc / 子命令仍走 `piMain` | 非交互模式和 benchmark 保持不变 | 全部模式都由 MMP 分发 | 按推荐推进。**重新评估的触发条件**：非交互模式在启动阶段仍会读项目 `.pi/settings.json`（tui-design 3.3 节），只有非交互模式也改走 SDK 才能消除。2026-10-01：`--help` 和 `--list-models` 也改由 MMP 自己实现（dogfood D48：Pi 的路径吞掉扩展诊断、打印 Pi 文案），其余非交互模式仍走 `piMain`。2026-10-04：被 N1 取代，print / json / rpc 也改走 SDK，只剩 `--export` 走 `piMain` | tui-design 第 1 节 |
 | 2026-09-29 | D4 | 扩展界面接口的 28 个方法全部实现 | 只做一部分的话，无法预测哪个扩展会坏 | 只实现子集 | 按推荐推进 | tui-design 第 1、6 节 |
 | 2026-09-29 | C1 | **MMP 和 Pi 的配置不共享**：Pi 的全局状态只放在 `~/.mmp/pi`，不读不写 `~/.pi/agent`；项目里的 `.pi/` 不读 | 你的硬性要求；MMP 的承诺是"显式、确定的 Harness" | — | 已定 | tui-design 3.3 节 |
 | 2026-09-29 | P0 | Pi 从 0.83 升到 0.87.1，作为单独的第 0 阶段 | 全屏渲染器、布局组件等新界面需要的能力都是 0.84 起才有 | 停在 0.83 | 已定（已完成） | tui-design 第 9 节 |
@@ -40,9 +40,9 @@
 | 2026-10-02 | H3 | 定位的其余关键点：K3 配置保持严格（不读别家工具配置，显式装配，项目要信任；以后可加显式的一次性导入命令）；K4 内置标准能力（`mmp:task`、`mmp:mcp`、`mmp:hooks`）默认开启、可在 Manifest 关闭；K6 和 Pi 一样默认不审批，审批分级先不做 | 用户决定（"K3/K4/K6 按你说的"） | K3 学 OMP 自动发现；K4 维持"声明才开"或用 profile；K6 默认 yolo 或写/执行要审批 | 已定（K4 已实现：Manifest 的 `disable` 字段） | development.md §1、§3.4、§17 |
 | 2026-09-30 | T3 | 界面细节："选中即复制"保持开启（和 Pi 一致）；用户消息块不显示 Pi 追加的图片缩放/格式转换说明（模型照常收到，"Image omitted" 这类失败说明照常显示） | 用户决定 | 关闭选中即复制；原样显示说明 | 已定（D9 随任务 D11 实现中） | [dogfood-issues.md](dogfood-issues.md) D9 |
 | 2026-09-30 | T4 | 图片标签 `[Image #N]` 留在发给模型的文字里；整个会话统一编号，下一张 = 会话里出现过的最大编号 + 1；没有编号的图片显示 `[Image]`；没有图片数据的标签显示成暗色删除线，发送时提示 | 用户确认（"我觉得没啥问题"）；做法参照 Claude Code，用户可以直接说"第 2 张图" | 按计数推算、按图片内容匹配预留（D11 前两轮，过于复杂且仍会错位） | 已定（D11 实现中） | [dogfood-issues.md](dogfood-issues.md) D11 |
-| 2026-10-03 | MG1 | MMP 内置 `magpie` provider（不进 Manifest，不是 `disable` 的第四项）；唯一配置是 API key，放在 `/login` 的 API key 登录项（存 `pi/auth.json`），没有 `magpie.json`，地址固定 `127.0.0.1:3425`；只有选中 Magpie 或 `--list-models` 时启动才等待目录 | 用户决定（"magpie的配置只需要填入api-key即可（放在api那一项配置中"）；启动策略是主控按审查结果定的：用其他 provider 时不为 Magpie 多等 | `magpie.json` 配置地址、超时、逐模型协议和开关；每次启动都查询目录 | 已定 | [magpie-design.md](magpie-design.md) |
-| 2026-10-04 | N1 | 非交互模式（`-p`、json、rpc）和 task 子进程改走 SDK，和交互界面用同一个启动函数；`piMain` 只剩 `--export` 还用。取代 D3 里"print / json / rpc 仍走 `piMain`"的部分 | `piMain` 是黑盒：D80（选模型和 Pi 不等待的刷新竞争）和 D62（读项目 `.pi/settings.json`）都发生在它内部，MMP 修不了。不给 Pi 上游报 issue（用户定） | 只给 Magpie 打补丁；给上游报 issue 等修复 | 已定（实现中） | [noninteractive-sdk-design.md](noninteractive-sdk-design.md) |
-| 2026-10-04 | MG2 | Magpie 作为普通 provider 扩展处理，不加 fallback 或专门规则：所有模式在选模型前等一次 Pi 自己的刷新，范围是所有由扩展注册的 provider；删掉 MMP 自己的启动查询、自己写 `models-store.json` 和 `selectsMagpie` 这类判断。改掉 MG1 的"只有选中 Magpie 时启动才等待目录" | 用户决定（"用统一的方式处理这个provider"、"当然是A"）；原型实测 40/40（设计文档 5.2 节） | 只刷新这次选中的 provider（要照 Pi 的规则重写一份"选了谁"的判断） | 已定（实现中） | noninteractive-sdk-design.md 第 5 节 |
+| 2026-10-03 | MG1 | MMP 内置 `magpie` provider（不进 Manifest，不是 `disable` 的第四项）；唯一配置是 API key，放在 `/login` 的 API key 登录项（存 `pi/auth.json`），没有 `magpie.json`，地址固定 `127.0.0.1:3425`；只有选中 Magpie 或 `--list-models` 时启动才等待目录（这一条 2026-10-04 被 MG2 改掉：每次启动都刷新所有扩展 provider） | 用户决定（"magpie的配置只需要填入api-key即可（放在api那一项配置中"）；启动策略是主控按审查结果定的：用其他 provider 时不为 Magpie 多等 | `magpie.json` 配置地址、超时、逐模型协议和开关；每次启动都查询目录 | 已定 | [magpie-design.md](magpie-design.md) |
+| 2026-10-04 | N1 | 非交互模式（`-p`、json、rpc）和 task 子进程改走 SDK，和交互界面用同一个启动函数；`piMain` 只剩 `--export` 还用。取代 D3 里"print / json / rpc 仍走 `piMain`"的部分 | `piMain` 是黑盒：D80（选模型和 Pi 不等待的刷新竞争）和 D62（读项目 `.pi/settings.json`）都发生在它内部，MMP 修不了。不给 Pi 上游报 issue（用户定） | 只给 Magpie 打补丁；给上游报 issue 等修复 | 已定（已实现） | [noninteractive-sdk-design.md](noninteractive-sdk-design.md) |
+| 2026-10-04 | MG2 | Magpie 作为普通 provider 扩展处理，不加 fallback 或专门规则：所有模式在选模型前等一次 Pi 自己的刷新，范围是所有由扩展注册的 provider；删掉 MMP 自己的启动查询、自己写 `models-store.json` 和 `selectsMagpie` 这类判断。改掉 MG1 的"只有选中 Magpie 时启动才等待目录" | 用户决定（"用统一的方式处理这个provider"、"当然是A"）；原型实测 40/40（设计文档 5.2 节） | 只刷新这次选中的 provider（要照 Pi 的规则重写一份"选了谁"的判断） | 已定（已实现） | noninteractive-sdk-design.md 第 5 节 |
 
 ## 待定
 
@@ -53,4 +53,4 @@
 
 ## 已知遗留问题
 
-- Pi 启动查找会话时总会读一次项目的 `.pi/settings.json`（影响会话目录等），发生在 `piMain` 内部，MMP 挡不住。交互模式（现在只走 MMP 自己的界面，见 M5）已经没有这个问题；非交互模式要等 D3 改成全部走 SDK，或者上游修复。
+- ~~Pi 启动查找会话时总会读一次项目的 `.pi/settings.json`（发生在 `piMain` 内部）。~~ 2026-10-04 已解决：非交互模式不再走 `piMain`（决策 N1）。

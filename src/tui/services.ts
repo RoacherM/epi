@@ -1,5 +1,6 @@
-// Terminal-free construction of the Pi session for MMP's own interactive host. Everything that
-// decides what the model sees lives here, so it can be tested without a terminal.
+// Terminal-free construction of the Pi session, for every mode that runs one: MMP's interactive
+// host and print/json/rpc (src/noninteractive.ts; decision N1). Everything that decides what the
+// model sees lives here, so it can be tested without a terminal.
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
@@ -25,6 +26,7 @@ import {
 import type { ResolvedAssembly } from "../assembly.js";
 import { MmpArgumentError } from "../errors.js";
 import { extensionLoadFailureHint } from "../pi-output.js";
+import { notRunningWarnings, settleRegisteredProviders } from "../provider-startup.js";
 import { crossProjectRefusal, type ProjectIdentity } from "./project-guard.js";
 
 export interface MmpSessionOptions {
@@ -39,10 +41,27 @@ export interface MmpSessionOptions {
   /** The project this process assembled its manifest from; --session/--fork targets from another
    * project are refused up front, the same way a later /resume would be (project-guard.ts). */
   projectIdentity: ProjectIdentity;
+  /** Where startup warnings go before a session exists. Default: stderr, as `mmp: <message>`. */
+  warn?: (message: string) => void;
+}
+
+/** The initial runtime's error diagnostics. `message` is what the TUI path prints; a host that
+ * prints diagnostics its own way (print/json/rpc: Pi's `Error: ` / `Warning: ` lines) reads the rest. */
+export class StartupDiagnosticsError extends Error {
+  constructor(
+    message: string,
+    /** Every startup diagnostic, in Pi's order, warnings included. */
+    readonly diagnostics: readonly Diagnostic[],
+    /** `extensionLoadFailureHint`, when an extension failed to load. */
+    readonly hint: string | undefined,
+  ) {
+    super(message);
+    this.name = "StartupDiagnosticsError";
+  }
 }
 
 type ParsedPiArgs = ReturnType<typeof parseArgs>;
-type Diagnostic = { type: "error" | "warning" | "info"; message: string };
+export type Diagnostic = { type: "error" | "warning" | "info"; message: string };
 
 // pi-internals row `http-dispatcher` (dogfood D38): Pi's own core/http-dispatcher.js, not in the
 // package "exports" map, so imported by file path. The package root already loaded it (through
@@ -90,8 +109,8 @@ function expandTilde(value: string): string {
 /**
  * Which Pi CLI arguments MMP's TUI host understands, in one place, so it's easy to see what's
  * missing. `isInteractivePiRun` (../interactive.ts) already keeps `--print`/`-p`, `--mode json/rpc`,
- * `--help`/`-h`, `--list-models` and `--export` off this path entirely (those go through piMain's
- * print/non-interactive modes instead of reaching here). Resource flags (`--extension`,
+ * `--help`/`-h`, `--list-models` and `--export` off the TUI (print/json/rpc reach this module through
+ * ../noninteractive.ts instead; `--resume` is refused there, since it needs the TUI's selector). Resource flags (`--extension`,
  * `--skill`, `--theme`, `--system-prompt`, ...) are rejected even earlier, in parseMmpArgs
  * (../args.ts), before Pi's own parser ever sees them.
  *
@@ -131,9 +150,20 @@ function validateSupportedPiArgs(parsed: ParsedPiArgs): void {
   }
 }
 
+/** Pi's assertValidSessionId (core/session-manager.js, not exported from the package root), checked
+ * as early as Pi's main.js does: before anything looks the id up. */
+function assertValidSessionId(id: string): void {
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(id)) {
+    throw new MmpArgumentError(
+      "Session id must be non-empty, contain only alphanumeric characters, '-', '_', and '.', and start and end with an alphanumeric character",
+    );
+  }
+}
+
 /** Mirrors Pi's validateForkFlags/validateSessionIdFlags (main.js): reject flag combinations that
  * would otherwise have one silently win over the other. */
 function validateSessionFlagCombinations(parsed: ParsedPiArgs): void {
+  if (parsed.sessionId !== undefined) assertValidSessionId(parsed.sessionId);
   if (parsed.fork !== undefined) {
     const conflicts = [
       parsed.session !== undefined ? "--session" : undefined,
@@ -215,27 +245,13 @@ function startupSessionDir(parsed: ParsedPiArgs, settingsManager: SettingsManage
     settingsManager.getSessionDir();
 }
 
-/** The TUI's startup --session check for runs that go through piMain (print, json, rpc), which
- * otherwise open another project's session with this project's Rules (dogfood D67, Fable F4).
- * A --session nothing matches is left to Pi, which reports it. */
-export async function refusePiMainCrossProjectSession(
-  piArgs: readonly string[],
-  cwd: string,
-  settingsManager: SettingsManager,
-  projectIdentity: ProjectIdentity,
-): Promise<void> {
-  const parsed = parseArgs([...piArgs]);
-  if (parsed.session === undefined || parsed.noSession || parsed.fork !== undefined) return;
-  const resolved = await resolveSessionArg(parsed.session, cwd, startupSessionDir(parsed, settingsManager));
-  if (resolved.type !== "not_found") refuseCrossProjectSession(parsed.session, resolved.path, projectIdentity);
-}
-
 /** Mirrors Pi's createSessionManager (main.js), using only SessionManager's exported statics. */
 async function buildSessionManager(
   parsed: ParsedPiArgs,
   cwd: string,
   sessionDir: string | undefined,
   projectIdentity: ProjectIdentity,
+  warn: (message: string) => void,
 ): Promise<SessionManager> {
   if (parsed.noSession) {
     return SessionManager.inMemory(cwd, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
@@ -252,12 +268,17 @@ async function buildSessionManager(
     }
     // --fork always lands in this cwd's project (forkFrom's targetCwd, below), regardless of which
     // project the source session came from, so it needs no project-identity check.
-    return SessionManager.forkFrom(
-      resolved.path,
-      cwd,
-      sessionDir,
-      parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined,
-    );
+    try {
+      return SessionManager.forkFrom(
+        resolved.path,
+        cwd,
+        sessionDir,
+        parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined,
+      );
+    } catch (error) {
+      // Pi's forkSessionOrExit: a source that is missing or not a session file is the user's argument.
+      throw new MmpArgumentError(error instanceof Error ? error.message : String(error));
+    }
   }
   if (parsed.session !== undefined) {
     const resolved = await resolveSessionArg(parsed.session, cwd, sessionDir);
@@ -275,11 +296,17 @@ async function buildSessionManager(
     if (existing !== undefined) {
       return SessionManager.open(existing, sessionDir);
     }
-    process.stderr.write(
-      `mmp: no project session found with id '${parsed.sessionId}'; creating a new session with that id.\n`,
-    );
+    warn(`No project session found with id '${parsed.sessionId}'; creating a new session with that id.`);
   }
   return SessionManager.create(cwd, sessionDir, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
+}
+
+/** main.js's collectSettingsDiagnostics: settings files that could not be read or parsed. */
+export function settingsDiagnostics(settingsManager: SettingsManager): Diagnostic[] {
+  return settingsManager.drainErrors().map(({ scope, path, error }): Diagnostic => ({
+    type: "warning",
+    message: path ? `Invalid settings file ${path}: ${error.message}` : `Invalid ${scope} settings: ${error.message}`,
+  }));
 }
 
 /** createAgentSessionServices leaves extension load results out of its diagnostics; Pi's main.js
@@ -416,11 +443,12 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
   validateSessionFlagCombinations(parsed);
   // Non-fatal parse diagnostics (e.g. an invalid --thinking level falls back to the default
   // instead of erroring); Pi's own CLI prints these too instead of dropping them.
+  const warn = options.warn ?? ((message: string) => void process.stderr.write(`mmp: ${message}\n`));
   for (const diagnostic of parsed.diagnostics) {
-    process.stderr.write(`mmp: ${diagnostic.message}\n`);
+    warn(diagnostic.message);
   }
-  // Mirrors main.js's own `--offline` handling (Pi's `offline` flag only takes effect via piMain,
-  // which the TUI v2 path never calls).
+  // Mirrors main.js's own `--offline` handling (Pi's `offline` flag only takes effect in its own main(),
+  // which no session ever goes through).
   if (parsed.offline) {
     process.env.PI_OFFLINE = "1";
   }
@@ -438,7 +466,7 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
       modelRuntimeSignal: AbortSignal.timeout(15_000),
       extensionFlagValues: parsed.unknownFlags,
       resourceLoaderOptions: {
-        // Same isolation as BASE_PI_RESOURCE_ARGS on the piMain path.
+        // Same isolation as BASE_PI_RESOURCE_ARGS gives the one run still left to piMain (--export).
         noExtensions: true,
         noSkills: true,
         noPromptTemplates: true,
@@ -450,14 +478,13 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
         extensionFactories: options.extensionFactories,
       },
     });
-    // Registering an extension's native provider starts an un-awaited auth refresh inside Pi. If it
-    // queues after createAgentSessionServices' own awaited refresh, that awaited pass is discarded and
-    // the initial model is picked from a stale snapshot. A refresh started now is the latest one.
-    await services.modelRuntime.refresh({ allowNetwork: false });
+    const providers = await settleRegisteredProviders(services.modelRuntime);
     const initial = await resolveInitialModel(parsed, services, sessionManager);
     const diagnostics: Diagnostic[] = [
       ...services.diagnostics,
       ...collectExtensionDiagnostics(services),
+      ...providers.warnings,
+      ...notRunningWarnings(providers, services.settingsManager.getDefaultProvider(), initial.diagnostics.length > 0),
       ...initial.diagnostics,
     ];
 
@@ -488,10 +515,15 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
     if (errors.length > 0) {
       const lines = errors.map((diagnostic) => diagnostic.message);
       const extensionErrors = services.resourceLoader.getExtensions().errors;
-      if (extensionErrors.length > 0) {
-        lines.push(extensionLoadFailureHint(extensionErrors.map(({ path }) => path), options.assembly));
-      }
-      throw new Error(lines.join("\n"));
+      const hint = extensionErrors.length > 0
+        ? extensionLoadFailureHint(extensionErrors.map(({ path }) => path), options.assembly)
+        : undefined;
+      if (hint !== undefined) lines.push(hint);
+      throw new StartupDiagnosticsError(
+        lines.join("\n"),
+        [...settingsDiagnostics(services.settingsManager), ...diagnostics],
+        hint,
+      );
     }
 
     const created = await createAgentSessionFromServices({
@@ -510,11 +542,17 @@ export async function createMmpRuntime(options: MmpSessionOptions): Promise<Agen
     if (created.session.model !== undefined && initial.cliThinkingOverride) {
       created.session.setThinkingLevel(created.session.thinkingLevel);
     }
+    // No model at all (Pi's `unknown` placeholder) and nothing said why yet: a provider that is not
+    // running may be the reason.
+    if (created.session.model === undefined || created.session.model.provider === "unknown") {
+      const said = new Set(diagnostics.map((diagnostic) => diagnostic.message));
+      diagnostics.push(...notRunningWarnings(providers, undefined, true).filter(({ message }) => !said.has(message)));
+    }
     return { ...created, services, diagnostics };
   };
 
   const sessionDir = startupSessionDir(parsed, startupSettingsManager);
-  const sessionManager = await buildSessionManager(parsed, options.cwd, sessionDir, options.projectIdentity);
+  const sessionManager = await buildSessionManager(parsed, options.cwd, sessionDir, options.projectIdentity, warn);
   if (parsed.name !== undefined) {
     sessionManager.appendSessionInfo(parsed.name.trim());
   }

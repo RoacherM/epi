@@ -1,8 +1,6 @@
 // `@file` arguments (docs/cli-design.md §2), mirroring Pi's processFileArguments/buildInitialMessage
 // (dist/cli/file-processor.js, dist/cli/initial-message.js -- neither is exported). Used by MMP's
-// TUI to build its initial message (src/tui/start.ts); the non-interactive path (-p/--mode) never
-// needs this module at all, since piMain still gets `@file` tokens verbatim in its passthrough
-// argv and does its own, real @file handling internally.
+// TUI to build its initial message (src/tui/start.ts) and by print/json (src/noninteractive.ts).
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -57,7 +55,8 @@ export async function processFileArguments(fileArgs: readonly string[], cwd: str
     if (mimeType) {
       imagePaths.push(absolutePath);
       images.push({ type: "image", mimeType, data: readFileSync(absolutePath).toString("base64") });
-      text += `<file name="${absolutePath}">image file</file>\n`;
+      // Pi's processFileArguments writes an empty element for an image it attaches unchanged.
+      text += `<file name="${absolutePath}"></file>\n`;
       continue;
     }
     const content = readFileSync(absolutePath, "utf8").replace(/^﻿/, "");

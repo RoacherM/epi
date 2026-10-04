@@ -11,7 +11,8 @@ import {
 import { readFileSync, unlinkSync } from "node:fs";
 
 import type { TaskCapsule } from "./task-runtime.js";
-import { createMagpieInlineExtension, selectsMagpie } from "./providers/magpie-extension.js";
+import { notRunningWarnings, settleRegisteredProviders } from "./provider-startup.js";
+import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
 
 interface WorkerResultEvent {
   type: "result";
@@ -112,7 +113,6 @@ async function main(): Promise<void> {
     capsule.agentDir,
     { projectTrusted: false },
   );
-  const usingMagpie = selectsMagpie(capsule.model === undefined ? {} : { model: capsule.model }, settingsManager);
   const { modelRuntime, resourceLoader, diagnostics } = await createAgentSessionServices({
     cwd: capsule.cwd,
     agentDir: capsule.agentDir,
@@ -128,21 +128,26 @@ async function main(): Promise<void> {
       systemPromptOverride: () => undefined,
       appendSystemPromptOverride: () =>
         capsule.systemPrompt.length === 0 ? [] : [capsule.systemPrompt],
-      extensionFactories: [createMagpieInlineExtension({
-        agentDir: capsule.agentDir,
-        online: process.env.PI_OFFLINE === undefined,
-        discover: usingMagpie,
-        required: usingMagpie,
-      })],
+      extensionFactories: [createMagpieInlineExtension()],
     },
   });
   const errors = diagnostics.filter((diagnostic) => diagnostic.type === "error");
   if (errors.length > 0) throw new Error(errors.map((diagnostic) => diagnostic.message).join("; "));
+  const providers = await settleRegisteredProviders(modelRuntime);
+  for (const warning of providers.warnings) {
+    process.stderr.write(`Warning: ${warning.message}\n`);
+  }
   const resolvedModel = capsule.model === undefined
     ? undefined
     : resolveCliModel({ cliModel: capsule.model, modelRuntime });
+  // In the reported error, not on stderr: the task tool hands the model the error and keeps stderr
+  // as an artifact only (task-runtime.ts).
+  const notRunning = (choiceFailed: boolean): string =>
+    notRunningWarnings(providers, settingsManager.getDefaultProvider(), choiceFailed)
+      .map((warning) => `; ${warning.message}`)
+      .join("");
   if (resolvedModel?.error !== undefined) {
-    throw new Error(resolvedModel.error);
+    throw new Error(`${resolvedModel.error}${notRunning(true)}`);
   }
 
   const { session } = await createAgentSession({
@@ -159,6 +164,11 @@ async function main(): Promise<void> {
     ...(capsule.tools === undefined ? {} : { tools: capsule.tools }),
   });
   activeSession = session;
+  // Pi's `unknown` placeholder: no model could be picked. Say so with the cause when a provider
+  // that is not running explains it, instead of the prompt's "No API key found".
+  if ((session.model === undefined || session.model.provider === "unknown") && notRunning(true) !== "") {
+    throw new Error(`No model available${notRunning(true)}`);
+  }
   emit({ type: "started", pid: process.pid });
 
   try {

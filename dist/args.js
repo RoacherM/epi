@@ -54,7 +54,7 @@ function findUnsupportedFlagReason(argument) {
  * in none of those is held back instead (Pi's own `parseArgs` `unknownFlags`, cli/args.js) and
  * forwarded on both paths -- it may be one an extension registers with `pi.registerFlag`, which
  * only loading extensions can confirm; downstream (agent-session-services.js's
- * applyExtensionFlagValues, run on both the TUI path and piMain) errors by name if nothing claims
+ * applyExtensionFlagValues, run for the TUI and for print/json/rpc alike) errors by name if nothing claims
  * it.
  */
 export const MMP_FLAG_TABLE = [
@@ -126,8 +126,8 @@ export function parseMmpArgs(argv) {
                 throw new MmpArgumentError(`Unknown option: ${argument}`);
             }
             // Extension-registered flag candidate (Pi's parseArgs `unknownFlags`, cli/args.js): held back
-            // here, not rejected -- Pi's own parser re-parses `passthrough` on both paths (piMain directly;
-            // MMP's TUI via services.ts's `parseArgs`) and matches it against what loaded extensions
+            // here, not rejected -- Pi's own parser re-parses `passthrough` (services.ts's `parseArgs`, for
+            // every mode) and matches it against what loaded extensions
             // actually registered (agent-session-services.js's applyExtensionFlagValues), erroring by name
             // if nobody did. MMP never guesses this flag's arity itself: the next token (its value, or the
             // start of the next flag/message) simply falls through this same loop unchanged.

@@ -85,7 +85,7 @@ mmp -p / --mode json / --mode rpc
 | `rewritePiOutput` 里"替换 Pi 的登录指引文字" | **保留**。模式运行器在运行中仍会打印 Pi 的文字（例如中途的 "No API key found"） |
 | `guardClosedStdout`（D54） | 保留，安装时机不变（接管 stdout 之前） |
 | `piMain` 这个依赖 | 只剩 `--export` 还用（见 5.4） |
-| `createMmpRuntime` 放在 `src/tui/` | 挪到 `src/` 下（它不再只属于界面）。**主控定** |
+| `createMmpRuntime` 放在 `src/tui/` | 不挪（见第 6 节 T1） |
 
 ### 3.3 状态清单
 
@@ -167,7 +167,7 @@ Pi 内置的 provider（Anthropic、OpenAI 等）不在这次刷新里：它们�
 
 | 任务 | 内容 | 依赖 |
 |---|---|---|
-| T1 | 把 `createMmpRuntime` 及其辅助函数从 `src/tui/services.ts` 挪到 `src/`，不改行为 | 无 |
+| ~~T1~~ | ~~把 `createMmpRuntime` 及其辅助函数从 `src/tui/services.ts` 挪到 `src/`~~ 不做（主控定）：纯挪文件，会改一批测试的 import 路径，对行为没有帮助。文件头注释已写明它现在服务所有模式 | — |
 | T2 | 新的非交互入口（3 节的第 2、4、5、7 步）+ print/json 接上 `runPrintMode`；输出对比批次 | T1 |
 | T3 | rpc 接上 `runRpcMode`；rpc 的对比批次 | T2 |
 | T4 | `worker.ts` 改用同一个启动函数 | T1 |
@@ -184,3 +184,93 @@ T2 完成、T3 没完成的中间状态下，rpc 仍走 `piMain`，两条路径�
 | Pi 升级改了 `runPrintMode` / `runRpcMode` 的签名或 `output-guard.js` | 都是 Pi 包根导出的函数（前两个）或登记过的内部接口（后一个），升级门禁有测试 |
 | `main.js` 以后新增的启动步骤 MMP 不会自动跟上 | 这是 SDK 路径本来就有的代价，交互路径已经在承担；升级时对照 `main.js` 的 diff（`pi-upgrade-design.md` 的流程里加一条） |
 | `createMmpRuntime` 里有只适合界面的假设 | 3.3 节的清单逐条核对并加测试 |
+
+## 8. 实现记录
+
+### 8.1 第一次合并：print / json / rpc 和 task 子进程（T2–T4）
+
+**实测**（对比脚本跑 50 个场景，改动前后各一遍，路径、ID、时间归一化后逐字段比较，202 个字段）：
+
+| 结果 | 字段数 | 说明 |
+|---|---|---|
+| 一致 | 197 | 包括 `-p`、json、rpc 的全部正常输出、退出码、会话文件数 |
+| 有意变化（D62） | 2 | 项目 `.pi/settings.json` 的 `sessionDir` 不再生效：会话写回 `~/.mmp/pi/sessions` |
+| 文案变化 | 3 | `--session`、`--fork` 找不到会话，以及 `--fork --session-id` 撞上已有会话时，Pi 打印不带前缀的 `No session found matching …` / `Session already exists …`；现在和其他参数错误一样带 `Error: ` 前缀。退出码仍是 1。**主控定**：不为这三条单独保留无前缀的写法 |
+
+另外两处没在对比批次里、但行为变了：
+
+- `--use-theme`、`--tui-mode` 在非交互模式下以前被 Pi 静默忽略，现在和交互模式一样报"not supported by MMP"。
+- 启动诊断在终端上不再带颜色（Pi 用 chalk 上色；输出到管道或文件时本来就没有颜色）。
+
+D80 的验证（加 CPU 负载，默认模型是 Magpie、没有保存 key）：
+
+| 路径 | 改动前 | 改动后 |
+|---|---|---|
+| `mmp -p hi` | 47/60 通过 | 60/60 |
+| task 子进程（`dist/worker.js`） | 55/60 通过 | 60/60 |
+
+我原来认为这个竞争写不出确定性的测试。Fable 审查给出了做法：把 Pi 注册 provider 时启动的那次刷新拖后 60ms、每次可用性检查拖慢 250ms，改动前 `-p`、json、rpc 0/5，改动后 5/5。已做成夹具 `test/fixtures/slow-registration-refresh.mjs` 和 `test/magpie.test.mjs` 里的测试。
+
+审查还发现两个扩展同时注册 provider 时一次等待不够：第二次不等待的刷新可能在等待期间把结果作废，默认的 Magpie 模型被跳过，运行悄悄改用另一个模型。所以 `settleRegisteredProviders` 在刷新之后核对"Pi 的快照说没有认证、provider 自己的检查说有"这种状态，不对就再刷新，最多 3 次（**主控定**）。审查的强制时序复现：修复前 0/4，修复后 4/4。
+
+### 8.1.1 审查后补上的差异清单（第一轮 Fable 审查，P2-1）
+
+除了上面三条 `Error: ` 前缀，非交互模式下还有这些和 `piMain` 不同（都由 MMP 自己的 `buildSessionManager` 决定，和交互模式一致）：
+
+| 情况 | 以前（Pi） | 现在 | 处理 |
+|---|---|---|---|
+| `--resume` | 打开 Pi 的会话选择器 | 报错退出 1，提示用 `--continue` 或 `--session <id>` | 审查 P1：之前被静默忽略、新建了会话。选择器只有 MMP 的界面有 |
+| `--session` 指向别的项目的会话 | `mmp: …` 退出 2（MMP 的预检查） | `Error: …` 退出 1 | 和其他会话错误一致（**主控定**） |
+| 会话的 cwd 已不存在 | `Stored session working directory does not exist … Session file: …` | `Error: Session working directory does not exist … Use --fork …` | 用 MMP 交互模式已有的文案 |
+| `--session <id 前缀>` 匹配到同项目另一个目录的会话 | 询问 `Fork this session into current directory? [y/N]` | 直接打开那个会话，在它自己的目录运行 | 和交互模式一致；非交互模式本来就不该等输入 |
+| 无效的 `--session-id`（如 `../evil`） | `Error: Session id must be …` | 相同（审查发现先打印了"creating a new session"再报错，已改成先校验） | 已修 |
+| `--fork <不存在或损坏的文件>` | `Error: Cannot fork …` | 相同（审查发现前缀变成了 `mmp:`，已修） | 已修 |
+| 启动失败时的无效 settings 警告 | 打印 | 相同（审查发现失败路径漏了，已修） | 已修 |
+| `@file` 图片在提示里的文字 | `<file name="x.png"></file>` | 相同（审查发现 MMP 写的是 `image file`，模型看到的文字不一样；已改成 Pi 的写法，交互模式也一起改了） | 已修 |
+| `@file` 是需要转换格式的图片（如 BMP） | 转换说明写在 `<file>` 标签里 | 转换说明在用户消息之后（由会话统一处理） | 留着：图片内容相同，只有说明的位置不同 |
+
+### 8.2 第二次合并：Magpie 作为普通 provider 扩展（T5、T6）
+
+删掉的：`selectsMagpie`、`mayNameMagpieModel`、扩展 factory 里的启动查询和 `saveCatalog`、`FileModelsStore` 这个内部接口（`pi-internals.md` 的 `models-store-file`）、provider 里的 `initialModels` / `pending` / `STARTUP_FRESH_MS` / `startupKey`。`magpie-extension.ts` 从 124 行变成 18 行，只剩注册。另外删掉了 `rewritePiOutput` 里抓加载错误、替换 Pi 提示的那一半，以及对应的内部接口登记 `pi-extension-load-hint`。
+
+统一的启动函数是 `src/provider-startup.ts` 的 `settleRegisteredProviders`，四条路径都调它：`createMmpRuntime`（TUI、print/json/rpc）、`worker.ts`、`list-models.ts`。
+
+做的过程中多定了三件事（**主控定**，都不按 provider 名字区分）：
+
+| 事 | 做法 | 原因 |
+|---|---|---|
+| 扩展 provider 的服务没运行（连接被拒绝） | 平时不提示；只有这次运行随后因为找不到 provider 或模型而失败时，才把这条刷新失败一起打印 | 每次启动都刷新所有扩展 provider，没装 Magpie 的人不该每次都看到警告；但第一次用 Magpie 而网关没开时，只报 `Unknown provider "magpie"` 会把一个失败表现成另一个（硬规则） |
+| 启动刷新的总超时 | 5 秒 | 第三方 provider 的刷新时长不可知，要有上限 |
+| `--api-key` | 不再用于 Magpie 的目录查询，只用于请求 | 查目录发生在选模型之前，这时还不知道 key 属于哪个 provider；其他 provider 也是这样。loopback 网关接受任意 key，所以默认 key 能查到目录；网关要求真实 key 时用 `/login` 保存 |
+
+MG2 带来的用户可见变化：
+
+- 用其他 provider 时，每次启动也请求一次 Magpie 目录（网关在运行时）。
+- 网关挂起不回应时，每次启动多等 2 秒并打印一条警告。
+- 启动后 10 秒内不重复查目录的窗口没有了：rpc 和 TUI 启动后的后台刷新会再请求一次。
+- 网关没运行、但有保存的列表、又选了 Magpie 的模型时：以前启动时有一条"检查网关是否在运行"的警告，现在没有，请求本身报 `Connection error.`。
+
+**实测**（加 CPU 负载）：
+
+| 检查 | 结果 |
+|---|---|
+| 全新目录下首次运行 `-p` 和 `--list-models` 各 30 次：成功、目录已保存、没有留下 `models-store.json.lock` | 60/60 |
+| 默认模型是 Magpie 的 `mmp -p hi` | 40/40 |
+| task 子进程 | 40/40 |
+
+### 8.3 第二轮审查后的修正（Fable 审查，第二部分的两条 P1）
+
+| 发现 | 原因 | 修法 |
+|---|---|---|
+| rpc 首次运行、客户端约 0.5 秒内关闭 stdin，会留下 `models-store.json.lock`，下一次运行等 30 秒（基线没有这个问题） | 启动时保存目录后，Pi 的存储丢掉了文件版本号，rpc 的后台刷新要重新加锁读一次，进程在这次读里退出。旧代码在自己写完后专门读了一次；我在 5.2 的原型里只测了 `-p` 那样的短进程，没测 rpc | `settleRegisteredProviders` 在联网刷新之后总是再等一次只读刷新，把这次加锁的读放在启动里做完。审查的复现：修复前 4/4 留锁，修复后 0/4；`test/magpie.test.mjs` 有对应测试，修复前失败 |
+| Magpie 是通过设置里的默认模型、`--models` 模式或 worker 的默认模型选中时，网关没运行的原因不显示：悄悄改用别的 provider，或只报 `No API key found` / `No models match pattern` | 我只在"模型参数解析报错"时才打印 | `notRunningWarnings`：模型选择出了任何问题（报错或警告）、会话没有模型、或保存的默认 provider 就是没运行的那个时，都打印 |
+| 扩展用 `pi.registerProvider("anthropic", { baseUrl })` 覆盖内置 provider 时，启动刷新会去连 `pi.dev` 取那个内置 provider 的远程目录 | `getRegisteredProviderIds()` 也包含这种配置式覆盖 | 联网刷新只针对以完整 provider 对象注册的（`getRegisteredNativeProvider`） |
+| 等 3 次后认证状态仍没稳定时没有任何提示 | — | 打印一条警告 |
+
+8.2 里漏列的用户可见变化：
+
+- 全新目录、网关在运行、没指定任何模型时，现在会直接用上 Magpie 的模型（以前报 `No API key found` 退出 1）。
+- 每次换会话（`/new`、`/resume`、rpc 的 `new_session`）都会再请求一次目录；网关挂起时每次多等 2 秒。
+- 如果 `127.0.0.1:3425` 上跑的不是 Magpie，每次运行都会有一条警告，而且保存的 Magpie key 会发给它（以前只在选中 Magpie 或 `--list-models` 时才会）。
+
+没做的：等待-核对循环本身没有测试（审查 A-3）。现有的 D80 夹具只强制一次迟到的刷新，触发不了循环；审查用的是进程预加载脚本加 7 个 provider 的时序，没法做成不依赖时间的测试。

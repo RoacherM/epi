@@ -20,7 +20,8 @@ import { fuzzyFilter } from "@earendil-works/pi-tui";
 
 import type { ResolvedAssembly } from "./assembly.js";
 import { extensionLoadFailureHint, PROVIDER_LOGIN_HELP } from "./pi-output.js";
-import { configureHttpAtStartup } from "./tui/services.js";
+import { settleRegisteredProviders } from "./provider-startup.js";
+import { configureHttpAtStartup, settingsDiagnostics } from "./tui/services.js";
 
 type Diagnostic = { type: "error" | "warning" | "info"; message: string };
 type ParsedPiArgs = ReturnType<typeof parseArgs>;
@@ -118,14 +119,13 @@ export async function runListModels(
     },
   });
   const { modelRuntime, resourceLoader } = services;
+  // A provider that is not running just has no models to list (`notRunning` is not reported).
+  const { warnings: providerWarnings } = await settleRegisteredProviders(modelRuntime);
   const extensions = resourceLoader.getExtensions();
   // main.js createRuntime's list, in its order.
   const diagnostics: Diagnostic[] = [
     ...services.diagnostics,
-    ...services.settingsManager.drainErrors().map(({ scope, path, error }) => ({
-      type: "warning" as const,
-      message: path ? `Invalid settings file ${path}: ${error.message}` : `Invalid ${scope} settings: ${error.message}`,
-    })),
+    ...settingsDiagnostics(services.settingsManager),
     ...extensions.errors.map(({ path, error }) => ({
       type: "error" as const,
       message: `Failed to load extension "${path}": ${error}`,
@@ -134,6 +134,7 @@ export async function runListModels(
       type: "warning" as const,
       message: `Extension package "${path}": ${warning}`,
     })),
+    ...providerWarnings,
   ];
   const seen = new Set<string>();
   for (const diagnostic of diagnostics) {

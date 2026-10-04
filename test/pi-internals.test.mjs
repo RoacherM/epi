@@ -49,26 +49,6 @@ const registry = [
     },
   },
   {
-    id: "models-store-file",
-    async check() {
-      const { FileModelsStore } = await importDeep("core", "models-store.js");
-      assertFunction(FileModelsStore, "FileModelsStore");
-      const dir = mkdtempSync(join(tmpdir(), "mmp-models-store-"));
-      try {
-        const path = join(dir, "models-store.json");
-        const store = new FileModelsStore(path);
-        const entry = { models: [{ id: "probe", provider: "probe" }], checkedAt: 1, etag: "tag" };
-        await store.write("probe", entry);
-        assert.deepEqual(await store.read("probe"), entry);
-        assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { probe: entry });
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
-      const runtime = readFileSync(join(piDist, "core", "model-runtime.js"), "utf8");
-      assert.match(runtime, /join\(dirname\(modelsPath\), "models-store\.json"\)/, "ModelRuntime no longer keeps models-store.json beside models.json");
-    },
-  },
-  {
     id: "keybindings-manager",
     async check() {
       const { KeybindingsManager } = await importDeep("core", "keybindings.js");
@@ -235,40 +215,6 @@ const registry = [
           "(process.env.X, env.X, process.env[\"X\"], getProviderEnvValue(\"X\"), process.env[ENV_X]). A new " +
           "`${APP_NAME.toUpperCase()}_...` name is invisible to the scan: add it next to ENV_AGENT_DIR/ENV_SESSION_DIR",
       );
-    },
-  },
-  {
-    id: "pi-extension-load-hint",
-    async check() {
-      const { PI_EXTENSION_LOAD_FAILURE_HINT } = await import(pathToFileURL(join(root, "dist", "pi-output.js")).href);
-      const mainPath = join(piDist, "main.js");
-      const piText = readFileSync(mainPath, "utf8");
-      const declaration = /const EXTENSION_LOAD_FAILURE_HINT = `([^`]*)`;/.exec(piText);
-      assert.ok(declaration, `${mainPath} no longer defines EXTENSION_LOAD_FAILURE_HINT`);
-      const { APP_NAME } = await importDeep("config.js");
-      assert.equal(
-        declaration[1].replaceAll("${APP_NAME}", APP_NAME),
-        PI_EXTENSION_LOAD_FAILURE_HINT,
-        "Pi's extension load hint changed; src/pi-output.ts no longer rewrites it",
-      );
-      assert.match(
-        piText,
-        /console\.error\(chalk\.yellow\(EXTENSION_LOAD_FAILURE_HINT\)\)/,
-        `${mainPath} no longer writes the hint to stderr in one console.error call`,
-      );
-      // K4: the built-in hint reads the failing paths from the error lines written before it.
-      assert.ok(
-        piText.includes('message: `Failed to load extension "${path}": ${error}`'),
-        `${mainPath} changed its load error message; src/pi-output.ts no longer finds the failing paths`,
-      );
-      assert.match(
-        piText,
-        /const prefix = diagnostic\.type === "error" \? "Error: "[^\n]*\n\s*console\.error\(color\(`\$\{prefix\}\$\{diagnostic\.message\}`\)\);/,
-        `${mainPath}'s reportDiagnostics no longer writes each error as one "Error: " line`,
-      );
-      const report = piText.indexOf("reportDiagnostics(startupDiagnostics);");
-      const hint = piText.indexOf("console.error(chalk.yellow(EXTENSION_LOAD_FAILURE_HINT))");
-      assert.ok(report !== -1 && report < hint, `${mainPath} no longer reports the load errors before the hint`);
     },
   },
   {
@@ -771,6 +717,13 @@ const registry = [
         /return process\.stdout\.write\.bind\(process\.stdout\);/,
         `${guardPath}'s getRawStdoutWrite no longer falls back to process.stdout.write`,
       );
+      // src/noninteractive.ts takes stdout over itself and hands it back after print/json.
+      assert.match(guardText, /export function restoreStdout\(\) \{/, `${guardPath} no longer exports restoreStdout`);
+      assert.match(
+        readFileSync(join(piDist, "modes", "print-mode.js"), "utf8"),
+        /import \{[^}]*writeRawStdout[^}]*\} from "\.\.\/core\/output-guard\.js";/,
+        "modes/print-mode.js no longer writes through core/output-guard.js -- src/noninteractive.ts's takeOverStdout would not cover its output",
+      );
       const printPath = join(piDist, "modes", "print-mode.js");
       const printText = readFileSync(printPath, "utf8");
       assert.match(
@@ -1039,7 +992,6 @@ function findDeepPathUsages() {
 
 const KNOWN_DEEP_PATHS = new Map([
   ["core/keybindings.js", "keybindings-manager"],
-  ["core/models-store.js", "models-store-file"],
   ["utils/clipboard.js", "clipboard-text"],
   ["utils/clipboard-image.js", "clipboard-image"],
   ["utils/mime.js", "mime-sniffer"],
@@ -1047,6 +999,7 @@ const KNOWN_DEEP_PATHS = new Map([
   ["core/trust-manager.js", "trust-requiring-resources"],
   ["core/resource-loader.js", "context-file-candidates"],
   ["core/http-dispatcher.js", "http-dispatcher"],
+  ["core/output-guard.js", "output-guard-stdout-write"],
   ["@earendil-works/pi-tui", "pi-tui-nested-copy"],
   ["diff", "pi-diff-package"],
   ["extensions/mcp/config.js", "mcp-native-config-loader"],
@@ -1061,4 +1014,16 @@ test("every join(piDist, ...)/importFromPi/createRequire(piEntry).resolve deep r
     .filter((usage) => !KNOWN_DEEP_PATHS.has(usage.path))
     .map((usage) => `${usage.file.slice(root.length + 1)}: join(piDist, ${JSON.stringify(usage.path)}) has no docs/pi-internals.md row -- add one and a case in KNOWN_DEEP_PATHS here`);
   assert.deepEqual(unregistered, []);
+});
+
+// src/tui/services.ts copies this rule (assertValidSessionId is not exported from the package root)
+// so that an invalid --session-id is refused before anything looks it up, as Pi's main() does.
+test("Pi's session id rule is the one MMP checks --session-id against", () => {
+  const piRule = /export function assertValidSessionId\(id\) \{\s*if \(!(\/.*\/)\.test\(id\)\) \{\s*throw new Error\("([^"]*)"\);/.exec(
+    readFileSync(join(piDist, "core", "session-manager.js"), "utf8"),
+  );
+  assert.ok(piRule, "core/session-manager.js no longer defines assertValidSessionId this way");
+  const mmp = readFileSync(join(root, "src", "tui", "services.ts"), "utf8");
+  assert.ok(mmp.includes(`if (!${piRule[1]}.test(id))`), `MMP's copy differs from Pi's pattern ${piRule[1]}`);
+  assert.ok(mmp.includes(JSON.stringify(piRule[2])), "MMP's copy differs from Pi's message");
 });

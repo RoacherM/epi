@@ -30,7 +30,7 @@ function fixture(t, extensions) {
 
 /** `mmp -p hi` with the probe's faux model. Runs without MMP_OFFLINE are deliberately online, so
  * network-guard.mjs refuses (and records) the main thread's fetch and TCP/TLS connects; every test
- * asserts there was none. */
+ * asserts which ones there were. */
 function runProbe(t, env) {
   const f = fixture(t, [probeExtension]);
   const probeOut = join(f.root, "probe.json");
@@ -54,7 +54,13 @@ function runProbe(t, env) {
     },
   );
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
-  assert.equal(existsSync(guardOut) ? readFileSync(guardOut, "utf8") : "", "", "a connection was attempted");
+  // An online run asks every registered provider for its model list (decision MG2): for the bundled
+  // Magpie that is one connection to its loopback gateway. Nothing else may connect.
+  assert.equal(
+    existsSync(guardOut) ? readFileSync(guardOut, "utf8") : "",
+    env.MMP_OFFLINE === undefined ? "connect 127.0.0.1:3425\n" : "",
+    "an unexpected connection was attempted",
+  );
   return { ...JSON.parse(readFileSync(probeOut, "utf8")), fixture: f };
 }
 

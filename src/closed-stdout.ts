@@ -1,6 +1,6 @@
 // Dogfood D54: `mmp -p hi | head -c1` (or `| true`) crashed with Node's unhandled EPIPE stack and
 // exit 1, killing a session_shutdown handler half way. Pi's print mode writes stdout through
-// core/output-guard.js, which binds `process.stdout.write` when piMain starts (`takeOverStdout`),
+// core/output-guard.js, which binds `process.stdout.write` when stdout is taken over (`takeOverStdout`),
 // retries only ENOBUFS/EAGAIN and otherwise calls process.exit(1); nothing listens for the stream's
 // `error` event (docs/pi-internals.md `output-guard-stdout-write`).
 //
@@ -73,7 +73,7 @@ export function endOnClosedPipe(stream: NodeJS.WriteStream, onClosed: () => void
 }
 
 /**
- * Guards stdout and stderr (before piMain, so Pi's output guard binds the wrappers) and returns an
+ * Guards stdout and stderr (before the takeover, so Pi's output guard binds the wrappers) and returns an
  * inline extension that aborts the run and skips further prompts once stdout's reader has gone. A
  * closed stderr (`2>&1 | head`) only stops MMP writing there: nothing could show an error anyway.
  * Print/json runs only: host.ts leaves `--mode rpc` to Pi.

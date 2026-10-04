@@ -5,17 +5,9 @@ import { getDocsPath } from "@earendil-works/pi-coding-agent";
 import { builtInOffInstruction, type ResolvedAssembly } from "./assembly.js";
 import type { BuiltInExtensionName } from "./manifest.js";
 
-/**
- * Pi's `main.js` ends a startup extension load failure with this hint (its unexported
- * `EXTENSION_LOAD_FAILURE_HINT`, with `APP_NAME` = "pi"). MMP has no `-ne` and exposes only its own
- * options (hard rule 4), so the line is swapped for MMP's own (docs/pi-internals.md,
- * `pi-extension-load-hint`). Pi's login guidance is swapped the same way (`rewritePiText`). Every
- * other `pi`-naming text Pi can print is out of MMP's reach: MMP handles `--help`, `auth`, `mcp` and
- * the other subcommands itself, never loads Pi's built-in extensions, and doesn't run Pi's
- * interactive mode.
- */
-export const PI_EXTENSION_LOAD_FAILURE_HINT = 'Hint: Start without extensions using "pi -ne".';
-
+/** MMP's own hint after an extension load failure, in every mode. Pi's (`Start without extensions
+ * using "pi -ne"`) names a Pi command and a flag MMP does not have (hard rule 4); nothing reaches
+ * Pi's code that prints it any more (decision N1). */
 export const EXTENSION_LOAD_FAILURE_HINT =
   'Hint: Fix the extension, or remove it from the Manifest that declares it ("mmp list" shows which).';
 
@@ -26,10 +18,6 @@ const LOADED_WITH: Readonly<Record<string, BuiltInExtensionName>> = {
   codemode: "mmp:mcp",
   "tool-search": "mmp:mcp",
 };
-
-/** Pi's `reportDiagnostics` line for a load error, chalk's color codes optional; anchored so other
- * output mentioning the phrase (an extension's own, stdout taken over in `-p`/json) isn't counted. */
-const LOAD_ERROR_LINE = /^(?:\x1b\[[\d;]*m)*Error: Failed to load extension "([^"]*)"/gm;
 
 /**
  * The hint after extension load failures (`failedPaths` as Pi names them). A built-in is on by
@@ -112,20 +100,12 @@ function rewriteStream(stream: NodeJS.WriteStream, rewrite: (text: string) => st
 }
 
 /**
- * For the piMain path, where Pi itself writes: `console.error` right before `process.exit(1)` for
- * the extension hint, and `-p`'s errors, and rpc/json's JSON lines on stdout (output-guard.js takes
- * the stdout write installed here as its raw write). There is nothing to catch, so the rewrite
- * happens on the streams. Only those exact texts are replaced; everything around them passes
- * through unchanged.
+ * For print/json/rpc, where Pi's mode runners write: `-p`'s errors on stderr, and rpc/json's JSON
+ * lines on stdout (output-guard.js takes the stdout write installed here as its raw write). There
+ * is nothing to catch, so the rewrite happens on the streams. Only Pi's login guidance is
+ * replaced; everything around it passes through unchanged.
  */
-export function rewritePiOutput(assembly: Pick<ResolvedAssembly, "globalManifest" | "inlineExtensions">): void {
-  // Pi prints every load error (reportDiagnostics) before the hint, each in its own write.
-  const failedPaths: string[] = [];
-  rewriteStream(process.stderr, (text) => {
-    for (const match of text.matchAll(LOAD_ERROR_LINE)) failedPaths.push(match[1]!);
-    return rewritePiText(text.includes(PI_EXTENSION_LOAD_FAILURE_HINT)
-      ? text.replace(PI_EXTENSION_LOAD_FAILURE_HINT, () => extensionLoadFailureHint(failedPaths, assembly))
-      : text);
-  });
+export function rewritePiOutput(): void {
+  rewriteStream(process.stderr, rewritePiText);
   rewriteStream(process.stdout, rewritePiText);
 }
