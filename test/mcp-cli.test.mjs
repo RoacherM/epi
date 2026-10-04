@@ -415,7 +415,7 @@ test("mmp mcp list still lists when the Manifest declares a path that does not e
 test("mmp mcp login refuses a --timeout that setTimeout cannot hold, before connecting", (t) => {
   const f = fixture(t);
   run(f, ["add", "remote", "--url", "http://127.0.0.1:9/mcp"]);
-  for (const value of ["0", "abc", "2147484"]) {
+  for (const value of ["2147484", "0", "abc"]) {
     const result = run(f, ["login", "remote", "--timeout", value]);
     assert.equal(result.status, 1, result.stdout + result.stderr);
     assert.match(result.stderr, /--timeout must be a positive number of seconds, at most 2147483\./);
