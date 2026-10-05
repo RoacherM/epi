@@ -13,7 +13,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
-import { getSelectListTheme } from "@earendil-works/pi-coding-agent";
+import { createEventBus, getSelectListTheme } from "@earendil-works/pi-coding-agent";
 
 import { contextFileCandidateNames, trustRequiringProjectConfigResources } from "./fixtures/pi-ambient-sources.mjs";
 
@@ -30,6 +30,26 @@ function assertFunction(value, label) {
 }
 
 const registry = [
+  {
+    id: "event-bus-sync-emit",
+    check() {
+      // Every handler runs inside emit, up to its first await: the request is filled when emit returns.
+      const bus = createEventBus();
+      bus.on("probe", (request) => { request.first = true; });
+      bus.on("probe", async (request) => { request.second = true; await null; request.late = true; });
+      const request = {};
+      bus.emit("probe", request);
+      assert.deepEqual(request, { first: true, second: true }, "createEventBus's emit no longer runs the handlers synchronously up to their first await");
+      // pi.events.emit is that bus's emit, and the resource loader's bus is a createEventBus one.
+      const loaderPath = join(piDist, "core", "extensions", "loader.js");
+      assert.match(readFileSync(loaderPath, "utf8"), /events: \{\s*emit\(channel, data\) \{\s*assertActive\(\);\s*eventBus\.emit\(channel, data\);\s*\}/, `${loaderPath}: pi.events.emit no longer forwards straight to the event bus`);
+      const resourceLoaderPath = join(piDist, "core", "resource-loader.js");
+      assert.match(readFileSync(resourceLoaderPath, "utf8"), /this\.eventBus = options\.eventBus \?\? createEventBus\(\);/, `${resourceLoaderPath} no longer creates its bus with createEventBus`);
+      // The places MMP relies on it.
+      assert.match(readFileSync(join(root, "src", "hook-events.ts"), "utf8"), /events\.emit\(MMP_TASK_HOOK_CHANNEL, request\);\s*return request\.run/);
+      assert.match(readFileSync(join(root, "src", "extensions", "preview.ts"), "utf8"), /pi\.events\.on\(PREVIEW_PLAYER_CHANNEL, \(request\) => \{/);
+    },
+  },
   {
     id: "magpie-protocol-apis",
     async check() {

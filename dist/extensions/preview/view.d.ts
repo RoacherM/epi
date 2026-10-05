@@ -32,11 +32,10 @@ export declare class Viewer {
     private info;
     /** The probe has answered (or failed): a video waits for it, to play at the source's frame rate. */
     private probed;
-    private player;
-    /** Size of the last rendered body and where the video progress bar sits, for the mouse. */
+    private pane;
+    /** Size of the last rendered body, for the mouse. */
     private width;
     private height;
-    private progress;
     constructor(tui: TUI, theme: Theme, entry: Entry, stills: StillCache);
     dispose(): void;
     /** Typing a search or a line number: every key goes to the prompt, not to the view. */
