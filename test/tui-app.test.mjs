@@ -44,7 +44,7 @@ test("TUI v2 shows the welcome page, answers a prompt, and exits on Ctrl+D", (t)
     ["waitReady"], ["type", "hi"], ["key", "enter"], turnDone("PICKED=model-a"), ["key", "ctrl+d"],
   ]);
   assert.match(out, /EXIT=0/);
-  assert.match(out, /\s{2,}Epi\s{2,}│/);
+  assert.match(out, /▄▀▀▀▄ █▀▀▀▄ ▀▀█/); // the startup logo's wordmark
   assert.match(out, /PICKED=model-a/);
 });
 

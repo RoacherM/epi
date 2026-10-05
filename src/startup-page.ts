@@ -7,13 +7,33 @@ const MAX_PANEL_WIDTH = 108;
 const SPLIT_LAYOUT_WIDTH = 84;
 const HERO_WIDTH = 36;
 
-const EPI_LOGO = [
-  ["███████", "██████ ", "██████"],
-  ["██     ", "██   ██", "  ██  "],
-  ["█████  ", "██████ ", "  ██  "],
-  ["██     ", "██     ", "  ██  "],
-  ["███████", "██     ", "██████"],
+/** The logo (docs/assets/epi-logo-dark.svg) as pixels: `a` accent (purple), `b` blue, `.` empty.
+ * Two pixel rows make one terminal row, drawn with half blocks: a cell is about twice as tall as it
+ * is wide, so the pixels come out about square. The mark is the first MARK_COLUMNS columns; the
+ * lowercase wordmark `epi` follows. */
+const LOGO_PIXELS = [
+  "aaaaaaaaaaaaaa....................",
+  "aaaaaaaaaaaaaa....................",
+  "...............................b..",
+  "..................................",
+  "bbbbbbbbbbbbbb....aaa..bbbb..bbb..",
+  "bbbbbbbbbbbbbb...a...a.b...b...b..",
+  "..bb......bb.....aaaaa.b...b...b..",
+  "..bb......bb.....a.....b...b...b..",
+  "..bb......bb.....a...a.b...b...b..",
+  "..bb......bb......aaa..bbbb..bbbbb",
+  "..bb......bb...........b..........",
+  "..bb......bb...........b..........",
 ] as const;
+const LOGO_WIDTH = LOGO_PIXELS[0].length;
+const MARK_COLUMNS = 14;
+const PIXEL_COLORS = { a: "accent", b: "syntaxFunction" } as const;
+// A typo in the bitmap would otherwise draw an uncolored block without any error.
+for (const row of LOGO_PIXELS) {
+  if (row.length !== LOGO_WIDTH || !/^[.ab]+$/.test(row)) {
+    throw new Error(`startup logo: pixel row ${JSON.stringify(row)} is not ${LOGO_WIDTH} of ".", "a", "b"`);
+  }
+}
 
 export type EpiStartupTheme = Pick<Theme, "bold" | "fg" | "italic">;
 
@@ -104,14 +124,45 @@ function splitBottom(theme: EpiStartupTheme, width: number): string {
   );
 }
 
-function logoRows(theme: EpiStartupTheme): string[] {
-  return EPI_LOGO.map(([e, p, i]) => [
-    theme.fg("syntaxKeyword", e),
-    "  ",
-    theme.fg("accent", p),
-    "  ",
-    theme.fg("syntaxFunction", i),
-  ].join(""));
+function halfBlock(upper: string, lower: string): string {
+  if (upper !== "." && lower !== ".") return "█";
+  if (upper !== ".") return "▀";
+  return lower !== "." ? "▄" : " ";
+}
+
+/** The first `columns` pixel columns of the logo, one string per terminal row. */
+function logoRows(theme: EpiStartupTheme, columns: number): string[] {
+  const rows: string[] = [];
+  for (let y = 0; y + 1 < LOGO_PIXELS.length; y += 2) {
+    const top = LOGO_PIXELS[y]!;
+    const bottom = LOGO_PIXELS[y + 1]!;
+    // One color code per run of glyphs, not per glyph: a row is a few escape codes, not 34.
+    const runs: { pixel: string; glyphs: string }[] = [];
+    for (let x = 0; x < columns; x += 1) {
+      const upper = top[x]!;
+      const lower = bottom[x]!;
+      const pixel = upper !== "." ? upper : lower;
+      const glyph = halfBlock(upper, lower);
+      const last = runs[runs.length - 1];
+      if (last?.pixel === pixel) last.glyphs += glyph;
+      else runs.push({ pixel, glyphs: glyph });
+    }
+    rows.push(runs.map(({ pixel, glyphs }) =>
+      pixel === "." ? glyphs : theme.fg(PIXEL_COLORS[pixel as keyof typeof PIXEL_COLORS], glyphs)).join(""));
+  }
+  return rows;
+}
+
+function wordmark(theme: EpiStartupTheme): string {
+  return theme.bold(`${theme.fg("accent", "e")}${theme.fg("syntaxFunction", "pi")}`);
+}
+
+/** The mark and the wordmark side by side; just the mark, with the wordmark as text under it, when
+ * the column is narrower than the whole logo. */
+function brandRows(theme: EpiStartupTheme, width: number): string[] {
+  return width >= LOGO_WIDTH
+    ? logoRows(theme, LOGO_WIDTH)
+    : [...logoRows(theme, MARK_COLUMNS), "", wordmark(theme)];
 }
 
 function projectState(identity: EpiRuntimeIdentity): string {
@@ -194,13 +245,13 @@ function heroRows(
   identity: EpiRuntimeIdentity,
   theme: EpiStartupTheme,
   options: EpiStartupPageOptions,
+  width: number,
 ): string[] {
   return [
     theme.bold("Welcome back"),
     "",
-    ...logoRows(theme),
+    ...brandRows(theme, width),
     "",
-    theme.bold(theme.fg("text", "Epi")),
     theme.italic(theme.fg("muted", "Compose Pi your way.")),
     "",
     theme.fg("text", options.modelName ?? options.modelId ?? "No model selected"),
@@ -230,7 +281,7 @@ function renderSplit(
   options: EpiStartupPageOptions,
 ): string[] {
   const columns = splitWidths(width);
-  const left = heroRows(identity, theme, options);
+  const left = heroRows(identity, theme, options, columns.left);
   const right = assemblyRows(identity, theme, columns.right);
   const rowCount = Math.max(left.length, right.length);
   const lines = [topBorder(identity, theme, width)];
@@ -256,13 +307,13 @@ function renderNarrow(
   options: EpiStartupPageOptions,
 ): string[] {
   const innerWidth = Math.max(0, width - 4);
-  const hero = heroRows(identity, theme, options);
+  const hero = heroRows(identity, theme, options, innerWidth);
   const visibleHero = innerWidth >= 31
     ? hero
     : [
         theme.bold("Welcome back"),
         "",
-        theme.bold(theme.fg("accent", "Epi")),
+        wordmark(theme),
         theme.italic(theme.fg("muted", "Compose Pi your way.")),
         "",
       ];
