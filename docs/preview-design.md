@@ -137,7 +137,7 @@ interface PreviewPlayerApi {
 - `createPane` 是 async：播放代码在第一次用到时才加载（和 `/preview` 本身一样）。
 - 参数不对时 `createPane` 直接 reject，错误里说明是哪一项：`video` 为空；`headers` 的名字或值里有换行（会把 ffmpeg 的 `-headers` 拆成别的头）。
 - 播放出错（没装 ffmpeg、地址打不开）不 reject，显示在面板的画面里，和 `/preview` 一样。
-- 面板由调用方回收：退出播放、关掉界面时调用 `dispose()`。preview 也记下自己发出、还没回收的面板，在它的 `session_shutdown`（`/new`、`/resume`、`/fork`、`/reload`、退出）时全部 `dispose()`：这几种情况进程不退出，`stopMediaProcesses` 只在进程退出时运行，漏掉的 ffplay 会一直出声。被回收的面板之后的 `render` 只显示"已停止"，不重新开始播放。
+- 面板由调用方回收：退出播放、关掉界面时调用 `dispose()`。preview 也记下自己发出、还没回收的面板，在它的 `session_shutdown`（`/new`、`/resume`、`/fork`、`/reload`、退出）时全部 `dispose()`：这几种情况进程不退出，`stopMediaProcesses` 只在进程退出时运行，漏掉的 ffplay 会一直出声。被回收的面板之后的 `render` 只显示"已停止"，不重新开始播放。会话结束以后，这个会话的 api 对象的 `createPane` 一律 reject（包括正在加载时会话结束的那一次），错误里说明要重新请求：这时建出来的面板没有人会回收。和 Pi 对过期的 `pi`/`ctx` 报错一致。
 - 总线的监听方不能 `await`、不能抛错：Pi 在第一个 `await` 之前同步运行它，抛出的错误只会 `console.error` 弄脏界面。不是对象的请求直接忽略。
 - 在扩展加载时（factory 里）发请求拿不到：用户声明的扩展比内置扩展先加载。
 - 尺寸变了（终端缩放）由面板自己处理：从当前位置用新尺寸接着播放，暂停状态不变。
