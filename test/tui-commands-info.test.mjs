@@ -13,20 +13,20 @@ const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 function runApp(t, extensions, steps, { keybindings, rows } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-info-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-info-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   if (keybindings !== undefined) {
-    mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
-    writeFileSync(join(home, ".mmp", "pi", "keybindings.json"), JSON.stringify(keybindings));
+    mkdirSync(join(home, ".epi", "pi"), { recursive: true });
+    writeFileSync(join(home, ".epi", "pi", "keybindings.json"), JSON.stringify(keybindings));
   }
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
-      PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ steps, ...(rows ? { rows } : {}) }),
+      PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ steps, ...(rows ? { rows } : {}) }),
     },
     encoding: "utf8",
     timeout: 60_000,
@@ -100,7 +100,7 @@ test("/hotkeys lists editor and app keys, resolved through the installed (possib
   assert.match(shown, /Editor/);
   assert.match(shown, /App/);
   assert.match(shown, /submit/i);
-  // The remap from ~/.mmp/pi/keybindings.json shows up instead of Pi's ctrl+l default.
+  // The remap from ~/.epi/pi/keybindings.json shows up instead of Pi's ctrl+l default.
   assert.match(shown, /ctrl\+q\s+Open model selector/);
   assert.doesNotMatch(shown, /ctrl\+l\s+Open model selector/);
   // Pi 0.99's keys (dogfood D10): model cycling is unbound by default (decision K1); the transcript

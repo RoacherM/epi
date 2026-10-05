@@ -1,4 +1,4 @@
-// Scripted, offline model responses; tools still execute through the real MMP runtime.
+// Scripted, offline model responses; tools still execute through the real Epi runtime.
 import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { registerFaux } from "../../test/fixtures/faux-register.mjs";
 

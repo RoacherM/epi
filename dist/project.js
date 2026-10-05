@@ -1,13 +1,13 @@
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
-import { MmpConfigError } from "./errors.js";
+import { EpiConfigError } from "./errors.js";
 import { resolveManifest, } from "./manifest.js";
 export function findNearestProjectManifest(cwd, globalManifestPath) {
     let current = realpathSync(cwd);
     const excludedManifest = resolve(globalManifestPath);
     while (true) {
-        const manifestPath = join(current, ".mmp", "mmp.json");
+        const manifestPath = join(current, ".epi", "epi.json");
         if (resolve(manifestPath) !== excludedManifest && existsSync(manifestPath)) {
             return { root: current, manifestPath };
         }
@@ -23,7 +23,7 @@ export function findNearestProjectManifest(cwd, globalManifestPath) {
  * has (yet). The store walks up from `cwd`, so it finds a decision saved for the project root (the
  * first-run prompt, TUI v2 `/trust`) and one saved for a subfolder (classic Pi `/trust` saves the
  * session cwd). Skips even opening the store when trust.json does not exist, so an unknown project
- * never causes MMP's agentDir to be created.
+ * never causes Epi's agentDir to be created.
  */
 export function readProjectTrustDecision(agentDir, cwd) {
     const trustPath = join(agentDir, "trust.json");
@@ -35,7 +35,7 @@ export function readProjectTrustDecision(agentDir, cwd) {
     }
     catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        throw new MmpConfigError(`failed to resolve project trust: ${detail}`);
+        throw new EpiConfigError(`failed to resolve project trust: ${detail}`);
     }
 }
 export function resolveProjectManifest(options) {

@@ -44,7 +44,7 @@ export async function openExternalEditor(host: CommandHost): Promise<void> {
         host.notice(`External editor dropped ${imageCount} image${imageCount > 1 ? "s" : ""} from the prompt (images aren't sent to $EDITOR).`, "warning");
       }
     } else {
-      // Pi ignores this silently; MMP's rule is that failures show, so a bad $EDITOR isn't a mystery.
+      // Pi ignores this silently; Epi's rule is that failures show, so a bad $EDITOR isn't a mystery.
       host.notice(`External editor (${command}) exited without saving; the prompt is unchanged.`, "error");
     }
   } finally {
@@ -59,7 +59,7 @@ async function runExternalEditor(
   command: string,
   content: string,
 ): Promise<{ status: "complete"; content: string } | { status: "failed" }> {
-  const directory = mkdtempSync(join(tmpdir(), "mmp-editor-"));
+  const directory = mkdtempSync(join(tmpdir(), "epi-editor-"));
   const filePath = join(directory, "prompt.md");
   try {
     writeFileSync(filePath, content, "utf8");
@@ -79,7 +79,7 @@ async function runExternalEditor(
 
 /** `app.clipboard.pasteImage` (Ctrl+V): as Pi's `handleClipboardPaste`, an image wins over text.
  * An image becomes an `[Image #N]` chip directly (docs/tui-design.md 4.3), not a temp-file path
- * for the model to read. Pi ignores clipboard errors silently; MMP's rule is that failures show,
+ * for the model to read. Pi ignores clipboard errors silently; Epi's rule is that failures show,
  * so this shows a notice. */
 export async function pasteClipboard(host: CommandHost): Promise<void> {
   try {

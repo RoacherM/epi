@@ -41,8 +41,8 @@ const VIDEO_EXT = new Set([".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".fl
 const QUICKLOOK_EXT = new Set([".pdf", ".heic", ".heif", ".psd", ".key", ".pages", ".numbers", ".docx", ".pptx", ".xlsx"]);
 const MARKDOWN_EXT = new Set([".md", ".markdown"]);
 
-// Nerd Font glyphs (opt-in with MMP_PREVIEW_NERD=1); plain markers otherwise.
-const NERD = process.env.MMP_PREVIEW_NERD === "1";
+// Nerd Font glyphs (opt-in with EPI_PREVIEW_NERD=1); plain markers otherwise.
+const NERD = process.env.EPI_PREVIEW_NERD === "1";
 const NERD_ICONS: Record<string, string> = {
   ".ts": "\ue628", ".tsx": "\ue7ba", ".js": "\ue74e", ".mjs": "\ue74e", ".cjs": "\ue74e", ".jsx": "\ue7ba",
   ".json": "\ue60b", ".md": "\ue609", ".py": "\ue606", ".rs": "\ue7a8", ".go": "\ue627", ".sh": "\uf489",

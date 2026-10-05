@@ -2,24 +2,24 @@
 
 状态：**用户已确认**（2026-10-04："我觉得2更好"、"当然用层次2的方式"、"当然是A"），决策 N1、MG2（[decisions.md](decisions.md)）。实现中；本文随实现更新。
 
-每条结论后面标了来源：**源码** = 读 Pi 或 MMP 的代码得到；**实测** = 跑出来的；**主控定** = 我自己定的做法，你可以改。
+每条结论后面标了来源：**源码** = 读 Pi 或 Epi 的代码得到；**实测** = 跑出来的；**主控定** = 我自己定的做法，你可以改。
 
 ## 1. 术语
 
 | 术语 | 意思 |
 |---|---|
-| 非交互模式 | `mmp -p`（print，打印回答后退出）、`--mode json`（每个事件一行 JSON）、`--mode rpc`（从 stdin 读命令、往 stdout 写事件，给别的程序调用）。benchmark 用的就是这些模式 |
-| `piMain` | Pi 包导出的 `main()` 函数（`dist/main.js`），就是 `pi` 命令行本身。MMP 把参数交给它，之后发生什么 MMP 都插不进去 |
-| SDK 路径 | MMP 自己调用 Pi 导出的函数搭出会话：`createAgentSessionServices` → `createAgentSessionFromServices` → `createAgentSessionRuntime`。交互界面已经这样做（`src/tui/services.ts` 的 `createMmpRuntime`） |
+| 非交互模式 | `epi -p`（print，打印回答后退出）、`--mode json`（每个事件一行 JSON）、`--mode rpc`（从 stdin 读命令、往 stdout 写事件，给别的程序调用）。benchmark 用的就是这些模式 |
+| `piMain` | Pi 包导出的 `main()` 函数（`dist/main.js`），就是 `pi` 命令行本身。Epi 把参数交给它，之后发生什么 Epi 都插不进去 |
+| SDK 路径 | Epi 自己调用 Pi 导出的函数搭出会话：`createAgentSessionServices` → `createAgentSessionFromServices` → `createAgentSessionRuntime`。交互界面已经这样做（`src/tui/services.ts` 的 `createEpiRuntime`） |
 | runtime | `createAgentSessionRuntime` 的返回值，包着一个会话，能换会话（`/new`、`switch_session`） |
 | 模式运行器 | Pi 导出的 `runPrintMode(runtime, 选项)` 和 `runRpcMode(runtime)`：拿到 runtime 以后负责 print/json/rpc 的全部输入输出 |
 
 ## 2. 现状和问题
 
 ```
-mmp <参数>
-  ├─ 子命令、--help、--version、--list-models、--dry-run   → MMP 自己实现
-  ├─ 交互（终端里直接运行）                                → SDK 路径：createMmpRuntime → MMP 的界面
+epi <参数>
+  ├─ 子命令、--help、--version、--list-models、--dry-run   → Epi 自己实现
+  ├─ 交互（终端里直接运行）                                → SDK 路径：createEpiRuntime → Epi 的界面
   └─ -p / --mode json / --mode rpc / --export             → piMain(参数)        ← 本文要改的
 ```
 
@@ -27,25 +27,25 @@ mmp <参数>
 
 | 问题 | 原因 | 为什么在 `piMain` 里修不了 |
 |---|---|---|
-| D80：机器忙时 `mmp -p` 偶尔报 "No API key found for the selected model" | Pi 注册 provider 后启动一次不等待的刷新，选初始模型时这次刷新可能还没跑完 | 要在"注册 provider"和"选模型"之间多等一次刷新，这两步都在 `piMain` 内部。交互路径已经加了这次等待（`src/tui/services.ts:456`） |
+| D80：机器忙时 `epi -p` 偶尔报 "No API key found for the selected model" | Pi 注册 provider 后启动一次不等待的刷新，选初始模型时这次刷新可能还没跑完 | 要在"注册 provider"和"选模型"之间多等一次刷新，这两步都在 `piMain` 内部。交互路径已经加了这次等待（`src/tui/services.ts:456`） |
 | D62：非交互启动仍读项目的 `.pi/settings.json`，项目的 `sessionDir` 能重定向会话 | `main.js` 创建 `startupSettingsManager` 时不传信任选项，默认当作可信 | 违反硬规则"不读项目 `.pi/`"。这个 SettingsManager 在 `piMain` 内部创建 |
 
-另外，MMP 为了管住 `piMain` 已经加了三处绕行：改写 stdout/stderr 的文字（`rewritePiOutput`）、启动前单独查一次跨项目会话（`refusePiMainCrossProjectSession`）、`piMain` 返回后强制退出（D50）。每多一个 `piMain` 的问题就要多一处这样的绕行。
+另外，Epi 为了管住 `piMain` 已经加了三处绕行：改写 stdout/stderr 的文字（`rewritePiOutput`）、启动前单独查一次跨项目会话（`refusePiMainCrossProjectSession`）、`piMain` 返回后强制退出（D50）。每多一个 `piMain` 的问题就要多一处这样的绕行。
 
 ## 3. 方案
 
-非交互模式改用和交互界面同一个 `createMmpRuntime`，再把 runtime 交给 Pi 导出的模式运行器。
+非交互模式改用和交互界面同一个 `createEpiRuntime`，再把 runtime 交给 Pi 导出的模式运行器。
 
 ```
-mmp -p / --mode json / --mode rpc
-  1. 解析参数、检查参数组合                （MMP，已有：createMmpRuntime 里）
+epi -p / --mode json / --mode rpc
+  1. 解析参数、检查参数组合                （Epi，已有：createEpiRuntime 里）
   2. 接管 stdout                           （Pi 的 output-guard，按文件路径引用）
-  3. createMmpRuntime                      （MMP，已有；内部多等一次刷新 → 修 D80；
+  3. createEpiRuntime                      （Epi，已有；内部多等一次刷新 → 修 D80；
                                             SettingsManager 一律 projectTrusted:false → 修 D62）
-  4. 读 stdin 里的内容、拼第一条消息        （MMP：照 Pi 的 readPipedStdin / prepareInitialMessage）
-  5. 打印启动诊断；有错误或没有模型就退出 1 （MMP：照 main.js 的格式）
+  4. 读 stdin 里的内容、拼第一条消息        （Epi：照 Pi 的 readPipedStdin / prepareInitialMessage）
+  5. 打印启动诊断；有错误或没有模型就退出 1 （Epi：照 main.js 的格式）
   6. runPrintMode(runtime, …) 或 runRpcMode(runtime)   （Pi 导出，原样使用）
-  7. 写完 stdout/stderr 后退出              （MMP，已有：D50 的做法）
+  7. 写完 stdout/stderr 后退出              （Epi，已有：D50 的做法）
 ```
 
 第 1、3 步是现成的；第 6 步是 Pi 导出的函数；真正新写的是第 2、4、5 步，都是照 `main.js` 对应段落写的小段代码。
@@ -56,22 +56,22 @@ mmp -p / --mode json / --mode rpc
 
 | `piMain` 里的步骤 | 新路径 | 说明 |
 |---|---|---|
-| `--offline` → `PI_OFFLINE=1` | 已有 | `createMmpRuntime` |
+| `--offline` → `PI_OFFLINE=1` | 已有 | `createEpiRuntime` |
 | 应用 `httpProxy`、配置 HTTP | 已有 | `configureHttpAtStartup` |
-| 参数诊断，错误退出 1 | 已有，要改输出格式 | 交互路径抛 `MmpArgumentError`；非交互要保持 Pi 的 `Error: …` 行 |
+| 参数诊断，错误退出 1 | 已有，要改输出格式 | 交互路径抛 `EpiArgumentError`；非交互要保持 Pi 的 `Error: …` 行 |
 | `takeOverStdout()`：把 stdout 留给模式运行器，其他输出转到 stderr | **新增** | `core/output-guard.js` 没有导出，按文件路径引用，登记进 `pi-internals.md`（已有一行 `output-guard-stdout-write`，扩展它） |
 | rpc 模式拒绝 `@file` 参数 | **新增** | 一行检查 |
 | `--fork`、`--session-id` 的参数组合检查 | 已有 | `validateSessionFlagCombinations` |
-| `runMigrations` | 不做 | 交互路径也不做（MMP 的 `~/.mmp/pi` 没有要迁移的旧数据）。**主控定** |
+| `runMigrations` | 不做 | 交互路径也不做（Epi 的 `~/.epi/pi` 没有要迁移的旧数据）。**主控定** |
 | 选会话（`--session`、`-c`、`--fork`、`--no-session`、`--session-dir`） | 已有 | `buildSessionManager`，已经含跨项目检查，所以 `refusePiMainCrossProjectSession` 可以删 |
 | 会话的 cwd 不存在：非交互直接报错退出 | 已有，要核对文案 | |
 | `--name` | 已有 | |
-| 建 services、选模型、`--api-key`、建会话 | 已有 | `createMmpRuntime` 的 `createRuntime` |
+| 建 services、选模型、`--api-key`、建会话 | 已有 | `createEpiRuntime` 的 `createRuntime` |
 | 读 stdin（非 TTY 时读到结束） | **新增** | 照 `readPipedStdin`，约 15 行 |
 | 拼第一条消息（stdin 内容 + `@file` + 位置参数） | 已有一半 | `file-arguments.ts` 的 `buildTuiInitialMessages` 已处理 `@file`；要加 stdin 内容 |
 | `initTheme` | **新增** | Pi 导出；非交互模式下只影响扩展拿到的主题对象 |
-| 打印启动诊断；有错误退出 1，并附扩展加载失败的提示 | **新增** | 用 MMP 的 `extensionLoadFailureHint`，不再靠改写 stderr |
-| 没有模型时退出 1 | **新增** | 用 MMP 的文案（`PROVIDER_LOGIN_HELP`） |
+| 打印启动诊断；有错误退出 1，并附扩展加载失败的提示 | **新增** | 用 Epi 的 `extensionLoadFailureHint`，不再靠改写 stderr |
+| 没有模型时退出 1 | **新增** | 用 Epi 的文案（`PROVIDER_LOGIN_HELP`） |
 | rpc：后台刷新一次模型目录 | **新增** | 照 `main.js`，约 6 行 |
 | `runRpcMode` / `runPrintMode` | Pi 导出 | 原样调用 |
 | print/json 结束后 `restoreStdout`、设置退出码 | **新增** | 之后接 D50 的强制退出 |
@@ -80,16 +80,16 @@ mmp -p / --mode json / --mode rpc
 
 | 现在 | 之后 |
 |---|---|
-| `refusePiMainCrossProjectSession`（启动前单独查一次） | 删。`createMmpRuntime` 自己查 |
-| `rewritePiOutput` 里"抓 stderr 上的加载错误行、替换 Pi 的提示" | 删。启动诊断由 MMP 自己打印 |
+| `refusePiMainCrossProjectSession`（启动前单独查一次） | 删。`createEpiRuntime` 自己查 |
+| `rewritePiOutput` 里"抓 stderr 上的加载错误行、替换 Pi 的提示" | 删。启动诊断由 Epi 自己打印 |
 | `rewritePiOutput` 里"替换 Pi 的登录指引文字" | **保留**。模式运行器在运行中仍会打印 Pi 的文字（例如中途的 "No API key found"） |
 | `guardClosedStdout`（D54） | 保留，安装时机不变（接管 stdout 之前） |
 | `piMain` 这个依赖 | 只剩 `--export` 还用（见 5.4） |
-| `createMmpRuntime` 放在 `src/tui/` | 不挪（见第 6 节 T1） |
+| `createEpiRuntime` 放在 `src/tui/` | 不挪（见第 6 节 T1） |
 
 ### 3.3 状态清单
 
-新路径不引入跨会话的新状态。要核对的是 `createMmpRuntime` 里原来只为交互界面考虑的地方：
+新路径不引入跨会话的新状态。要核对的是 `createEpiRuntime` 里原来只为交互界面考虑的地方：
 
 | 状态或行为 | 交互界面的做法 | 非交互要怎样 |
 |---|---|---|
@@ -105,11 +105,11 @@ mmp -p / --mode json / --mode rpc
 | 检查 | 做法 | 通过标准 |
 |---|---|---|
 | 输出不变 | 改动前后各跑一遍同一批命令，用假模型（`test/fixtures/faux-*.mjs`），比 stdout、stderr、退出码。批次覆盖：`-p`、json、rpc 各一组正常对话；带 `@file`；stdin 管道输入；`-c`、`--session`、`--fork`、`--no-session`；`--model` 不存在；没有模型；扩展加载失败；参数错误；rpc 的 `switch_session`、`new_session` | 逐字节一致。不一致的每一处都要列出来并说明理由 |
-| 有意变化 1（D80） | 加 CPU 负载反复跑默认模型是 Magpie 的 `mmp -p`（复现脚本已有） | 改动前会失败，改动后 100 次里 0 次失败 |
-| 有意变化 2（D62） | 项目里放 `.pi/settings.json` 写 `sessionDir`，跑 `mmp -p` | 改动前会话写到那个目录，改动后不会 |
+| 有意变化 1（D80） | 加 CPU 负载反复跑默认模型是 Magpie 的 `epi -p`（复现脚本已有） | 改动前会失败，改动后 100 次里 0 次失败 |
+| 有意变化 2（D62） | 项目里放 `.pi/settings.json` 写 `sessionDir`，跑 `epi -p` | 改动前会话写到那个目录，改动后不会 |
 | 模型可见内容 | `node scripts/model-snapshot.mjs --diff test/snapshots/model-visible.json` | 无变化 |
 | 现有测试 | 完整 `npm test` | 全过 |
-| 真实模型 | Herdr 里用真实模型跑 `mmp -p`、json 各一次；benchmark adapter 跑一次冒烟 | 有回答，退出码 0 |
+| 真实模型 | Herdr 里用真实模型跑 `epi -p`、json 各一次；benchmark adapter 跑一次冒烟 | 有回答，退出码 0 |
 | Pi 内部接口 | `output-guard.js` 的引用登记进 `pi-internals.md` 并有测试 | 升级门禁能发现它被改 |
 
 ## 5. Magpie 改成普通的 provider 扩展（层次 2，用户 2026-10-04 定）
@@ -167,7 +167,7 @@ Pi 内置的 provider（Anthropic、OpenAI 等）不在这次刷新里：它们�
 
 | 任务 | 内容 | 依赖 |
 |---|---|---|
-| ~~T1~~ | ~~把 `createMmpRuntime` 及其辅助函数从 `src/tui/services.ts` 挪到 `src/`~~ 不做（主控定）：纯挪文件，会改一批测试的 import 路径，对行为没有帮助。文件头注释已写明它现在服务所有模式 | — |
+| ~~T1~~ | ~~把 `createEpiRuntime` 及其辅助函数从 `src/tui/services.ts` 挪到 `src/`~~ 不做（主控定）：纯挪文件，会改一批测试的 import 路径，对行为没有帮助。文件头注释已写明它现在服务所有模式 | — |
 | T2 | 新的非交互入口（3 节的第 2、4、5、7 步）+ print/json 接上 `runPrintMode`；输出对比批次 | T1 |
 | T3 | rpc 接上 `runRpcMode`；rpc 的对比批次 | T2 |
 | T4 | `worker.ts` 改用同一个启动函数 | T1 |
@@ -182,8 +182,8 @@ T2 完成、T3 没完成的中间状态下，rpc 仍走 `piMain`，两条路径�
 |---|---|
 | 输出和 `piMain` 有细微差别，benchmark 结果不可比 | 4 节的逐字节对比；差别必须逐条说明 |
 | Pi 升级改了 `runPrintMode` / `runRpcMode` 的签名或 `output-guard.js` | 都是 Pi 包根导出的函数（前两个）或登记过的内部接口（后一个），升级门禁有测试 |
-| `main.js` 以后新增的启动步骤 MMP 不会自动跟上 | 这是 SDK 路径本来就有的代价，交互路径已经在承担；升级时对照 `main.js` 的 diff（`pi-upgrade-design.md` 的流程里加一条） |
-| `createMmpRuntime` 里有只适合界面的假设 | 3.3 节的清单逐条核对并加测试 |
+| `main.js` 以后新增的启动步骤 Epi 不会自动跟上 | 这是 SDK 路径本来就有的代价，交互路径已经在承担；升级时对照 `main.js` 的 diff（`pi-upgrade-design.md` 的流程里加一条） |
+| `createEpiRuntime` 里有只适合界面的假设 | 3.3 节的清单逐条核对并加测试 |
 
 ## 8. 实现记录
 
@@ -194,19 +194,19 @@ T2 完成、T3 没完成的中间状态下，rpc 仍走 `piMain`，两条路径�
 | 结果 | 字段数 | 说明 |
 |---|---|---|
 | 一致 | 197 | 包括 `-p`、json、rpc 的全部正常输出、退出码、会话文件数 |
-| 有意变化（D62） | 2 | 项目 `.pi/settings.json` 的 `sessionDir` 不再生效：会话写回 `~/.mmp/pi/sessions` |
+| 有意变化（D62） | 2 | 项目 `.pi/settings.json` 的 `sessionDir` 不再生效：会话写回 `~/.epi/pi/sessions` |
 | 文案变化 | 3 | `--session`、`--fork` 找不到会话，以及 `--fork --session-id` 撞上已有会话时，Pi 打印不带前缀的 `No session found matching …` / `Session already exists …`；现在和其他参数错误一样带 `Error: ` 前缀。退出码仍是 1。**主控定**：不为这三条单独保留无前缀的写法 |
 
 另外两处没在对比批次里、但行为变了：
 
-- `--use-theme`、`--tui-mode` 在非交互模式下以前被 Pi 静默忽略，现在和交互模式一样报"not supported by MMP"。
+- `--use-theme`、`--tui-mode` 在非交互模式下以前被 Pi 静默忽略，现在和交互模式一样报"not supported by Epi"。
 - 启动诊断在终端上不再带颜色（Pi 用 chalk 上色；输出到管道或文件时本来就没有颜色）。
 
 D80 的验证（加 CPU 负载，默认模型是 Magpie、没有保存 key）：
 
 | 路径 | 改动前 | 改动后 |
 |---|---|---|
-| `mmp -p hi` | 47/60 通过 | 60/60 |
+| `epi -p hi` | 47/60 通过 | 60/60 |
 | task 子进程（`dist/worker.js`） | 55/60 通过 | 60/60 |
 
 我原来认为这个竞争写不出确定性的测试。Fable 审查给出了做法：把 Pi 注册 provider 时启动的那次刷新拖后 60ms、每次可用性检查拖慢 250ms，改动前 `-p`、json、rpc 0/5，改动后 5/5。已做成夹具 `test/fixtures/slow-registration-refresh.mjs` 和 `test/magpie.test.mjs` 里的测试。
@@ -215,25 +215,25 @@ D80 的验证（加 CPU 负载，默认模型是 Magpie、没有保存 key）：
 
 ### 8.1.1 审查后补上的差异清单（第一轮 Fable 审查，P2-1）
 
-除了上面三条 `Error: ` 前缀，非交互模式下还有这些和 `piMain` 不同（都由 MMP 自己的 `buildSessionManager` 决定，和交互模式一致）：
+除了上面三条 `Error: ` 前缀，非交互模式下还有这些和 `piMain` 不同（都由 Epi 自己的 `buildSessionManager` 决定，和交互模式一致）：
 
 | 情况 | 以前（Pi） | 现在 | 处理 |
 |---|---|---|---|
-| `--resume` | 打开 Pi 的会话选择器 | 报错退出 1，提示用 `--continue` 或 `--session <id>` | 审查 P1：之前被静默忽略、新建了会话。选择器只有 MMP 的界面有 |
-| `--session` 指向别的项目的会话 | `mmp: …` 退出 2（MMP 的预检查） | `Error: …` 退出 1 | 和其他会话错误一致（**主控定**） |
-| 会话的 cwd 已不存在 | `Stored session working directory does not exist … Session file: …` | `Error: Session working directory does not exist … Use --fork …` | 用 MMP 交互模式已有的文案 |
+| `--resume` | 打开 Pi 的会话选择器 | 报错退出 1，提示用 `--continue` 或 `--session <id>` | 审查 P1：之前被静默忽略、新建了会话。选择器只有 Epi 的界面有 |
+| `--session` 指向别的项目的会话 | `epi: …` 退出 2（Epi 的预检查） | `Error: …` 退出 1 | 和其他会话错误一致（**主控定**） |
+| 会话的 cwd 已不存在 | `Stored session working directory does not exist … Session file: …` | `Error: Session working directory does not exist … Use --fork …` | 用 Epi 交互模式已有的文案 |
 | `--session <id 前缀>` 匹配到同项目另一个目录的会话 | 询问 `Fork this session into current directory? [y/N]` | 直接打开那个会话，在它自己的目录运行 | 和交互模式一致；非交互模式本来就不该等输入 |
 | 无效的 `--session-id`（如 `../evil`） | `Error: Session id must be …` | 相同（审查发现先打印了"creating a new session"再报错，已改成先校验） | 已修 |
-| `--fork <不存在或损坏的文件>` | `Error: Cannot fork …` | 相同（审查发现前缀变成了 `mmp:`，已修） | 已修 |
+| `--fork <不存在或损坏的文件>` | `Error: Cannot fork …` | 相同（审查发现前缀变成了 `epi:`，已修） | 已修 |
 | 启动失败时的无效 settings 警告 | 打印 | 相同（审查发现失败路径漏了，已修） | 已修 |
-| `@file` 图片在提示里的文字 | `<file name="x.png"></file>` | 相同（审查发现 MMP 写的是 `image file`，模型看到的文字不一样；已改成 Pi 的写法，交互模式也一起改了） | 已修 |
+| `@file` 图片在提示里的文字 | `<file name="x.png"></file>` | 相同（审查发现 Epi 写的是 `image file`，模型看到的文字不一样；已改成 Pi 的写法，交互模式也一起改了） | 已修 |
 | `@file` 是需要转换格式的图片（如 BMP） | 转换说明写在 `<file>` 标签里 | 转换说明在用户消息之后（由会话统一处理） | 留着：图片内容相同，只有说明的位置不同 |
 
 ### 8.2 第二次合并：Magpie 作为普通 provider 扩展（T5、T6）
 
 删掉的：`selectsMagpie`、`mayNameMagpieModel`、扩展 factory 里的启动查询和 `saveCatalog`、`FileModelsStore` 这个内部接口（`pi-internals.md` 的 `models-store-file`）、provider 里的 `initialModels` / `pending` / `STARTUP_FRESH_MS` / `startupKey`。`magpie-extension.ts` 从 124 行变成 18 行，只剩注册。另外删掉了 `rewritePiOutput` 里抓加载错误、替换 Pi 提示的那一半，以及对应的内部接口登记 `pi-extension-load-hint`。
 
-统一的启动函数是 `src/provider-startup.ts` 的 `settleRegisteredProviders`，四条路径都调它：`createMmpRuntime`（TUI、print/json/rpc）、`worker.ts`、`list-models.ts`。
+统一的启动函数是 `src/provider-startup.ts` 的 `settleRegisteredProviders`，四条路径都调它：`createEpiRuntime`（TUI、print/json/rpc）、`worker.ts`、`list-models.ts`。
 
 做的过程中多定了三件事（**主控定**，都不按 provider 名字区分）：
 
@@ -255,7 +255,7 @@ MG2 带来的用户可见变化：
 | 检查 | 结果 |
 |---|---|
 | 全新目录下首次运行 `-p` 和 `--list-models` 各 30 次：成功、目录已保存、没有留下 `models-store.json.lock` | 60/60 |
-| 默认模型是 Magpie 的 `mmp -p hi` | 40/40 |
+| 默认模型是 Magpie 的 `epi -p hi` | 40/40 |
 | task 子进程 | 40/40 |
 
 ### 8.3 第二轮审查后的修正（Fable 审查，第二部分的两条 P1）

@@ -30,11 +30,11 @@ function writeSessionFile(path, cwd) {
 }
 
 test("header, /trust's cwd, and !pwd all agree after switching to a session in a different cwd", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-cwd-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-cwd-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("switch-cwd-extension.mjs")] }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fixture("switch-cwd-extension.mjs")] }));
 
   const subCwd = join(root, "subproject");
   mkdirSync(subCwd, { recursive: true });
@@ -46,10 +46,10 @@ test("header, /trust's cwd, and !pwd all agree after switching to a session in a
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TEST_SWITCH_SESSION_PATH: otherSessionFile,
-      MMP_TUI_HARNESS: JSON.stringify({
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TEST_SWITCH_SESSION_PATH: otherSessionFile,
+      EPI_TUI_HARNESS: JSON.stringify({
         steps: [
           ["waitReady"], ["mark", "before"],
           ["type", "/gotoSubdir"], ["key", "enter"], ["wait", 800], ["mark", "afterSwitch"],

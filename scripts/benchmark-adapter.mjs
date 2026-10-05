@@ -30,7 +30,7 @@ import { BASE_PI_RESOURCE_ARGS } from "../dist/host.js";
 import { canonicalize, normalizeSnapshot } from "./normalize-snapshot.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const defaultMmpEntry = join(root, "dist", "cli.js");
+const defaultEpiEntry = join(root, "dist", "cli.js");
 const defaultPiEntry = join(
   root,
   "node_modules",
@@ -40,7 +40,7 @@ const defaultPiEntry = join(
   "cli.js",
 );
 const PACKAGE_JSON = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-const MMP_VERSION = PACKAGE_JSON.version;
+const EPI_VERSION = PACKAGE_JSON.version;
 // package.json's dependency entry is the single source of truth for the pinned Pi version
 // (docs/pi-upgrade-design.md 4): this catches a node_modules install that drifted from it.
 const EXPECTED_PI_VERSION = PACKAGE_JSON.dependencies["@earendil-works/pi-coding-agent"];
@@ -56,17 +56,17 @@ const EXIT_CODE = {
 };
 const VARIANTS = new Set([
   "pi-baseline",
-  "mmp-core-empty",
-  "mmp-rules-skills",
-  "mmp-full",
+  "epi-core-empty",
+  "epi-rules-skills",
+  "epi-full",
 ]);
 
-const help = `MMP benchmark adapter
+const help = `Epi benchmark adapter
 
 Usage:
   node scripts/benchmark-adapter.mjs \\
     --variant <name> \\
-    --bundle <MMP_HOME template> \\
+    --bundle <EPI_HOME template> \\
     --output-dir <new directory> \\
     --cwd <workspace> \\
     --model <provider/model> \\
@@ -231,7 +231,7 @@ function resolveOptions(raw) {
   const cwd = resolve(raw.cwd);
   const promptFile = raw.promptFile === undefined ? undefined : resolve(raw.promptFile);
   const entry = resolve(
-    raw.entry ?? (raw.variant === "pi-baseline" ? defaultPiEntry : defaultMmpEntry),
+    raw.entry ?? (raw.variant === "pi-baseline" ? defaultPiEntry : defaultEpiEntry),
   );
   requirePathType(bundle, "directory", "--bundle");
   requirePathType(cwd, "directory", "--cwd");
@@ -263,7 +263,7 @@ function resolveOptions(raw) {
     promptFile,
     grader,
     graderTimeoutMs,
-    harness: raw.variant === "pi-baseline" ? "pi" : "mmp",
+    harness: raw.variant === "pi-baseline" ? "pi" : "epi",
   };
 }
 
@@ -570,10 +570,10 @@ function createMetricsCollector() {
 
 function baselineAssembly(trialHome, cwd) {
   return {
-    mmpVersion: MMP_VERSION,
+    epiVersion: EPI_VERSION,
     piVersion: PI_VERSION,
     harness: "pi",
-    mmpHome: trialHome,
+    epiHome: trialHome,
     agentDir: join(trialHome, "pi"),
     projectDiscovery: "disabled",
     cwd,
@@ -651,7 +651,7 @@ async function main(argv) {
   } else {
     mkdirSync(options.outputDir, { recursive: true });
   }
-  const trialHome = join(options.outputDir, "mmp-home");
+  const trialHome = join(options.outputDir, "epi-home");
   copyBundle(options.bundle, trialHome, options.harness);
   const requestPath = join(options.outputDir, "request.json");
   const assemblyPath = join(options.outputDir, "assembly.json");
@@ -685,16 +685,16 @@ async function main(argv) {
   process.once("SIGTERM", onSigterm);
 
   // Both harnesses get this script's env as-is, after the bridge above: the operator's own PI_*
-  // are gone, MMP_* knobs (MMP_OFFLINE, ...) arrive as PI_*, everything else passes through. Bare
+  // are gone, EPI_* knobs (EPI_OFFLINE, ...) arrive as PI_*, everything else passes through. Bare
   // `pi` gets no further isolation: this is a dev tool the operator runs, not something users do.
   const environment = {
     ...process.env,
-    // HOME isolation matters beyond auth/session state now: MMP auto-discovers skills from
+    // HOME isolation matters beyond auth/session state now: Epi auto-discovers skills from
     // ~/.agents/skills (docs/decisions.md S1), so a real HOME would leak the operator's own
     // skills into every trial, breaking "capability tier is decided by the bundle alone" for
-    // mmp-core-empty and making assemblyDigest differ machine to machine.
+    // epi-core-empty and making assemblyDigest differ machine to machine.
     HOME: trialHome,
-    MMP_HOME: trialHome,
+    EPI_HOME: trialHome,
     PI_CODING_AGENT_DIR: join(trialHome, "pi"),
   };
   let assembly;
@@ -702,7 +702,7 @@ async function main(argv) {
   let preflightError = null;
   let assemblyDeterministic = true;
   let preflightFailure = null;
-  if (options.harness === "mmp") {
+  if (options.harness === "epi") {
     const preflightArgs = ["--dry-run", "--no-approve"];
     const first = preflightRun = await runChild({
       entry: options.entry,
@@ -754,7 +754,7 @@ async function main(argv) {
   const normalizedAssembly = assembly === undefined
     ? null
     : canonicalize(normalizeSnapshot(assembly, [
-        [trialHome, "$MMP_HOME"],
+        [trialHome, "$EPI_HOME"],
         [options.cwd, "$CWD"],
       ]));
   const fingerprints = bundleFingerprints(trialHome);
@@ -786,7 +786,7 @@ async function main(argv) {
       "--print",
       options.prompt,
     ];
-    const measuredArgs = options.harness === "mmp"
+    const measuredArgs = options.harness === "epi"
       ? commonArgs
       : [...BASE_PI_RESOURCE_ARGS, ...commonArgs];
     run = await runChild({
@@ -815,9 +815,9 @@ async function main(argv) {
       cwd: options.cwd,
       env: {
         ...environment,
-        MMP_BENCHMARK_OUTPUT_DIR: options.outputDir,
-        MMP_BENCHMARK_EVENTS: eventsPath,
-        MMP_BENCHMARK_REQUEST: requestPath,
+        EPI_BENCHMARK_OUTPUT_DIR: options.outputDir,
+        EPI_BENCHMARK_EVENTS: eventsPath,
+        EPI_BENCHMARK_REQUEST: requestPath,
       },
       timeoutMs: options.graderTimeoutMs,
       stdoutPath: join(options.outputDir, "grader.stdout"),
@@ -864,7 +864,7 @@ async function main(argv) {
     variant: options.variant,
     harness: options.harness,
     versions: {
-      mmp: MMP_VERSION,
+      epi: EPI_VERSION,
       pi: PI_VERSION,
       node: process.version,
     },
@@ -937,6 +937,6 @@ try {
   process.exitCode = await main(process.argv.slice(2));
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`mmp-benchmark: ${message}\n`);
+  process.stderr.write(`epi-benchmark: ${message}\n`);
   process.exitCode = error?.exitCode ?? EXIT_CODE.infra;
 }

@@ -3,11 +3,11 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createMcpExtension, } from "@earendil-works/pi-coding-agent";
-// Native MCP (docs/mcp-design.md, decision MCP2): MMP no longer ships its own MCP client
+// Native MCP (docs/mcp-design.md, decision MCP2): Epi no longer ships its own MCP client
 // (pi-mcp-adapter, removed in the Pi 0.99 upgrade's stage 1) -- Pi's own createMcpExtension does
-// connections, OAuth, tool registration, and the /mcp panel. MMP only decides *which config files*
+// connections, OAuth, tool registration, and the /mcp panel. Epi only decides *which config files*
 // get read and *whose trust judgment* gates the project one (never Pi's own .pi/ or
-// ctx.isProjectTrusted() -- that is Pi's own trust store, and MMP always runs Pi with --no-approve).
+// ctx.isProjectTrusted() -- that is Pi's own trust store, and Epi always runs Pi with --no-approve).
 // pi-internals row `mcp-native-config-loader`: extensions/mcp/config.js's loadMcpConfig is not in
 // pi-coding-agent's package "exports" map (design §2), so it is imported by file path, like
 // src/tui/keybindings.ts imports core/keybindings.js. Top-level await: this runs once, when
@@ -19,23 +19,23 @@ const { loadMcpConfig: piLoadMcpConfig } = (await import(pathToFileURL(join(piDi
 // "exports" map; only the McpTransportFactory type is) is what createMcpExtension uses when no
 // createTransport option is given. Loaded at the first transport, not before (dogfood D42): Pi
 // itself loads runtime.js only once a session has servers (index.js's loadMcpRuntime), and
-// src/commands/mcp-cli.ts imports this module too, so `mmp mcp add/remove` must not load it either
+// src/commands/mcp-cli.ts imports this module too, so `epi mcp add/remove` must not load it either
 // (row `mcp-native-runtime`). Pi only ever calls createTransport synchronously from inside runtime.js
 // (McpServerConnection.connectOnce), so by then runtime.js is evaluated and require() of the ES
-// module returns that same instance at once. The mmp:mcp factory still checks the file exists, so
+// module returns that same instance at once. The epi:mcp factory still checks the file exists, so
 // a moved path fails loudly at startup rather than at the first connect.
 const piRuntimePath = join(piDist, "extensions", "mcp", "runtime.js");
 let piCreateDefaultTransport;
 function checkDefaultTransportPath() {
     if (!existsSync(piRuntimePath)) {
-        throw new Error(`mmp:mcp: Pi's MCP runtime is not at ${piRuntimePath} (pi-internals row mcp-default-transport)`);
+        throw new Error(`epi:mcp: Pi's MCP runtime is not at ${piRuntimePath} (pi-internals row mcp-default-transport)`);
     }
 }
 function defaultTransportFactory() {
     if (piCreateDefaultTransport === undefined) {
         const { createDefaultTransport } = createRequire(import.meta.url)(piRuntimePath);
         if (typeof createDefaultTransport !== "function") {
-            throw new Error(`mmp:mcp: ${piRuntimePath} no longer exports createDefaultTransport (pi-internals row mcp-default-transport)`);
+            throw new Error(`epi:mcp: ${piRuntimePath} no longer exports createDefaultTransport (pi-internals row mcp-default-transport)`);
         }
         piCreateDefaultTransport = createDefaultTransport;
     }
@@ -46,7 +46,7 @@ function defaultTransportFactory() {
  * Dogfood D3: Pi's `McpServerConnection.close()` (extensions/mcp/runtime.js) only closes a client
  * that finished `initialize`; a connect still in flight keeps its client and transport in
  * `connectOnce()`'s locals, so a server that never answers keeps the child process, its pipes and
- * the request timer alive until the request timeout (60 s by default) -- `mmp -p` printed its
+ * the request timer alive until the request timeout (60 s by default) -- `epi -p` printed its
  * answer and then sat there. Closing the transport rejects the pending `initialize`
  * (pi-mcp client.js `handleTransportClose` -> `markClosed`), and Pi's connection, already marked
  * closed by then, settles as "closed". Same upstream as of Pi 1.0.0.
@@ -69,23 +69,23 @@ function trackingTransportFactory() {
     };
 }
 /**
- * Reads `~/.mmp/mcp.json`, and, only when MMP trusts the current project
- * (`assembly.projectManifest?.loaded === true` -- MMP's own trust judgment, never
- * `ctx.isProjectTrusted()`), also `<project>/.mmp/mcp.json`. Both calls reuse Pi's own
+ * Reads `~/.epi/mcp.json`, and, only when Epi trusts the current project
+ * (`assembly.projectManifest?.loaded === true` -- Epi's own trust judgment, never
+ * `ctx.isProjectTrusted()`), also `<project>/.epi/mcp.json`. Both calls reuse Pi's own
  * `loadMcpConfig` with `projectTrusted: false` (design §2): that flag only controls whether
- * `loadMcpConfig` itself additionally reads `<cwd>/.pi/mcp.json`, which MMP never wants, so it is
- * always false, and the two files MMP does want are read by varying `agentDir` instead. The second
+ * `loadMcpConfig` itself additionally reads `<cwd>/.pi/mcp.json`, which Epi never wants, so it is
+ * always false, and the two files Epi does want are read by varying `agentDir` instead. The second
  * call's entries are relabeled `scope: "project"` (Pi's own `loadMcpConfig` calls them "global"
- * because, from its point of view, `<project>/.mmp` was just another `agentDir`); on a name clash
+ * because, from its point of view, `<project>/.epi` was just another `agentDir`); on a name clash
  * the project entry wins, matching Pi's own project-overrides-global rule.
  */
 export function loadNativeMcpConfig(source, cwd) {
     const assembly = source.resolveAssembly();
-    const global = piLoadMcpConfig({ agentDir: source.mmpHome, cwd, projectTrusted: false });
+    const global = piLoadMcpConfig({ agentDir: source.epiHome, cwd, projectTrusted: false });
     if (assembly.projectManifest?.loaded !== true) {
         return global;
     }
-    const projectAgentDir = join(assembly.projectManifest.root, ".mmp");
+    const projectAgentDir = join(assembly.projectManifest.root, ".epi");
     const project = piLoadMcpConfig({ agentDir: projectAgentDir, cwd, projectTrusted: false });
     const merged = new Map(global.servers.map((entry) => [entry.name, entry]));
     for (const entry of project.servers) {
@@ -98,15 +98,15 @@ export function loadNativeMcpConfig(source, cwd) {
         errors: [...global.errors, ...project.errors],
     };
 }
-/** Shared by `/mcp` and `mmp mcp list` (src/commands/mcp-cli.ts): what to run, in one sentence. `-l`
- * writes `<cwd>/.mmp/mcp.json`, so it's offered only where `cwd` has a project Manifest (dogfood D47). */
-export function emptyStateMessage(mmpHome, cwd) {
-    const local = existsSync(join(cwd, ".mmp", "mmp.json")) ? ", or with -l to this project's .mmp/mcp.json" : "";
-    return (`No MCP servers configured -- add one to ${join(mmpHome, "mcp.json")} with ` +
-        `\`mmp mcp add <server> (--url <url> | -- <command> [args...])\`${local}.`);
+/** Shared by `/mcp` and `epi mcp list` (src/commands/mcp-cli.ts): what to run, in one sentence. `-l`
+ * writes `<cwd>/.epi/mcp.json`, so it's offered only where `cwd` has a project Manifest (dogfood D47). */
+export function emptyStateMessage(epiHome, cwd) {
+    const local = existsSync(join(cwd, ".epi", "epi.json")) ? ", or with -l to this project's .epi/mcp.json" : "";
+    return (`No MCP servers configured -- add one to ${join(epiHome, "mcp.json")} with ` +
+        `\`epi mcp add <server> (--url <url> | -- <command> [args...])\`${local}.`);
 }
 /** The first line of Pi's `reportProblems()` notify (`extensions/mcp/index.js`), whose next lines are
- * `  <server>: <state>`, one per failed or needs-sign-in server, then `Run /mcp to fix.`. MMP's own
+ * `  <server>: <state>`, one per failed or needs-sign-in server, then `Run /mcp to fix.`. Epi's own
  * report at session_shutdown uses the same header and lines, so a run shows one kind of message
  * either way, but ends in `cliHint()` instead: `/mcp` does not exist outside the TUI. */
 const ATTENTION_HEADER = "MCP servers need attention:";
@@ -117,21 +117,21 @@ const PI_UNREACHABLE_PREFIX = "MCP tools are only reachable from the codemode or
 /**
  * Pi's default `startupWaitMs` (createMcpExtension), passed explicitly because the session_shutdown
  * report uses the same bound: a server still connecting is named only once the session lasted longer
- * than this. Test seam: MMP_TEST_MCP_STARTUP_WAIT_MS shortens both.
+ * than this. Test seam: EPI_TEST_MCP_STARTUP_WAIT_MS shortens both.
  */
 function mcpStartupWaitMs() {
-    const override = Number(process.env.MMP_TEST_MCP_STARTUP_WAIT_MS);
+    const override = Number(process.env.EPI_TEST_MCP_STARTUP_WAIT_MS);
     return Number.isFinite(override) && override > 0 ? override : 10_000;
 }
-/** What to run instead of `/mcp`, which outside the TUI does not exist: mmp's own CLI (hard rule 4).
+/** What to run instead of `/mcp`, which outside the TUI does not exist: epi's own CLI (hard rule 4).
  * Names the server when exactly one needs a sign-in. */
 function cliHint(lines) {
     const signIn = lines.flatMap((line) => {
         const match = /^ {2}(.+?): needs sign-in/.exec(line);
         return match ? [match[1]] : [];
     });
-    const login = signIn.length === 0 ? "" : `, or "mmp mcp login ${signIn.length === 1 ? signIn[0] : "<server>"}" to sign in`;
-    return `From the shell: run "mmp mcp list" to see why${login}.`;
+    const login = signIn.length === 0 ? "" : `, or "epi mcp login ${signIn.length === 1 ? signIn[0] : "<server>"}" to sign in`;
+    return `From the shell: run "epi mcp list" to see why${login}.`;
 }
 /**
  * `  <server>: <state>` for every enabled server that failed or needs a sign-in, read from Pi's own
@@ -152,11 +152,11 @@ async function mcpProblemLines(completions, { includeConnecting }) {
     });
 }
 /**
- * `mmp:mcp`: `createMcpExtension` (connections, OAuth, tool registration, `/mcp`) wired to MMP's own
- * config source, plus three MMP-only behaviors (a second "/mcp" from another extension is refused
+ * `epi:mcp`: `createMcpExtension` (connections, OAuth, tool registration, `/mcp`) wired to Epi's own
+ * config source, plus three Epi-only behaviors (a second "/mcp" from another extension is refused
  * at startup like any duplicate command, src/tui/services.ts):
- *   - `/mcp` with zero configured servers shows MMP's own message instead of Pi's (which names
- *     `.pi/mcp.json`, a path MMP never reads) -- done by wrapping the `pi` passed into Pi's factory
+ *   - `/mcp` with zero configured servers shows Epi's own message instead of Pi's (which names
+ *     `.pi/mcp.json`, a path Epi never reads) -- done by wrapping the `pi` passed into Pi's factory
  *     so only the "mcp" registration is intercepted; every other call passes through untouched.
  *   - a server still connecting when the session shuts down is closed instead of holding the
  *     process open until its request timeout (dogfood D3, `trackingTransportFactory`).
@@ -168,21 +168,21 @@ async function mcpProblemLines(completions, { includeConnecting }) {
  * `McpOAuthCredentialStore` (a class instance with a private `AuthStorageBackend`, not a path --
  * verified in `extensions/mcp/oauth.d.ts`), and constructing one only to point it at the same
  * location Pi already defaults to would import `oauth.js` for no isolation benefit. Pi's default
- * resolves through `getAgentDir()`, which MMP already redirects globally (`src/host.ts` sets
- * `PI_CODING_AGENT_DIR` to MMP's own `<mmpHome>/pi` before Pi ever runs), so the default already
- * lands at `<mmpHome>/pi/mcp-auth.json` -- test/mcp.test.mjs asserts this. `logPath` has no such
+ * resolves through `getAgentDir()`, which Epi already redirects globally (`src/host.ts` sets
+ * `PI_CODING_AGENT_DIR` to Epi's own `<epiHome>/pi` before Pi ever runs), so the default already
+ * lands at `<epiHome>/pi/mcp-auth.json` -- test/mcp.test.mjs asserts this. `logPath` has no such
  * default-already-correct shortcut concern (it is a plain string), so it is passed explicitly for
  * auditability, matching the design.
  */
-export function createMmpMcpExtension(source) {
-    const { mmpHome } = source;
+export function createEpiMcpExtension(source) {
+    const { epiHome } = source;
     const loadConfig = (ctx) => loadNativeMcpConfig(source, ctx.cwd);
-    const logPath = join(mmpHome, "pi", "mcp.log");
+    const logPath = join(epiHome, "pi", "mcp.log");
     const transports = trackingTransportFactory();
     const startupWaitMs = mcpStartupWaitMs();
     const piFactory = createMcpExtension({ loadConfig, logPath, createTransport: transports.createTransport, startupWaitMs });
     return {
-        name: "mmp:mcp",
+        name: "epi:mcp",
         factory: async (pi) => {
             // F3 (Fable milestone review, hard rule 3): captured so the session_shutdown report below can
             // read each server's state.
@@ -194,7 +194,7 @@ export function createMmpMcpExtension(source) {
             // ctx.ui.notify is a no-op in print/json mode (modes/print-mode.js's bindExtensions passes no
             // uiContext). So every handler Pi's MCP extension registers gets a ctx whose ui.notify also
             // writes the message, as is, to stderr when there is no UI (once per message and session);
-            // after Pi's "Run /mcp to fix." block, one MMP line says what to run in the shell instead.
+            // after Pi's "Run /mcp to fix." block, one Epi line says what to run in the shell instead.
             // The unreachable-tools warning is not copied (PI_UNREACHABLE_PREFIX). The TUI shows them
             // itself, and rpc sends them to its client as extension_ui_request (D47, D52), so neither
             // gets a copy. Messages are Pi's own, so -p tells the same story as the TUI; stdout is never
@@ -288,12 +288,12 @@ export function createMmpMcpExtension(source) {
                                         // pi.registerMcpServer(), e.g. another extension) hid Pi's real /mcp panel --
                                         // exactly the place a person would go to re-enable one. Count every configured
                                         // server regardless of `enabled`, plus anything registered via the extension
-                                        // API (pi.getMcpServers()); MMP's message is only for a project with truly
+                                        // API (pi.getMcpServers()); Epi's message is only for a project with truly
                                         // nothing to show.
                                         const configuredCount = loadConfig(ctx).servers.length;
                                         const registeredCount = pi.getMcpServers().length;
                                         if (configuredCount === 0 && registeredCount === 0) {
-                                            ctx.ui.notify(emptyStateMessage(mmpHome, ctx.cwd), "info");
+                                            ctx.ui.notify(emptyStateMessage(epiHome, ctx.cwd), "info");
                                             return;
                                         }
                                     }

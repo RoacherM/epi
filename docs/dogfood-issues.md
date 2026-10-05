@@ -1,6 +1,6 @@
-# mmp 使用中发现的问题
+# epi 使用中发现的问题
 
-用 mmp 干活（包括开发 mmp 自己）时看到的问题记在这里，按 [dev-workflow-herdr.md](dev-workflow-herdr.md) 第 6 节分级修复。
+用 epi 干活（包括开发 epi 自己）时看到的问题记在这里，按 [dev-workflow-herdr.md](dev-workflow-herdr.md) 第 6 节分级修复。
 
 | 编号 | 级别 | 现象 | 复现 | 状态 |
 |---|---|---|---|---|

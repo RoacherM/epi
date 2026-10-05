@@ -13,7 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { piTui } from "../dist/tui/pi-tui.js";
-import { createMmpTheme } from "../dist/tui/theme.js";
+import { createEpiTheme } from "../dist/tui/theme.js";
 import {
   findRenderers,
   grepRenderers,
@@ -24,7 +24,7 @@ import {
 
 // Ensure global theme is initialized for highlightCode and syntax tokens
 initTheme("dark");
-const theme = createMmpTheme("dark");
+const theme = createEpiTheme("dark");
 
 function createMockContext(cwd, args, expanded = false, isError = false) {
   return {
@@ -54,7 +54,7 @@ function assertLinesFitWidth(lines, width) {
 }
 
 test("read renderer fits widths 40, 80, 120 and follows grok-build content rules", async (t) => {
-  const tempDir = mkdtempSync(join(tmpdir(), "mmp-test-read-"));
+  const tempDir = mkdtempSync(join(tmpdir(), "epi-test-read-"));
   t.after(() => rmSync(tempDir, { recursive: true, force: true }));
 
   // CJK path with 15 lines of TypeScript code
@@ -131,7 +131,7 @@ test("read renderer fits widths 40, 80, 120 and follows grok-build content rules
 test("read renderer: offset=1 (a common model default) does not make the collapsed result repeat the call line", async (t) => {
   // Reproduces a real-terminal observation: the model called read with offset:1, and the
   // collapsed result echoed "path:1" -- identical to the call line -- instead of a line count.
-  const tempDir = mkdtempSync(join(tmpdir(), "mmp-test-read-offset1-"));
+  const tempDir = mkdtempSync(join(tmpdir(), "epi-test-read-offset1-"));
   t.after(() => rmSync(tempDir, { recursive: true, force: true }));
   // Trailing newline on purpose: highlightCode wraps the resulting blank line in color codes,
   // which must still be trimmed as an empty line (see trimTrailingEmptyLines).
@@ -153,7 +153,7 @@ test("read renderer: offset=1 (a common model default) does not make the collaps
 });
 
 test("grep renderer fits widths 40, 80, 120 and follows grok-build content rules", async (t) => {
-  const tempDir = mkdtempSync(join(tmpdir(), "mmp-test-grep-"));
+  const tempDir = mkdtempSync(join(tmpdir(), "epi-test-grep-"));
   t.after(() => rmSync(tempDir, { recursive: true, force: true }));
 
   mkdirSync(join(tempDir, "项目"), { recursive: true });
@@ -188,7 +188,7 @@ test("grep renderer fits widths 40, 80, 120 and follows grok-build content rules
 });
 
 test("find renderer fits widths 40, 80, 120 and follows grok-build content rules", async (t) => {
-  const tempDir = mkdtempSync(join(tmpdir(), "mmp-test-find-"));
+  const tempDir = mkdtempSync(join(tmpdir(), "epi-test-find-"));
   t.after(() => rmSync(tempDir, { recursive: true, force: true }));
 
   mkdirSync(join(tempDir, "项目"), { recursive: true });
@@ -224,7 +224,7 @@ test("find renderer fits widths 40, 80, 120 and follows grok-build content rules
 });
 
 test("ls renderer fits widths 40, 80, 120 and follows grok-build content rules", async (t) => {
-  const tempDir = mkdtempSync(join(tmpdir(), "mmp-test-ls-"));
+  const tempDir = mkdtempSync(join(tmpdir(), "epi-test-ls-"));
   t.after(() => rmSync(tempDir, { recursive: true, force: true }));
 
   mkdirSync(join(tempDir, "项目"), { recursive: true });

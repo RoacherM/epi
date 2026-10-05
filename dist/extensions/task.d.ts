@@ -1,6 +1,6 @@
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 export interface TaskExtensionOptions {
-    mmpHome: string;
+    epiHome: string;
     agentDir: string;
     projectAgentsDir: string | undefined;
     workerPath?: string;

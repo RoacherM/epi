@@ -4,9 +4,9 @@ import test from "node:test";
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-import { MMP_PACKAGE_VERSION as MMP_VERSION } from "./fixtures/mmp-package-version.mjs";
-import { createMmpRuntimeExtensions } from "../dist/extensions/runtime.js";
-import { renderMmpStartupPage } from "../dist/startup-page.js";
+import { EPI_PACKAGE_VERSION as EPI_VERSION } from "./fixtures/epi-package-version.mjs";
+import { createEpiRuntimeExtensions } from "../dist/extensions/runtime.js";
+import { renderEpiStartupPage } from "../dist/startup-page.js";
 
 function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -20,18 +20,18 @@ const theme = {
 
 const identity = {
   runtime: {
-    name: "MMP",
-    version: MMP_VERSION,
+    name: "Epi",
+    version: EPI_VERSION,
     engine: "Pi",
     engineVersion: PI_VERSION,
   },
   paths: {
-    mmpHome: "/fixture/.mmp",
-    agentDir: "/fixture/.mmp/pi",
+    epiHome: "/fixture/.epi",
+    agentDir: "/fixture/.epi/pi",
   },
   manifests: {
     global: {
-      path: "/fixture/.mmp/mmp.json",
+      path: "/fixture/.epi/epi.json",
       loaded: false,
     },
     project: {
@@ -44,7 +44,7 @@ const identity = {
   resourcePolicy: {
     discovery: "manifest-and-fixed-skill-roots",
     relativePaths: "declaring-manifest-directory",
-    fixedSkillRoots: ["~/.agents/skills", "<mmpHome>/skills", "<trusted project>/.mmp/skills"],
+    fixedSkillRoots: ["~/.agents/skills", "<epiHome>/skills", "<trusted project>/.epi/skills"],
     piDiscoveryPathsLoaded: false,
   },
   declaredResources: {
@@ -56,8 +56,8 @@ const identity = {
 };
 
 const assembly = {
-  agentDir: "/fixture/.mmp/pi",
-  globalManifest: "/fixture/.mmp/mmp.json",
+  agentDir: "/fixture/.epi/pi",
+  globalManifest: "/fixture/.epi/epi.json",
   globalManifestLoaded: false,
   projectDiscovery: "none",
   projectManifest: undefined,
@@ -68,6 +68,9 @@ const assembly = {
   externalExtensions: [],
 };
 
+// The brand line under the logo: "Epi" centered on its own, not the "Epi ──▶ Pi" composition row.
+const BRAND_LINE = /\s{2,}Epi\s{2,}│/;
+
 function assertFits(lines, width) {
   for (const line of lines) {
     assert.ok(
@@ -77,8 +80,8 @@ function assertFits(lines, width) {
   }
 }
 
-test("wide startup page presents the Make My Pi brand and assembly controls", () => {
-  const lines = renderMmpStartupPage(identity, theme, 120, {
+test("wide startup page presents the Epi brand and assembly controls", () => {
+  const lines = renderEpiStartupPage(identity, theme, 120, {
     modelName: "MoonshotAI: Kimi K2.5",
     modelProvider: "openrouter",
     modelId: "moonshotai/kimi-k2.5",
@@ -86,18 +89,18 @@ test("wide startup page presents the Make My Pi brand and assembly controls", ()
   const output = lines.join("\n");
 
   assertFits(lines, 108);
-  assert.match(output, new RegExp(`mmp v${escapeRegExp(MMP_VERSION)}`));
-  assert.match(output, /Make My Pi/);
+  assert.match(output, new RegExp(`epi v${escapeRegExp(EPI_VERSION)}`));
+  assert.match(output, BRAND_LINE);
   assert.match(output, /Compose Pi your way\./);
   assert.match(output, /MoonshotAI: Kimi K2\.5/);
   assert.match(output, new RegExp(`openrouter · Pi ${escapeRegExp(PI_VERSION)}`));
   assert.match(output, /ASSEMBLY/);
   assert.match(output, /COMPOSITION/);
   assert.match(output, /rules \+ skills \+ extensions/);
-  assert.match(output, /MMP ──▶ Pi/);
+  assert.match(output, /Epi ──▶ Pi/);
   assert.match(output, /manifest\s+not configured/);
-  assert.match(output, /\/fixture\/\.mmp\/mmp\.json/);
-  assert.match(output, /\/mmp inspect · \/login authenticate/);
+  assert.match(output, /\/fixture\/\.epi\/epi\.json/);
+  assert.match(output, /\/epi inspect · \/login authenticate/);
   assert.match(output, /\/trust/);
 });
 
@@ -108,29 +111,29 @@ test("startup page shows an explicitly untrusted project", () => {
       ...identity.manifests,
       project: {
         discovery: "ignored",
-        path: "/repo/.mmp/mmp.json",
+        path: "/repo/.epi/epi.json",
         trusted: false,
         loaded: false,
       },
     },
   };
-  const output = renderMmpStartupPage(untrusted, theme, 120).join("\n");
+  const output = renderEpiStartupPage(untrusted, theme, 120).join("\n");
   assert.match(output, /not trusted · \/trust/);
 });
 
 test("narrow startup page remains within the terminal width", () => {
-  const lines = renderMmpStartupPage(identity, theme, 44);
+  const lines = renderEpiStartupPage(identity, theme, 44);
   const output = lines.join("\n");
 
   assertFits(lines, 44);
-  assert.match(output, /Make My Pi/);
+  assert.match(output, BRAND_LINE);
   assert.match(output, /ASSEMBLY/);
   assert.match(output, /CONFIGURE/);
 });
 
 test("runtime extension installs the startup page only in TUI mode", async () => {
   const handlers = new Map();
-  const extension = createMmpRuntimeExtensions(identity, assembly).runtime;
+  const extension = createEpiRuntimeExtensions(identity, assembly).runtime;
   extension.factory({
     on(event, handler) {
       handlers.set(event, handler);
@@ -168,7 +171,7 @@ test("runtime extension installs the startup page only in TUI mode", async () =>
   const component = headerFactory({}, theme);
   const lines = component.render(80);
   assertFits(lines, 80);
-  assert.match(lines.join("\n"), /Make My Pi/);
+  assert.match(lines.join("\n"), BRAND_LINE);
   assert.match(lines.join("\n"), /Fixture Model/);
   assert.equal(typeof component.invalidate, "function");
 });

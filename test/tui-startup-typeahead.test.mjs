@@ -2,7 +2,7 @@
 // own interactive-mode.js guards exactly this window: defaultEditor.onSubmit is handleStartupSubmit
 // (puts the text back with a "Startup is still in progress" status) until setupEditorSubmitHandler
 // swaps in the real handler once startup (there: managed-tool setup, then rebindCurrentSession)
-// finishes. MMP's app.ts wired the full submit() pipeline (session.prompt(), builtin dispatch, …)
+// finishes. Epi's app.ts wired the full submit() pipeline (session.prompt(), builtin dispatch, …)
 // to editor.onSubmit from before tui.start(), with no equivalent gate, so a prompt typed and
 // submitted while bind() (extension binding + model refresh) was still in flight raced a session
 // that was not fully set up yet. This is exercised deterministically with an extension that delays
@@ -20,19 +20,19 @@ const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 function runApp(t, extensions, steps) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-startup-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-startup-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ steps }),
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ steps }),
     },
     encoding: "utf8",
     timeout: 60_000,

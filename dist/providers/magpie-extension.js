@@ -4,7 +4,7 @@ import { createMagpieProvider, createWriteTracker, magpieBaseUrl } from "./magpi
  * startup path awaits for all registered providers (src/provider-startup.ts, decision MG2). */
 export function createMagpieInlineExtension() {
     return {
-        name: "mmp:magpie-provider",
+        name: "epi:magpie-provider",
         hidden: true,
         factory: (pi) => {
             const writes = createWriteTracker();

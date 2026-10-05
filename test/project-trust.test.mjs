@@ -18,39 +18,39 @@ const packageRoot = new URL("../", import.meta.url);
 const cliPath = new URL("../dist/cli.js", import.meta.url);
 
 function createProjectFixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-project-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-project-"));
   const projectRoot = join(root, "project");
   const nestedCwd = join(projectRoot, "nested");
-  const projectMmp = join(projectRoot, ".mmp");
-  const mmpHome = join(root, "home");
-  // Isolated HOME (distinct from mmpHome): a real ~/.agents/skills must not affect these runs
+  const projectEpi = join(projectRoot, ".epi");
+  const epiHome = join(root, "home");
+  // Isolated HOME (distinct from epiHome): a real ~/.agents/skills must not affect these runs
   // (docs/decisions.md S1 auto-discovery reads it regardless of project trust).
   const realHome = join(root, "realhome");
   mkdirSync(nestedCwd, { recursive: true });
-  mkdirSync(projectMmp, { recursive: true });
+  mkdirSync(projectEpi, { recursive: true });
   mkdirSync(realHome, { recursive: true });
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  return { root, projectRoot, nestedCwd, projectMmp, mmpHome, realHome };
+  return { root, projectRoot, nestedCwd, projectEpi, epiHome, realHome };
 }
 
 function runDry(fixture, flags = []) {
   return spawnSync(process.execPath, [cliPath.pathname, ...flags, "--dry-run"], {
     cwd: fixture.nestedCwd,
     encoding: "utf8",
-    env: { ...process.env, HOME: fixture.realHome, MMP_HOME: fixture.mmpHome },
+    env: { ...process.env, HOME: fixture.realHome, EPI_HOME: fixture.epiHome },
   });
 }
 
 test("unknown and denied projects are discovered without reading project manifest", (t) => {
   const fixture = createProjectFixture(t);
-  writeFileSync(join(fixture.projectMmp, "mmp.json"), "not valid json");
+  writeFileSync(join(fixture.projectEpi, "epi.json"), "not valid json");
 
   const unknown = runDry(fixture);
   assert.equal(unknown.status, 0, unknown.stderr);
-  assert.equal(existsSync(fixture.mmpHome), false);
+  assert.equal(existsSync(fixture.epiHome), false);
   assert.deepEqual(JSON.parse(unknown.stdout).projectManifest, {
     root: realpathSync(fixture.projectRoot),
-    path: join(realpathSync(fixture.projectRoot), ".mmp", "mmp.json"),
+    path: join(realpathSync(fixture.projectRoot), ".epi", "epi.json"),
     trusted: false,
     loaded: false,
   });
@@ -62,10 +62,10 @@ test("unknown and denied projects are discovered without reading project manifes
 
 test("--approve loads project resources and preserves project provenance", (t) => {
   const fixture = createProjectFixture(t);
-  const rulePath = join(fixture.projectMmp, "RULES.md");
+  const rulePath = join(fixture.projectEpi, "RULES.md");
   writeFileSync(rulePath, "Project-only rule.\n");
   writeFileSync(
-    join(fixture.projectMmp, "mmp.json"),
+    join(fixture.projectEpi, "epi.json"),
     JSON.stringify({ version: 1, rules: ["./RULES.md"] }),
   );
 
@@ -81,14 +81,14 @@ test("--approve loads project resources and preserves project provenance", (t) =
       kind: "rule",
       value: realpathSync(rulePath),
       source: "project",
-      declaredIn: join(realpathSync(fixture.projectRoot), ".mmp", "mmp.json"),
+      declaredIn: join(realpathSync(fixture.projectRoot), ".epi", "epi.json"),
     },
   ]);
 });
 
 test("--no-project does not parse even an invalid project manifest", (t) => {
   const fixture = createProjectFixture(t);
-  writeFileSync(join(fixture.projectMmp, "mmp.json"), "not valid json");
+  writeFileSync(join(fixture.projectEpi, "epi.json"), "not valid json");
 
   const result = runDry(fixture, ["--no-project", "--approve"]);
   const output = JSON.parse(result.stdout);
@@ -101,10 +101,10 @@ test("--no-project does not parse even an invalid project manifest", (t) => {
 test("persisted Pi ProjectTrustStore decisions gate project resources", (t) => {
   const fixture = createProjectFixture(t);
   writeFileSync(
-    join(fixture.projectMmp, "mmp.json"),
+    join(fixture.projectEpi, "epi.json"),
     JSON.stringify({ version: 1 }),
   );
-  const trustStore = new ProjectTrustStore(join(fixture.mmpHome, "pi"));
+  const trustStore = new ProjectTrustStore(join(fixture.epiHome, "pi"));
 
   trustStore.set(fixture.projectRoot, true);
   const trusted = runDry(fixture);
@@ -119,8 +119,8 @@ test("persisted Pi ProjectTrustStore decisions gate project resources", (t) => {
 
 test("a decision saved for a subfolder (classic Pi /trust saves the cwd) applies from there", (t) => {
   const fixture = createProjectFixture(t);
-  writeFileSync(join(fixture.projectMmp, "mmp.json"), JSON.stringify({ version: 1 }));
-  const trustStore = new ProjectTrustStore(join(fixture.mmpHome, "pi"));
+  writeFileSync(join(fixture.projectEpi, "epi.json"), JSON.stringify({ version: 1 }));
+  const trustStore = new ProjectTrustStore(join(fixture.epiHome, "pi"));
 
   trustStore.set(fixture.nestedCwd, true);
   const trusted = runDry(fixture);
@@ -136,7 +136,7 @@ test("a decision saved for a subfolder (classic Pi /trust saves the cwd) applies
 
 test("global and trusted project resources merge in order and deduplicate canonically", (t) => {
   const fixture = createProjectFixture(t);
-  mkdirSync(fixture.mmpHome, { recursive: true });
+  mkdirSync(fixture.epiHome, { recursive: true });
   const globalRule = join(fixture.root, "global.md");
   const sharedRule = join(fixture.root, "shared.md");
   const projectRule = join(fixture.root, "project.md");
@@ -144,11 +144,11 @@ test("global and trusted project resources merge in order and deduplicate canoni
   writeFileSync(sharedRule, "shared\n");
   writeFileSync(projectRule, "project\n");
   writeFileSync(
-    join(fixture.mmpHome, "mmp.json"),
+    join(fixture.epiHome, "epi.json"),
     JSON.stringify({ version: 1, rules: [globalRule, sharedRule] }),
   );
   writeFileSync(
-    join(fixture.projectMmp, "mmp.json"),
+    join(fixture.projectEpi, "epi.json"),
     JSON.stringify({ version: 1, rules: [sharedRule, projectRule] }),
   );
 
@@ -168,36 +168,36 @@ test("global and trusted project resources merge in order and deduplicate canoni
 
 test("--dry-run never shows the trust prompt, even for an undecided project", (t) => {
   const fixture = createProjectFixture(t);
-  writeFileSync(join(fixture.projectMmp, "mmp.json"), JSON.stringify({ version: 1 }));
+  writeFileSync(join(fixture.projectEpi, "epi.json"), JSON.stringify({ version: 1 }));
 
   const result = runDry(fixture);
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(`${result.stdout}${result.stderr}`, /Trust project folder\?/);
   assert.equal(JSON.parse(result.stdout).projectDiscovery, "ignored");
   // --dry-run never even opens the trust store for an unknown project.
-  assert.equal(existsSync(join(fixture.mmpHome, "pi", "trust.json")), false);
+  assert.equal(existsSync(join(fixture.epiHome, "pi", "trust.json")), false);
 });
 
 test("-p (non-interactive, non-TTY) never shows the trust prompt and ignores the project", (t) => {
   const fixture = createProjectFixture(t);
-  writeFileSync(join(fixture.projectMmp, "mmp.json"), JSON.stringify({ version: 1 }));
-  mkdirSync(fixture.mmpHome, { recursive: true });
+  writeFileSync(join(fixture.projectEpi, "epi.json"), JSON.stringify({ version: 1 }));
+  mkdirSync(fixture.epiHome, { recursive: true });
   const driver = new URL("./fixtures/faux-two-models.mjs", import.meta.url).pathname;
   writeFileSync(
-    join(fixture.mmpHome, "mmp.json"),
+    join(fixture.epiHome, "epi.json"),
     JSON.stringify({ version: 1, extensions: [driver] }),
   );
 
   const result = spawnSync(process.execPath, [cliPath.pathname, "-p", "hi"], {
     cwd: fixture.nestedCwd,
-    env: { PATH: process.env.PATH, HOME: fixture.mmpHome, MMP_HOME: fixture.mmpHome, MMP_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: fixture.epiHome, EPI_HOME: fixture.epiHome, EPI_OFFLINE: "1" },
     input: "",
     encoding: "utf8",
     timeout: 60_000,
   });
   assert.match(result.stdout, /PICKED=model-a/, `${result.stdout}${result.stderr}`);
   assert.doesNotMatch(`${result.stdout}${result.stderr}`, /Trust project folder\?/);
-  assert.equal(existsSync(join(fixture.mmpHome, "pi", "trust.json")), false);
+  assert.equal(existsSync(join(fixture.epiHome, "pi", "trust.json")), false);
 });
 
 test("conflicting project trust overrides fail before Pi", () => {

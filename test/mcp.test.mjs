@@ -1,9 +1,9 @@
-// Native MCP (docs/mcp-design.md §8): mmp:mcp wires Pi's own createMcpExtension to MMP's config
-// source. MMP no longer parses or validates mcp.json itself (src/mcp-config.ts, deleted in stage 2)
+// Native MCP (docs/mcp-design.md §8): epi:mcp wires Pi's own createMcpExtension to Epi's config
+// source. Epi no longer parses or validates mcp.json itself (src/mcp-config.ts, deleted in stage 2)
 // -- format and validation are entirely Pi's (extensions/mcp/config.js, core/mcp-servers.js),
 // reused by file path (docs/pi-internals.md "mcp-native-config-loader"). These tests cover:
 //   - loadNativeMcpConfig's own merge/scope-remap logic (unit-level, offline)
-//   - trust gating of a project's .mmp/mcp.json
+//   - trust gating of a project's .epi/mcp.json
 //   - the /mcp empty-state override (docs/mcp-design.md §7)
 //   - a full offline end-to-end run: a real stdio fixture server, one call via codemode, one via
 //     "direct" exposure, env var expansion, and child-process cleanup on session exit
@@ -18,7 +18,7 @@ import test from "node:test";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-import { createMmpMcpExtension, loadNativeMcpConfig } from "../dist/extensions/mcp.js";
+import { createEpiMcpExtension, loadNativeMcpConfig } from "../dist/extensions/mcp.js";
 import { startOAuthMcpServer } from "./fixtures/mcp-oauth-server.mjs";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -35,7 +35,7 @@ function fixtureServerArgs() {
 }
 
 function createFixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-mcp-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-mcp-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   return root;
 }
@@ -49,7 +49,7 @@ function untrustedAssembly() {
 }
 
 function trustedAssembly(root) {
-  return { projectManifest: { loaded: true, root, path: join(root, ".mmp", "mmp.json"), trusted: true } };
+  return { projectManifest: { loaded: true, root, path: join(root, ".epi", "epi.json"), trusted: true } };
 }
 
 // ── loadNativeMcpConfig: merge, scope, and trust gating ────────────────────────────────────────
@@ -57,71 +57,71 @@ function trustedAssembly(root) {
 test("missing MCP config resolves to an empty, error-free result", (t) => {
   const root = createFixture(t);
   const result = loadNativeMcpConfig(
-    { mmpHome: join(root, "missing"), resolveAssembly: untrustedAssembly },
+    { epiHome: join(root, "missing"), resolveAssembly: untrustedAssembly },
     root,
   );
   assert.deepEqual(result.servers, []);
   assert.deepEqual(result.errors, []);
 });
 
-test("an untrusted project's .mmp/mcp.json is never read", (t) => {
+test("an untrusted project's .epi/mcp.json is never read", (t) => {
   const root = createFixture(t);
-  const mmpHome = join(root, "home");
-  mkdirSync(mmpHome, { recursive: true });
-  writeJson(join(mmpHome, "mcp.json"), { mcpServers: { global: { command: "node" } } });
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
+  writeJson(join(epiHome, "mcp.json"), { mcpServers: { global: { command: "node" } } });
   const projectRoot = join(root, "project");
-  mkdirSync(join(projectRoot, ".mmp"), { recursive: true });
-  writeJson(join(projectRoot, ".mmp", "mcp.json"), { mcpServers: { project: { command: "node" } } });
+  mkdirSync(join(projectRoot, ".epi"), { recursive: true });
+  writeJson(join(projectRoot, ".epi", "mcp.json"), { mcpServers: { project: { command: "node" } } });
 
-  const result = loadNativeMcpConfig({ mmpHome, resolveAssembly: untrustedAssembly }, root);
+  const result = loadNativeMcpConfig({ epiHome, resolveAssembly: untrustedAssembly }, root);
   assert.deepEqual(result.servers.map((s) => s.name), ["global"]);
 });
 
-test("a trusted project's .mmp/mcp.json is read and wins on a name clash, remapped to scope \"project\"", (t) => {
+test("a trusted project's .epi/mcp.json is read and wins on a name clash, remapped to scope \"project\"", (t) => {
   const root = createFixture(t);
-  const mmpHome = join(root, "home");
-  mkdirSync(mmpHome, { recursive: true });
-  writeJson(join(mmpHome, "mcp.json"), {
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
+  writeJson(join(epiHome, "mcp.json"), {
     mcpServers: {
       shared: { command: "node", args: ["old.mjs"] },
       global: { command: "node" },
     },
   });
   const projectRoot = join(root, "project");
-  mkdirSync(join(projectRoot, ".mmp"), { recursive: true });
-  writeJson(join(projectRoot, ".mmp", "mcp.json"), {
+  mkdirSync(join(projectRoot, ".epi"), { recursive: true });
+  writeJson(join(projectRoot, ".epi", "mcp.json"), {
     mcpServers: { shared: { command: "node", args: ["new.mjs"] } },
   });
 
   const result = loadNativeMcpConfig(
-    { mmpHome, resolveAssembly: () => trustedAssembly(projectRoot) },
+    { epiHome, resolveAssembly: () => trustedAssembly(projectRoot) },
     root,
   );
   const byName = Object.fromEntries(result.servers.map((s) => [s.name, s]));
   assert.equal(byName.global.scope, "global");
   assert.equal(byName.shared.scope, "project");
   assert.deepEqual(byName.shared.config.args, ["new.mjs"], "project entry did not win on a name clash");
-  assert.equal(byName.shared.source, join(projectRoot, ".mmp", "mcp.json"));
+  assert.equal(byName.shared.source, join(projectRoot, ".epi", "mcp.json"));
 });
 
 test("a bad server entry surfaces Pi's own validation error, not a silently empty config", (t) => {
   const root = createFixture(t);
-  const mmpHome = join(root, "home");
-  mkdirSync(mmpHome, { recursive: true });
-  writeJson(join(mmpHome, "mcp.json"), { mcpServers: { broken: { timeout: 5 } } });
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
+  writeJson(join(epiHome, "mcp.json"), { mcpServers: { broken: { timeout: 5 } } });
 
-  const result = loadNativeMcpConfig({ mmpHome, resolveAssembly: untrustedAssembly }, root);
+  const result = loadNativeMcpConfig({ epiHome, resolveAssembly: untrustedAssembly }, root);
   assert.equal(result.servers.length, 0);
   assert.match(result.errors[0], /needs either "command" \(stdio\) or "url" \(streamable HTTP\)/);
 });
 
-// ── Isolation: MMP's OAuth credentials never land under Pi's own agent dir ─────────────────────
+// ── Isolation: Epi's OAuth credentials never land under Pi's own agent dir ─────────────────────
 
-test("MMP's PI_CODING_AGENT_DIR redirection puts Pi's default MCP credentials/log under <mmpHome>/pi", () => {
+test("Epi's PI_CODING_AGENT_DIR redirection puts Pi's default MCP credentials/log under <epiHome>/pi", () => {
   const previous = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = "/tmp/mmp-test-agent-dir/pi";
+  process.env.PI_CODING_AGENT_DIR = "/tmp/epi-test-agent-dir/pi";
   try {
-    assert.equal(getAgentDir(), "/tmp/mmp-test-agent-dir/pi");
+    assert.equal(getAgentDir(), "/tmp/epi-test-agent-dir/pi");
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;
@@ -133,12 +133,12 @@ test("MMP's PI_CODING_AGENT_DIR redirection puts Pi's default MCP credentials/lo
 test("--dry-run reports a native mcp.json validation error before Pi starts", (t) => {
   const root = createFixture(t);
   mkdirSync(join(root, "pi"));
-  writeJson(join(root, "mmp.json"), { version: 1, extensions: ["mmp:mcp"] });
+  writeJson(join(root, "epi.json"), { version: 1, extensions: ["epi:mcp"] });
   writeJson(join(root, "mcp.json"), { mcpServers: { broken: { timeout: 5 } } });
 
   const result = spawnSync(process.execPath, [cliPath, "--dry-run", "--no-project"], {
     encoding: "utf8",
-    env: { ...process.env, HOME: root, MMP_HOME: root },
+    env: { ...process.env, HOME: root, EPI_HOME: root },
   });
   assert.equal(result.status, 2);
   assert.equal(result.stdout, "");
@@ -148,9 +148,9 @@ test("--dry-run reports a native mcp.json validation error before Pi starts", (t
 // ── /mcp empty-state override (docs/mcp-design.md §7) ──────────────────────────────────────────
 
 /** A minimal ExtensionAPI: only `on`, `registerCommand`, and (F2) `getMcpServers` are called
- * synchronously by Pi's own createMcpExtension factory body or by mmp:mcp's own wrapper (verified
+ * synchronously by Pi's own createMcpExtension factory body or by epi:mcp's own wrapper (verified
  * against extensions/mcp/index.js -- every other pi.X call it makes happens inside an event
- * handler, none of which fire here). Enough to drive mmp:mcp's own Proxy-wrapping logic around the
+ * handler, none of which fire here). Enough to drive epi:mcp's own Proxy-wrapping logic around the
  * real "/mcp" registration without spawning a session or a real MCP connection.
  * `registeredServers` fakes servers another extension added with `pi.registerMcpServer()`. */
 function fakePi(registeredServers = []) {
@@ -165,48 +165,48 @@ function fakePi(registeredServers = []) {
   };
 }
 
-test("/mcp with zero configured servers shows MMP's own message, not Pi's", async (t) => {
+test("/mcp with zero configured servers shows Epi's own message, not Pi's", async (t) => {
   const root = createFixture(t);
-  const mmpHome = join(root, "home");
-  mkdirSync(mmpHome, { recursive: true });
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
   // No mcp.json at all -- loadNativeMcpConfig resolves to zero servers.
-  const extension = createMmpMcpExtension({ mmpHome, resolveAssembly: untrustedAssembly });
+  const extension = createEpiMcpExtension({ epiHome, resolveAssembly: untrustedAssembly });
   const pi = fakePi();
   await extension.factory(pi);
   const notices = [];
   const ctx = { cwd: root, mode: "print", ui: { notify: (message, type) => notices.push({ message, type }) } };
   await pi.commands.get("mcp").handler("", ctx);
   assert.equal(notices.length, 1);
-  // Dogfood D4: one sentence saying what to run, not "Add them to ... then run `mmp mcp add`".
-  assert.match(notices[0].message, /^No MCP servers configured -- add one to .*mcp\.json with `mmp mcp add <server> /);
+  // Dogfood D4: one sentence saying what to run, not "Add them to ... then run `epi mcp add`".
+  assert.match(notices[0].message, /^No MCP servers configured -- add one to .*mcp\.json with `epi mcp add <server> /);
   assert.doesNotMatch(notices[0].message, /then run/);
-  assert.doesNotMatch(notices[0].message, /\.pi\/mcp\.json/, "leaked Pi's own path, not MMP's");
+  assert.doesNotMatch(notices[0].message, /\.pi\/mcp\.json/, "leaked Pi's own path, not Epi's");
   // Dogfood D47: -l is offered only where the cwd has a project Manifest for it to go with.
   assert.match(notices[0].message, /`\.$/);
   // Match the offer itself, not a bare "-l": the message contains a random mkdtemp path (B8 review F5).
   assert.doesNotMatch(notices[0].message, /with -l to/);
-  mkdirSync(join(root, ".mmp"), { recursive: true });
-  writeJson(join(root, ".mmp", "mmp.json"), { version: 1 });
+  mkdirSync(join(root, ".epi"), { recursive: true });
+  writeJson(join(root, ".epi", "epi.json"), { version: 1 });
   await pi.commands.get("mcp").handler("", ctx);
-  assert.match(notices[1].message, /`, or with -l to this project's \.mmp[\\/]mcp\.json\.$/);
+  assert.match(notices[1].message, /`, or with -l to this project's \.epi[\\/]mcp\.json\.$/);
 });
 
-test("/mcp with configured servers delegates to Pi's own handler instead of MMP's message", async (t) => {
+test("/mcp with configured servers delegates to Pi's own handler instead of Epi's message", async (t) => {
   const root = createFixture(t);
-  const mmpHome = join(root, "home");
-  mkdirSync(mmpHome, { recursive: true });
-  writeJson(join(mmpHome, "mcp.json"), {
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
+  writeJson(join(epiHome, "mcp.json"), {
     mcpServers: { configured: { command: "node", args: [fixtureServerPath] } },
   });
-  const extension = createMmpMcpExtension({ mmpHome, resolveAssembly: untrustedAssembly });
+  const extension = createEpiMcpExtension({ epiHome, resolveAssembly: untrustedAssembly });
   const pi = fakePi();
   await extension.factory(pi);
   const notices = [];
   const ctx = { cwd: root, mode: "print", ui: { notify: (message, type) => notices.push({ message, type }) } };
   await pi.commands.get("mcp").handler("", ctx);
   // Pi's real handler ran (session_start never fired in this synthetic test, so its own internal
-  // server list is still empty -- it reports ITS OWN default message, not MMP's override, proving
-  // delegation: MMP's wrapper only substitutes its own message when *its* config read says zero
+  // server list is still empty -- it reports ITS OWN default message, not Epi's override, proving
+  // delegation: Epi's wrapper only substitutes its own message when *its* config read says zero
   // servers, never based on Pi's live connection state).
   assert.equal(notices.length, 1);
   assert.match(notices[0].message, /No MCP servers configured\. Add them to/);
@@ -217,59 +217,59 @@ test("/mcp with only a disabled server still delegates to Pi's own handler (F2)"
   // Fable milestone review, F2: this used to count only *enabled* servers, so disabling the only
   // configured server hid Pi's real /mcp panel -- exactly where a person would go to re-enable it.
   const root = createFixture(t);
-  const mmpHome = join(root, "home");
-  mkdirSync(mmpHome, { recursive: true });
-  writeJson(join(mmpHome, "mcp.json"), {
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
+  writeJson(join(epiHome, "mcp.json"), {
     mcpServers: { configured: { command: "node", args: [fixtureServerPath], enabled: false } },
   });
-  const extension = createMmpMcpExtension({ mmpHome, resolveAssembly: untrustedAssembly });
+  const extension = createEpiMcpExtension({ epiHome, resolveAssembly: untrustedAssembly });
   const pi = fakePi();
   await extension.factory(pi);
   const notices = [];
   const ctx = { cwd: root, mode: "print", ui: { notify: (message, type) => notices.push({ message, type }) } };
   await pi.commands.get("mcp").handler("", ctx);
   assert.equal(notices.length, 1);
-  assert.match(notices[0].message, /No MCP servers configured\. Add them to/, "expected Pi's own message, not MMP's empty-state override");
-  assert.match(notices[0].message, /\.pi[\\/]mcp\.json/, "expected Pi's own handler to have run, proving MMP delegated instead of intercepting");
+  assert.match(notices[0].message, /No MCP servers configured\. Add them to/, "expected Pi's own message, not Epi's empty-state override");
+  assert.match(notices[0].message, /\.pi[\\/]mcp\.json/, "expected Pi's own handler to have run, proving Epi delegated instead of intercepting");
 });
 
 test("/mcp with zero configured servers but one registered via pi.registerMcpServer() still delegates to Pi's own handler (F2)", async (t) => {
   const root = createFixture(t);
-  const mmpHome = join(root, "home");
-  mkdirSync(mmpHome, { recursive: true });
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
   // No mcp.json at all -- only an extension-registered server, e.g. from another Manifest entry.
-  const extension = createMmpMcpExtension({ mmpHome, resolveAssembly: untrustedAssembly });
+  const extension = createEpiMcpExtension({ epiHome, resolveAssembly: untrustedAssembly });
   const pi = fakePi([{ name: "jira", config: { url: "https://mcp.example.com/jira" }, extensionPath: "/some/other-extension.mjs" }]);
   await extension.factory(pi);
   const notices = [];
   const ctx = { cwd: root, mode: "print", ui: { notify: (message, type) => notices.push({ message, type }) } };
   await pi.commands.get("mcp").handler("", ctx);
   assert.equal(notices.length, 1);
-  assert.match(notices[0].message, /No MCP servers configured\. Add them to/, "expected Pi's own message, not MMP's empty-state override");
-  assert.match(notices[0].message, /\.pi[\\/]mcp\.json/, "expected Pi's own handler to have run, proving MMP delegated instead of intercepting");
+  assert.match(notices[0].message, /No MCP servers configured\. Add them to/, "expected Pi's own message, not Epi's empty-state override");
+  assert.match(notices[0].message, /\.pi[\\/]mcp\.json/, "expected Pi's own handler to have run, proving Epi delegated instead of intercepting");
 });
 
 // ── Manifest declaring a second /mcp-registering extension: refused at startup (docs/mcp-design.md §4) ─
 
-test("a Manifest that declares another extension registering \"/mcp\" alongside mmp:mcp is refused at startup", (t) => {
+test("a Manifest that declares another extension registering \"/mcp\" alongside epi:mcp is refused at startup", (t) => {
   const root = createFixture(t);
-  const mmpHome = join(root, "home");
-  mkdirSync(mmpHome, { recursive: true });
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
   const rogue = fileURLToPath(new URL("./fixtures/mcp-duplicate-rogue.mjs", import.meta.url));
   const driver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
-  writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", rogue, driver] });
+  writeJson(join(epiHome, "epi.json"), { version: 1, extensions: ["epi:mcp", rogue, driver] });
 
   const result = spawnSync(
     process.execPath,
-    [cliPath, "--no-project", "--model", "mmp-faux/echo", "-p", "hi"],
-    { encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" } },
+    [cliPath, "--no-project", "--model", "epi-faux/echo", "-p", "hi"],
+    { encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, EPI_HOME: epiHome, EPI_OFFLINE: "1" } },
   );
   // Like every duplicate command (src/tui/services.ts): nothing runs, and the error names both.
   assert.equal(result.status, 1, `stderr:\n${result.stderr}`);
   assert.equal(result.stdout, "");
   assert.match(
     result.stderr,
-    /^Error: The command "\/mcp" is registered by more than one extension: .*mcp-duplicate-rogue\.mjs, <inline:mmp:mcp>\./m,
+    /^Error: The command "\/mcp" is registered by more than one extension: .*mcp-duplicate-rogue\.mjs, <inline:epi:mcp>\./m,
     `stderr:\n${result.stderr}`,
   );
 });
@@ -283,16 +283,16 @@ const delayedDriver = fileURLToPath(new URL("./fixtures/faux-delayed-echo.mjs", 
 
 function nonTuiMcpCommand(t, mode, mcpConfig, { nodeArgs = [], env = {}, cliArgs = [], delayed = false } = {}) {
   const root = createFixture(t);
-  const mmpHome = join(root, "home");
-  mkdirSync(mmpHome, { recursive: true });
-  writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", delayed ? delayedDriver : echoDriver] });
-  if (mcpConfig !== undefined) writeJson(join(mmpHome, "mcp.json"), mcpConfig);
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
+  writeJson(join(epiHome, "epi.json"), { version: 1, extensions: ["epi:mcp", delayed ? delayedDriver : echoDriver] });
+  if (mcpConfig !== undefined) writeJson(join(epiHome, "mcp.json"), mcpConfig);
 
-  const model = delayed ? "mmp-faux/delayed" : "mmp-faux/echo";
+  const model = delayed ? "epi-faux/delayed" : "epi-faux/echo";
   const modeArgs = mode === "json" ? ["--mode", "json", "hi"] : ["-p", "hi"];
   return {
     args: [...nodeArgs, cliPath, "--no-project", "--model", model, ...cliArgs, ...modeArgs],
-    env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1", ...env },
+    env: { PATH: process.env.PATH, HOME: root, EPI_HOME: epiHome, EPI_OFFLINE: "1", ...env },
   };
 }
 
@@ -316,7 +316,7 @@ async function runNonTuiMcpAsync(t, mode, mcpConfig, options) {
 }
 
 // Dogfood D42: Pi loads extensions/mcp/runtime.js (the MCP client, transports, OAuth) only once a
-// session has an enabled server (index.js's loadMcpRuntime); mmp:mcp's transport tracking (D3) must
+// session has an enabled server (index.js's loadMcpRuntime); epi:mcp's transport tracking (D3) must
 // not load it any earlier. A module-load hook logs whether runtime.js was loaded at all. The one
 // server has direct tools: since Pi 0.99.2 only those hold up the first prompt, and a codemode
 // server may not even have started connecting when the faux model's instant reply ends the run.
@@ -327,8 +327,8 @@ for (const [label, mcpConfig, loaded] of [
   ["only a disabled server", { mcpServers: { off: { command: "/nonexistent/x", enabled: false } } }, false],
   ["one server", "fixture", true],
 ]) {
-  test(`mmp:mcp with ${label} ${loaded ? "loads" : "never loads"} Pi's MCP runtime (D42)`, (t) => {
-    const log = join(mkdtempSync(join(tmpdir(), "mmp-d42-")), "loads.log");
+  test(`epi:mcp with ${label} ${loaded ? "loads" : "never loads"} Pi's MCP runtime (D42)`, (t) => {
+    const log = join(mkdtempSync(join(tmpdir(), "epi-d42-")), "loads.log");
     t.after(() => rmSync(dirname(log), { recursive: true, force: true }));
     writeFileSync(log, "");
     let marker;
@@ -340,7 +340,7 @@ for (const [label, mcpConfig, loaded] of [
     }
     const result = runNonTuiMcp(t, "print", config, {
       nodeArgs: ["--import", moduleLoadLog],
-      env: { MMP_TEST_MODULE_LOG: log, MMP_TEST_MODULE_MATCH: "/extensions/mcp/runtime.js" },
+      env: { EPI_TEST_MODULE_LOG: log, EPI_TEST_MODULE_MATCH: "/extensions/mcp/runtime.js" },
     });
     const loads = readFileSync(log, "utf8");
     const context = `loads:\n${loads}\nstatus=${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
@@ -348,7 +348,7 @@ for (const [label, mcpConfig, loaded] of [
     assert.equal(result.stdout, "ECHO:hi\n", context);
     if (loaded) {
       assert.match(loads, /\/extensions\/mcp\/runtime\.js/, context);
-      assert.equal(result.stderr, "", `the server connected through MMP's tracking transport\n${context}`);
+      assert.equal(result.stderr, "", `the server connected through Epi's tracking transport\n${context}`);
       const leftover = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" });
       assert.equal(leftover.stdout.trim(), "", `fixture server still running after exit\n${context}`);
     } else {
@@ -358,18 +358,18 @@ for (const [label, mcpConfig, loaded] of [
 }
 
 // Since Pi 0.99.2 the codemode and tool_search descriptions name no server; Pi's MCP extension lists
-// codemode and deferred servers in a `mcp_servers` prompt section from its before_agent_start. MMP's
+// codemode and deferred servers in a `mcp_servers` prompt section from its before_agent_start. Epi's
 // forced prompt (Rules + runtime contract) must be built after that, or the model never learns which
 // servers exist (docs/pi-internals.md "system-prompt-forced-last").
-test("codemode and deferred servers reach the model in Pi's <mcp_servers> section, ahead of MMP's Rules and runtime contract", (t) => {
+test("codemode and deferred servers reach the model in Pi's <mcp_servers> section, ahead of Epi's Rules and runtime contract", (t) => {
   const root = createFixture(t);
-  const mmpHome = join(root, "home");
-  mkdirSync(mmpHome, { recursive: true });
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
   const probe = fileURLToPath(new URL("./fixtures/faux-skill-probe.mjs", import.meta.url));
   const external = fileURLToPath(new URL("./fixtures/prompt-section-extension.mjs", import.meta.url));
-  writeFileSync(join(mmpHome, "RULES.md"), "# U3 fixture rules\n");
-  writeJson(join(mmpHome, "mmp.json"), { version: 1, rules: ["./RULES.md"], extensions: ["mmp:mcp", external, probe] });
-  writeJson(join(mmpHome, "mcp.json"), {
+  writeFileSync(join(epiHome, "RULES.md"), "# U3 fixture rules\n");
+  writeJson(join(epiHome, "epi.json"), { version: 1, rules: ["./RULES.md"], extensions: ["epi:mcp", external, probe] });
+  writeJson(join(epiHome, "mcp.json"), {
     mcpServers: {
       fixture: { command: process.execPath, args: fixtureServerArgs().args },
       "deferred-one": { command: process.execPath, args: fixtureServerArgs().args, exposure: "deferred" },
@@ -377,8 +377,8 @@ test("codemode and deferred servers reach the model in Pi's <mcp_servers> sectio
   });
   const result = spawnSync(
     process.execPath,
-    [cliPath, "--no-project", "--model", "mmp-faux/model-a", "-p", "hi"],
-    { encoding: "utf8", timeout: 30_000, env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" } },
+    [cliPath, "--no-project", "--model", "epi-faux/model-a", "-p", "hi"],
+    { encoding: "utf8", timeout: 30_000, env: { PATH: process.env.PATH, HOME: root, EPI_HOME: epiHome, EPI_OFFLINE: "1" } },
   );
   const context = `status=${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
   assert.equal(result.status, 0, context);
@@ -388,10 +388,10 @@ test("codemode and deferred servers reach the model in Pi's <mcp_servers> sectio
   assert.match(section[1], /^- mcp__deferred_one \(tool_search\)/m, context);
   assert.match(section[1], /^- mcp__fixture \(codemode\)/m, context);
   // A Manifest extension's section edit lands too: Pi runs external extensions before inline ones.
-  const externalSection = prompt.indexOf("<mmp_test_external>\nexternal section text\n</mmp_test_external>");
+  const externalSection = prompt.indexOf("<epi_test_external>\nexternal section text\n</epi_test_external>");
   assert.ok(externalSection >= 0, `a Manifest extension's section is missing\n${context}`);
   const rules = prompt.indexOf("# U3 fixture rules");
-  const contract = prompt.indexOf("# MMP Runtime Contract");
+  const contract = prompt.indexOf("# Epi Runtime Contract");
   assert.ok(section.index < rules && externalSection < rules && rules < contract, `expected Pi's sections, then Rules, then the runtime contract\n${context}`);
 });
 
@@ -399,18 +399,18 @@ test("codemode and deferred servers reach the model in Pi's <mcp_servers> sectio
 // as an rpc client gets it.
 const BROKEN_LINE = "  broken: failed: spawn /nonexistent/x ENOENT";
 const PI_BROKEN = `MCP servers need attention:\n${BROKEN_LINE}\nRun /mcp to fix.`;
-// "/mcp" does not exist outside the TUI: MMP says what to run in the shell instead (hard rule 4).
-const LIST_HINT = 'From the shell: run "mmp mcp list" to see why.';
-// Pi's report as MMP copies it to stderr in print/json: Pi's text, then MMP's shell hint.
+// "/mcp" does not exist outside the TUI: Epi says what to run in the shell instead (hard rule 4).
+const LIST_HINT = 'From the shell: run "epi mcp list" to see why.';
+// Pi's report as Epi copies it to stderr in print/json: Pi's text, then Epi's shell hint.
 const BROKEN_ATTENTION = `${PI_BROKEN}\n${LIST_HINT}\n`;
-// MMP's own report at session_shutdown, for what Pi has not reported: Pi's shape, MMP's shell hint.
-const MMP_BROKEN = `MCP servers need attention:\n${BROKEN_LINE}\n${LIST_HINT}`;
-const MMP_HUNG = `MCP servers need attention:\n  hung: still connecting\n${LIST_HINT}`;
+// Epi's own report at session_shutdown, for what Pi has not reported: Pi's shape, Epi's shell hint.
+const EPI_BROKEN = `MCP servers need attention:\n${BROKEN_LINE}\n${LIST_HINT}`;
+const EPI_HUNG = `MCP servers need attention:\n  hung: still connecting\n${LIST_HINT}`;
 const STILL_CONNECTING = "MCP servers are still connecting; their tools become available once connected.\n";
 const hungServer = (fixtureArgs, exposure) => ({
   command: process.execPath,
   args: fixtureArgs,
-  env: { MMP_FIXTURE_HANG_INITIALIZE: "1" },
+  env: { EPI_FIXTURE_HANG_INITIALIZE: "1" },
   timeout: 30,
   ...(exposure === undefined ? {} : { exposure }),
 });
@@ -446,7 +446,7 @@ for (const mode of ["print", "json"]) {
     test(`${mode} mode: a working ${exposure} server produces no stderr diagnostic (no false alarm) (F3, D40)`, (t) => {
       const { args: fixtureArgs, marker } = fixtureServerArgs();
       const result = runNonTuiMcp(t, mode, {
-        mcpServers: { fixture: { command: process.execPath, args: fixtureArgs, exposure, env: { MMP_FIXTURE_VALUE: "fixture-ok" } } },
+        mcpServers: { fixture: { command: process.execPath, args: fixtureArgs, exposure, env: { EPI_FIXTURE_VALUE: "fixture-ok" } } },
       });
       const context = `marker=${marker}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
       assert.equal(result.status, 0, context);
@@ -479,8 +479,8 @@ for (const mode of ["print", "json"]) {
     assertCleanStdout(mode, result, context);
   });
 
-  // Review 1 finding 3: a server that needs a sign-in gets the exact mmp command for it.
-  test(`${mode} mode: a server that needs sign-in is reported with "mmp mcp login <server>"`, async (t) => {
+  // Review 1 finding 3: a server that needs a sign-in gets the exact epi command for it.
+  test(`${mode} mode: a server that needs sign-in is reported with "epi mcp login <server>"`, async (t) => {
     const oauth = await startOAuthMcpServer();
     t.after(() => oauth.close());
     const result = await runNonTuiMcpAsync(t, mode, { mcpServers: { remote: { url: oauth.url, exposure: "direct" } } });
@@ -489,7 +489,7 @@ for (const mode of ["print", "json"]) {
     assert.equal(
       result.stderr,
       'MCP servers need attention:\n  remote: needs sign-in\nRun /mcp to fix.\n' +
-        'From the shell: run "mmp mcp list" to see why, or "mmp mcp login remote" to sign in.\n',
+        'From the shell: run "epi mcp list" to see why, or "epi mcp login remote" to sign in.\n',
       context,
     );
     assertCleanStdout(mode, result, context);
@@ -502,16 +502,16 @@ for (const mode of ["print", "json"]) {
     const { args: fixtureArgs, marker } = fixtureServerArgs();
     const result = runNonTuiMcp(t, mode, { mcpServers: { hung: hungServer(fixtureArgs) } }, {
       delayed: true,
-      env: { MMP_TEST_MCP_STARTUP_WAIT_MS: "500" },
+      env: { EPI_TEST_MCP_STARTUP_WAIT_MS: "500" },
     });
     const context = `marker=${marker}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
     assert.equal(result.status, 0, context);
-    assert.equal(result.stderr, `${MMP_HUNG}\n`, context);
+    assert.equal(result.stderr, `${EPI_HUNG}\n`, context);
     assertCleanStdout(mode, result, context);
   });
 
   // Pi's reportProblems() waits for every startup connection, so a hung server holds back the report
-  // of one that already failed past the end of the run; MMP reports it at session_shutdown instead.
+  // of one that already failed past the end of the run; Epi reports it at session_shutdown instead.
   test(`${mode} mode: a failed server is reported even while a hung one holds Pi's own report back`, (t) => {
     const { args: fixtureArgs, marker } = fixtureServerArgs();
     const result = runNonTuiMcp(t, mode, {
@@ -519,7 +519,7 @@ for (const mode of ["print", "json"]) {
     });
     const context = `marker=${marker}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
     assert.equal(result.status, 0, context);
-    assert.equal(result.stderr, `${MMP_BROKEN}\n`, context);
+    assert.equal(result.stderr, `${EPI_BROKEN}\n`, context);
     assertCleanStdout(mode, result, context);
   });
 }
@@ -528,19 +528,19 @@ for (const mode of ["print", "json"]) {
 // script names, the script's call fails, and Pi's report reaches stderr.
 test("print mode: a failed codemode server that a codemode script uses is reported on stderr", (t) => {
   const root = createFixture(t);
-  const mmpHome = join(root, "home");
-  mkdirSync(mmpHome, { recursive: true });
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
   const driver = fileURLToPath(new URL("./fixtures/faux-codemode-call.mjs", import.meta.url));
-  writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", driver] });
-  writeJson(join(mmpHome, "mcp.json"), { mcpServers: { broken: { command: "/nonexistent/x" } } });
-  const result = spawnSync(process.execPath, [cliPath, "--no-project", "--model", "mmp-faux/codemode-call", "-p", "go"], {
+  writeJson(join(epiHome, "epi.json"), { version: 1, extensions: ["epi:mcp", driver] });
+  writeJson(join(epiHome, "mcp.json"), { mcpServers: { broken: { command: "/nonexistent/x" } } });
+  const result = spawnSync(process.execPath, [cliPath, "--no-project", "--model", "epi-faux/codemode-call", "-p", "go"], {
     encoding: "utf8",
     env: {
       PATH: process.env.PATH,
       HOME: root,
-      MMP_HOME: mmpHome,
-      MMP_OFFLINE: "1",
-      MMP_TEST_CODEMODE_SCRIPT: "return await tools.mcp__broken__echo({ text: 'x' });",
+      EPI_HOME: epiHome,
+      EPI_OFFLINE: "1",
+      EPI_TEST_CODEMODE_SCRIPT: "return await tools.mcp__broken__echo({ text: 'x' });",
     },
     timeout: 30_000,
   });
@@ -551,17 +551,17 @@ test("print mode: a failed codemode server that a codemode script uses is report
 });
 
 // A server that never answers "initialize" must not hold up the first prompt past Pi's own startup
-// bound (createMcpExtension's startupWaitMs, 10 s by default; MMP passes none), and must not hold
+// bound (createMcpExtension's startupWaitMs, 10 s by default; Epi passes none), and must not hold
 // up the exit either (dogfood D3): Pi's McpServerConnection.close() does not reach a connect still
 // in flight, so the pending "initialize" request used to keep the process alive until the server's
-// request timeout (Pi's default 60 s; same in plain Pi). mmp:mcp now closes that transport at
+// request timeout (Pi's default 60 s; same in plain Pi). epi:mcp now closes that transport at
 // session_shutdown. The timeout here is 30 s so "exits in < 15 s" can only pass with the fix. Only
 // a server with direct tools is waited for (Pi 0.99.2), and only that wait running out is reported
-// -- in Pi's own words, then by MMP naming the server at the end (review 1 finding 2); a hung
+// -- in Pi's own words, then by Epi naming the server at the end (review 1 finding 2); a hung
 // codemode server in a short run is just still connecting in the background (D40).
 for (const mode of ["print", "json"]) {
   for (const [exposure, stderr, bound] of [
-    ["direct", `${STILL_CONNECTING}${MMP_HUNG}\n`, 20_000],
+    ["direct", `${STILL_CONNECTING}${EPI_HUNG}\n`, 20_000],
     ["codemode", "", 8_000],
   ]) {
     test(`${mode} mode: a ${exposure} server that never answers initialize ${stderr ? "is reported as still connecting" : "is not reported"} and holds up neither the prompt nor the exit`, (t) => {
@@ -584,17 +584,17 @@ for (const mode of ["print", "json"]) {
 // Dogfood D6: when Pi's MCP startup chain throws after reading the config (here: every
 // McpServerConnection constructor, via a module hook on Pi's extensions/mcp/runtime.js), Pi only
 // calls ctx.ui.notify("MCP failed to load: ...") -- a no-op in print/json mode -- and no server gets
-// a connection. MMP used to call each server "still connecting" and drop the real error. Direct
+// a connection. Epi used to call each server "still connecting" and drop the real error. Direct
 // tools, so Pi's first prompt waits for the startup chain and the failure is known before the reply.
 for (const mode of ["print", "json"]) {
   test(`${mode} mode: a failure in Pi's MCP startup is reported once on stderr, not as servers still connecting (D6)`, (t) => {
     const root = createFixture(t);
-    const mmpHome = join(root, "home");
-    mkdirSync(mmpHome, { recursive: true });
+    const epiHome = join(root, "home");
+    mkdirSync(epiHome, { recursive: true });
     const driver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
     const hooks = fileURLToPath(new URL("./fixtures/mcp-connection-throws.mjs", import.meta.url));
-    writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", driver] });
-    writeJson(join(mmpHome, "mcp.json"), {
+    writeJson(join(epiHome, "epi.json"), { version: 1, extensions: ["epi:mcp", driver] });
+    writeJson(join(epiHome, "mcp.json"), {
       mcpServers: {
         one: { command: "node", args: [fixtureServerPath], exposure: "direct" },
         two: { command: "node", args: [fixtureServerPath], exposure: "direct" },
@@ -603,10 +603,10 @@ for (const mode of ["print", "json"]) {
     const modeArgs = mode === "json" ? ["--mode", "json", "hi"] : ["-p", "hi"];
     const result = spawnSync(
       process.execPath,
-      ["--import", hooks, cliPath, "--no-project", "--model", "mmp-faux/echo", ...modeArgs],
+      ["--import", hooks, cliPath, "--no-project", "--model", "epi-faux/echo", ...modeArgs],
       {
         encoding: "utf8",
-        env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" },
+        env: { PATH: process.env.PATH, HOME: root, EPI_HOME: epiHome, EPI_OFFLINE: "1" },
         timeout: 30_000,
       },
     );
@@ -620,15 +620,15 @@ for (const mode of ["print", "json"]) {
 // Runs one "hi" prompt in `--mode rpc` and ends the session once the turn is over.
 async function runRpcMcp(t, mcpConfig, { nodeArgs = [], extensions = [], cliArgs = [] } = {}) {
   const root = createFixture(t);
-  const mmpHome = join(root, "home");
-  mkdirSync(mmpHome, { recursive: true });
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
   const driver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
-  writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", driver, ...extensions] });
-  if (mcpConfig !== undefined) writeJson(join(mmpHome, "mcp.json"), mcpConfig);
+  writeJson(join(epiHome, "epi.json"), { version: 1, extensions: ["epi:mcp", driver, ...extensions] });
+  if (mcpConfig !== undefined) writeJson(join(epiHome, "mcp.json"), mcpConfig);
   const child = spawn(
     process.execPath,
-    [...nodeArgs, cliPath, "--no-project", "--model", "mmp-faux/echo", ...cliArgs, "--mode", "rpc"],
-    { env: { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" }, stdio: ["pipe", "pipe", "pipe"] },
+    [...nodeArgs, cliPath, "--no-project", "--model", "epi-faux/echo", ...cliArgs, "--mode", "rpc"],
+    { env: { PATH: process.env.PATH, HOME: root, EPI_HOME: epiHome, EPI_OFFLINE: "1" }, stdio: ["pipe", "pipe", "pipe"] },
   );
   const killTimer = setTimeout(() => child.kill(), 30_000);
   let stdout = "";
@@ -665,7 +665,7 @@ test("rpc mode: a failure in Pi's MCP startup reaches the client once, not stder
   assert.equal(stderr, "", context);
 });
 
-// Dogfood D52: Pi's own reportProblems() also reaches an rpc client, so MMP's per-server line on
+// Dogfood D52: Pi's own reportProblems() also reaches an rpc client, so Epi's per-server line on
 // stderr reported a failed server a second time.
 test("rpc mode: a server that fails to start is reported to the client once, not on stderr too (D52)", async (t) => {
   const { stderr, notifies, context } = await runRpcMcp(t, { mcpServers: { broken: { command: "/nonexistent/x", exposure: "direct" } } });
@@ -679,21 +679,21 @@ test("rpc mode: a failed server is reported to the client once even while a hung
   const { stderr, notifies, context } = await runRpcMcp(t, {
     mcpServers: { broken: { command: "/nonexistent/x", exposure: "direct" }, hung: hungServer(fixtureArgs) },
   });
-  assert.deepEqual(notifies, [[MMP_BROKEN, "warning"]], context);
+  assert.deepEqual(notifies, [[EPI_BROKEN, "warning"]], context);
   assert.equal(stderr, "", context);
 });
 
 // Pi says "still connecting" itself once its 10 s wait for servers with direct tools runs out, without
-// naming the server; MMP names it when the session ends (review 1 finding 2).
+// naming the server; Epi names it when the session ends (review 1 finding 2).
 test("rpc mode: a direct server still connecting after Pi's startup wait is reported to the client once (D52)", async (t) => {
   const { args: fixtureArgs } = fixtureServerArgs();
   const { stderr, notifies, context } = await runRpcMcp(t, { mcpServers: { hung: hungServer(fixtureArgs, "direct") } });
-  assert.deepEqual(notifies, [[STILL_CONNECTING.trimEnd(), "info"], [MMP_HUNG, "warning"]], context);
+  assert.deepEqual(notifies, [[STILL_CONNECTING.trimEnd(), "info"], [EPI_HUNG, "warning"]], context);
   assert.equal(stderr, "", context);
 });
 
 // Review 1 finding 1: -p/json drop Pi's unreachable-tools warning, but an rpc client gets it, as Pi
-// sends it (MMP's filter applies only to the stderr copy).
+// sends it (Epi's filter applies only to the stderr copy).
 test("rpc mode: --no-tools with a working server still sends Pi's unreachable-tools warning to the client", async (t) => {
   const { args: fixtureArgs } = fixtureServerArgs();
   const { stderr, notifies, context } = await runRpcMcp(
@@ -711,7 +711,7 @@ test("rpc mode: --no-tools with a working server still sends Pi's unreachable-to
 
 // A server registered after startup (here: by the first prompt) connects in the background, like
 // every server whose tools are not waited for; Pi 1.0 says nothing about it still connecting, and
-// MMP no longer does either (it used to, before Pi 0.99.2's background connects; D40, D52).
+// Epi no longer does either (it used to, before Pi 0.99.2's background connects; D40, D52).
 test("rpc mode: a later-registered server still connecting is not reported (D40)", async (t) => {
   const { args: fixtureArgs } = fixtureServerArgs();
   const root = createFixture(t);
@@ -728,33 +728,33 @@ test("rpc mode: a later-registered server still connecting is not reported (D40)
 // ── Offline end-to-end: real stdio fixture server, codemode + direct calls, cleanup ────────────
 
 test("declared MCP servers: codemode call, direct call, env expansion, and child-process cleanup on exit", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-mcp-e2e-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-mcp-e2e-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const mmpHome = join(root, "home", ".mmp");
-  mkdirSync(mmpHome, { recursive: true });
+  const epiHome = join(root, "home", ".epi");
+  mkdirSync(epiHome, { recursive: true });
   const driver = fileURLToPath(new URL("./fixtures/faux-mcp-driver.mjs", import.meta.url));
   const { args: fixtureArgs, marker } = fixtureServerArgs();
 
-  writeJson(join(mmpHome, "mcp.json"), {
+  writeJson(join(epiHome, "mcp.json"), {
     mcpServers: {
       fixture: {
         command: process.execPath,
         args: fixtureArgs,
-        env: { MMP_FIXTURE_VALUE: "${MMP_MCP_FIXTURE_VALUE}" },
+        env: { EPI_FIXTURE_VALUE: "${EPI_MCP_FIXTURE_VALUE}" },
       },
       fixturedirect: {
         command: process.execPath,
         args: fixtureArgs,
-        env: { MMP_FIXTURE_VALUE: "${MMP_MCP_FIXTURE_VALUE}" },
+        env: { EPI_FIXTURE_VALUE: "${EPI_MCP_FIXTURE_VALUE}" },
         exposure: "direct",
       },
     },
   });
-  writeJson(join(mmpHome, "mmp.json"), { version: 1, extensions: ["mmp:mcp", driver] });
+  writeJson(join(epiHome, "epi.json"), { version: 1, extensions: ["epi:mcp", driver] });
 
   const result = spawnSync(
     process.execPath,
-    [cliPath, "--no-project", "--model", "mmp-faux/scripted", "-p", "go"],
+    [cliPath, "--no-project", "--model", "epi-faux/scripted", "-p", "go"],
     {
       cwd: root,
       encoding: "utf8",
@@ -763,10 +763,10 @@ test("declared MCP servers: codemode call, direct call, env expansion, and child
       env: {
         PATH: process.env.PATH,
         HOME: join(root, "home"),
-        MMP_HOME: mmpHome,
-        MMP_MCP_FIXTURE_VALUE: "fixture-ok",
+        EPI_HOME: epiHome,
+        EPI_MCP_FIXTURE_VALUE: "fixture-ok",
         // Offline: a model-catalog refresh landing mid-run occasionally dropped the faux provider.
-        MMP_OFFLINE: "1",
+        EPI_OFFLINE: "1",
       },
     },
   );
@@ -801,20 +801,20 @@ test("declared MCP servers: codemode call, direct call, env expansion, and child
 const tuiHarness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 
 function runTuiApp(t, extensions, steps, mcpConfig) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-mcp-lifecycle-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-mcp-lifecycle-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeJson(join(home, ".mmp", "mmp.json"), { version: 1, extensions });
-  writeJson(join(home, ".mmp", "mcp.json"), mcpConfig);
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeJson(join(home, ".epi", "epi.json"), { version: 1, extensions });
+  writeJson(join(home, ".epi", "mcp.json"), mcpConfig);
   const result = spawnSync(process.execPath, [tuiHarness], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ steps }),
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ steps }),
     },
     encoding: "utf8",
     timeout: 60_000,
@@ -828,7 +828,7 @@ test("/new and /reload leave exactly one MCP child process running, never zero o
   const { args: fixtureArgs, marker } = fixtureServerArgs();
   const { marks, exit, output } = runTuiApp(
     t,
-    ["mmp:mcp", driver],
+    ["epi:mcp", driver],
     [
       ["waitReady"],
       ["type", "hi"], ["key", "enter"], ["wait", 800], ["mark", "firstReply"],
@@ -864,17 +864,17 @@ test("/new and /reload leave exactly one MCP child process running, never zero o
   assert.equal(leftovers, "", `MCP stdio server outlived the whole app\n${context}`);
 });
 
-test("the duplicate-/mcp error stops MMP's own TUI before it starts, with the same message", (t) => {
+test("the duplicate-/mcp error stops Epi's own TUI before it starts, with the same message", (t) => {
   const rogue = fileURLToPath(new URL("./fixtures/mcp-duplicate-rogue.mjs", import.meta.url));
   const driver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
-  const root = mkdtempSync(join(tmpdir(), "mmp-mcp-duplicate-tui-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-mcp-duplicate-tui-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeJson(join(home, ".mmp", "mmp.json"), { version: 1, extensions: ["mmp:mcp", rogue, driver] });
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeJson(join(home, ".epi", "epi.json"), { version: 1, extensions: ["epi:mcp", rogue, driver] });
   const result = spawnSync(process.execPath, [tuiHarness], {
     cwd: root,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_TUI_HARNESS: JSON.stringify({ steps: [["waitReady"]] }) },
+    env: { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1", EPI_TUI_HARNESS: JSON.stringify({ steps: [["waitReady"]] }) },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -893,7 +893,7 @@ test("a codemode call's nested MCP tool renders exactly once, not duplicated alo
   const { args: fixtureArgs, marker } = fixtureServerArgs();
   const { marks, exit, output } = runTuiApp(
     t,
-    ["mmp:mcp", driver],
+    ["epi:mcp", driver],
     [
       ["waitReady"],
       ["type", "go"], ["key", "enter"], ["wait", 3000],
@@ -902,8 +902,8 @@ test("a codemode call's nested MCP tool renders exactly once, not duplicated alo
     ],
     {
       mcpServers: {
-        fixture: { command: process.execPath, args: fixtureArgs, env: { MMP_FIXTURE_VALUE: "fixture-ok" } },
-        fixturedirect: { command: process.execPath, args: fixtureArgs, env: { MMP_FIXTURE_VALUE: "fixture-ok" }, exposure: "direct" },
+        fixture: { command: process.execPath, args: fixtureArgs, env: { EPI_FIXTURE_VALUE: "fixture-ok" } },
+        fixturedirect: { command: process.execPath, args: fixtureArgs, env: { EPI_FIXTURE_VALUE: "fixture-ok" }, exposure: "direct" },
       },
     },
   );

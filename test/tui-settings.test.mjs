@@ -1,4 +1,4 @@
-// /settings (docs/tui-design.md 4.6): MMP's cut-down version of Pi's SettingsSelectorComponent.
+// /settings (docs/tui-design.md 4.6): Epi's cut-down version of Pi's SettingsSelectorComponent.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -10,17 +10,17 @@ import test from "node:test";
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
-/** A temp HOME/MMP_HOME and project dir; `run` can be called more than once to restart the app on
+/** A temp HOME/EPI_HOME and project dir; `run` can be called more than once to restart the app on
  * the same settings.json. */
 function makeEnv(t, { extension = "faux-echo.mjs", settings } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-settings-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-settings-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const project = join(root, "project");
-  mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
+  mkdirSync(join(home, ".epi", "pi"), { recursive: true });
   mkdirSync(project);
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture(extension)] }));
-  const settingsFile = join(home, ".mmp", "pi", "settings.json");
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fixture(extension)] }));
+  const settingsFile = join(home, ".epi", "pi", "settings.json");
   if (settings !== undefined) writeFileSync(settingsFile, JSON.stringify(settings));
   return {
     root, home, project, settingsFile,
@@ -29,8 +29,8 @@ function makeEnv(t, { extension = "faux-echo.mjs", settings } = {}) {
       const result = spawnSync(process.execPath, [harness], {
         cwd: project,
         env: {
-          PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", ...env,
-          MMP_TUI_HARNESS: JSON.stringify({ steps, ...(rows ? { rows } : {}) }),
+          PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1", ...env,
+          EPI_TUI_HARNESS: JSON.stringify({ steps, ...(rows ? { rows } : {}) }),
         },
         encoding: "utf8",
         timeout: 60_000,
@@ -63,17 +63,17 @@ const SHOWN = [
 ];
 // Opens a submenu instead of cycling values (the per-model thinking levels, D29).
 const SUBMENU = "Default thinking level per model";
-// Pi's items MMP leaves out, and why: docs/tui-design.md 4.6. "Show images"/"Image width" only
+// Pi's items Epi leaves out, and why: docs/tui-design.md 4.6. "Show images"/"Image width" only
 // exist in Pi's list when the terminal can draw images.
 const HIDDEN = [
   "Show images", "Image width", "Editor padding", "Output padding", "Clear on shrink",
   "Hide thinking", "Mermaid diagrams", "Cache miss notices", "Collapse changelog", "Quiet startup",
   "Install telemetry", "Default project trust", "Warnings", "TUI mode", "Fullscreen exit output", "Theme",
 ];
-// Pi's wording names keys or behaviour MMP does not have (see src/tui/settings-command.ts).
+// Pi's wording names keys or behaviour Epi does not have (see src/tui/settings-command.ts).
 const OWN_DESCRIPTION = new Set(["steering-mode", "follow-up-mode"]);
 
-test("/settings lists MMP's 18 items and none of the ones it leaves out", (t) => {
+test("/settings lists Epi's 18 items and none of the ones it leaves out", (t) => {
   const env = makeEnv(t);
   const { marks } = env.run([
     ["waitReady"], ["mark", "start"],
@@ -99,12 +99,12 @@ test("Esc closes /settings and gives the prompt its keys back (e2e K1: Shift+Tab
     ["raw", "\x1b[Z"], ["waitFor", "thinker (high)"], ["mark", "cycled"],
     ["key", "ctrl+v"], ["waitFor", "PASTED-AFTER-SETTINGS"], ["mark", "pasted"],
     ...quit,
-  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboard } });
+  ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboard } });
   assert.match(after(marks, "closed", "cycled"), /thinker \(high\)/);
   assert.match(after(marks, "cycled", "pasted"), /❯ PASTED-AFTER-SETTINGS/);
 });
 
-test("every item saves to ~/.mmp/pi/settings.json, nothing lands under ~/.pi or the project's .pi/, and a restart reads it", (t) => {
+test("every item saves to ~/.epi/pi/settings.json, nothing lands under ~/.pi or the project's .pi/, and a restart reads it", (t) => {
   const env = makeEnv(t);
   const { marks } = env.run([
     ["waitReady"],
@@ -177,7 +177,7 @@ test("Default thinking level per model (D29): the submenu saves a model's level,
   const { marks } = env.run([
     ["waitReady"], ["waitFor", "thinker-a (medium)", { all: true }], ["mark", "start"],
     ...openModelThinking, ["mark", "models"],
-    ["type", "thinker-b"], ["key", "enter"], ["waitFor", "Thinking Level for thinker-b [mmp-faux]"], ["mark", "levels"],
+    ["type", "thinker-b"], ["key", "enter"], ["waitFor", "Thinking Level for thinker-b [epi-faux]"], ["mark", "levels"],
     // off, minimal, low, medium, high: nothing saved yet, so "off" is selected.
     ["key", "down"], ["key", "down"], ["key", "down"], ["key", "down"], ["key", "enter"],
     ["waitFor", "Per-Model Thinking Level"], ["mark", "saved"],
@@ -189,23 +189,23 @@ test("Default thinking level per model (D29): the submenu saves a model's level,
   const models = after(marks, "start", "models");
   assert.match(models, /Step 1\/2 · Select a model to configure/);
   // Pi lists the current model first.
-  assert.match(models, /thinker-a \[mmp-faux\][\s\S]*thinker-b \[mmp-faux\]/);
+  assert.match(models, /thinker-a \[epi-faux\][\s\S]*thinker-b \[epi-faux\]/);
   const levels = after(marks, "models", "levels");
   assert.match(levels, /Step 2\/2 · Select default thinking level for this model/);
   assert.match(levels, /off +No reasoning[\s\S]*high +Deep reasoning/);
   assert.doesNotMatch(levels, /clear override/);
-  assert.match(after(marks, "levels", "saved"), /thinker-b \[mmp-faux\] +high/);
-  assert.deepEqual(env.readSettings().modelThinkingLevels, { "mmp-faux/thinker-b": "high" });
+  assert.match(after(marks, "levels", "saved"), /thinker-b \[epi-faux\] +high/);
+  assert.deepEqual(env.readSettings().modelThinkingLevels, { "epi-faux/thinker-b": "high" });
   // Another model's level leaves the current one alone.
   assert.match(after(marks, "closed", "prompt"), /thinker-a \(medium\)/);
   assert.doesNotMatch(after(marks, "closed", "prompt"), /thinker-a \(high\)/);
-  assert.match(after(marks, "prompt", "switched"), /Model: mmp-faux\/thinker-b/);
+  assert.match(after(marks, "prompt", "switched"), /Model: epi-faux\/thinker-b/);
 });
 
 test("Default thinking level per model (D29): the current model's level applies at once; clearing it reverts to the global default", (t) => {
   const env = makeEnv(t, {
     extension: "faux-two-reasoning-models.mjs",
-    settings: { defaultThinkingLevel: "minimal", modelThinkingLevels: { "mmp-faux/thinker-a": "high" } },
+    settings: { defaultThinkingLevel: "minimal", modelThinkingLevels: { "epi-faux/thinker-a": "high" } },
   });
   const { marks } = env.run([
     ["waitReady"], ["waitFor", "thinker-a (high)", { all: true }], ["mark", "start"],
@@ -232,7 +232,7 @@ test("Autocomplete max items applies at once and at the next start", (t) => {
   // `/` lists login, logout, model, new, quit, compact, resume, … : row 6 only shows at 7 or more.
   const { marks } = env.run([
     ["waitReady"], ["mark", "start"],
-    ["type", "/"], ["waitFor", "Quit MMP"], ["mark", "default"], ["key", "esc"], ["key", "ctrl+c"], ["wait", 150],
+    ["type", "/"], ["waitFor", "Quit Epi"], ["mark", "default"], ["key", "esc"], ["key", "ctrl+c"], ["wait", 150],
     ...change("Autocomplete max items"), ["mark", "changed"],
     ["type", "/"], ["waitFor", "Resume a different session"], ["mark", "seven"], ["key", "esc"],
     ...quit,
@@ -325,7 +325,7 @@ test("extension autocomplete providers across /new and a cancelled switch, like 
 
 // Review 2 N1: Pi's resetExtensionUI rebuilds autocomplete right after clearing the wrappers, so the
 // old session's wrapper (and its soon-stale ctx) isn't asked for suggestions while /reload or a
-// switch runs. Before, it was, and its ctx.cwd threw "extension ctx is stale", crashing MMP.
+// switch runs. Before, it was, and its ctx.cwd threw "extension ctx is stale", crashing Epi.
 test("typing an extension's trigger during /reload doesn't call the old session's provider", (t) => {
   const env = makeEnv(t, { extension: "settings-ext-autocomplete.mjs" });
   const { marks } = env.run([
@@ -340,7 +340,7 @@ test("typing an extension's trigger during /reload doesn't call the old session'
 });
 
 test("Fullscreen scrollbar 'always' shows the bar at once, from settings.json at startup, and after /reload", (t) => {
-  // "┃" is the scrollbar thumb; MMP draws it nowhere else, and in "auto" it only shows while scrolling.
+  // "┃" is the scrollbar thumb; Epi draws it nowhere else, and in "auto" it only shows while scrolling.
   const live = makeEnv(t);
   const { marks } = live.run([
     ["waitReady"], ["mark", "start"], ...change("Fullscreen scrollbar"), ["mark", "changed"], ...quit,
@@ -375,8 +375,8 @@ test("Show hardware cursor turns the terminal cursor on at once and at startup",
 });
 
 test("Show hardware cursor ignores Pi's PI_HARDWARE_CURSOR: unset in settings.json means off, and /settings says false", (t) => {
-  // Pi's getter falls back to PI_HARDWARE_CURSOR=1; MMP does not honour a user's Pi environment
-  // (the MMP_SESSION_DIR precedent, docs/cli-design.md).
+  // Pi's getter falls back to PI_HARDWARE_CURSOR=1; Epi does not honour a user's Pi environment
+  // (the EPI_SESSION_DIR precedent, docs/cli-design.md).
   const env = makeEnv(t);
   const { marks } = env.run([
     ["waitReady"], ["type", "x"], ["wait", 100], ["rawMark", "typed"], ["key", "ctrl+c"], ["wait", 100],
@@ -416,7 +416,7 @@ test("Ctrl+X copies the active selection when copy-on-select is off, otherwise t
   const ctrlX = [["key", "ctrl+x"], ["waitFor", "Copied!"]];
   const clipboard = (env) => {
     const file = join(env.root, "clipboard.txt");
-    return { file, env: { MMP_TEST_CLIPBOARD_FILE: file } };
+    return { file, env: { EPI_TEST_CLIPBOARD_FILE: file } };
   };
 
   // Off, with a selection: the selection goes out as OSC 52, as pi-tui's own selection copy does.
@@ -473,20 +473,20 @@ test("Fullscreen wheel scrolling sets lines per wheel event at once and at start
   assert.match(after(started, "before", "wheeled"), /Open model selector/);
 });
 
-test("MMP's items match Pi's SettingsSelectorComponent: same order, labels, descriptions and values", async (t) => {
+test("Epi's items match Pi's SettingsSelectorComponent: same order, labels, descriptions and values", async (t) => {
   // Pi's modules find their theme files under PI_CODING_AGENT_DIR; never let them look in ~/.pi.
-  const agentDir = mkdtempSync(join(tmpdir(), "mmp-settings-drift-"));
+  const agentDir = mkdtempSync(join(tmpdir(), "epi-settings-drift-"));
   t.after(() => rmSync(agentDir, { recursive: true, force: true }));
   process.env.PI_CODING_AGENT_DIR = agentDir;
-  // Pi's getShowHardwareCursor reads PI_HARDWARE_CURSOR, MMP's value never does; compare the two
+  // Pi's getShowHardwareCursor reads PI_HARDWARE_CURSOR, Epi's value never does; compare the two
   // with it unset so the developer's environment can't make them differ.
   const hardwareCursorEnv = process.env.PI_HARDWARE_CURSOR;
   delete process.env.PI_HARDWARE_CURSOR;
   t.after(() => { if (hardwareCursorEnv !== undefined) process.env.PI_HARDWARE_CURSOR = hardwareCursorEnv; });
   const { SettingsManager, SettingsSelectorComponent } = await import("@earendil-works/pi-coding-agent");
-  const { installMmpTheme } = await import("../dist/tui/theme.js");
+  const { installEpiTheme } = await import("../dist/tui/theme.js");
   const { settingsItems } = await import("../dist/tui/settings-command.js");
-  const theme = installMmpTheme(agentDir, "dark");
+  const theme = installEpiTheme(agentDir, "dark");
 
   const settings = SettingsManager.inMemory();
   const config = {
@@ -542,18 +542,18 @@ test("MMP's items match Pi's SettingsSelectorComponent: same order, labels, desc
     steeringMode: settings.getSteeringMode(),
     followUpMode: settings.getFollowUpMode(),
   };
-  const mmp = settingsItems({ session: () => session }).map((setting) => setting.item);
+  const epi = settingsItems({ session: () => session }).map((setting) => setting.item);
   const piLabels = piItems.map((item) => item.label);
-  assert.deepEqual(mmp.map((item) => item.label), piLabels.filter((label) => mmp.some((item) => item.label === label)),
-    "MMP keeps Pi's order");
-  assert.deepEqual(mmp.map((item) => item.label), SHOWN);
+  assert.deepEqual(epi.map((item) => item.label), piLabels.filter((label) => epi.some((item) => item.label === label)),
+    "Epi keeps Pi's order");
+  assert.deepEqual(epi.map((item) => item.label), SHOWN);
   const left = piLabels.filter((label) => !SHOWN.includes(label));
   assert.deepEqual(left.filter((label) => !HIDDEN.includes(label)), [],
-    "Pi has an item MMP neither shows nor lists as hidden: decide (docs/tui-design.md 4.6)");
+    "Pi has an item Epi neither shows nor lists as hidden: decide (docs/tui-design.md 4.6)");
   assert.deepEqual(HIDDEN.filter((label) => !left.includes(label) && label !== "Show images" && label !== "Image width"), [],
     "an item listed as hidden is gone from Pi");
 
-  for (const item of mmp) {
+  for (const item of epi) {
     const piItem = piItems.find((candidate) => candidate.label === item.label);
     assert.equal(item.currentValue, piItem.value, `${item.id}: current value`);
     if (!OWN_DESCRIPTION.has(item.id)) assert.equal(item.description, piItem.description, `${item.id}: description`);
@@ -569,12 +569,12 @@ test("MMP's items match Pi's SettingsSelectorComponent: same order, labels, desc
       piCycle.push(read(selector).value);
     }
     const start = item.values.indexOf(item.currentValue);
-    const mmpCycle = item.values.map((_, offset) => item.values[(start + 1 + offset) % item.values.length]);
-    assert.deepEqual(mmpCycle, piCycle, `${item.id}: values`);
+    const epiCycle = item.values.map((_, offset) => item.values[(start + 1 + offset) % item.values.length]);
+    assert.deepEqual(epiCycle, piCycle, `${item.id}: values`);
   }
 
-  // Review 1 F4: the milliseconds behind MMP's copy of HTTP_IDLE_TIMEOUT_CHOICES. Save each label
-  // through MMP's item, then check Pi's selector shows the same label for the saved value.
+  // Review 1 F4: the milliseconds behind Epi's copy of HTTP_IDLE_TIMEOUT_CHOICES. Save each label
+  // through Epi's item, then check Pi's selector shows the same label for the saved value.
   const timeout = settingsItems({ session: () => session, applySettings() {}, notice() {} })
     .find((setting) => setting.item.id === "http-idle-timeout");
   for (const label of timeout.item.values) {
@@ -584,12 +584,12 @@ test("MMP's items match Pi's SettingsSelectorComponent: same order, labels, desc
     assert.equal(read(selector).value, label, `http-idle-timeout: Pi's label for ${settings.getHttpIdleTimeoutMs()} ms`);
   }
 
-  // D29: MMP's copy of Pi's model-thinking submenu draws what Pi's does at each step: the models
+  // D29: Epi's copy of Pi's model-thinking submenu draws what Pi's does at each step: the models
   // (current first, then the default model, saved levels beside them), a reasoning model's levels
   // with the saved one ticked and "(clear override)", a non-reasoning model's "off", the search box
   // filtering the models, and the loop back to the models after saving. No global default level is
   // set, so "(clear override)" shows Pi's DEFAULT_THINKING_LEVEL (core/defaults.js, not exported;
-  // read by path here only) against MMP's copy.
+  // read by path here only) against Epi's copy.
   const { modelThinkingSubmenu } = await import("../dist/tui/model-thinking-submenu.js");
   const { DEFAULT_THINKING_LEVEL } = await import(new URL("./core/defaults.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href);
   const model = (provider, id, reasoning) => ({ provider, id, name: id, reasoning, input: ["text"] });
@@ -598,7 +598,7 @@ test("MMP's items match Pi's SettingsSelectorComponent: same order, labels, desc
   thinking.setModelThinkingLevel("alpha", "reasoner", "high");
   // The default model sorts last by provider, so only the default-model rule puts it second.
   thinking.setDefaultModelAndProvider("zeta", "plain-model");
-  /** Pi's and MMP's submenus over the same settings, opened as Pi's showSettingsSelector does. */
+  /** Pi's and Epi's submenus over the same settings, opened as Pi's showSettingsSelector does. */
   const submenus = (currentModel) => {
     const pi = new SettingsSelectorComponent({
       ...config, availableDefaultModels: models, currentModel,
@@ -608,19 +608,19 @@ test("MMP's items match Pi's SettingsSelectorComponent: same order, labels, desc
     }, noop);
     for (const char of "Default thinking level per model") pi.getSettingsList().handleInput(char);
     pi.getSettingsList().handleInput("\r");
-    const mmp = modelThinkingSubmenu({
+    const epi = modelThinkingSubmenu({
       theme,
       tui: { requestRender() {} },
       session: () => ({ settingsManager: thinking, modelRuntime: { getAvailableSnapshot: () => models }, model: currentModel }),
     }, () => {});
-    return { pi, mmp };
+    return { pi, epi };
   };
   // Pi's selector draws a border above and below whatever the list shows.
   const drawn = (component, border) => component.render(100).map((line) => strip(line).trimEnd()).slice(border ? 1 : 0, border ? -1 : undefined);
-  const same = ({ pi, mmp }, step) => assert.deepEqual(drawn(mmp, false), drawn(pi, true), `model-thinking: ${step}`);
-  const both = ({ pi, mmp }, data) => {
+  const same = ({ pi, epi }, step) => assert.deepEqual(drawn(epi, false), drawn(pi, true), `model-thinking: ${step}`);
+  const both = ({ pi, epi }, data) => {
     pi.getSettingsList().handleInput(data);
-    mmp.handleInput(data);
+    epi.handleInput(data);
   };
 
   // No current model: the default model comes first and is preselected.
@@ -643,5 +643,5 @@ test("MMP's items match Pi's SettingsSelectorComponent: same order, labels, desc
   both(menus, DOWN);
   both(menus, "\r");
   same(menus, "back to the models after saving a level");
-  assert.equal(thinking.getAllModelThinkingLevels()["beta/other"], "minimal", "MMP's submenu saved the level");
+  assert.equal(thinking.getAllModelThinkingLevels()["beta/other"], "minimal", "Epi's submenu saved the level");
 });

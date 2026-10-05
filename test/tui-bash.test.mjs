@@ -7,26 +7,26 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { piTui } from "../dist/tui/pi-tui.js";
-import { createMmpTheme } from "../dist/tui/theme.js";
+import { createEpiTheme } from "../dist/tui/theme.js";
 import { truncateBashOutput, UserBashBlock } from "../dist/tui/bash-block.js";
 
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 function runApp(t, extensions, steps) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-bash-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-bash-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ steps }),
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ steps }),
     },
     encoding: "utf8",
     timeout: 60_000,
@@ -106,7 +106,7 @@ test("running another bash command while one is running is refused", (t) => {
 
 // ── pure unit tests: block rendering ────────────────────────────────────────
 
-const theme = createMmpTheme("dark");
+const theme = createEpiTheme("dark");
 
 function assertWidths(component, widths = [40, 80, 120]) {
   for (const width of widths) {

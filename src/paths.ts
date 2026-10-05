@@ -1,18 +1,18 @@
 import { homedir } from "node:os";
 import { isAbsolute, join, normalize } from "node:path";
 
-import { MmpConfigError } from "./errors.js";
+import { EpiConfigError } from "./errors.js";
 
-export interface MmpPaths {
-  mmpHome: string;
+export interface EpiPaths {
+  epiHome: string;
   agentDir: string;
   globalManifest: string;
 }
 
-/** The one home-directory resolution MMP uses everywhere it needs `~` (this file's own `~/.mmp`
+/** The one home-directory resolution Epi uses everywhere it needs `~` (this file's own `~/.epi`
  * default and skill-discovery.ts's fixed `~/.agents/skills` root): `environment.HOME` when set,
  * otherwise the real `os.homedir()`. A test that injects a fake HOME (never the real user's) then
- * gets a consistent `~/.mmp` default and `~/.agents/skills` root, not one real and one fake. In
+ * gets a consistent `~/.epi` default and `~/.agents/skills` root, not one real and one fake. In
  * production `environment` is `process.env`, where this is identical to calling `homedir()`
  * directly (it already reads `process.env.HOME` on POSIX). */
 export function resolveHomeDir(environment: NodeJS.ProcessEnv): string {
@@ -20,20 +20,20 @@ export function resolveHomeDir(environment: NodeJS.ProcessEnv): string {
   return configured !== undefined && configured.length > 0 ? configured : homedir();
 }
 
-export function resolveMmpPaths(
+export function resolveEpiPaths(
   environment: NodeJS.ProcessEnv = process.env,
-): MmpPaths {
-  const configuredHome = environment.MMP_HOME;
-  const mmpHome = configuredHome ?? join(resolveHomeDir(environment), ".mmp");
+): EpiPaths {
+  const configuredHome = environment.EPI_HOME;
+  const epiHome = configuredHome ?? join(resolveHomeDir(environment), ".epi");
 
-  if (mmpHome.length === 0 || !isAbsolute(mmpHome)) {
-    throw new MmpConfigError("MMP_HOME must be an absolute path");
+  if (epiHome.length === 0 || !isAbsolute(epiHome)) {
+    throw new EpiConfigError("EPI_HOME must be an absolute path");
   }
 
-  const normalizedHome = normalize(mmpHome);
+  const normalizedHome = normalize(epiHome);
   return {
-    mmpHome: normalizedHome,
+    epiHome: normalizedHome,
     agentDir: join(normalizedHome, "pi"),
-    globalManifest: join(normalizedHome, "mmp.json"),
+    globalManifest: join(normalizedHome, "epi.json"),
   };
 }

@@ -19,16 +19,16 @@ import {
 const NOW = new Date("2026-10-15T00:00:00Z");
 const LONG_AGO = new Date("2026-09-01T00:00:00Z");
 
-function makeCwd({ piVersion = "0.87.1", mmpVersion = "0.1.4" } = {}) {
-  const cwd = mkdtempSync(join(tmpdir(), "mmp-pi-upgrade-test-"));
+function makeCwd({ piVersion = "0.87.1", epiVersion = "0.1.4" } = {}) {
+  const cwd = mkdtempSync(join(tmpdir(), "epi-pi-upgrade-test-"));
   mkdirSync(join(cwd, "test"));
   writeFileSync(join(cwd, "test", "foundation.test.mjs"), "");
   writeFileSync(
     join(cwd, "package.json"),
     JSON.stringify(
       {
-        name: "mmp",
-        version: mmpVersion,
+        name: "epi",
+        version: epiVersion,
         dependencies: {
           "@earendil-works/pi-ai": piVersion,
           "@earendil-works/pi-coding-agent": piVersion,
@@ -42,7 +42,7 @@ function makeCwd({ piVersion = "0.87.1", mmpVersion = "0.1.4" } = {}) {
   writeFileSync(
     join(cwd, "package-lock.json"),
     JSON.stringify(
-      { name: "mmp", version: mmpVersion, lockfileVersion: 3, packages: { "": { name: "mmp", version: mmpVersion } } },
+      { name: "epi", version: epiVersion, lockfileVersion: 3, packages: { "": { name: "epi", version: epiVersion } } },
       null,
       2,
     ),
@@ -218,7 +218,7 @@ test("runPiUpgrade: rejects a 'v'-prefixed --version before writing package.json
   }
 });
 
-test("runPiUpgrade: newer version, gate passes -> bumps MMP patch version", () => {
+test("runPiUpgrade: newer version, gate passes -> bumps Epi patch version", () => {
   const cwd = makeCwd();
   try {
     const registry = fakeRegistry({ latestPi: "0.88.0" });
@@ -227,7 +227,7 @@ test("runPiUpgrade: newer version, gate passes -> bumps MMP patch version", () =
 
     assert.equal(result.exitCode, 0);
     assert.equal(result.upgraded, true);
-    assert.equal(result.mmpVersion, "0.1.5");
+    assert.equal(result.epiVersion, "0.1.5");
     assert.match(result.report, /0\.87\.1 → 0\.88\.0/);
     assert.match(result.report, /Gate: pass/);
 
@@ -254,7 +254,7 @@ test("runPiUpgrade: newer version, gate passes -> bumps MMP patch version", () =
 });
 
 // Regression test for the cron failure found reviewing the Pi 0.99 upgrade (docs/mcp-design.md):
-// pi-mcp-adapter was removed as a dependency once MMP switched to Pi's native MCP support, but the
+// pi-mcp-adapter was removed as a dependency once Epi switched to Pi's native MCP support, but the
 // upgrade script still read pkg.dependencies["pi-mcp-adapter"] and called `npm view
 // pi-mcp-adapter@undefined ...` -- which throws, caught by main()'s try/catch (visible: stderr +
 // exit 2), but blocks every future automated upgrade PR until fixed. The adapter-selection logic is
@@ -277,7 +277,7 @@ test("runPiUpgrade: runs cleanly against a package.json with no pi-mcp-adapter, 
   }
 });
 
-test("runPiUpgrade: gate failure -> exit 1, report lists failing tests, no MMP version bump, but still reports the real CHANGELOG (npm install succeeded)", () => {
+test("runPiUpgrade: gate failure -> exit 1, report lists failing tests, no Epi version bump, but still reports the real CHANGELOG (npm install succeeded)", () => {
   const cwd = makeCwd();
   try {
     mkdirSync(join(cwd, "node_modules", "@earendil-works", "pi-coding-agent"), { recursive: true });
@@ -291,7 +291,7 @@ test("runPiUpgrade: gate failure -> exit 1, report lists failing tests, no MMP v
 
     assert.equal(result.exitCode, 1);
     assert.equal(result.upgraded, false);
-    assert.equal(result.mmpVersion, undefined);
+    assert.equal(result.epiVersion, undefined);
     assert.match(result.report, /fail \(test\)/);
     assert.match(result.report, /regression in foo/);
     // The gate failed at the test step, so npm install (and the new CHANGELOG.md) DID succeed --
@@ -302,7 +302,7 @@ test("runPiUpgrade: gate failure -> exit 1, report lists failing tests, no MMP v
     const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
     // Dependencies were rewritten before the gate ran (that's what the gate tests)...
     assert.equal(pkg.dependencies["@earendil-works/pi-coding-agent"], "0.88.0");
-    // ...but the MMP version itself is untouched, since the gate didn't pass.
+    // ...but the Epi version itself is untouched, since the gate didn't pass.
     assert.equal(pkg.version, "0.1.4");
   } finally {
     rmSync(cwd, { recursive: true, force: true });

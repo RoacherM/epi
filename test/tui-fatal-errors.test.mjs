@@ -21,21 +21,21 @@ const harnessPath = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.m
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 test("/new failing after teardown is fatal: the alt screen is left cleanly and the process exits non-zero, naming the failure", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-fatal-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-fatal-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
   const result = spawnSync(process.execPath, ["--import", fixture("second-session-throws.mjs"), harnessPath], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
       // fatal() calls process.exit(1) directly (Pi's own handleFatalRuntimeError does too), which
       // cuts off the harness's own JSON stdout write -- so this checks the raw process exit and
       // stderr instead of the usual marks/JSON.
-      MMP_TUI_HARNESS: JSON.stringify({
+      EPI_TUI_HARNESS: JSON.stringify({
         args: ["--no-project"],
         steps: [
           ["waitReady"],
@@ -68,10 +68,10 @@ function writeSessionFile(path, cwd) {
 // runtime.importFromJsonl with the fatal handling (mirroring Pi's handleImportCommand,
 // interactive-mode.js ~5271-5311, and handleFatalRuntimeError, ~1557); passes after.
 test("/import failing after teardown is fatal: the alt screen is left cleanly and the process exits non-zero, naming the failure", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-fatal-import-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-fatal-import-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
   const sessionFile = join(root, "imported.jsonl");
   writeSessionFile(sessionFile, root);
   const result = spawnSync(process.execPath, ["--import", fixture("second-session-throws.mjs"), harnessPath], {
@@ -79,11 +79,11 @@ test("/import failing after teardown is fatal: the alt screen is left cleanly an
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
       // As in the /new case above: fatal() calls process.exit(1) directly, cutting off the harness's
       // JSON stdout write, so this checks the raw process exit and stderr instead of marks/JSON.
-      MMP_TUI_HARNESS: JSON.stringify({
+      EPI_TUI_HARNESS: JSON.stringify({
         args: ["--no-project"],
         steps: [
           ["waitReady"],
@@ -105,25 +105,25 @@ test("/import failing after teardown is fatal: the alt screen is left cleanly an
 });
 
 test("/switchto a session whose cwd no longer exists offers to continue in the current cwd instead of failing", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-fatal-missing-cwd-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-fatal-missing-cwd-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const gone = join(root, "gone");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
   mkdirSync(gone, { recursive: true });
   const sessionFile = join(root, "gone-session.jsonl");
   writeSessionFile(sessionFile, gone);
   rmSync(gone, { recursive: true, force: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("switchto-extension.mjs")] }));
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fixture("switchto-extension.mjs")] }));
 
   const result = spawnSync(process.execPath, [harnessPath], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({
         args: ["--no-project"],
         steps: [
           ["waitReady"],
@@ -148,25 +148,25 @@ test("/switchto a session whose cwd no longer exists offers to continue in the c
 });
 
 test("/switchto a session whose cwd no longer exists, cancelled, leaves the current session usable", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-fatal-missing-cwd-cancel-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-fatal-missing-cwd-cancel-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const gone = join(root, "gone");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
   mkdirSync(gone, { recursive: true });
   const sessionFile = join(root, "gone-session.jsonl");
   writeSessionFile(sessionFile, gone);
   rmSync(gone, { recursive: true, force: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("switchto-extension.mjs")] }));
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fixture("switchto-extension.mjs")] }));
 
   const result = spawnSync(process.execPath, [harnessPath], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({
         args: ["--no-project"],
         steps: [
           ["waitReady"],

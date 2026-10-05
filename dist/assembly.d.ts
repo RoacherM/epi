@@ -3,9 +3,9 @@ import { type ProjectDiscovery, type ProjectManifestState } from "./project.js";
 export interface ResolveAssemblyOptions {
     agentDir: string;
     globalManifestPath: string;
-    /** MMP's own home (parent of `pi/` and `mmp.json`); `<mmpHome>/skills` is one of the three fixed
+    /** Epi's own home (parent of `pi/` and `epi.json`); `<epiHome>/skills` is one of the three fixed
      * auto-discovery roots (docs/decisions.md S1). */
-    mmpHome: string;
+    epiHome: string;
     cwd: string;
     noProject: boolean;
     projectTrustOverride: boolean | undefined;

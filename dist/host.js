@@ -1,6 +1,6 @@
 import { createAgentSessionServices, SettingsManager, VERSION as PI_VERSION, main as piMain, parseArgs, } from "@earendil-works/pi-coding-agent";
 import { resolveAssembly, } from "./assembly.js";
-import { parseMmpArgs, passthroughHasFlag, renderHelp } from "./args.js";
+import { parseEpiArgs, passthroughHasFlag, renderHelp } from "./args.js";
 import { guardClosedStdout } from "./closed-stdout.js";
 import { runAuthCommand } from "./commands/auth-cli.js";
 import { runConfigCommand, runInstallCommand, runListCommand, runRemoveCommand } from "./commands/manifest-cli.js";
@@ -9,26 +9,26 @@ import { reportRunFailure } from "./errors.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { isInteractivePiRun } from "./interactive.js";
 import { isListModelsRun, runListModels } from "./list-models.js";
-import { resolveMmpPaths } from "./paths.js";
+import { resolveEpiPaths } from "./paths.js";
 import { rewritePiOutput } from "./pi-output.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { installProviderCostValidation } from "./provider-validation.js";
 import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
-import { createMmpRuntimeIdentity, } from "./runtime-identity.js";
+import { createEpiRuntimeIdentity, } from "./runtime-identity.js";
 import { askProjectTrust, saveProjectTrustChoice, shouldAskProjectTrust } from "./trust-prompt.js";
-import { runMmpUpdateCommand, updateCheckDisabled } from "./update.js";
-import { MMP_VERSION } from "./version.js";
-// scripts/model-snapshot.mjs imports MMP_VERSION from dist/host.js.
-export { MMP_VERSION };
+import { runEpiUpdateCommand, updateCheckDisabled } from "./update.js";
+import { EPI_VERSION } from "./version.js";
+// scripts/model-snapshot.mjs imports EPI_VERSION from dist/host.js.
+export { EPI_VERSION };
 const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
-/** `mmp <subcommand>`: routed before any flag parsing, and only when it is the first argument
- * (`mmp -p update` is a prompt), never forwarded to Pi's own CLI dispatcher (docs/cli-design.md
- * §3) -- each reads/writes the Manifest or MMP's own agent directory directly. */
-const MMP_SUBCOMMANDS = new Set(["update", "install", "remove", "uninstall", "list", "config", "auth", "mcp"]);
+/** `epi <subcommand>`: routed before any flag parsing, and only when it is the first argument
+ * (`epi -p update` is a prompt), never forwarded to Pi's own CLI dispatcher (docs/cli-design.md
+ * §3) -- each reads/writes the Manifest or Epi's own agent directory directly. */
+const EPI_SUBCOMMANDS = new Set(["update", "install", "remove", "uninstall", "list", "config", "auth", "mcp"]);
 async function runSubcommand(subcommand, argv, agentDir) {
     switch (subcommand) {
         case "update":
-            return runMmpUpdateCommand(argv, { currentVersion: MMP_VERSION, agentDir });
+            return runEpiUpdateCommand(argv, { currentVersion: EPI_VERSION, agentDir });
         case "install":
             return runInstallCommand(argv);
         case "remove":
@@ -43,7 +43,7 @@ async function runSubcommand(subcommand, argv, agentDir) {
             return runAuthCommand(argv);
         case "mcp":
             // Never reaches piMain (docs/mcp-design.md §6): Pi's own `pi mcp` reads/writes .pi/mcp.json
-            // and Pi's ProjectTrustStore, both wrong for MMP.
+            // and Pi's ProjectTrustStore, both wrong for Epi.
             return runMcpCommand(argv);
         default:
             throw new Error(`unreachable subcommand: ${subcommand}`);
@@ -61,7 +61,7 @@ export const BASE_PI_RESOURCE_ARGS = [
     "",
     "--append-system-prompt",
     "",
-    // MMP's --approve only trusts .mmp/mmp.json. Pi must never trust project .pi/ files.
+    // Epi's --approve only trusts .epi/epi.json. Pi must never trust project .pi/ files.
     "--no-approve",
 ];
 export function buildPiArgs(resources, passthrough) {
@@ -72,27 +72,27 @@ export function buildPiArgs(resources, passthrough) {
     args.push(...passthrough);
     return args;
 }
-function prepareParsedMmpRun(args, environment, cwd) {
-    const paths = resolveMmpPaths(environment);
+function prepareParsedEpiRun(args, environment, cwd) {
+    const paths = resolveEpiPaths(environment);
     const resolveCurrentAssembly = () => resolveAssembly({
         agentDir: paths.agentDir,
         globalManifestPath: paths.globalManifest,
-        mmpHome: paths.mmpHome,
+        epiHome: paths.epiHome,
         cwd,
         noProject: args.noProject,
         projectTrustOverride: args.projectTrustOverride,
         environment,
     });
     const assembly = resolveCurrentAssembly();
-    const runtimeIdentity = createMmpRuntimeIdentity({
-        mmpVersion: MMP_VERSION,
+    const runtimeIdentity = createEpiRuntimeIdentity({
+        epiVersion: EPI_VERSION,
         piVersion: PI_VERSION,
-        mmpHome: paths.mmpHome,
+        epiHome: paths.epiHome,
         assembly,
     });
     return {
         args,
-        mmpHome: paths.mmpHome,
+        epiHome: paths.epiHome,
         agentDir: paths.agentDir,
         assembly,
         runtimeIdentity,
@@ -100,11 +100,11 @@ function prepareParsedMmpRun(args, environment, cwd) {
         piArgs: buildPiArgs(assembly, args.passthrough),
     };
 }
-export function prepareMmpRun(argv, environment = process.env, cwd = process.cwd()) {
-    return prepareParsedMmpRun(parseMmpArgs(argv), environment, cwd);
+export function prepareEpiRun(argv, environment = process.env, cwd = process.cwd()) {
+    return prepareParsedEpiRun(parseEpiArgs(argv), environment, cwd);
 }
 /**
- * `mmp --help`'s "Extension options" section: mirrors Pi's own `--help` (dist/main.js), which
+ * `epi --help`'s "Extension options" section: mirrors Pi's own `--help` (dist/main.js), which
  * builds its whole runtime -- extensions included -- before printing help, then lists whatever
  * `pi.registerFlag` calls its `resourceLoader.getExtensions()` picked up. This only needs the
  * resource loader, not a session or model, so it calls `createAgentSessionServices` directly
@@ -112,15 +112,15 @@ export function prepareMmpRun(argv, environment = process.env, cwd = process.cwd
  *
  * Never throws: like Pi (whose `--help` never checks `runtime.diagnostics` for errors -- see
  * dist/main.js, the `parsed.help` branch runs before that check), an invalid Manifest, untrusted
- * project, or bad MMP_HOME just means an empty section, not a failed `--help`.
+ * project, or bad EPI_HOME just means an empty section, not a failed `--help`.
  */
 async function collectExtensionHelpFlags(args, environment, cwd) {
     try {
-        const prepared = prepareParsedMmpRun(args, environment, cwd);
+        const prepared = prepareParsedEpiRun(args, environment, cwd);
         process.env.PI_CODING_AGENT_DIR = prepared.agentDir;
         const extensionFactories = [
             createMagpieInlineExtension(),
-            ...buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly),
+            ...buildInlineExtensions(prepared.assembly, prepared.epiHome, prepared.runtimeIdentity, prepared.resolveAssembly),
         ];
         const services = await createAgentSessionServices({
             cwd,
@@ -149,7 +149,7 @@ async function collectExtensionHelpFlags(args, environment, cwd) {
 /**
  * Interactive first run into a new (undecided) project: ask, then fold the answer into the same
  * --approve/--no-approve override `resolveAssembly` already understands (DEVELOPMENT.md 8.2). Runs
- * before assembly, ahead of starting MMP's TUI. A no-op for print/json/rpc/help/non-TTY
+ * before assembly, ahead of starting Epi's TUI. A no-op for print/json/rpc/help/non-TTY
  * runs, `--no-project`, and runs that already carry an explicit trust decision.
  */
 async function maybeAskProjectTrust(args, environment, cwd) {
@@ -157,7 +157,7 @@ async function maybeAskProjectTrust(args, environment, cwd) {
     if (!interactive || args.dryRun || args.noProject || args.projectTrustOverride !== undefined) {
         return;
     }
-    const paths = resolveMmpPaths(environment);
+    const paths = resolveEpiPaths(environment);
     const candidate = findNearestProjectManifest(cwd, paths.globalManifest);
     if (candidate === undefined) {
         return;
@@ -177,30 +177,30 @@ async function maybeAskProjectTrust(args, environment, cwd) {
     saveProjectTrustChoice(paths.agentDir, choice);
     args.projectTrustOverride = choice.trusted;
 }
-export async function runMmp(argv) {
-    // Subcommands read/write MMP's own agent directory (~/.mmp/pi) directly, never through
-    // prepareMmpRun -- set the isolation guard (never Pi's default ~/.pi/agent) before each, but not
-    // before --help/--version, which must work even with an invalid MMP_HOME.
+export async function runEpi(argv) {
+    // Subcommands read/write Epi's own agent directory (~/.epi/pi) directly, never through
+    // prepareEpiRun -- set the isolation guard (never Pi's default ~/.pi/agent) before each, but not
+    // before --help/--version, which must work even with an invalid EPI_HOME.
     const subcommand = argv[0];
-    if (subcommand !== undefined && MMP_SUBCOMMANDS.has(subcommand)) {
-        const agentDir = resolveMmpPaths(process.env).agentDir;
+    if (subcommand !== undefined && EPI_SUBCOMMANDS.has(subcommand)) {
+        const agentDir = resolveEpiPaths(process.env).agentDir;
         process.env.PI_CODING_AGENT_DIR = agentDir;
         process.exitCode = await runSubcommand(subcommand, argv.slice(1), agentDir);
         return;
     }
-    const args = parseMmpArgs(argv);
-    // Pi's own notice would suggest `pi update`, which does not update MMP's pinned Pi.
+    const args = parseEpiArgs(argv);
+    // Pi's own notice would suggest `pi update`, which does not update Epi's pinned Pi.
     process.env.PI_SKIP_VERSION_CHECK = "1";
     // Before any path below can load an extension that registers a provider (--help included).
     installProviderCostValidation();
     if (args.version) {
-        process.stdout.write(`mmp ${MMP_VERSION}\npi ${PI_VERSION}\n`);
+        process.stdout.write(`epi ${EPI_VERSION}\npi ${PI_VERSION}\n`);
         return;
     }
     if (passthroughHasFlag(args.passthrough, "--help") ||
         passthroughHasFlag(args.passthrough, "-h")) {
         const extensionFlags = await collectExtensionHelpFlags(args, process.env, process.cwd());
-        // Collecting extensionFlags just ran every declared extension's factory (mmp:mcp among them,
+        // Collecting extensionFlags just ran every declared extension's factory (epi:mcp among them,
         // which can open a real connection to a configured MCP server) -- the same reason Pi's own
         // `--help` calls `process.exit(0)` right after printing (dist/main.js: "so bad extensions
         // cannot keep one-shot commands alive") instead of returning and letting the event loop drain.
@@ -208,23 +208,23 @@ export async function runMmp(argv) {
         return;
     }
     await maybeAskProjectTrust(args, process.env, process.cwd());
-    const prepared = prepareParsedMmpRun(args, process.env, process.cwd());
+    const prepared = prepareParsedEpiRun(args, process.env, process.cwd());
     const updateCheck = {
-        mmpHome: prepared.mmpHome,
-        currentVersion: MMP_VERSION,
+        epiHome: prepared.epiHome,
+        currentVersion: EPI_VERSION,
         disabled: updateCheckDisabled(process.env, args.passthrough),
     };
     // Building the inline extensions also validates their config (MCP, hooks), which --dry-run reports.
     const extensionFactories = [
         createMagpieInlineExtension(),
-        ...buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly, updateCheck, passthroughHasFlag(args.passthrough, "--verbose")),
+        ...buildInlineExtensions(prepared.assembly, prepared.epiHome, prepared.runtimeIdentity, prepared.resolveAssembly, updateCheck, passthroughHasFlag(args.passthrough, "--verbose")),
     ];
     if (prepared.args.dryRun) {
         const output = {
-            mmpVersion: MMP_VERSION,
+            epiVersion: EPI_VERSION,
             piVersion: PI_VERSION,
             sdkEntry: SDK_ENTRY,
-            mmpHome: prepared.mmpHome,
+            epiHome: prepared.epiHome,
             agentDir: prepared.agentDir,
             globalManifest: prepared.assembly.globalManifest,
             globalManifestLoaded: prepared.assembly.globalManifestLoaded,
@@ -242,8 +242,8 @@ export async function runMmp(argv) {
         return;
     }
     process.env.PI_CODING_AGENT_DIR = prepared.agentDir;
-    // Every interactive run takes MMP's own TUI (docs/tui-design.md); no environment switch.
-    // `--help` and `--list-models` are MMP's own too (above/below); print/json/rpc and non-TTY runs
+    // Every interactive run takes Epi's own TUI (docs/tui-design.md); no environment switch.
+    // `--help` and `--list-models` are Epi's own too (above/below); print/json/rpc and non-TTY runs
     // go through src/noninteractive.ts, and only `--export` is left to piMain (docs/decisions.md N1).
     if (isInteractivePiRun(args.passthrough, process.stdin.isTTY === true, process.stdout.isTTY === true)) {
         const tui = await import("./tui/start.js");
@@ -254,7 +254,7 @@ export async function runMmp(argv) {
         // as a compaction request that ignored its abort (dogfood D35, D41).
         process.exit(code);
     }
-    // `--list-models` is MMP's own (dogfood D48): piMain's drops the extension diagnostics `-p` stops
+    // `--list-models` is Epi's own (dogfood D48): piMain's drops the extension diagnostics `-p` stops
     // on and prints Pi's empty-list text (src/list-models.ts).
     if (isListModelsRun(prepared.piArgs)) {
         await runListModels(prepared.piArgs, {

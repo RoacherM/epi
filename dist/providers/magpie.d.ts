@@ -1,5 +1,5 @@
 import type { Api, Model, Provider } from "@earendil-works/pi-ai";
-/** Test seam: MMP_TEST_MAGPIE_URL points MMP at a local fake gateway instead of the real one. */
+/** Test seam: EPI_TEST_MAGPIE_URL points Epi at a local fake gateway instead of the real one. */
 export declare function magpieBaseUrl(): string;
 export declare function parseMagpieModels(value: unknown, baseUrl: string): Model<Api>[];
 export declare function discoverMagpieModels(baseUrl: string, signal: AbortSignal, apiKey?: string, timeoutMs?: number): Promise<Model<Api>[]>;
@@ -10,7 +10,7 @@ export declare function discoverMagpieModels(baseUrl: string, signal: AbortSigna
  * the request has no user text or image after the last tool call, so other requests go out unchanged. */
 export declare function renameToolIdsAfterSteer(payload: unknown): unknown;
 /** Catalog writes still running, so a session shutdown can wait for them: a process that exits
- * while Pi is taking the models-store lock leaves models-store.json.lock behind, and the next mmp
+ * while Pi is taking the models-store lock leaves models-store.json.lock behind, and the next epi
  * waits up to 30 s for it (Fable F5: rpc's background refresh, then the client closes stdin). */
 export declare function createWriteTracker(): {
     readonly closed: boolean;

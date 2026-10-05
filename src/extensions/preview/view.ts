@@ -29,7 +29,7 @@ export interface ViewFrame {
   status: string;
 }
 
-/** Where each file's view was scrolled to, kept for this MMP process (docs/preview-design.md §3.3). */
+/** Where each file's view was scrolled to, kept for this Epi process (docs/preview-design.md §3.3). */
 export const lastScroll = new Map<string, number>();
 
 export class Viewer {

@@ -1,11 +1,11 @@
 {
-  "name": "mmp",
+  "name": "epi",
   "version": "0.1.12",
   "private": true,
   "description": "A customizable terminal coding agent built on Pi, with a focused TUI, skills, MCP, hooks, and isolated subagents.",
   "type": "module",
   "bin": {
-    "mmp": "./dist/cli.js"
+    "epi": "./dist/cli.js"
   },
   "files": [
     "dist"

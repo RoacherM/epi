@@ -1,7 +1,7 @@
 import { confirmInEditorSlot } from "./dialogs.js";
 import { errorText } from "./errors.js";
 import { crossProjectRefusal } from "./project-guard.js";
-/** Pi's getPathCommandArgument, simplified: MMP only needs the whole remainder, optionally quoted
+/** Pi's getPathCommandArgument, simplified: Epi only needs the whole remainder, optionally quoted
  * (so a path with spaces can be typed as `/export "my file.html"`), not partial-token parsing. */
 function pathArgument(args) {
     const trimmed = args.trim();
@@ -31,7 +31,7 @@ export async function runExport(host, args) {
     }
 }
 /** `/import <path>`: confirm, then replace the current session (Pi's handleImportCommand).
- * Refuses a session whose cwd belongs to a different MMP project, like /resume
+ * Refuses a session whose cwd belongs to a different Epi project, like /resume
  * (src/tui/project-guard.ts): manifest extensions are fixed for this process at launch. */
 export async function runImport(host, args) {
     const inputPath = pathArgument(args);

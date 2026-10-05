@@ -1,5 +1,5 @@
-// `mmp install/remove/uninstall/list/config/auth` (docs/cli-design.md §3), end to end: every
-// subcommand spawns the real dist/cli.js against a temp HOME/MMP_HOME, exactly like a real
+// `epi install/remove/uninstall/list/config/auth` (docs/cli-design.md §3), end to end: every
+// subcommand spawns the real dist/cli.js against a temp HOME/EPI_HOME, exactly like a real
 // invocation, and never touches ~/.pi/agent.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -12,7 +12,7 @@ import test from "node:test";
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-cli-e2e-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-cli-e2e-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const project = join(root, "project");
@@ -22,10 +22,10 @@ function fixture(t) {
     root,
     home,
     project,
-    // MMP_OFFLINE (Pi's offline mode, under MMP's own name: src/pi-env.ts) skips mmp install's real npm/git existence check
+    // EPI_OFFLINE (Pi's offline mode, under Epi's own name: src/pi-env.ts) skips epi install's real npm/git existence check
     // (manifest-cli.ts's defaultCheckSourceExists), so these tests' fictitious "npm:some-extension"
     // sources don't need live network or a real published package.
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1" },
   };
 }
 
@@ -39,14 +39,14 @@ function run(f, args, extraEnv = {}) {
 }
 
 function globalManifestPath(f) {
-  return join(f.home, ".mmp", "mmp.json");
+  return join(f.home, ".epi", "epi.json");
 }
 
 function projectManifestPath(f) {
-  return join(f.project, ".mmp", "mmp.json");
+  return join(f.project, ".epi", "epi.json");
 }
 
-test("mmp install adds a source to the global Manifest and mmp list shows it", (t) => {
+test("epi install adds a source to the global Manifest and epi list shows it", (t) => {
   const f = fixture(t);
   const installed = run(f, ["install", "npm:some-extension"]);
   assert.equal(installed.status, 0, installed.stderr);
@@ -61,7 +61,7 @@ test("mmp install adds a source to the global Manifest and mmp list shows it", (
   assert.match(listed.stdout, /Project: \(none found\)/);
 });
 
-test("mmp install -l writes the project Manifest instead of the global one", (t) => {
+test("epi install -l writes the project Manifest instead of the global one", (t) => {
   const f = fixture(t);
   const result = run(f, ["install", "npm:proj-extension", "-l", "--approve"]);
   assert.equal(result.status, 0, result.stderr);
@@ -71,7 +71,7 @@ test("mmp install -l writes the project Manifest instead of the global one", (t)
 });
 
 // `--local` is the long form of `-l`, as in Pi's package-manager-cli.js (`arg === "-l" || arg === "--local"`).
-test("mmp install and remove accept --local as the long form of -l", (t) => {
+test("epi install and remove accept --local as the long form of -l", (t) => {
   const f = fixture(t);
   const installed = run(f, ["install", "npm:proj-extension", "--local", "--approve"]);
   assert.equal(installed.status, 0, installed.stderr);
@@ -84,12 +84,12 @@ test("mmp install and remove accept --local as the long form of -l", (t) => {
 
   const removed = run(f, ["remove", "npm:proj-extension", "--local", "-a"]);
   assert.equal(removed.status, 0, removed.stderr);
-  assert.match(removed.stdout, /Removed npm:proj-extension from .*\.mmp[/\\]mmp\.json/);
+  assert.match(removed.stdout, /Removed npm:proj-extension from .*\.epi[/\\]epi\.json/);
   assert.deepEqual(JSON.parse(readFileSync(projectManifestPath(f), "utf8")).extensions, []);
   assert.equal(existsSync(globalManifestPath(f)), false);
 });
 
-test("mmp config accepts --local as the long form of -l", (t) => {
+test("epi config accepts --local as the long form of -l", (t) => {
   const f = fixture(t);
   const refused = run(f, ["config", "--local"], { EDITOR: "true" });
   assert.notEqual(refused.status, 0);
@@ -98,38 +98,38 @@ test("mmp config accepts --local as the long form of -l", (t) => {
 
   const saved = run(f, ["config", "--local", "--approve"], { EDITOR: "true" });
   assert.equal(saved.status, 0, saved.stderr);
-  assert.match(saved.stdout, /Saved .*project.*\.mmp[/\\]mmp\.json/);
+  assert.match(saved.stdout, /Saved .*project.*\.epi[/\\]epi\.json/);
   assert.equal(existsSync(projectManifestPath(f)), true);
   assert.equal(existsSync(globalManifestPath(f)), false);
 });
 
 // Bug 5 (docs/development.md §8.2 rule 1): install/remove/config -l used to read and write an untrusted
-// project .mmp/mmp.json unconditionally. The rule is that a project's .mmp/mmp.json is only read
+// project .epi/epi.json unconditionally. The rule is that a project's .epi/epi.json is only read
 // once the project is trusted, full stop -- not because resolveManifest executes anything (it just
-// resolves declared paths) -- exactly what `mmp list` already refuses to do for an untrusted project.
+// resolves declared paths) -- exactly what `epi list` already refuses to do for an untrusted project.
 // Pi requires --approve for its own project-scope package commands the same way
 // (package-manager-cli.js's writesProjectPackageConfig/isProjectTrusted checks).
-test("mmp install -l refuses an untrusted project without --approve, printing the same line mmp list uses", (t) => {
+test("epi install -l refuses an untrusted project without --approve, printing the same line epi list uses", (t) => {
   const f = fixture(t);
   const result = run(f, ["install", "npm:proj-extension", "-l"]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /not trusted -- not read \(mmp --approve or \/trust\)/);
+  assert.match(result.stderr, /not trusted -- not read \(epi --approve or \/trust\)/);
   assert.equal(existsSync(projectManifestPath(f)), false, "nothing was written");
 });
 
-// Bug 7a (review round 2): the refusal text used to say "...(mmp --approve or /trust)" even when the
+// Bug 7a (review round 2): the refusal text used to say "...(epi --approve or /trust)" even when the
 // user had just explicitly passed --no-approve, which is self-contradictory -- suggesting the exact
 // flag they just used to refuse. It now says plainly that --no-approve is why.
-test("mmp install -l --no-approve refuses even though nothing else was decided yet, without suggesting --approve", (t) => {
+test("epi install -l --no-approve refuses even though nothing else was decided yet, without suggesting --approve", (t) => {
   const f = fixture(t);
   const result = run(f, ["install", "npm:proj-extension", "-l", "--no-approve"]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /refused by --no-approve/);
-  assert.doesNotMatch(result.stderr, /mmp --approve/);
+  assert.doesNotMatch(result.stderr, /epi --approve/);
   assert.equal(existsSync(projectManifestPath(f)), false);
 });
 
-test("mmp install -l takes the last of --approve and --no-approve, like Pi", (t) => {
+test("epi install -l takes the last of --approve and --no-approve, like Pi", (t) => {
   const f = fixture(t);
   const refused = run(f, ["install", "npm:proj-extension", "-l", "--approve", "--no-approve"]);
   assert.notEqual(refused.status, 0);
@@ -141,7 +141,7 @@ test("mmp install -l takes the last of --approve and --no-approve, like Pi", (t)
   assert.deepEqual(JSON.parse(readFileSync(projectManifestPath(f), "utf8")).extensions, ["npm:proj-extension"]);
 });
 
-test("mmp remove -l and mmp config -l also refuse an untrusted project without --approve", (t) => {
+test("epi remove -l and epi config -l also refuse an untrusted project without --approve", (t) => {
   const f = fixture(t);
   const removeResult = run(f, ["remove", "npm:proj-extension", "-l"]);
   assert.notEqual(removeResult.status, 0);
@@ -153,7 +153,7 @@ test("mmp remove -l and mmp config -l also refuse an untrusted project without -
   assert.equal(existsSync(projectManifestPath(f)), false, "config -l must not even create the file first");
 });
 
-test("mmp install resolves a relative local source against the current directory, not the Manifest's", (t) => {
+test("epi install resolves a relative local source against the current directory, not the Manifest's", (t) => {
   const f = fixture(t);
   writeFileSync(join(f.project, "ext.mjs"), "export default function () {}\n");
   const result = run(f, ["install", "./ext.mjs"]);
@@ -162,7 +162,7 @@ test("mmp install resolves a relative local source against the current directory
   assert.equal(manifest.extensions[0], join(realpathSync(f.project), "ext.mjs"));
 });
 
-test("mmp install -l also resolves a relative local source against the current directory", (t) => {
+test("epi install -l also resolves a relative local source against the current directory", (t) => {
   const f = fixture(t);
   writeFileSync(join(f.project, "ext.mjs"), "export default function () {}\n");
   const result = run(f, ["install", "./ext.mjs", "-l", "--approve"]);
@@ -171,7 +171,7 @@ test("mmp install -l also resolves a relative local source against the current d
   assert.equal(manifest.extensions[0], join(realpathSync(f.project), "ext.mjs"));
 });
 
-test("mmp install rejects a local source that does not exist, before writing anything", (t) => {
+test("epi install rejects a local source that does not exist, before writing anything", (t) => {
   const f = fixture(t);
   const result = run(f, ["install", "./does-not-exist.mjs"]);
   assert.notEqual(result.status, 0);
@@ -179,16 +179,16 @@ test("mmp install rejects a local source that does not exist, before writing any
   assert.equal(existsSync(globalManifestPath(f)), false);
 });
 
-// Bug 6 (docs/cli-design.md §3): `mmp install npm:<source>`/`git:<source>` only checked the prefix
+// Bug 6 (docs/cli-design.md §3): `epi install npm:<source>`/`git:<source>` only checked the prefix
 // was non-empty, never that the package or repo actually exists, so a typo silently wrote a Manifest
-// entry that would only fail much later, the next time `mmp` starts and tries to load it. Fixed with
+// entry that would only fail much later, the next time `epi` starts and tries to load it. Fixed with
 // a real existence check (manifest-cli.ts's defaultCheckSourceExists: `npm view`/`git ls-remote`).
-// `runNoOffline` drops the MMP_OFFLINE that `fixture()`'s other tests rely on (bug 6's own skip,
+// `runNoOffline` drops the EPI_OFFLINE that `fixture()`'s other tests rely on (bug 6's own skip,
 // tested separately below).
 function runNoOffline(f, args, extraEnv = {}) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: join(f.home, ".mmp"), ...extraEnv },
+    env: { PATH: process.env.PATH, HOME: f.home, EPI_HOME: join(f.home, ".epi"), ...extraEnv },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -204,7 +204,7 @@ function runWithFakeCommand(f, args, fakeCmdEnv) {
   return runNoOffline(f, args, { PATH: `${fakeNetworkBin}:${process.env.PATH}`, ...fakeCmdEnv });
 }
 
-test("mmp install rejects an npm: source that doesn't resolve, before writing anything", (t) => {
+test("epi install rejects an npm: source that doesn't resolve, before writing anything", (t) => {
   const f = fixture(t);
   // A syntactically invalid npm tag name: `npm view` rejects it immediately and locally
   // (EINVALIDTAGNAME), so this is a real, deterministic, offline failure of the real check.
@@ -214,20 +214,20 @@ test("mmp install rejects an npm: source that doesn't resolve, before writing an
   assert.equal(existsSync(globalManifestPath(f)), false);
 });
 
-// MMP_OFFLINE is Pi's own offline mode (package-manager.js's isOfflineModeEnabled): every
+// EPI_OFFLINE is Pi's own offline mode (package-manager.js's isOfflineModeEnabled): every
 // network-backed resolution Pi does is skipped, and so is this same kind of check. Reuses the exact
 // spec that fails fast above (with real, non-offline checking) to prove the skip is real -- it only
 // succeeds because the check never ran, not because the (impossible) name somehow resolved.
-test("mmp install skips the npm/git existence check under MMP_OFFLINE, like Pi's own offline mode", (t) => {
+test("epi install skips the npm/git existence check under EPI_OFFLINE, like Pi's own offline mode", (t) => {
   const f = fixture(t);
-  const result = run(f, ["install", "npm:Not A Valid Name!!!"]); // fixture() already sets MMP_OFFLINE=1
+  const result = run(f, ["install", "npm:Not A Valid Name!!!"]); // fixture() already sets EPI_OFFLINE=1
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(readFileSync(globalManifestPath(f), "utf8")).extensions, ["npm:Not A Valid Name!!!"]);
 });
 
-// Dogfood D63: a Pi user's own PI_OFFLINE must not make mmp offline (src/pi-env.ts clears it at
+// Dogfood D63: a Pi user's own PI_OFFLINE must not make epi offline (src/pi-env.ts clears it at
 // startup). The fake npm records that the existence check still ran.
-test("PI_OFFLINE alone (a Pi user's setting) does not skip mmp install's existence check", (t) => {
+test("PI_OFFLINE alone (a Pi user's setting) does not skip epi install's existence check", (t) => {
   const f = fixture(t);
   const argsOut = join(f.root, "npm-args.json");
   const result = runWithFakeCommand(f, ["install", "npm:some-extension"], {
@@ -242,10 +242,10 @@ test("PI_OFFLINE alone (a Pi user's setting) does not skip mmp install's existen
   assert.equal(existsSync(globalManifestPath(f)), false);
 });
 
-// Bug 4 (review round 2): --offline is an MMP flag (docs/cli-design.md §2), and `mmp install
-// --offline` used to be rejected as an unknown option even though MMP_OFFLINE already skips this same
+// Bug 4 (review round 2): --offline is an Epi flag (docs/cli-design.md §2), and `epi install
+// --offline` used to be rejected as an unknown option even though EPI_OFFLINE already skips this same
 // check. Reuses the exact spec that fails fast above to prove the skip is real.
-test("mmp install --offline skips the npm/git existence check, honouring the flag like MMP_OFFLINE", (t) => {
+test("epi install --offline skips the npm/git existence check, honouring the flag like EPI_OFFLINE", (t) => {
   const f = fixture(t);
   const result = runNoOffline(f, ["install", "npm:Not A Valid Name!!!", "--offline"]);
   assert.equal(result.status, 0, result.stderr);
@@ -261,9 +261,9 @@ test("mmp install --offline skips the npm/git existence check, honouring the fla
 // previous version of this test did; instead this injects a fake checkSourceExists (manifest-cli.ts's
 // own seam) and asserts on exactly what it was asked to check -- proving the parser split the ref
 // off correctly without needing any real command or network at all.
-test("mmp install's git ref parsing splits on @ (not #), matching Pi's splitRef", async (t) => {
+test("epi install's git ref parsing splits on @ (not #), matching Pi's splitRef", async (t) => {
   const { runInstallCommand } = await import("../dist/commands/manifest-cli.js");
-  const home = mkdtempSync(join(tmpdir(), "mmp-git-ref-"));
+  const home = mkdtempSync(join(tmpdir(), "epi-git-ref-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const cases = [
     ["git:github.com/earendil-works/pi-mono@main", { type: "git", url: "https://github.com/earendil-works/pi-mono" }],
@@ -273,23 +273,23 @@ test("mmp install's git ref parsing splits on @ (not #), matching Pi's splitRef"
   ];
   for (const [source, expected] of cases) {
     const checked = [];
-    process.env.MMP_HOME = join(home, ".mmp");
+    process.env.EPI_HOME = join(home, ".epi");
     try {
       const code = await runInstallCommand([source], { checkSourceExists: async (parsed) => { checked.push(parsed); } });
       assert.equal(code, 0, source);
     } finally {
-      delete process.env.MMP_HOME;
+      delete process.env.EPI_HOME;
     }
     assert.deepEqual(checked, [expected], source);
-    rmSync(join(home, ".mmp", "mmp.json"), { force: true });
+    rmSync(join(home, ".epi", "epi.json"), { force: true });
   }
 });
 
-// Pi's own loader (utils/git.js's parseGitUrl/buildGitSource) would refuse each of these at `mmp`
-// startup; MMP now catches the same shapes before ever writing them to the Manifest, with a message
+// Pi's own loader (utils/git.js's parseGitUrl/buildGitSource) would refuse each of these at `epi`
+// startup; Epi now catches the same shapes before ever writing them to the Manifest, with a message
 // that says why, instead of a confusing "not reachable" from a mis-built check URL (or a silent write
-// that only fails on the next `mmp` run).
-test("mmp install rejects a git: source Pi's own loader would also reject", (t) => {
+// that only fails on the next `epi` run).
+test("epi install rejects a git: source Pi's own loader would also reject", (t) => {
   const f = fixture(t);
   const cases = [
     ["git:file:///some/local/repo", /unsupported scheme/],
@@ -311,7 +311,7 @@ test("mmp install rejects a git: source Pi's own loader would also reject", (t) 
 // `npm view` if it ever reached them -- a reviewer reproduced `git:--upload-pack=...` running an
 // arbitrary command via a malicious upload-pack. Rejected before any command runs, for both source
 // kinds.
-test("mmp install rejects an npm:/git: source that looks like a command-line flag", (t) => {
+test("epi install rejects an npm:/git: source that looks like a command-line flag", (t) => {
   const f = fixture(t);
   for (const source of ["npm:--evil-flag", "git:--upload-pack=touch /tmp/pwned;@github.com/a/b"]) {
     const result = runNoOffline(f, ["install", source]);
@@ -325,7 +325,7 @@ test("mmp install rejects an npm:/git: source that looks like a command-line fla
 // for any reason -- offline, DNS, auth, a 404 -- surfaced as the same generic message with no clue
 // why. It now captures and includes stderr. Uses the fake git/npm (test/fixtures/fake-network-bin)
 // to drive a real failing exit deterministically, offline.
-test("mmp install includes the command's stderr in the failure message", (t) => {
+test("epi install includes the command's stderr in the failure message", (t) => {
   const f = fixture(t);
   const result = runWithFakeCommand(f, ["install", "git:github.com/user/repo"], {
     FAKE_CMD_EXIT_CODE: "128",
@@ -338,7 +338,7 @@ test("mmp install includes the command's stderr in the failure message", (t) => 
 
 // Item 2: a real failing exit (as opposed to the command not existing at all, tested next) still
 // succeeds when the fake command reports success, proving the same plumbing works end to end.
-test("mmp install succeeds when the (fake) git command reports success", (t) => {
+test("epi install succeeds when the (fake) git command reports success", (t) => {
   const f = fixture(t);
   const result = runWithFakeCommand(f, ["install", "git:github.com/user/repo"], { FAKE_CMD_EXIT_CODE: "0" });
   assert.equal(result.status, 0, result.stderr);
@@ -346,9 +346,9 @@ test("mmp install succeeds when the (fake) git command reports success", (t) => 
 
 // Item 2: git/npm missing from PATH entirely (ENOENT) must not be reported as "package not found" --
 // that's actively misleading (there's no lookup to fail; the tool itself couldn't run).
-test("mmp install distinguishes git/npm missing from PATH from a failed lookup", (t) => {
+test("epi install distinguishes git/npm missing from PATH from a failed lookup", (t) => {
   const f = fixture(t);
-  const emptyBin = mkdtempSync(join(tmpdir(), "mmp-empty-bin-"));
+  const emptyBin = mkdtempSync(join(tmpdir(), "epi-empty-bin-"));
   t.after(() => rmSync(emptyBin, { recursive: true, force: true }));
   const result = runNoOffline(f, ["install", "git:github.com/user/repo"], { PATH: emptyBin });
   assert.notEqual(result.status, 0);
@@ -358,17 +358,17 @@ test("mmp install distinguishes git/npm missing from PATH from a failed lookup",
 
 // Item 2: no timeout meant a dead host (or a repo demanding credentials with GIT_TERMINAL_PROMPT
 // unset) hung the whole command for however long the OS took to give up. Pi's own
-// NETWORK_TIMEOUT_MS is 10s (package-manager.js's getLatestNpmVersion); this proves MMP's matches by
+// NETWORK_TIMEOUT_MS is 10s (package-manager.js's getLatestNpmVersion); this proves Epi's matches by
 // making the fake command sleep past it and checking the command is actually killed, not left
 // running -- this test genuinely takes a bit over 10s.
-test("mmp install times out instead of hanging on an unresponsive command", { timeout: 20_000 }, (t) => {
+test("epi install times out instead of hanging on an unresponsive command", { timeout: 20_000 }, (t) => {
   const f = fixture(t);
   const result = runWithFakeCommand(f, ["install", "git:github.com/user/repo"], { FAKE_CMD_SLEEP_MS: "30000" });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /timed out after 10000ms/);
 });
 
-test("mmp remove drops the source; removing an absent source exits 1 without touching the file", (t) => {
+test("epi remove drops the source; removing an absent source exits 1 without touching the file", (t) => {
   const f = fixture(t);
   run(f, ["install", "npm:a"]);
   run(f, ["install", "npm:b"]);
@@ -383,7 +383,7 @@ test("mmp remove drops the source; removing an absent source exits 1 without tou
   assert.equal(readFileSync(globalManifestPath(f), "utf8"), before);
 });
 
-test("mmp uninstall is an alias for remove", (t) => {
+test("epi uninstall is an alias for remove", (t) => {
   const f = fixture(t);
   run(f, ["install", "npm:a"]);
   const result = run(f, ["uninstall", "npm:a"]);
@@ -391,9 +391,9 @@ test("mmp uninstall is an alias for remove", (t) => {
   assert.deepEqual(JSON.parse(readFileSync(globalManifestPath(f), "utf8")).extensions, []);
 });
 
-test("mmp install preserves an existing Manifest's rules/skills and its indent style", (t) => {
+test("epi install preserves an existing Manifest's rules/skills and its indent style", (t) => {
   const f = fixture(t);
-  mkdirSync(join(f.home, ".mmp"), { recursive: true });
+  mkdirSync(join(f.home, ".epi"), { recursive: true });
   writeFileSync(
     globalManifestPath(f),
     '{\n    "version": 1,\n    "rules": [],\n    "extensions": [\n        "npm:existing"\n    ]\n}\n',
@@ -405,7 +405,7 @@ test("mmp install preserves an existing Manifest's rules/skills and its indent s
   assert.deepEqual(JSON.parse(raw).extensions, ["npm:existing", "npm:new-one"]);
 });
 
-test("mmp list on an empty setup reports both Manifests as not found", (t) => {
+test("epi list on an empty setup reports both Manifests as not found", (t) => {
   const f = fixture(t);
   const result = run(f, ["list"]);
   assert.equal(result.status, 0, result.stderr);
@@ -413,9 +413,9 @@ test("mmp list on an empty setup reports both Manifests as not found", (t) => {
   assert.match(result.stdout, /Project: \(none found\)/);
 });
 
-test("mmp list never reads an untrusted project Manifest's declared sources", (t) => {
+test("epi list never reads an untrusted project Manifest's declared sources", (t) => {
   const f = fixture(t);
-  mkdirSync(join(f.project, ".mmp"), { recursive: true });
+  mkdirSync(join(f.project, ".epi"), { recursive: true });
   writeFileSync(projectManifestPath(f), JSON.stringify({ version: 1, extensions: ["npm:untrusted-source"] }));
   // No trust.json planted: this project has never been approved (docs/development.md §8.2 rule 1).
   const result = run(f, ["list"]);
@@ -424,7 +424,7 @@ test("mmp list never reads an untrusted project Manifest's declared sources", (t
   assert.match(result.stdout, /not trusted/);
 });
 
-test("mmp config edits the Manifest with $EDITOR and validates the result", (t) => {
+test("epi config edits the Manifest with $EDITOR and validates the result", (t) => {
   const f = fixture(t);
   const editorScript = join(f.root, "append-rule.mjs");
   writeFileSync(
@@ -440,9 +440,9 @@ writeFileSync(path, JSON.stringify({ version: 1, extensions: ["npm:from-editor"]
   assert.deepEqual(JSON.parse(readFileSync(globalManifestPath(f), "utf8")).extensions, ["npm:from-editor"]);
 });
 
-test("mmp config restores the original file when the edit is invalid", (t) => {
+test("epi config restores the original file when the edit is invalid", (t) => {
   const f = fixture(t);
-  mkdirSync(join(f.home, ".mmp"), { recursive: true });
+  mkdirSync(join(f.home, ".epi"), { recursive: true });
   const original = JSON.stringify({ version: 1, extensions: ["npm:keep-me"] }, null, 2) + "\n";
   writeFileSync(globalManifestPath(f), original);
   const editorScript = join(f.root, "break-it.mjs");
@@ -453,25 +453,25 @@ test("mmp config restores the original file when the edit is invalid", (t) => {
   assert.equal(readFileSync(globalManifestPath(f), "utf8"), original);
 });
 
-test("mmp config fails loudly without $VISUAL or $EDITOR set", (t) => {
+test("epi config fails loudly without $VISUAL or $EDITOR set", (t) => {
   const f = fixture(t);
   const result = spawnSync(process.execPath, [cliPath, "config"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: join(f.home, ".mmp") },
+    env: { PATH: process.env.PATH, HOME: f.home, EPI_HOME: join(f.home, ".epi") },
     encoding: "utf8",
   });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Set \$VISUAL or \$EDITOR/);
 });
 
-test("an unknown mmp subcommand-shaped install/remove call fails clearly", (t) => {
+test("an unknown epi subcommand-shaped install/remove call fails clearly", (t) => {
   const f = fixture(t);
   assert.notEqual(run(f, ["install"]).status, 0);
   assert.notEqual(run(f, ["install", "npm:a", "npm:b"]).status, 0);
   assert.notEqual(run(f, ["remove"]).status, 0);
 });
 
-test("mmp auth requires --provider or --model, and rejects an unknown auth command", (t) => {
+test("epi auth requires --provider or --model, and rejects an unknown auth command", (t) => {
   const f = fixture(t);
   const noArgs = run(f, ["auth", "print-api-key"]);
   assert.notEqual(noArgs.status, 0);
@@ -482,9 +482,9 @@ test("mmp auth requires --provider or --model, and rejects an unknown auth comma
   assert.match(bogus.stderr, /Unknown auth command/);
 });
 
-test("mmp auth check reports not_ready for an unconfigured provider, isolated from ~/.pi/agent", (t) => {
+test("epi auth check reports not_ready for an unconfigured provider, isolated from ~/.pi/agent", (t) => {
   const f = fixture(t);
-  // Plant a credential where Pi's own default agent dir would look -- MMP must never read it.
+  // Plant a credential where Pi's own default agent dir would look -- Epi must never read it.
   mkdirSync(join(f.home, ".pi", "agent"), { recursive: true });
   writeFileSync(
     join(f.home, ".pi", "agent", "auth.json"),
@@ -493,33 +493,33 @@ test("mmp auth check reports not_ready for an unconfigured provider, isolated fr
   const result = run(f, ["auth", "check", "--provider", "openai"]);
   assert.equal(result.status, 1, result.stderr);
   assert.equal(result.stdout.trim(), "not_ready");
-  // MMP's own agentDir was used (ModelRuntime creates an empty auth.json there on first use), and
+  // Epi's own agentDir was used (ModelRuntime creates an empty auth.json there on first use), and
   // it never saw the credential planted under ~/.pi/agent.
-  assert.doesNotMatch(readFileSync(join(f.home, ".mmp", "pi", "auth.json"), "utf8"), /sk-from-ambient-pi-agent/);
+  assert.doesNotMatch(readFileSync(join(f.home, ".epi", "pi", "auth.json"), "utf8"), /sk-from-ambient-pi-agent/);
 });
 
-test("mmp auth print-api-key fails clearly when no credential is configured", (t) => {
+test("epi auth print-api-key fails clearly when no credential is configured", (t) => {
   const f = fixture(t);
   const result = run(f, ["auth", "print-api-key", "--provider", "openai"]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /No usable API key is configured/);
 });
 
-test("mmp auth print-api-key rejects an unknown provider", (t) => {
+test("epi auth print-api-key rejects an unknown provider", (t) => {
   const f = fixture(t);
   const result = run(f, ["auth", "print-api-key", "--provider", "not-a-real-provider"]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Unknown provider/);
 });
 
-test("mmp auth check --json prints machine-readable status", (t) => {
+test("epi auth check --json prints machine-readable status", (t) => {
   const f = fixture(t);
   const result = run(f, ["auth", "check", "--provider", "openai", "--json"]);
   assert.equal(result.status, 1, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), { status: "not_ready", provider: "openai", reason: "credentials_not_configured" });
 });
 
-test("mmp auth rejects --json/--credentials/--no-refresh outside of check, and a bad --min-expiry", (t) => {
+test("epi auth rejects --json/--credentials/--no-refresh outside of check, and a bad --min-expiry", (t) => {
   const f = fixture(t);
   const jsonOnPrint = run(f, ["auth", "print-api-key", "--provider", "openai", "--json"]);
   assert.notEqual(jsonOnPrint.status, 0);
@@ -534,25 +534,25 @@ test("mmp auth rejects --json/--credentials/--no-refresh outside of check, and a
   assert.match(expiryOnCheck.stderr, /only supported by print-bearer-token/);
 });
 
-test("mmp auth help prints usage and exits 0", (t) => {
+test("epi auth help prints usage and exits 0", (t) => {
   const f = fixture(t);
   const result = run(f, ["auth"]);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /mmp auth print-api-key/);
+  assert.match(result.stdout, /epi auth print-api-key/);
 });
 
-test("mmp install|remove|uninstall|list|config --help (and -h) print usage instead of failing", (t) => {
+test("epi install|remove|uninstall|list|config --help (and -h) print usage instead of failing", (t) => {
   const f = fixture(t);
   const cases = [
-    { argv: ["install", "--help"], expect: /mmp install <source> \[-l\]/ },
-    { argv: ["install", "-h"], expect: /mmp install <source> \[-l\]/ },
-    { argv: ["remove", "--help"], expect: /mmp remove <source> \[-l\]/ },
-    { argv: ["remove", "-h"], expect: /mmp remove <source> \[-l\]/ },
-    { argv: ["uninstall", "--help"], expect: /mmp uninstall <source> \[-l\]/ },
-    { argv: ["list", "--help"], expect: /mmp list/ },
-    { argv: ["list", "-h"], expect: /mmp list/ },
-    { argv: ["config", "--help"], expect: /mmp config \[-l\]/ },
-    { argv: ["config", "-h"], expect: /mmp config \[-l\]/ },
+    { argv: ["install", "--help"], expect: /epi install <source> \[-l\]/ },
+    { argv: ["install", "-h"], expect: /epi install <source> \[-l\]/ },
+    { argv: ["remove", "--help"], expect: /epi remove <source> \[-l\]/ },
+    { argv: ["remove", "-h"], expect: /epi remove <source> \[-l\]/ },
+    { argv: ["uninstall", "--help"], expect: /epi uninstall <source> \[-l\]/ },
+    { argv: ["list", "--help"], expect: /epi list/ },
+    { argv: ["list", "-h"], expect: /epi list/ },
+    { argv: ["config", "--help"], expect: /epi config \[-l\]/ },
+    { argv: ["config", "-h"], expect: /epi config \[-l\]/ },
   ];
   for (const { argv, expect } of cases) {
     const result = run(f, argv);
@@ -565,12 +565,12 @@ test("mmp install|remove|uninstall|list|config --help (and -h) print usage inste
   assert.equal(existsSync(globalManifestPath(f)), false);
 });
 
-test("mmp update --help (and -h) prints usage instead of failing", (t) => {
+test("epi update --help (and -h) prints usage instead of failing", (t) => {
   const f = fixture(t);
   for (const flag of ["--help", "-h"]) {
     const result = run(f, ["update", flag]);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /mmp update \[--self\|--extensions\|--models\|--all\]/);
+    assert.match(result.stdout, /epi update \[--self\|--extensions\|--models\|--all\]/);
     assert.equal(result.stderr, "");
   }
 });

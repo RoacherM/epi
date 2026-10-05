@@ -2,7 +2,7 @@
 
 [← 文档索引](README.md)
 
-`mmp:hooks` 默认开启（`"disable": ["mmp:hooks"]` 可关掉，关掉后不读 `hooks.json`），创建 `~/.mmp/hooks.json` 即可：
+`epi:hooks` 默认开启（`"disable": ["epi:hooks"]` 可关掉，关掉后不读 `hooks.json`），创建 `~/.epi/hooks.json` 即可：
 
 ```json
 {
@@ -70,7 +70,7 @@ Handler 类型：
 - `prompt`：字段为 `prompt`、可选 `model`/`timeoutMs`。缺省 model 使用当前 Parent 模型。
 - `agent`：字段为 `agent`、`prompt`、可选 `timeoutMs`。`agent` 必须引用已加载的 Task Agent profile；未知名称在 Pi 启动前失败。Agent Child 同样不能递归派生 Task。
 
-`timeoutMs` 默认 `10000`，最大 `300000`。超时、非零 command exit（错误信息包含退出码和一段 stderr 尾部）、spawn 失败（如 command 找不到）、非 2xx HTTP、超限输出、malformed JSON 和非法决策都视为 Hook 失败，错误信息会指出具体是哪个 Hook（event + 声明它的文件）和哪个 handler。阻断型 Pi 事件会 fail-closed；Session shutdown 会取消仍在运行的 handlers 并回收进程。`tool_call`/`tool_result` 失败通过对应 tool result 显示；没有 tool result 可用的事件（`session_start`、`user_prompt`、`session_before_compact`、`session_shutdown`）失败时会调用 Pi UI 通知，在 MMP 自己的界面和 Pi 的 `rpc` 模式下可见；Pi 的 `print`/`json` 模式没有可用 UI（Pi 的 `noOpUIContext`），这两种模式下同一条消息还会写到 stderr，确保失败不会安静地留下一个空回复。
+`timeoutMs` 默认 `10000`，最大 `300000`。超时、非零 command exit（错误信息包含退出码和一段 stderr 尾部）、spawn 失败（如 command 找不到）、非 2xx HTTP、超限输出、malformed JSON 和非法决策都视为 Hook 失败，错误信息会指出具体是哪个 Hook（event + 声明它的文件）和哪个 handler。阻断型 Pi 事件会 fail-closed；Session shutdown 会取消仍在运行的 handlers 并回收进程。`tool_call`/`tool_result` 失败通过对应 tool result 显示；没有 tool result 可用的事件（`session_start`、`user_prompt`、`session_before_compact`、`session_shutdown`）失败时会调用 Pi UI 通知，在 Epi 自己的界面和 Pi 的 `rpc` 模式下可见；Pi 的 `print`/`json` 模式没有可用 UI（Pi 的 `noOpUIContext`），这两种模式下同一条消息还会写到 stderr，确保失败不会安静地留下一个空回复。
 
 HTTP `body`、`url`、`headers` 与 command `env` 支持 `${ENV_NAME}`。HTTP body 还支持事件模板：
 

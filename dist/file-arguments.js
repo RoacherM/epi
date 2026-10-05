@@ -1,15 +1,15 @@
 // `@file` arguments (docs/cli-design.md §2), mirroring Pi's processFileArguments/buildInitialMessage
-// (dist/cli/file-processor.js, dist/cli/initial-message.js -- neither is exported). Used by MMP's
+// (dist/cli/file-processor.js, dist/cli/initial-message.js -- neither is exported). Used by Epi's
 // TUI to build its initial message (src/tui/start.ts) and by print/json (src/noninteractive.ts).
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { detectSupportedImageMimeTypeFromFile } from "@earendil-works/pi-coding-agent";
-import { MmpArgumentError } from "./errors.js";
+import { EpiArgumentError } from "./errors.js";
 /**
  * Mirrors Pi's resolveReadPath (dist/core/tools/path-utils.js, not exported): `~` expansion, then
  * resolved against cwd. Pi also retries a few macOS screenshot filename quirks (NFD normalization,
- * curly quotes, a narrow no-break space before AM/PM) when the plain path doesn't exist; MMP skips
+ * curly quotes, a narrow no-break space before AM/PM) when the plain path doesn't exist; Epi skips
  * those and reports a plain not-found error instead (documented deviation).
  */
 function resolveFileArgument(fileArg, cwd) {
@@ -18,7 +18,7 @@ function resolveFileArgument(fileArg, cwd) {
 }
 /** Reads each `@file` argument: text files are inlined, image files are noted by path and read as
  * an attachment, a missing file throws (instead of Pi's `console.error` + `process.exit(1)`) so
- * the caller can report it through MMP's normal preflight-error path. An empty file is skipped,
+ * the caller can report it through Epi's normal preflight-error path. An empty file is skipped,
  * matching Pi. Raw bytes are kept as-is; AgentSession resizes for the model at send time
  * (agent-session.js's `_normalizePromptImages`), so there's no need to do it here too. */
 export async function processFileArguments(fileArgs, cwd) {
@@ -28,7 +28,7 @@ export async function processFileArguments(fileArgs, cwd) {
     for (const fileArg of fileArgs) {
         const absolutePath = resolveFileArgument(fileArg, cwd);
         if (!existsSync(absolutePath)) {
-            throw new MmpArgumentError(`File not found: ${absolutePath}`);
+            throw new EpiArgumentError(`File not found: ${absolutePath}`);
         }
         if (statSync(absolutePath).size === 0) {
             continue;

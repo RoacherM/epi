@@ -14,9 +14,9 @@ const usage = () => ({
 });
 
 export default function (pi) {
-  const core = createFauxCore({ provider: "mmp-nocost", models: [{ id: "echo" }] });
+  const core = createFauxCore({ provider: "epi-nocost", models: [{ id: "echo" }] });
   core.setResponses([() => fauxAssistantMessage(fauxText("ECHO"))]);
-  pi.registerProvider("mmp-nocost", {
+  pi.registerProvider("epi-nocost", {
     baseUrl: "http://localhost:0",
     apiKey: "faux-test-key",
     api: core.api,

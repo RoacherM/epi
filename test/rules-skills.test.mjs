@@ -9,7 +9,7 @@ import test from "node:test";
 
 import {
   BASE_PI_RESOURCE_ARGS,
-  prepareMmpRun,
+  prepareEpiRun,
 } from "../dist/host.js";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
@@ -20,20 +20,20 @@ const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const rulesProbe = fileURLToPath(new URL("./fixtures/faux-rules-probe.mjs", import.meta.url));
 
-test("Rules and Skills stay in MMP assembly instead of fixed Pi arguments", (t) => {
+test("Rules and Skills stay in Epi assembly instead of fixed Pi arguments", (t) => {
   // Isolated HOME: this run's assembly.skills is asserted to have exactly the one declared root
   // below, which the real ~/.agents/skills (docs/decisions.md S1 auto-discovery) would break.
-  const home = mkdtempSync(join(tmpdir(), "mmp-rules-skills-home-"));
+  const home = mkdtempSync(join(tmpdir(), "epi-rules-skills-home-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  const prepared = prepareMmpRun(
+  const prepared = prepareEpiRun(
     ["--no-project", "--print", "acceptance"],
-    { HOME: home, MMP_HOME: fixtureRoot },
+    { HOME: home, EPI_HOME: fixtureRoot },
     packageRoot,
   );
   const ruleText = readFileSync(join(fixtureRoot, "RULES.md"), "utf8");
   const skillPath = realpathSync(join(fixtureRoot, "skills"));
 
-  assert.equal(prepared.assembly.rulesText, `# MMP Rules\n\n${ruleText}`);
+  assert.equal(prepared.assembly.rulesText, `# Epi Rules\n\n${ruleText}`);
   assert.deepEqual(prepared.piArgs, [
     ...BASE_PI_RESOURCE_ARGS,
     "--print",
@@ -44,12 +44,12 @@ test("Rules and Skills stay in MMP assembly instead of fixed Pi arguments", (t) 
 
 test("dry-run reports resource paths but never Rules content", (t) => {
   // Isolated HOME (same reason as the test above).
-  const home = mkdtempSync(join(tmpdir(), "mmp-rules-skills-home-"));
+  const home = mkdtempSync(join(tmpdir(), "epi-rules-skills-home-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const result = spawnSync(process.execPath, [cliPath, "--no-project", "--dry-run"], {
     cwd: dirname(packageRoot),
     encoding: "utf8",
-    env: { ...process.env, HOME: home, MMP_HOME: fixtureRoot },
+    env: { ...process.env, HOME: home, EPI_HOME: fixtureRoot },
   });
   const output = JSON.parse(result.stdout);
 
@@ -58,33 +58,33 @@ test("dry-run reports resource paths but never Rules content", (t) => {
   assert.equal(output.skills.length, 1);
   assert.equal(output.rules[0].value, realpathSync(join(fixtureRoot, "RULES.md")));
   assert.equal(output.skills[0].value, realpathSync(join(fixtureRoot, "skills")));
-  assert.equal(result.stdout.includes("MMP_RULES_OK"), false);
+  assert.equal(result.stdout.includes("EPI_RULES_OK"), false);
 });
 
-/** An MMP home whose Manifest starts with Rules marker V1; R2.md and the `skills-two` root (one
+/** An Epi home whose Manifest starts with Rules marker V1; R2.md and the `skills-two` root (one
  * skill, `probe-skill-two`) and R3.md are there for a later Manifest to switch to. */
 function failedRefreshFixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-failed-reload-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-failed-reload-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  const mmpHome = join(home, ".mmp");
-  mkdirSync(join(mmpHome, "skills-two", "probe-skill-two"), { recursive: true });
-  writeFileSync(join(mmpHome, "skills-two", "probe-skill-two", "SKILL.md"),
+  const epiHome = join(home, ".epi");
+  mkdirSync(join(epiHome, "skills-two", "probe-skill-two"), { recursive: true });
+  writeFileSync(join(epiHome, "skills-two", "probe-skill-two", "SKILL.md"),
     "---\nname: probe-skill-two\ndescription: probe-skill-two\n---\nprobe-skill-two\n");
   for (const [file, marker] of [["R1.md", "RULES-VONE"], ["R2.md", "RULES-VTWO"], ["R3.md", "RULES-VTHREE"]]) {
-    writeFileSync(join(mmpHome, file), `${marker}\n`);
+    writeFileSync(join(epiHome, file), `${marker}\n`);
   }
   const manifest = (rules, skills) => JSON.stringify({ version: 1, rules, skills, extensions: [rulesProbe] });
-  const manifestPath = join(mmpHome, "mmp.json");
+  const manifestPath = join(epiHome, "epi.json");
   writeFileSync(manifestPath, manifest(["./R1.md"], []));
-  return { root, home, mmpHome, manifest, manifestPath };
+  return { root, home, epiHome, manifest, manifestPath };
 }
 
 // docs/development.md §9.3: a failed Manifest refresh keeps the last valid assembly. Pi re-runs the
 // extension factories on /reload and /new, so this has to go through a real Pi runtime (the TUI
 // harness) -- a unit test that runs the factory once can't see a factory re-run discard the state.
 test("a failed /reload or /new keeps the last valid Rules and Skill roots, not the startup ones", (t) => {
-  const { root, home, mmpHome, manifest, manifestPath } = failedRefreshFixture(t);
+  const { root, home, epiHome, manifest, manifestPath } = failedRefreshFixture(t);
   const seen = (text) => ["waitFor", text, { timeoutMs: 5000 }];
   // The complete reply to this turn: drawn after the turn's own prompt line, so neither the TUI
   // redrawing an earlier reply nor a half-streamed line satisfies it.
@@ -95,19 +95,19 @@ test("a failed /reload or /new keeps the last valid Rules and Skill roots, not t
     ["waitReady"],
     ["type", "one"], ["key", "enter"], seen("SEEN rules=RULES-VONE skills=none"),
     ["writeFile", { path: manifestPath, content: manifest(["./R2.md"], ["./skills-two"]) }],
-    ["type", "/reload"], ["key", "enter"], ["waitFor", "MMP reloaded 1 rule files and 1 skill roots."],
+    ["type", "/reload"], ["key", "enter"], ["waitFor", "Epi reloaded 1 rule files and 1 skill roots."],
     ["type", "two"], ["key", "enter"], seen("SEEN rules=RULES-VTWO skills=probe-skill-two"),
     ["writeFile", { path: manifestPath, content: '{"version":1,"bogusField":true}' }],
-    ["type", "/reload"], ["key", "enter"], ["waitFor", "MMP Manifest reload failed"], ["mark", "failedReload"],
+    ["type", "/reload"], ["key", "enter"], ["waitFor", "Epi Manifest reload failed"], ["mark", "failedReload"],
     ["type", "three"], ["key", "enter"], replyTo("three"), ["mark", "afterFailedReload"],
-    ["type", "/mmp"], ["key", "enter"], ["waitFor", "loadedSkills"], ["wait", 300], ["mark", "mmpReport"],
+    ["type", "/epi"], ["key", "enter"], ["waitFor", "loadedSkills"], ["wait", 300], ["mark", "epiReport"],
     // /new runs the factories again and refreshes the (still broken) Manifest once more.
-    ["type", "/new"], ["key", "enter"], ["waitFor", "MMP Manifest reload failed"], ["wait", 300],
+    ["type", "/new"], ["key", "enter"], ["waitFor", "Epi Manifest reload failed"], ["wait", 300],
     ["screen", "newPage"],
     ["type", "four"], ["key", "enter"], replyTo("four"), ["mark", "afterFailedNew"],
     // Once the Manifest is valid again, the next refresh replaces the kept assembly.
     ["writeFile", { path: manifestPath, content: manifest(["./R3.md"], []) }],
-    ["type", "/reload"], ["key", "enter"], ["waitFor", "MMP reloaded 1 rule files and 0 skill roots."],
+    ["type", "/reload"], ["key", "enter"], ["waitFor", "Epi reloaded 1 rule files and 0 skill roots."],
     ["type", "five"], ["key", "enter"], seen("SEEN rules=RULES-VTHREE skills=none"),
     ["key", "ctrl+d"],
   ];
@@ -116,10 +116,10 @@ test("a failed /reload or /new keeps the last valid Rules and Skill roots, not t
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: mmpHome,
-      MMP_OFFLINE: "1",
-      // Tall enough that /mmp's whole report is drawn, not just its tail.
-      MMP_TUI_HARNESS: JSON.stringify({ steps, rows: 120, args: ["--no-project", "--model", "mmp-faux/model-a"] }),
+      EPI_HOME: epiHome,
+      EPI_OFFLINE: "1",
+      // Tall enough that /epi's whole report is drawn, not just its tail.
+      EPI_TUI_HARNESS: JSON.stringify({ steps, rows: 120, args: ["--no-project", "--model", "epi-faux/model-a"] }),
     },
     encoding: "utf8",
     timeout: 90_000,
@@ -130,24 +130,24 @@ test("a failed /reload or /new keeps the last valid Rules and Skill roots, not t
   // The TUI redraws earlier replies inside a window, so only the last SEEN line is the new turn's.
   const lastSeen = (mark, previous) => since(mark, previous).match(/SEEN rules=\S+ skills=\S+/g)?.at(-1);
 
-  assert.match(marks.failedReload, /MMP Manifest reload failed: .*bogusField/);
+  assert.match(marks.failedReload, /Epi Manifest reload failed: .*bogusField/);
   assert.equal(lastSeen("afterFailedReload", "failedReload"), "SEEN rules=RULES-VTWO skills=probe-skill-two");
-  // /mmp reports the kept assembly: the second Manifest's Rules file and Skill root.
-  const report = since("mmpReport", "afterFailedReload");
+  // /epi reports the kept assembly: the second Manifest's Rules file and Skill root.
+  const report = since("epiReport", "afterFailedReload");
   assert.match(report, /R2\.md/);
   assert.match(report, /skills-two/);
   assert.doesNotMatch(report, /R1\.md/);
   // The startup page /new draws counts the kept Skill root (the startup Manifest had none).
   assert.match(screens.newPage.join("\n"), /rules 1 · roots 1\b/);
-  assert.equal(lastSeen("afterFailedNew", "mmpReport"), "SEEN rules=RULES-VTWO skills=probe-skill-two");
+  assert.equal(lastSeen("afterFailedNew", "epiReport"), "SEEN rules=RULES-VTWO skills=probe-skill-two");
 });
 
 // The same rule for an rpc client's session switch and fork, where Pi also re-runs the factories.
 test("rpc: switch_session and fork after a failed Manifest refresh keep the last valid assembly", async (t) => {
-  const { root, home, mmpHome, manifest, manifestPath } = failedRefreshFixture(t);
-  const child = spawn(process.execPath, [cliPath, "--no-project", "--model", "mmp-faux/model-a", "--mode", "rpc"], {
+  const { root, home, epiHome, manifest, manifestPath } = failedRefreshFixture(t);
+  const child = spawn(process.execPath, [cliPath, "--no-project", "--model", "epi-faux/model-a", "--mode", "rpc"], {
     cwd: root,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: mmpHome, MMP_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, EPI_HOME: epiHome, EPI_OFFLINE: "1" },
     stdio: ["pipe", "pipe", "pipe"],
   });
   const killTimer = setTimeout(() => child.kill(), 30_000);
@@ -195,8 +195,8 @@ test("rpc: switch_session and fork after a failed Manifest refresh keep the last
   writeFileSync(manifestPath, '{"version":1,"bogusField":true}');
   // Each refresh that fails says so. (Pi's rpc rebinds a switched or forked session twice --
   // runtimeHost's rebind callback, then the command handler's own rebindSession() -- so session_start,
-  // and with it the notice, comes twice; only "at least once per step" is MMP's.)
-  const failures = () => notifies.filter((message) => /^MMP Manifest reload failed: .*bogusField/.test(message)).length;
+  // and with it the notice, comes twice; only "at least once per step" is Epi's.)
+  const failures = () => notifies.filter((message) => /^Epi Manifest reload failed: .*bogusField/.test(message)).length;
   await send({ type: "switch_session", sessionPath: firstSession });
   const afterSwitch = failures();
   assert.ok(afterSwitch > 0, notifies.join("\n"));

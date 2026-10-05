@@ -23,7 +23,7 @@ const typesVersion = packageVersion(topLevelEntry);
 if (runtimeVersion !== typesVersion) {
   throw new Error(
     `pi-tui version mismatch: Pi uses ${runtimeVersion} (${piTuiEntry}), ` +
-    `MMP's types come from ${typesVersion} (${topLevelEntry})`,
+    `Epi's types come from ${typesVersion} (${topLevelEntry})`,
   );
 }
 

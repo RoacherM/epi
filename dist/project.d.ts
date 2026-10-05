@@ -28,7 +28,7 @@ export declare function findNearestProjectManifest(cwd: string, globalManifestPa
  * has (yet). The store walks up from `cwd`, so it finds a decision saved for the project root (the
  * first-run prompt, TUI v2 `/trust`) and one saved for a subfolder (classic Pi `/trust` saves the
  * session cwd). Skips even opening the store when trust.json does not exist, so an unknown project
- * never causes MMP's agentDir to be created.
+ * never causes Epi's agentDir to be created.
  */
 export declare function readProjectTrustDecision(agentDir: string, cwd: string): boolean | null;
 export declare function resolveProjectManifest(options: ResolveProjectOptions): ProjectResolution;

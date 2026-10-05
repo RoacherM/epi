@@ -9,16 +9,16 @@ import { fileURLToPath } from "node:url";
 import xterm from "@xterm/headless";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const temp = mkdtempSync(join(tmpdir(), "mmp-ui-"));
+const temp = mkdtempSync(join(tmpdir(), "epi-ui-"));
 const home = join(temp, "home");
-const cwd = join(home, "Projects", "mmp-demo");
+const cwd = join(home, "Projects", "epi-demo");
 const columns = 120;
 const rows = 34;
 try {
   mkdirSync(join(cwd, "src"), { recursive: true });
-  mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
+  mkdirSync(join(home, ".epi", "pi"), { recursive: true });
   writeFileSync(join(cwd, "src", "greet.js"), 'export function greet(name) {\n  return `Hello, ${name}!`;\n}\n');
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({
     version: 1, extensions: [join(root, "scripts/docs/ui-demo.mjs")],
   }));
   const steps = [
@@ -36,10 +36,10 @@ try {
     // Deliberately allowlist the environment: no credentials, user config, or NODE_OPTIONS.
     env: {
       PATH: dirname(process.execPath) + ":/usr/bin:/bin",
-      HOME: home, MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1", MMP_DISABLE_UPDATE_CHECK: "1",
+      HOME: home, EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1", EPI_DISABLE_UPDATE_CHECK: "1",
       TERM: "xterm-256color", COLORTERM: "truecolor", COLORFGBG: "15;0",
-      MMP_TUI_HARNESS: JSON.stringify({
+      EPI_TUI_HARNESS: JSON.stringify({
         columns, rows, args: ["--no-project", "--offline", "--thinking", "medium"], steps,
       }),
     },
@@ -53,7 +53,7 @@ try {
   assert.match(session, /exit 0/);
   assert.match(session, /const displayName = name.trim/);
   assert.match(readFileSync(join(cwd, "src/greet.js"), "utf8"), /const displayName = name.trim\(\) \|\| "world";/);
-  for (const [mark, filename] of [["welcome", "mmp-welcome.png"], ["session", "mmp-ui.png"]]) {
+  for (const [mark, filename] of [["welcome", "epi-welcome.png"], ["session", "epi-ui.png"]]) {
     const terminal = new xterm.Terminal({ cols: columns, rows, allowProposedApi: true });
     await new Promise((resolve) => terminal.write(capture.marks[mark], resolve));
     const buffer = terminal.buffer.active;

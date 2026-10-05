@@ -1,7 +1,7 @@
 // /settings (docs/tui-design.md 4.6): Pi's SettingsSelectorComponent (settings-selector.js) cut down
-// to the items MMP's interface honours. Pi's component builds all of its items in the constructor
+// to the items Epi's interface honours. Pi's component builds all of its items in the constructor
 // with no way to leave any out (SettingsList.items is private), so this builds the same pi-tui
-// SettingsList with MMP's own item list. Ids, labels, descriptions and values are Pi's, checked
+// SettingsList with Epi's own item list. Ids, labels, descriptions and values are Pi's, checked
 // against Pi's real component by test/tui-settings.test.mjs; the items left out and why are listed
 // in docs/tui-design.md 4.6.
 import { DynamicBorder, getSettingsListTheme, keyText, type AgentSession, type SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -35,7 +35,7 @@ type TreeFilterMode = Parameters<SettingsManager["setTreeFilterMode"]>[0];
 type DoubleEscapeAction = Parameters<SettingsManager["setDoubleEscapeAction"]>[0];
 type Scrollbar = Parameters<SettingsManager["setFullscreenScrollbar"]>[0];
 
-interface MmpSetting {
+interface EpiSetting {
   item: SettingItem;
   /** Save the new value and apply it where it takes effect, like Pi's matching callback. */
   apply(value: string): void;
@@ -44,10 +44,10 @@ interface MmpSetting {
 const bool = (value: boolean) => (value ? "true" : "false");
 
 /**
- * MMP's show-hardware-cursor value. Pi's getShowHardwareCursor falls back to the PI_HARDWARE_CURSOR
- * environment variable when settings.json has no value; MMP never honours a user's Pi environment
- * (like MMP_SESSION_DIR instead of PI_CODING_AGENT_SESSION_DIR, docs/cli-design.md), so unset is
- * off. Global settings are all of MMP's settings: its SettingsManager never loads a project's
+ * Epi's show-hardware-cursor value. Pi's getShowHardwareCursor falls back to the PI_HARDWARE_CURSOR
+ * environment variable when settings.json has no value; Epi never honours a user's Pi environment
+ * (like EPI_SESSION_DIR instead of PI_CODING_AGENT_SESSION_DIR, docs/cli-design.md), so unset is
+ * off. Global settings are all of Epi's settings: its SettingsManager never loads a project's
  * .pi/settings.json (services.ts, `projectTrusted: false`).
  */
 export function showHardwareCursor(settings: SettingsManager): boolean {
@@ -60,7 +60,7 @@ export function showHardwareCursor(settings: SettingsManager): boolean {
  * applyRuntimeSettings), so /settings, startup and /reload all apply a setting through the same
  * code. Skill commands only rebuild autocomplete (`host.resetAutocomplete()`), like Pi's callback.
  */
-export function settingsItems(host: CommandHost): MmpSetting[] {
+export function settingsItems(host: CommandHost): EpiSetting[] {
   const session = host.session();
   const settings = session.settingsManager;
   const wheelLines = settings.getFullscreenWheelScrollLines();
@@ -154,7 +154,7 @@ export function settingsItems(host: CommandHost): MmpSetting[] {
       item: {
         id: "steering-mode",
         label: "Steering mode",
-        // Pi says "Enter": MMP swaps Enter and Alt+Enter while a turn runs (docs/tui-design.md 4.7),
+        // Pi says "Enter": Epi swaps Enter and Alt+Enter while a turn runs (docs/tui-design.md 4.7),
         // so steering is the app.message.followUp key here.
         description: `${keyText("app.message.followUp")} while streaming queues steering messages. 'one-at-a-time': deliver one, wait for response. 'all': deliver all at once.`,
         currentValue: session.steeringMode,
@@ -166,7 +166,7 @@ export function settingsItems(host: CommandHost): MmpSetting[] {
       item: {
         id: "follow-up-mode",
         label: "Follow-up mode",
-        // Pi names its app.message.followUp key; in MMP a follow-up is plain Enter (4.7).
+        // Pi names its app.message.followUp key; in Epi a follow-up is plain Enter (4.7).
         description: "Enter while streaming queues follow-up messages until agent stops. 'one-at-a-time': deliver one, wait for response. 'all': deliver all at once.",
         currentValue: session.followUpMode,
         values: ["one-at-a-time", "all"],

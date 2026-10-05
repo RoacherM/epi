@@ -14,25 +14,25 @@ const probeExtension = fileURLToPath(new URL("./fixtures/ambient-probe-extension
 const fauxTwoModels = fileURLToPath(new URL("./fixtures/faux-two-models.mjs", import.meta.url));
 
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-sdk-path-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-sdk-path-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const project = join(root, "project");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
   mkdirSync(join(project, ".pi"), { recursive: true });
   // Ambient resources both paths must ignore.
   writeFileSync(join(project, "AGENTS.md"), "AMBIENT-CONTEXT\n");
-  writeFileSync(join(home, ".mmp", "SYSTEM.md"), "AMBIENT-SYSTEM\n");
-  mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "pi", "APPEND_SYSTEM.md"), "AMBIENT-APPEND\n");
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
-  return { root, home, project, env, agentDir: join(home, ".mmp", "pi") };
+  writeFileSync(join(home, ".epi", "SYSTEM.md"), "AMBIENT-SYSTEM\n");
+  mkdirSync(join(home, ".epi", "pi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "pi", "APPEND_SYSTEM.md"), "AMBIENT-APPEND\n");
+  const env = { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1" };
+  return { root, home, project, env, agentDir: join(home, ".epi", "pi") };
 }
 
 function runSdkPath(f, options) {
   return spawnSync(process.execPath, [runnerPath], {
     cwd: f.project,
-    env: { ...f.env, MMP_SDK_RUNNER: JSON.stringify(options) },
+    env: { ...f.env, EPI_SDK_RUNNER: JSON.stringify(options) },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -42,11 +42,11 @@ test("SDK path gives the model exactly what the piMain path gives it", (t) => {
   const f = fixture(t);
   const piMainOut = join(f.root, "pimain.json");
   const sdkOut = join(f.root, "sdk.json");
-  writeFileSync(join(f.home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [probeExtension] }));
+  writeFileSync(join(f.home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [probeExtension] }));
 
   spawnSync(process.execPath, [cliPath, "--no-project", "-p", "hi"], {
     cwd: f.project,
-    env: { ...f.env, MMP_AMBIENT_PROBE_OUT: piMainOut },
+    env: { ...f.env, EPI_AMBIENT_PROBE_OUT: piMainOut },
     input: "",
     encoding: "utf8",
     timeout: 60_000,
@@ -55,8 +55,8 @@ test("SDK path gives the model exactly what the piMain path gives it", (t) => {
     cwd: f.project,
     env: {
       ...f.env,
-      MMP_AMBIENT_PROBE_OUT: sdkOut,
-      MMP_SDK_RUNNER: "{}",
+      EPI_AMBIENT_PROBE_OUT: sdkOut,
+      EPI_SDK_RUNNER: "{}",
     },
     encoding: "utf8",
     timeout: 60_000,
@@ -74,8 +74,8 @@ test("SDK path gives the model exactly what the piMain path gives it", (t) => {
 
 test("SDK path ignores project .pi/settings.json", (t) => {
   const f = fixture(t);
-  writeFileSync(join(f.project, ".pi", "settings.json"), JSON.stringify({ defaultProvider: "mmp-faux", defaultModel: "model-b" }));
-  writeFileSync(join(f.home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxTwoModels] }));
+  writeFileSync(join(f.project, ".pi", "settings.json"), JSON.stringify({ defaultProvider: "epi-faux", defaultModel: "model-b" }));
+  writeFileSync(join(f.home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fauxTwoModels] }));
   const result = runSdkPath(f, { prompt: "hi" });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /PICKED=model-a/);
@@ -87,10 +87,10 @@ test("SDK path loads no ambient Pi resource", (t) => {
   const out = join(f.root, "probe.json");
   mkdirSync(marks);
   plantAmbientWorld({ home: f.home, project: f.project, marks });
-  writeFileSync(join(f.home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [probeExtension] }));
+  writeFileSync(join(f.home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [probeExtension] }));
   const result = spawnSync(process.execPath, [runnerPath], {
     cwd: f.project,
-    env: { ...f.env, MMP_AMBIENT_PROBE_OUT: out, MMP_SDK_RUNNER: "{}" },
+    env: { ...f.env, EPI_AMBIENT_PROBE_OUT: out, EPI_SDK_RUNNER: "{}" },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -100,18 +100,18 @@ test("SDK path loads no ambient Pi resource", (t) => {
   assert.deepEqual(`${probe.systemPrompt}\n${probe.commands.join("\n")}`.match(AMBIENT_MARKER) ?? [], []);
 });
 
-// docs/mcp-design.md §8: the SDK path with "mmp:mcp" actually declared and active (not just Pi's
-// own never-loaded builtin) must still never read <MMP_HOME>/pi/mcp.json or <cwd>/.pi/mcp.json.
-test("SDK path loads no ambient Pi resource (mmp:mcp declared and active)", (t) => {
+// docs/mcp-design.md §8: the SDK path with "epi:mcp" actually declared and active (not just Pi's
+// own never-loaded builtin) must still never read <EPI_HOME>/pi/mcp.json or <cwd>/.pi/mcp.json.
+test("SDK path loads no ambient Pi resource (epi:mcp declared and active)", (t) => {
   const f = fixture(t);
   const marks = join(f.root, "marks");
   const out = join(f.root, "probe.json");
   mkdirSync(marks);
   plantAmbientWorld({ home: f.home, project: f.project, marks });
-  writeFileSync(join(f.home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: ["mmp:mcp", probeExtension] }));
+  writeFileSync(join(f.home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: ["epi:mcp", probeExtension] }));
   const result = spawnSync(process.execPath, [runnerPath], {
     cwd: f.project,
-    env: { ...f.env, MMP_AMBIENT_PROBE_OUT: out, MMP_SDK_RUNNER: "{}" },
+    env: { ...f.env, EPI_AMBIENT_PROBE_OUT: out, EPI_SDK_RUNNER: "{}" },
     encoding: "utf8",
     timeout: 60_000,
   });

@@ -19,11 +19,11 @@ export interface UsageBucket {
 export declare function usageBreakdown(entries: readonly SessionEntry[]): UsageBucket[];
 /** `/session`: file, id, message and token counts, and cost (with a per-model breakdown when more
  * than one model was used). Pi also shows cache-waste and cache-warming detail built from internals
- * MMP has no access to (computeCacheWaste, formatCacheWarmingStatus); left out here. */
+ * Epi has no access to (computeCacheWaste, formatCacheWarmingStatus); left out here. */
 export declare function runSession(host: CommandHost): Promise<void>;
-/** `/hotkeys`: every key MMP's app table (src/tui/keys.ts) and editor actually bind, with the keys
+/** `/hotkeys`: every key Epi's app table (src/tui/keys.ts) and editor actually bind, with the keys
  * resolved live through the installed KeybindingsManager (installKeybindings, keybindings.ts), so a
- * user remap in `~/.mmp/pi/keybindings.json` shows here too — unlike a hardcoded key label. */
+ * user remap in `~/.epi/pi/keybindings.json` shows here too — unlike a hardcoded key label. */
 export declare function runHotkeys(host: CommandHost): Promise<void>;
 /** `/scoped-models`: enable/disable/reorder models for Ctrl+P-style cycling (session-only until
  * Ctrl+S persists it to settings), Pi's showModelsSelector. Simplified from Pi: refreshes the model

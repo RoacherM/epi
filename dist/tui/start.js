@@ -5,13 +5,13 @@ import { createPreviewInlineExtension } from "../extensions/preview.js";
 import { buildTuiInitialMessages } from "../file-arguments.js";
 import { findNearestProjectManifest } from "../project.js";
 import { runTuiApp } from "./app.js";
-import { createMmpRuntime } from "./services.js";
-import { detectAppearance, installMmpTheme } from "./theme.js";
+import { createEpiRuntime } from "./services.js";
+import { detectAppearance, installEpiTheme } from "./theme.js";
 /** Extensions that are interface features (/preview) load only for the interactive TUI: print,
- * json and rpc have no screen to put them on. They go before mmp:system-prompt, which has to stay
+ * json and rpc have no screen to put them on. They go before epi:system-prompt, which has to stay
  * last (extensions/index.ts). */
 function withInterfaceExtensions(extensionFactories) {
-    const last = extensionFactories.findIndex((extension) => extension.name === "mmp:system-prompt");
+    const last = extensionFactories.findIndex((extension) => extension.name === "epi:system-prompt");
     const at = last < 0 ? extensionFactories.length : last;
     return [...extensionFactories.slice(0, at), createPreviewInlineExtension(), ...extensionFactories.slice(at)];
 }
@@ -20,8 +20,8 @@ export async function createRuntimeFromPrepared(prepared, cwd,
 // Mirrors host.ts's own construction (same flag, same default undefined updateCheck) so a caller
 // that builds a runtime straight from `prepared` (tests; host.ts always passes its own factories
 // explicitly) still gets `--verbose` support.
-extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, prepared.runtimeIdentity, prepared.resolveAssembly, undefined, passthroughHasFlag(prepared.args.passthrough, "--verbose"))) {
-    return createMmpRuntime({
+extensionFactories = buildInlineExtensions(prepared.assembly, prepared.epiHome, prepared.runtimeIdentity, prepared.resolveAssembly, undefined, passthroughHasFlag(prepared.args.passthrough, "--verbose"))) {
+    return createEpiRuntime({
         cwd,
         agentDir: prepared.agentDir,
         piArgs: prepared.args.passthrough,
@@ -36,7 +36,7 @@ extensionFactories = buildInlineExtensions(prepared.assembly, prepared.mmpHome, 
  *
  * `root` is recomputed from `cwd` directly, independent of `--no-project`/trust: with
  * `--no-project` (or an untrusted/missing manifest), `prepared.assembly.projectManifest` is
- * undefined even when a `.mmp/mmp.json` really does exist above `cwd`, which made a session
+ * undefined even when a `.epi/epi.json` really does exist above `cwd`, which made a session
  * started in that very folder look like "a different project" to project-guard.ts. */
 export function projectIdentityFromPrepared(prepared, cwd) {
     return {
@@ -57,7 +57,7 @@ export async function startupOptionsFromPiArgs(piArgs, cwd) {
 export async function runTuiV2(prepared, extensionFactories) {
     const cwd = process.cwd();
     // Pi's exported components read the global theme; it must exist before any of them is built.
-    const theme = installMmpTheme(prepared.agentDir, detectAppearance(process.env));
+    const theme = installEpiTheme(prepared.agentDir, detectAppearance(process.env));
     const runtime = await createRuntimeFromPrepared(prepared, cwd, extensionFactories);
     const { initialMessages, initialImages, resumeOnStart } = await startupOptionsFromPiArgs(prepared.args.passthrough, cwd);
     return runTuiApp({

@@ -1,10 +1,10 @@
-// ExtensionUIContext for MMP's host: all members exist (docs/tui-design.md 6.1). Members the v0
+// ExtensionUIContext for Epi's host: all members exist (docs/tui-design.md 6.1). Members the v0
 // layout cannot place yet report that plainly instead of silently doing nothing.
 import { ExtensionInputComponent } from "@earendil-works/pi-coding-agent";
 import { confirmInEditorSlot, dialog, editInEditorSlot, selectInEditorSlot } from "./dialogs.js";
 import { piTui } from "./pi-tui.js";
 function unsupported(surface, member) {
-    surface.notify(`An extension called ui.${member}, which MMP TUI v2 does not support yet.`, "warning");
+    surface.notify(`An extension called ui.${member}, which Epi TUI v2 does not support yet.`, "warning");
 }
 export function createExtensionUIContext(surface) {
     const ui = {
@@ -78,9 +78,9 @@ export function createExtensionUIContext(surface) {
         get theme() {
             return surface.theme;
         },
-        getAllThemes: () => [{ name: surface.theme.name ?? "mmp", path: undefined }],
+        getAllThemes: () => [{ name: surface.theme.name ?? "epi", path: undefined }],
         getTheme: (name) => (name === surface.theme.name ? surface.theme : undefined),
-        setTheme: () => ({ success: false, error: "MMP TUI v2 uses its own grok theme; switching is not supported yet." }),
+        setTheme: () => ({ success: false, error: "Epi TUI v2 uses its own grok theme; switching is not supported yet." }),
         getToolsExpanded: () => surface.getToolsExpanded(),
         setToolsExpanded: (expanded) => surface.setToolsExpanded(expanded),
     };

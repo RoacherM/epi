@@ -30,7 +30,7 @@
 //   stack, `undo()` Object.assigns the popped clone back onto `state`, and `navigateHistory()`
 //   clones `state` into `historyDraft` on the way into history and reinstalls it with
 //   `this.state = draft` on the way out. `slots` is stored on that same object
-//   (`state.mmpTextChips`), so every one of those paths restores the registry exactly as it was
+//   (`state.epiTextChips`), so every one of those paths restores the registry exactly as it was
 //   for that text, with no bookkeeping of our own. `sync()` recognises a restore by the array's
 //   identity (Pi's copy is a clone, never the array we last wrote).
 // - Every other edit (typing, Pi's deletes and kills, yank, setText): `carryOver()` diffs the
@@ -713,7 +713,7 @@ export class ChipEditor {
         const state = this.editorState();
         const text = this.inner.getText();
         const cursor = cursorOffset(text, this.inner.getCursor());
-        const stored = state.mmpTextChips;
+        const stored = state.epiTextChips;
         let slots;
         if (stored !== undefined && stored !== this.synced.slots) {
             slots = this.restoredSlots(text, stored) ?? this.carryOver(text, cursor);
@@ -727,7 +727,7 @@ export class ChipEditor {
         else {
             slots = this.carryOver(text, cursor);
         }
-        state.mmpTextChips = slots;
+        state.epiTextChips = slots;
         this.synced = { text, cursor, slots };
     }
     /** Slots Pi put back with an earlier state (undo, leaving history). Checked chip by chip; only

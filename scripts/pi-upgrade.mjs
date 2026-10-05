@@ -185,9 +185,9 @@ export function bumpPatch(version) {
 /** Bumps package.json's version and package-lock.json's matching root version (so the lockfile
  * isn't visibly stale in the PR -- `npm ci` doesn't require this, but a release-ready PR shouldn't
  * ship an inconsistent lockfile), so a passing-gate PR is release-ready (docs/pi-upgrade-design.md
- * §5). `src/version.ts`'s `MMP_VERSION` now reads package.json at runtime (single source of truth --
+ * §5). `src/version.ts`'s `EPI_VERSION` now reads package.json at runtime (single source of truth --
  * a separate concurrent change), so there is nothing else to edit here. */
-export function bumpMmpVersion({ cwd, readFile = readFileSync, writeFile = writeFileSync }) {
+export function bumpEpiVersion({ cwd, readFile = readFileSync, writeFile = writeFileSync }) {
   const pkg = readPackageJson(cwd);
   const nextVersion = bumpPatch(pkg.version);
   pkg.version = nextVersion;
@@ -226,7 +226,7 @@ function buildReport({
   gate,
   modelSnapshot,
   changelog,
-  mmpVersion,
+  epiVersion,
 }) {
   const lines = [
     "# Pi upgrade report",
@@ -240,8 +240,8 @@ function buildReport({
     );
   }
   lines.push(`- Gate: ${formatGateResult(gate)}`);
-  if (mmpVersion !== undefined) {
-    lines.push(`- MMP version bumped to ${mmpVersion} (package.json + package-lock.json)`);
+  if (epiVersion !== undefined) {
+    lines.push(`- Epi version bumped to ${epiVersion} (package.json + package-lock.json)`);
   }
   lines.push("", "## Model-visible changes", "");
   if (modelSnapshot === undefined) {
@@ -388,12 +388,12 @@ export function runPiUpgrade({
   const changelog =
     changelogText === undefined ? undefined : extractChangelogEntries(changelogText, oldPiVersion, newPiVersion);
 
-  let mmpVersion;
+  let epiVersion;
   if (gatePassed) {
-    mmpVersion = bumpMmpVersion({ cwd, readFile, writeFile });
+    epiVersion = bumpEpiVersion({ cwd, readFile, writeFile });
     const rebuild = exec("npm", ["run", "build"], { cwd });
     if (rebuild.status !== 0) {
-      throw new Error(`npm run build failed after bumping MMP_VERSION: ${rebuild.stderr || rebuild.stdout}`);
+      throw new Error(`npm run build failed after bumping EPI_VERSION: ${rebuild.stderr || rebuild.stdout}`);
     }
   }
 
@@ -402,7 +402,7 @@ export function runPiUpgrade({
     upgraded: gatePassed,
     gatePassed,
     modelVisibleChanged: modelSnapshot?.changed ?? false,
-    mmpVersion,
+    epiVersion,
     newPiVersion,
     reportHash: computeReportHash({ oldPiVersion, newPiVersion, gate }),
     report: buildReport({
@@ -411,7 +411,7 @@ export function runPiUpgrade({
       gate,
       modelSnapshot,
       changelog,
-      mmpVersion,
+      epiVersion,
     }),
   };
 }
@@ -447,7 +447,7 @@ function main() {
         upgraded: result.upgraded,
         gatePassed: result.gatePassed,
         modelVisibleChanged: result.modelVisibleChanged,
-        mmpVersion: result.mmpVersion,
+        epiVersion: result.epiVersion,
         newPiVersion: result.newPiVersion,
         reportHash: result.reportHash,
       },

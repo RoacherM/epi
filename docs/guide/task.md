@@ -2,7 +2,7 @@
 
 [← 文档索引](README.md)
 
-`mmp:task` 默认开启（Manifest 里 `"disable": ["mmp:task"]` 可关掉），可用工具：
+`epi:task` 默认开启（Manifest 里 `"disable": ["epi:task"]` 可关掉），可用工具：
 
 ```text
 task
@@ -12,7 +12,7 @@ task_cancel
 todo
 ```
 
-Agent profile 放在 `~/.mmp/agents/<name>.md`；可信项目可用 `<repo>/.mmp/agents/<name>.md` 按名称覆盖全局 profile：
+Agent profile 放在 `~/.epi/agents/<name>.md`；可信项目可用 `<repo>/.epi/agents/<name>.md` 按名称覆盖全局 profile：
 
 ```markdown
 ---
@@ -36,4 +36,4 @@ Review only the requested change. Return findings with file and line evidence.
 - `timeoutSeconds`：可选正整数，默认 `600`。
 - frontmatter 后正文是 Child system prompt。
 
-每个 Task Child 都是包内 `dist/worker.js` 启动的独立 Node.js process，使用固定 Pi SDK 和 in-memory Session；不会加载 `mmp:task`，因此不能递归派生 Task。Parent Session 退出时会取消并回收所有 Child。
+每个 Task Child 都是包内 `dist/worker.js` 启动的独立 Node.js process，使用固定 Pi SDK 和 in-memory Session；不会加载 `epi:task`，因此不能递归派生 Task。Parent Session 退出时会取消并回收所有 Child。

@@ -3,7 +3,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 
 import { z } from "zod";
 
-import { MmpConfigError } from "./errors.js";
+import { EpiConfigError } from "./errors.js";
 import type { ResourceSource } from "./manifest.js";
 
 const HOOK_EVENT_NAMES = [
@@ -124,12 +124,12 @@ export interface EffectiveHooksConfig {
   project?: LoadedHooksConfig;
 }
 
-function configError(configPath: string, error: z.ZodError): MmpConfigError {
+function configError(configPath: string, error: z.ZodError): EpiConfigError {
   const issue = error.issues[0];
   const location = issue?.path.length === 0
     ? "hooks config"
     : issue?.path.map(String).join(".") ?? "hooks config";
-  return new MmpConfigError(
+  return new EpiConfigError(
     `${configPath}: ${location}: ${issue?.message ?? "invalid hooks config"}`,
   );
 }
@@ -143,7 +143,7 @@ function expandEnvironment(
   return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => {
     const resolved = environment[name];
     if (resolved === undefined) {
-      throw new MmpConfigError(
+      throw new EpiConfigError(
         `${configPath}: ${location} references missing environment variable ${name}`,
       );
     }
@@ -227,14 +227,14 @@ function resolveHandler(
       `${location}.url`,
     );
     if (!z.url().safeParse(url).success) {
-      throw new MmpConfigError(`${configPath}: ${location}.url must be a valid URL`);
+      throw new EpiConfigError(`${configPath}: ${location}.url must be a valid URL`);
     }
     // fetch (undici) always rejects a URL with user:password@, and its error text repeats the whole
     // expanded URL -- so such a config can never work and would only leak the credentials. The
     // message names the field, never its value.
     const parsed = new URL(url);
     if (parsed.username !== "" || parsed.password !== "") {
-      throw new MmpConfigError(
+      throw new EpiConfigError(
         `${configPath}: ${location}.url must not contain credentials (user:password@); send them in a header instead`,
       );
     }
@@ -281,7 +281,7 @@ export function loadHooksConfig(
     return { path: configPath, source, loaded: false, hooks: [] };
   }
   if (!statSync(configPath).isFile()) {
-    throw new MmpConfigError(`${configPath}: hooks config must be a file`);
+    throw new EpiConfigError(`${configPath}: hooks config must be a file`);
   }
 
   let raw: unknown;
@@ -289,7 +289,7 @@ export function loadHooksConfig(
     raw = JSON.parse(readFileSync(configPath, "utf8"));
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new MmpConfigError(`${configPath}: invalid JSON: ${detail}`);
+    throw new EpiConfigError(`${configPath}: invalid JSON: ${detail}`);
   }
 
   const parsed = hooksConfigSchema.safeParse(raw);

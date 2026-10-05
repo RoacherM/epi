@@ -5,7 +5,7 @@ import type {
 
 import type { TaskJobSnapshot } from "./task-runtime.js";
 
-export const MMP_TASK_HOOK_CHANNEL = "mmp/hooks/task/v1";
+export const EPI_TASK_HOOK_CHANNEL = "epi/hooks/task/v1";
 
 export interface TaskStartHookEvent {
   type: "task_start";
@@ -40,7 +40,7 @@ export async function emitTaskHook(
   context: ExtensionContext,
 ): Promise<HookDecision> {
   const request: TaskHookBridgeRequest = { event, context };
-  events.emit(MMP_TASK_HOOK_CHANNEL, request);
+  events.emit(EPI_TASK_HOOK_CHANNEL, request);
   return request.run === undefined
     ? { action: "continue" }
     : request.run();

@@ -16,14 +16,14 @@ const runnerPath = fileURLToPath(new URL("./fixtures/sdk-path-runner.mjs", impor
 const flagExtension = fileURLToPath(new URL("./fixtures/flag-extension.mjs", import.meta.url));
 
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-extension-flags-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-extension-flags-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const project = join(root, "project");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
   mkdirSync(project, { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [flagExtension] }));
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [flagExtension] }));
+  const env = { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1" };
   return { root, home, project, env };
 }
 
@@ -34,8 +34,8 @@ test("TUI/SDK path: a registered value flag and boolean flag reach the extension
     cwd: f.project,
     env: {
       ...f.env,
-      MMP_FLAG_EXTENSION_OUT: out,
-      MMP_SDK_RUNNER: JSON.stringify({ args: ["--no-project", "--foo", "bar", "--flagbool"] }),
+      EPI_FLAG_EXTENSION_OUT: out,
+      EPI_SDK_RUNNER: JSON.stringify({ args: ["--no-project", "--foo", "bar", "--flagbool"] }),
     },
     encoding: "utf8",
     timeout: 30_000,
@@ -50,14 +50,14 @@ test("TUI/SDK path: a flag no loaded extension registered fails by name, before 
     cwd: f.project,
     env: {
       ...f.env,
-      MMP_SDK_RUNNER: JSON.stringify({ args: ["--no-project", "--bogus-flag"] }),
+      EPI_SDK_RUNNER: JSON.stringify({ args: ["--no-project", "--bogus-flag"] }),
     },
     encoding: "utf8",
     timeout: 30_000,
   });
   assert.notEqual(result.status, 0);
   assert.equal(result.stdout, "");
-  assert.match(result.stderr, /mmp: Unknown option: --bogus-flag/);
+  assert.match(result.stderr, /epi: Unknown option: --bogus-flag/);
 });
 
 test("-p path: a registered value flag and boolean flag reach the extension", (t) => {
@@ -68,7 +68,7 @@ test("-p path: a registered value flag and boolean flag reach the extension", (t
     [cliPath, "--no-project", "--foo", "bar", "--flagbool", "-p", "hi"],
     {
       cwd: f.project,
-      env: { ...f.env, MMP_FLAG_EXTENSION_OUT: out },
+      env: { ...f.env, EPI_FLAG_EXTENSION_OUT: out },
       input: "",
       encoding: "utf8",
       timeout: 30_000,
@@ -89,12 +89,12 @@ test("-p path: a flag no loaded extension registered fails by name, before any g
   });
   assert.notEqual(result.status, 0);
   assert.equal(result.stdout, "");
-  // Pi's own main.js prints and exits this one directly (reportDiagnostics), before cli.ts's `mmp: `
+  // Pi's own main.js prints and exits this one directly (reportDiagnostics), before cli.ts's `epi: `
   // wrapper would ever run -- see test/foundation.test.mjs's matching case for the no-extension form.
   assert.match(result.stderr, /Unknown option: --bogus-flag/);
 });
 
-test("mmp --help lists a Manifest extension's registered flags under Extension options", (t) => {
+test("epi --help lists a Manifest extension's registered flags under Extension options", (t) => {
   const f = fixture(t);
   const result = spawnSync(process.execPath, [cliPath, "--help"], {
     cwd: f.project,
@@ -107,18 +107,18 @@ test("mmp --help lists a Manifest extension's registered flags under Extension o
   assert.match(result.stdout, /Extension options:/);
   assert.match(result.stdout, /--foo <value>\s+test string flag/);
   assert.match(result.stdout, /--flagbool\s+test boolean flag/);
-  // Still MMP's own help, not Pi's.
+  // Still Epi's own help, not Pi's.
   assert.match(result.stdout, /^Usage:/m);
 });
 
-test("mmp --help has no Extension options section when nothing registers a flag", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-extension-flags-none-"));
+test("epi --help has no Extension options section when nothing registers a flag", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "epi-extension-flags-none-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
   const result = spawnSync(process.execPath, [cliPath, "--help"], {
     cwd: root,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1" },
     encoding: "utf8",
     input: "",
     timeout: 30_000,

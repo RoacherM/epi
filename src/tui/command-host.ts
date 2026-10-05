@@ -12,7 +12,7 @@ export interface CommandHost {
   readonly theme: Theme;
   /** The current session's cwd; like session(), it changes after /new, /resume, /reload and forks. */
   readonly cwd: string;
-  /** MMP's Pi state directory (~/.mmp/pi): where /trust's ProjectTrustStore lives. */
+  /** Epi's Pi state directory (~/.epi/pi): where /trust's ProjectTrustStore lives. */
   readonly agentDir: string;
   readonly runtime: AgentSessionRuntime;
   /** The project this process assembled its manifest from; used to refuse a cross-project /resume. */
@@ -83,7 +83,7 @@ export interface CommandHost {
    * through AgentSessionRuntime, so it skips setBeforeSessionInvalidate/setRebindSession. This
    * redoes the host-owned parts of docs/tui-design.md 6.3 (widgets, autocomplete, keybindings). */
   reloadSession(): Promise<void>;
-  /** Re-read the settings MMP's interface honours (cursor, scrollbar, mouse, autocomplete rows,
+  /** Re-read the settings Epi's interface honours (cursor, scrollbar, mouse, autocomplete rows,
    * HTTP timeout) and apply them: Pi's applyRuntimeSettings. /settings calls it after a change;
    * bind() and /reload call it too. */
   applySettings(): void;

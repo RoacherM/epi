@@ -1,6 +1,6 @@
 // Faux model for scripts/model-snapshot.mjs: on the first (and only) prompt, captures exactly what
 // a real provider would receive -- the leading system message's text and tool declarations -- and
-// writes it to MMP_MODEL_SNAPSHOT_OUT, then returns a fixed reply so the run completes normally.
+// writes it to EPI_MODEL_SNAPSHOT_OUT, then returns a fixed reply so the run completes normally.
 //
 // Context.systemPrompt/tools are shorthand that pi-ai's normalizeContext() folds into a leading
 // SystemMessage before any provider sees it (pi-ai's types.d.ts: "Replaying every system message in
@@ -26,7 +26,7 @@ export default function (pi) {
           description: tool.description,
           parameters: tool.parameters,
         }));
-        writeFileSync(process.env.MMP_MODEL_SNAPSHOT_OUT, JSON.stringify({ systemPrompt, tools }));
+        writeFileSync(process.env.EPI_MODEL_SNAPSHOT_OUT, JSON.stringify({ systemPrompt, tools }));
         return fauxAssistantMessage(fauxText("SNAPSHOT_OK"));
       },
     ],

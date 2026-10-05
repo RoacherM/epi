@@ -1,4 +1,4 @@
-// Entry of MMP's own interactive host (docs/tui-design.md): the only interactive path host.ts
+// Entry of Epi's own interactive host (docs/tui-design.md): the only interactive path host.ts
 // dispatches to (docs/decisions.md M5). Non-interactive runs never reach this module.
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { type AgentSessionRuntime, type InlineExtension, parseArgs } from "@earendil-works/pi-coding-agent";
@@ -7,39 +7,39 @@ import { passthroughHasFlag } from "../args.js";
 import { buildInlineExtensions } from "../extensions/index.js";
 import { createPreviewInlineExtension } from "../extensions/preview.js";
 import { buildTuiInitialMessages } from "../file-arguments.js";
-import type { PreparedMmpRun } from "../host.js";
+import type { PreparedEpiRun } from "../host.js";
 import { findNearestProjectManifest } from "../project.js";
 import { runTuiApp } from "./app.js";
 import type { ProjectIdentity } from "./project-guard.js";
-import { createMmpRuntime } from "./services.js";
-import { detectAppearance, installMmpTheme } from "./theme.js";
+import { createEpiRuntime } from "./services.js";
+import { detectAppearance, installEpiTheme } from "./theme.js";
 
 /** Extensions that are interface features (/preview) load only for the interactive TUI: print,
- * json and rpc have no screen to put them on. They go before mmp:system-prompt, which has to stay
+ * json and rpc have no screen to put them on. They go before epi:system-prompt, which has to stay
  * last (extensions/index.ts). */
 function withInterfaceExtensions(extensionFactories: InlineExtension[]): InlineExtension[] {
-  const last = extensionFactories.findIndex((extension) => extension.name === "mmp:system-prompt");
+  const last = extensionFactories.findIndex((extension) => extension.name === "epi:system-prompt");
   const at = last < 0 ? extensionFactories.length : last;
   return [...extensionFactories.slice(0, at), createPreviewInlineExtension(), ...extensionFactories.slice(at)];
 }
 
 /** The Manifest assembly, handed to the SDK. */
 export async function createRuntimeFromPrepared(
-  prepared: PreparedMmpRun,
+  prepared: PreparedEpiRun,
   cwd: string,
   // Mirrors host.ts's own construction (same flag, same default undefined updateCheck) so a caller
   // that builds a runtime straight from `prepared` (tests; host.ts always passes its own factories
   // explicitly) still gets `--verbose` support.
   extensionFactories: InlineExtension[] = buildInlineExtensions(
     prepared.assembly,
-    prepared.mmpHome,
+    prepared.epiHome,
     prepared.runtimeIdentity,
     prepared.resolveAssembly,
     undefined,
     passthroughHasFlag(prepared.args.passthrough, "--verbose"),
   ),
 ): Promise<AgentSessionRuntime> {
-  return createMmpRuntime({
+  return createEpiRuntime({
     cwd,
     agentDir: prepared.agentDir,
     piArgs: prepared.args.passthrough,
@@ -55,9 +55,9 @@ export async function createRuntimeFromPrepared(
  *
  * `root` is recomputed from `cwd` directly, independent of `--no-project`/trust: with
  * `--no-project` (or an untrusted/missing manifest), `prepared.assembly.projectManifest` is
- * undefined even when a `.mmp/mmp.json` really does exist above `cwd`, which made a session
+ * undefined even when a `.epi/epi.json` really does exist above `cwd`, which made a session
  * started in that very folder look like "a different project" to project-guard.ts. */
-export function projectIdentityFromPrepared(prepared: PreparedMmpRun, cwd: string): ProjectIdentity {
+export function projectIdentityFromPrepared(prepared: PreparedEpiRun, cwd: string): ProjectIdentity {
   return {
     root: findNearestProjectManifest(cwd, prepared.assembly.globalManifest)?.root,
     globalManifestPath: prepared.assembly.globalManifest,
@@ -90,10 +90,10 @@ export async function startupOptionsFromPiArgs(piArgs: readonly string[], cwd: s
   };
 }
 
-export async function runTuiV2(prepared: PreparedMmpRun, extensionFactories: InlineExtension[]): Promise<number> {
+export async function runTuiV2(prepared: PreparedEpiRun, extensionFactories: InlineExtension[]): Promise<number> {
   const cwd = process.cwd();
   // Pi's exported components read the global theme; it must exist before any of them is built.
-  const theme = installMmpTheme(prepared.agentDir, detectAppearance(process.env));
+  const theme = installEpiTheme(prepared.agentDir, detectAppearance(process.env));
   const runtime = await createRuntimeFromPrepared(prepared, cwd, extensionFactories);
   const { initialMessages, initialImages, resumeOnStart } = await startupOptionsFromPiArgs(prepared.args.passthrough, cwd);
   return runTuiApp({

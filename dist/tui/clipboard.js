@@ -1,4 +1,4 @@
-// Test seam: MMP_TEST_CLIPBOARD_FILE swaps the system clipboard for a plain file, so tests never
+// Test seam: EPI_TEST_CLIPBOARD_FILE swaps the system clipboard for a plain file, so tests never
 // read or write the developer's real clipboard. Used only by /copy (session-commands.ts) and
 // Ctrl+V (key-handlers.ts); set only by test/tui-commands-session.test.mjs,
 // test/tui-keys-actions.test.mjs and test/tui-paste-chips.test.mjs.
@@ -10,7 +10,7 @@ import { copyToClipboard } from "@earendil-works/pi-coding-agent";
 const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
 const { detectSupportedImageMimeType } = (await import(pathToFileURL(join(piDist, "utils", "mime.js")).href));
 function testFile() {
-    return process.env.MMP_TEST_CLIPBOARD_FILE;
+    return process.env.EPI_TEST_CLIPBOARD_FILE;
 }
 /** `/copy` and the `app.message.copy` key: write text to the clipboard (or the test file). */
 export async function writeClipboardText(text) {

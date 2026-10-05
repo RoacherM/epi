@@ -1,17 +1,19 @@
-# Make My Pi
+# Epi
 
 > Compose Pi your way.
 
-MMP (Make My Pi) 是基于 Pi SDK 的可定制终端编程助手。自有 grok 风格 TUI，组合 Skills、MCP、Hooks 与隔离子任务；Pi 提供模型、Agent Loop 与 Session，MMP 管理界面、配置、信任和能力装配。
+epi- 是希腊语前缀"在……之上"，Epi 是建在 Pi 之上的那一层。
 
-![MMP 终端界面：对话、思考、工具调用与 Markdown](docs/assets/mmp-ui.png)
+Epi 是基于 Pi SDK 的可定制终端编程助手。自有 grok 风格 TUI，组合 Skills、MCP、Hooks 与隔离子任务；Pi 提供模型、Agent Loop 与 Session，Epi 管理界面、配置、信任和能力装配。
+
+![Epi 终端界面：对话、思考、工具调用与 Markdown](docs/assets/epi-ui.png)
 
 *真实 TUI，离线演示数据。思考、文件修改与命令执行集中呈现。*
 
 <details>
 <summary>查看启动页</summary>
 
-![MMP 启动页](docs/assets/mmp-welcome.png)
+![Epi 启动页](docs/assets/epi-welcome.png)
 
 [截图生成方式](docs/assets/README.md)
 
@@ -21,13 +23,13 @@ MMP (Make My Pi) 是基于 Pi SDK 的可定制终端编程助手。自有 grok �
 
 - **自有界面**：按 grok-build 设计的全屏终端界面，对话、思考、工具调用和文件修改集中呈现。
 - **建在 Pi 上**：模型、Agent Loop、Session 用锁定版本的 Pi SDK，功能和 Pi 对齐。
-- **配置只属于 MMP**：独立的 `~/.mmp`，不读 Pi 或其他工具的配置，不认 `PI_*` 环境变量；项目配置要先信任。
+- **配置只属于 Epi**：独立的 `~/.epi`，不读 Pi 或其他工具的配置，不认 `PI_*` 环境变量；项目配置要先信任。
 - **显式装配**：Rules、Skills、Extensions 由 Manifest 声明；内建 Task（子任务）、MCP、Hooks 默认开启，可以关掉。
 - **不用离开终端去审查**：`/preview` 看 agent 改了什么（diff），以及文件、Markdown、图片和视频。
 
 ## 最近更新
 
-**0.1.12：在 MMP 里看 agent 改了什么**
+**0.1.12：在 Epi 里看 agent 改了什么**
 
 agent 改完文件后输入 `/preview`，直接看到改了哪些文件和每个文件的 diff，不用切到编辑器或 `git diff`。
 
@@ -45,9 +47,9 @@ Tab               切到文件浏览
 **0.1.11：预览的小修正，以及命令不能重名**
 
 - `/preview` 0.1.1：正在看的文件或目录被删后显示 `xxx not found`；读不了的目录说明原因，不再显示成空目录；名字里有换行的文件不插入引用，会提示。
-- 两个扩展注册同名命令时（包括和内置的 `/preview`、`/mcp` 同名），MMP 启动就报错并说明是哪两个，而不是悄悄把它们改名成 `/xxx:1`、`/xxx:2`。
+- 两个扩展注册同名命令时（包括和内置的 `/preview`、`/mcp` 同名），Epi 启动就报错并说明是哪两个，而不是悄悄把它们改名成 `/xxx:1`、`/xxx:2`。
 
-**0.1.10：在 MMP 里看文件（`/preview`）**
+**0.1.10：在 Epi 里看文件（`/preview`）**
 
 改完代码不用再切到编辑器去看结果。`/preview` 打开一个三栏的文件浏览器和查看器，能看带语法高亮的代码、渲染后的 Markdown、图片和视频。
 
@@ -62,7 +64,7 @@ Tab               切到文件浏览
 
 **0.1.9：`-p`、json、rpc 更稳**
 
-- 机器忙时 `mmp -p` 偶尔报 "No API key found for the selected model" 的问题修掉了。
+- 机器忙时 `epi -p` 偶尔报 "No API key found for the selected model" 的问题修掉了。
 - 项目里的 `.pi/settings.json` 不再能改会话的保存位置。
 - 内置的 Magpie 网关每次启动都会同步模型列表，不管这次用的是哪个 provider。
 
@@ -70,8 +72,8 @@ Tab               切到文件浏览
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/RoacherM/mmp/releases/latest/download/install.sh | sh
-mmp
+  https://github.com/RoacherM/epi/releases/latest/download/install.sh | sh
+epi
 ```
 
 要求 Node.js `>=22.19.0`。启动后用 `/login` 登录模型服务。

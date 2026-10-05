@@ -1,4 +1,4 @@
-// Dogfood D54: `mmp -p hi | head -c1` / `| true` crashed with Node's unhandled EPIPE stack and exit 1,
+// Dogfood D54: `epi -p hi | head -c1` / `| true` crashed with Node's unhandled EPIPE stack and exit 1,
 // and a slow session_shutdown handler never finished. A reader that goes away is a normal end now:
 // no stack, the run's own exit code, the run stops, and shutdown completes (src/closed-stdout.ts).
 import assert from "node:assert/strict";
@@ -17,19 +17,19 @@ const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const fauxEpipe = fileURLToPath(new URL("./fixtures/faux-epipe.mjs", import.meta.url));
 
 function makeHome(t) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-closed-stdout-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-closed-stdout-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEpipe] }));
+  mkdirSync(join(home, ".epi", "pi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fauxEpipe] }));
   const marks = { shutdown: join(root, "shutdown"), later: join(root, "later.jsonl") };
   const env = {
     PATH: process.env.PATH,
     HOME: home,
-    MMP_HOME: join(home, ".mmp"),
-    MMP_OFFLINE: "1",
-    MMP_FAUX_SHUTDOWN_MARK: marks.shutdown,
-    MMP_FAUX_LATER_LOG: marks.later,
+    EPI_HOME: join(home, ".epi"),
+    EPI_OFFLINE: "1",
+    EPI_FAUX_SHUTDOWN_MARK: marks.shutdown,
+    EPI_FAUX_LATER_LOG: marks.later,
   };
   return { root, env, marks };
 }
@@ -44,7 +44,7 @@ function laterRequests(marks) {
  * (`| head -c1`), "all" reads everything. */
 async function run(t, args, reader) {
   const { root, env, marks } = makeHome(t);
-  const child = spawn(process.execPath, [cli, "--no-project", "--no-session", "--provider", "mmp-faux", "--model", "long", ...args], {
+  const child = spawn(process.execPath, [cli, "--no-project", "--no-session", "--provider", "epi-faux", "--model", "long", ...args], {
     cwd: root,
     env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -100,7 +100,7 @@ test("control: with a reader that reads everything, both prompts run and shutdow
 // running and silently drops its prompts.
 test("--mode rpc with a closed stdout behaves as Pi does: EPIPE on stderr, exit 1, no prompt dropped silently", async (t) => {
   const { root, env, marks } = makeHome(t);
-  const child = spawn(process.execPath, [cli, "--no-project", "--no-session", "--provider", "mmp-faux", "--model", "long", "--mode", "rpc"], {
+  const child = spawn(process.execPath, [cli, "--no-project", "--no-session", "--provider", "epi-faux", "--model", "long", "--mode", "rpc"], {
     cwd: root,
     env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -120,11 +120,11 @@ test("--mode rpc with a closed stdout behaves as Pi does: EPIPE on stderr, exit 
   assert.ok(!laterRequests(marks).includes("second"));
 });
 
-// stdout and stderr on the same pipe: MMP's own final stderr flush used to raise a second EPIPE.
+// stdout and stderr on the same pipe: Epi's own final stderr flush used to raise a second EPIPE.
 for (const reader of ["head -c1", "true"]) {
   test(`-p 2>&1 | ${reader}: stderr closing too is still a quiet end, exit 0, shutdown finishes`, (t) => {
     const { root, env, marks } = makeHome(t);
-    const command = `"${process.execPath}" "${cli}" --no-project --no-session --provider mmp-faux --model long -p hi 2>&1 | ${reader} >/dev/null; exit \${PIPESTATUS[0]}`;
+    const command = `"${process.execPath}" "${cli}" --no-project --no-session --provider epi-faux --model long -p hi 2>&1 | ${reader} >/dev/null; exit \${PIPESTATUS[0]}`;
     const result = spawnSync("bash", ["-c", command], { cwd: root, env, encoding: "utf8", timeout: 30_000 });
     assert.equal(result.status, 0, result.stderr);
     assert.ok(existsSync(marks.shutdown), "the session_shutdown handler did not finish");
@@ -132,7 +132,7 @@ for (const reader of ["head -c1", "true"]) {
 }
 
 // Dogfood D60: Node's spawn stdio are socketpairs; a write racing the reader's close can fail with
-// ENOTCONN (or ECONNRESET) instead of EPIPE, and MMP crashed with a stack. These drive the guard on a
+// ENOTCONN (or ECONNRESET) instead of EPIPE, and Epi crashed with a stack. These drive the guard on a
 // stand-in stream with synthetic errors, through both ways a write can report one.
 function writeError(code) {
   return Object.assign(new Error(`write ${code}`), { code });

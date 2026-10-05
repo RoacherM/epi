@@ -14,7 +14,7 @@ export function plantSkill(skillsDir, name) {
 }
 
 /** Plants a marker for one entry of Pi's TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES (trust-manager.js)
- * under `configDir` (a `.pi`-style directory: a project's `.pi`, `~/.pi/agent`, or `~/.mmp/pi`).
+ * under `configDir` (a `.pi`-style directory: a project's `.pi`, `~/.pi/agent`, or `~/.epi/pi`).
  * Throws for a name this doesn't know how to plant -- a directory kind or a `.md` file are the only
  * shapes Pi's list has ever held; anything else needs a new case here, not a silent no-op. */
 function plantTrustRequiringResource(configDir, name, tag, markDir) {
@@ -56,10 +56,10 @@ export default function (pi) {
     // native mcp extension ever read it here, would be a spawned child process, not marker text in
     // the system prompt or a registered command -- same shape as "extensions" above, reusing
     // markDir (a distinct filename, unlike "extensions", so a failure here names the right culprit).
-    // This never loads regardless of whether the test's own Manifest declares "mmp:mcp": MMP's
-    // loadNativeMcpConfig (src/extensions/mcp.ts) only ever reads join(mmpHome, "mcp.json") and
-    // <project>/.mmp/mcp.json -- never this file -- and Pi's own builtin mcp extension is never
-    // loaded either (noExtensions disables builtins in 0.99, and MMP never adds `-e builtin:mcp`).
+    // This never loads regardless of whether the test's own Manifest declares "epi:mcp": Epi's
+    // loadNativeMcpConfig (src/extensions/mcp.ts) only ever reads join(epiHome, "mcp.json") and
+    // <project>/.epi/mcp.json -- never this file -- and Pi's own builtin mcp extension is never
+    // loaded either (noExtensions disables builtins in 0.99, and Epi never adds `-e builtin:mcp`).
     mkdirSync(configDir, { recursive: true });
     writeFileSync(
       join(configDir, "mcp.json"),
@@ -90,7 +90,7 @@ export default function (pi) {
 
 /** Plants every resource in Pi's current TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES list under
  * `configDir`. `configDir` is itself an agent dir root for a global call (`~/.pi/agent`,
- * `~/.mmp/pi`) -- SYSTEM.md/APPEND_SYSTEM.md and the skills/prompts/themes/extensions dirs are
+ * `~/.epi/pi`) -- SYSTEM.md/APPEND_SYSTEM.md and the skills/prompts/themes/extensions dirs are
  * ambient there regardless of project trust (resource-loader.js's discoverSystemPromptFile and
  * getDefaultSourceInfoForPath). */
 export function plantPiResources(configDir, tag, markDir) {
@@ -110,20 +110,20 @@ export function plantContextFiles(dir, tag) {
 }
 
 /** Plants the full ambient set for a project and home; `marks` collects files written by ambient extensions.
- * Global `~/.agents/skills` is deliberately NOT planted here: since docs/decisions.md S1, MMP itself
+ * Global `~/.agents/skills` is deliberately NOT planted here: since docs/decisions.md S1, Epi itself
  * auto-discovers skills there (test/skill-discovery.test.mjs covers that as a positive case), so it
  * is no longer an "ambient resource that must never load" -- unlike a project's own `.agents/skills`
- * below, which stays forbidden (not a location the user chose for MMP). */
+ * below, which stays forbidden (not a location the user chose for Epi). */
 export function plantAmbientWorld({ home, project, marks }) {
   plantPiResources(join(project, ".pi"), "project", marks);
   plantPiResources(join(home, ".pi", "agent"), "pi-agent", marks);
-  plantPiResources(join(home, ".mmp", "pi"), "mmp-agent", marks);
+  plantPiResources(join(home, ".epi", "pi"), "epi-agent", marks);
   plantContextFiles(join(home, ".pi", "agent"), "pi-agent-global");
-  plantContextFiles(join(home, ".mmp", "pi"), "mmp-agent-global");
+  plantContextFiles(join(home, ".epi", "pi"), "epi-agent-global");
   plantContextFiles(project, "project-root");
   plantSkill(join(project, ".agents", "skills"), "ambient-skill-project-agents");
   // Not just the project's own .agents/skills -- one in an ancestor directory above it must stay
-  // forbidden too (MMP never discovers project .agents/skills at any depth, only the three fixed
+  // forbidden too (Epi never discovers project .agents/skills at any depth, only the three fixed
   // roots in docs/decisions.md S1).
   plantSkill(join(dirname(project), ".agents", "skills"), "ambient-skill-ancestor-agents");
 }

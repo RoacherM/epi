@@ -1,7 +1,7 @@
 // Registers /marker (always), /late (only from the second invocation onward) and an echo model.
 // /reload calls session.reload(), which reloads resources and re-runs every extension factory
 // (see resource-loader.js's loadExtensionFactories) even though the AgentSession instance stays
-// the same. A test can use this to prove MMP's /reload handler reaches that path, refreshes the
+// the same. A test can use this to prove Epi's /reload handler reaches that path, refreshes the
 // autocomplete command list, and leaves the model usable (re-registering the faux provider on
 // reload must not break it).
 import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";

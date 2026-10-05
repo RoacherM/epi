@@ -1,4 +1,4 @@
-// Pi internals inventory (docs/pi-upgrade-design.md 6, docs/pi-internals.md): every place MMP
+// Pi internals inventory (docs/pi-upgrade-design.md 6, docs/pi-internals.md): every place Epi
 // reaches past Pi's public "exports" map or into a private field/method must be registered in
 // docs/pi-internals.md and checked here (design §6: "allowed only when registered + tested"). Three
 // things this file guarantees, none of which a plain doc by itself would:
@@ -45,8 +45,8 @@ const registry = [
       assert.match(readFileSync(loaderPath, "utf8"), /events: \{\s*emit\(channel, data\) \{\s*assertActive\(\);\s*eventBus\.emit\(channel, data\);\s*\}/, `${loaderPath}: pi.events.emit no longer forwards straight to the event bus`);
       const resourceLoaderPath = join(piDist, "core", "resource-loader.js");
       assert.match(readFileSync(resourceLoaderPath, "utf8"), /this\.eventBus = options\.eventBus \?\? createEventBus\(\);/, `${resourceLoaderPath} no longer creates its bus with createEventBus`);
-      // The places MMP relies on it.
-      assert.match(readFileSync(join(root, "src", "hook-events.ts"), "utf8"), /events\.emit\(MMP_TASK_HOOK_CHANNEL, request\);\s*return request\.run/);
+      // The places Epi relies on it.
+      assert.match(readFileSync(join(root, "src", "hook-events.ts"), "utf8"), /events\.emit\(EPI_TASK_HOOK_CHANNEL, request\);\s*return request\.run/);
       assert.match(readFileSync(join(root, "src", "extensions", "preview.ts"), "utf8"), /pi\.events\.on\(PREVIEW_PLAYER_CHANNEL, \(request\) => \{/);
     },
   },
@@ -157,8 +157,8 @@ const registry = [
       const { createRequire } = await import("node:module");
       const piEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
       const { default: chalk } = await import(pathToFileURL(createRequire(piEntry).resolve("chalk")).href);
-      const { createMmpTheme } = await import(pathToFileURL(join(root, "dist", "tui", "theme.js")).href);
-      const theme = createMmpTheme("dark");
+      const { createEpiTheme } = await import(pathToFileURL(join(root, "dist", "tui", "theme.js")).href);
+      const theme = createEpiTheme("dark");
       const level = chalk.level;
       try {
         chalk.level = 1;
@@ -176,7 +176,7 @@ const registry = [
       // pi-agent-core's package.json "exports" only offers an "import" condition (no "require"),
       // so createRequire(piEntry).resolve(...) -- which pi-tui.ts uses for pi-tui -- can't resolve
       // it; it's only ever nested under pi-coding-agent's own node_modules, never hoisted to
-      // MMP's, so a manual path join is how app.ts's dependency actually gets loaded too.
+      // Epi's, so a manual path join is how app.ts's dependency actually gets loaded too.
       const entry = join(piDist, "..", "node_modules", "@earendil-works", "pi-agent-core", "dist", "index.js");
       const { Agent } = await import(pathToFileURL(entry).href);
       assert.ok(typeof Agent === "function", "pi-agent-core no longer exports Agent");
@@ -222,7 +222,7 @@ const registry = [
       const classified = new Set([...Object.keys(PI_ENV_RULES), ...PI_ENV_NOT_READ]);
       const unclassified = [...found].filter((name) => !classified.has(name)).sort();
       const gone = [...classified].filter((name) => !found.has(name)).sort();
-      // A name can outlive its read in Pi's --help text or a comment; a bridged MMP_* knob would then
+      // A name can outlive its read in Pi's --help text or a comment; a bridged EPI_* knob would then
       // do nothing (D63 review 1, F3).
       const bridgedWithoutRead = Object.entries(PI_ENV_RULES)
         .filter(([name, rule]) => rule.kind === "bridged" && !readSites.names.has(name))
@@ -230,7 +230,7 @@ const registry = [
       assert.deepEqual(
         { unclassified, gone, bridgedWithoutRead, appNameBuilt },
         { unclassified: [], gone: [], bridgedWithoutRead: [], appNameBuilt: { "pi-coding-agent/config.js": 2 } },
-        "Pi's PI_* names changed: classify each new one in src/pi-env.ts (bridged / mmp-owned / cleared / not read) and " +
+        "Pi's PI_* names changed: classify each new one in src/pi-env.ts (bridged / epi-owned / cleared / not read) and " +
           "docs/cli-design.md §2.1, and drop the ones Pi no longer uses. A bridged name needs a read site " +
           "(process.env.X, env.X, process.env[\"X\"], getProviderEnvValue(\"X\"), process.env[ENV_X]). A new " +
           "`${APP_NAME.toUpperCase()}_...` name is invisible to the scan: add it next to ENV_AGENT_DIR/ENV_SESSION_DIR",
@@ -242,7 +242,7 @@ const registry = [
     async check() {
       const { PROVIDER_LOGIN_HELP, piProviderLoginHelp, rewritePiText } = await import(pathToFileURL(join(root, "dist", "pi-output.js")).href);
       const guidance = await importDeep("core", "auth-guidance.js");
-      const why = "src/pi-output.ts no longer swaps Pi's login guidance for MMP's (dogfood D55)";
+      const why = "src/pi-output.ts no longer swaps Pi's login guidance for Epi's (dogfood D55)";
       assert.equal(guidance.getProviderLoginHelp(), piProviderLoginHelp(), `Pi's getProviderLoginHelp() text changed -- ${why}`);
       for (const message of [
         guidance.formatNoModelsAvailableMessage(),
@@ -252,7 +252,7 @@ const registry = [
         const rewritten = rewritePiText(message);
         assert.ok(rewritten.includes(PROVIDER_LOGIN_HELP) && !/docs[\\/](?:providers|models)\.md/.test(rewritten), `Pi's message ${JSON.stringify(message)} no longer ends in getProviderLoginHelp() -- ${why}`);
       }
-      // No second copy of the guidance elsewhere in Pi (the bundle is not what MMP loads).
+      // No second copy of the guidance elsewhere in Pi (the bundle is not what Epi loads).
       const copies = readdirSync(piDist, { recursive: true })
         .filter((file) => file.endsWith(".js") && !file.startsWith("bundle"))
         .filter((file) => readFileSync(join(piDist, file), "utf8").includes("Use /login to log into a provider"));
@@ -339,13 +339,13 @@ const registry = [
         assert.equal(typeof tui.scrollToPrompt, "function", "TuiAltScreen.scrollToPrompt is gone");
         let since = written.length;
         tui.scrollToPrompt(-1);
-        assert.equal(scroll.scrollTop, rows.indexOf(rows.find((row) => row.endsWith("TWO"))), "scrollToPrompt no longer stops on MMP's 133;A-marked row");
+        assert.equal(scroll.scrollTop, rows.indexOf(rows.find((row) => row.endsWith("TWO"))), "scrollToPrompt no longer stops on Epi's 133;A-marked row");
         await painted("TWO", since);
         since = written.length;
         tui.scrollToPrompt(-1);
         assert.equal(scroll.scrollTop, 0, "scrollToPrompt no longer stops on the first marked row");
         await painted("ONE", since);
-        assert.ok(!written.includes("\x1b]133;"), "TuiAltScreen painted MMP's OSC 133 markers instead of stripping them");
+        assert.ok(!written.includes("\x1b]133;"), "TuiAltScreen painted Epi's OSC 133 markers instead of stripping them");
       } finally {
         tui.stop();
       }
@@ -370,7 +370,7 @@ const registry = [
       const { mkdtempSync, mkdirSync, rmSync } = await import("node:fs");
       const { tmpdir } = await import("node:os");
       const { piTui } = await import(pathToFileURL(join(root, "dist", "tui", "pi-tui.js")).href);
-      const cwd = mkdtempSync(join(tmpdir(), "mmp-pi-internals-autocomplete-"));
+      const cwd = mkdtempSync(join(tmpdir(), "epi-pi-internals-autocomplete-"));
       mkdirSync(join(cwd, "home"));
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       // `see #1` + two quick Backspaces leaves the debounced `#` request pending on `see `, where it
@@ -434,7 +434,7 @@ const registry = [
       const os = await import("node:os");
       const fs = await import("node:fs");
       const path = await import("node:path");
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mmp-pi-internals-mcp-"));
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "epi-pi-internals-mcp-"));
       try {
         const empty = loadMcpConfig({ agentDir: dir, cwd: dir, projectTrusted: false });
         assert.deepEqual(empty.servers, [], "loadMcpConfig no longer returns {servers: []} for a missing mcp.json");
@@ -448,8 +448,8 @@ const registry = [
         assert.equal(loaded.servers[0].name, "probe");
         assert.equal(loaded.servers[0].source, path.join(dir, "mcp.json"), "loadMcpConfig's entry.source is no longer the config file path -- src/extensions/mcp.ts's /mcp write-back routing (Pi's own default updateConfig) relies on this");
         assert.equal(loaded.servers[0].scope, "global", "loadMcpConfig no longer tags agentDir-sourced entries scope: \"global\"");
-        // projectTrusted: false must never read <cwd>/.pi/mcp.json -- this is the isolation MMP
-        // depends on (docs/mcp-design.md §2): MMP always passes false and varies agentDir instead.
+        // projectTrusted: false must never read <cwd>/.pi/mcp.json -- this is the isolation Epi
+        // depends on (docs/mcp-design.md §2): Epi always passes false and varies agentDir instead.
         fs.mkdirSync(path.join(dir, ".pi"));
         fs.writeFileSync(
           path.join(dir, ".pi", "mcp.json"),
@@ -489,7 +489,7 @@ const registry = [
       );
       // The exact renaming rule src/extensions/mcp.ts's hasDuplicateMcpCommand depends on: a name
       // registered more than once gets "<name>:<occurrence>" for *every* registration, not just the
-      // second one -- so a plain "mcp" never survives a collision for MMP to mistake as the only one.
+      // second one -- so a plain "mcp" never survives a collision for Epi to mistake as the only one.
       assert.match(
         text,
         /\(counts\.get\(command\.name\)\s*\?\?\s*0\)\s*>\s*1\s*\?\s*`\$\{command\.name\}:\$\{occurrence\}`\s*:\s*command\.name/,
@@ -530,7 +530,7 @@ const registry = [
       const store = new runtime.McpOAuthCredentialStore();
       assertFunction(store.forServer, "McpOAuthCredentialStore.prototype.forServer");
       assertFunction(store.remove, "McpOAuthCredentialStore.prototype.remove");
-      // Pi 1.0 keys credentials by server name and URL (CHANGELOG #10252); mmp mcp login/logout pass both.
+      // Pi 1.0 keys credentials by server name and URL (CHANGELOG #10252); epi mcp login/logout pass both.
       for (const method of ["forServer", "remove"]) {
         assert.equal(store[method].length, 2, `McpOAuthCredentialStore.prototype.${method} no longer takes (name, serverUrl) -- src/commands/mcp-cli.ts's login/logout pass both`);
       }
@@ -605,12 +605,12 @@ const registry = [
         /pending = Promise\.all\(enabled\.map\(\(server\) => startConnection\(server, isCurrent, runtime\)\)\)[\s\S]{0,200}\.catch\(\(error\) => \{[\s\S]{0,200}MCP failed to load/,
         `${indexPath}'s startup chain (session_start) no longer ends in a catch that notifies "MCP failed to load" -- ${why}`,
       );
-      // Pi reports MCP problems only through ctx.ui.notify, and MMP sees only the notifies made with
+      // Pi reports MCP problems only through ctx.ui.notify, and Epi sees only the notifies made with
       // the ctx of an event handler (command handlers get their own ctx, and are interactive anyway).
       // Pin the notifies: 3 written in the pi.on handlers (two load failures, the still-connecting
       // wait), 18 in the whole file in 1.0.0 (the others are in reportProblems/ensureDiscoveryActive,
       // which handlers call, and in the /mcp command's helpers). A new one anywhere forces a re-review:
-      // is it raised from an event handler (MMP copies it -- fine), or does Pi now report a problem
+      // is it raised from an event handler (Epi copies it -- fine), or does Pi now report a problem
       // some other way that print/json would drop?
       const review = `review how it reaches the user, then update this count and docs/pi-internals.md -- ${why}`;
       assert.equal((indexText.match(/notify\(/g) ?? []).length, 18, `${indexPath}'s number of notifies changed: ${review}`);
@@ -625,7 +625,7 @@ const registry = [
         ],
         `${indexPath}'s pi.on handlers raise different notifies: ${review}`,
       );
-      // MMP recognises one of Pi's notifies by its text (src/extensions/mcp.ts): the unreachable-tools
+      // Epi recognises one of Pi's notifies by its text (src/extensions/mcp.ts): the unreachable-tools
       // warning, which -p/json do not copy (it is about reachability, not a failed server; review 1
       // finding 1).
       assert.match(
@@ -638,7 +638,7 @@ const registry = [
   {
     id: "system-prompt-forced-last",
     check() {
-      const why = "mmp:system-prompt (src/extensions/runtime.ts) forces the prompt and is pushed last by buildInlineExtensions, so every other before_agent_start section edit, Pi's MCP mcp_servers among them, is already in the text it appends to (U3)";
+      const why = "epi:system-prompt (src/extensions/runtime.ts) forces the prompt and is pushed last by buildInlineExtensions, so every other before_agent_start section edit, Pi's MCP mcp_servers among them, is already in the text it appends to (U3)";
       const runnerPath = join(piDist, "core", "extensions", "runner.js");
       const runnerText = readFileSync(runnerPath, "utf8");
       const emit = runnerText.slice(runnerText.indexOf("async emitBeforeAgentStart("), runnerText.indexOf("async emitResourcesDiscover("));
@@ -702,7 +702,7 @@ const registry = [
       assert.match(
         readFileSync(runnerPath, "utf8"),
         /async emit\(event\) \{\s*const ctx = this\.createContext\(\);[\s\S]{0,200}for \(const \{ ext, handlers \} of snapshotEventHandlers\(this\.extensions, event\.type\)\) \{\s*for \(const handler of handlers\) \{\s*try \{\s*const handlerResult = await handler\(event, ctx\);/,
-        `${runnerPath}'s emit() no longer awaits one extension's handlers one after another in registration order -- MMP's report might run after Pi's session_shutdown handler has forgotten the servers`,
+        `${runnerPath}'s emit() no longer awaits one extension's handlers one after another in registration order -- Epi's report might run after Pi's session_shutdown handler has forgotten the servers`,
       );
     },
   },
@@ -749,7 +749,7 @@ const registry = [
       assert.match(
         printText,
         /for \(const message of messages\) \{\s*await session\.prompt\(message\);/,
-        `${printPath} no longer sends each -p message through session.prompt -- MMP's input handler would stop skipping them after stdout closes`,
+        `${printPath} no longer sends each -p message through session.prompt -- Epi's input handler would stop skipping them after stdout closes`,
       );
       assert.match(
         printText,
@@ -770,13 +770,13 @@ const registry = [
       const { mkdtempSync, readFileSync: readFile, rmSync } = await import("node:fs");
       const { tmpdir } = await import("node:os");
       const { ModelRuntime, SettingsManager } = await import("@earendil-works/pi-coding-agent");
-      const dir = mkdtempSync(join(tmpdir(), "mmp-pi-internals-device-id-"));
+      const dir = mkdtempSync(join(tmpdir(), "epi-pi-internals-device-id-"));
       try {
         const text = readFileSync(join(root, "src", "tui", "commands.ts"), "utf8");
         assert.match(text, /getDeviceId: \(\) => session\.settingsManager\.getOrCreateDeviceId\(\)/, "src/tui/commands.ts no longer passes getDeviceId to modelRuntime.login");
         // Without the option, "Sign in with ChatGPT" must still fail before it starts (agentHostId
         // runs before PKCE and the callback server), so this never reaches a network or a browser.
-        // If it stops failing, pi-ai gets the device ID some other way and MMP should follow.
+        // If it stops failing, pi-ai gets the device ID some other way and Epi should follow.
         const runtime = await ModelRuntime.create({
           authPath: join(dir, "auth.json"), modelsPath: null, modelsStorePath: join(dir, "models-store.json"), refreshOnCreate: false,
         });
@@ -787,7 +787,7 @@ const registry = [
         };
         await assert.rejects(runtime.login("openai", "oauth", interaction), /requires a device ID/,
           "openai's OAuth login no longer requires LoginOptions.getDeviceId");
-        // The ID lives in the agentDir's global settings.json (MMP's ~/.mmp/pi), not project settings,
+        // The ID lives in the agentDir's global settings.json (Epi's ~/.epi/pi), not project settings,
         // and stays the same for every later SettingsManager.
         const agentDir = join(dir, "agent");
         const settings = SettingsManager.create(dir, agentDir, { projectTrusted: false });
@@ -811,7 +811,7 @@ const registry = [
       assert.match(editText, /const diffResult = generateDiffString\(/, `${editPath} no longer builds its diff with generateDiffString`);
       assert.match(editText, /details: \{ diff: diffResult\.diff,/, `${editPath} no longer returns generateDiffString's output as details.diff`);
       // 12 lines; line 3 becomes two lines (so new-file numbers run one ahead), line 10 is replaced.
-      // One context line keeps the expected rows short; MMP doesn't depend on the context count.
+      // One context line keeps the expected rows short; Epi doesn't depend on the context count.
       const old = Array.from({ length: 12 }, (_, i) => `l${i + 1}`).join("\n") + "\n";
       const edited = old.replace("l3\n", "A\nB\n").replace("l10\n", "C\n");
       const { diff } = generateDiffString(old, edited, 1);
@@ -829,16 +829,16 @@ const registry = [
           row("add", 11, "C"),
           row("context", 11, "l11"),
         ],
-        `generateDiffString's rows changed shape -- MMP's edit diff (src/tui/tools/mutating.ts) expects numbered "+N"/"-N"/" N" rows, ` +
+        `generateDiffString's rows changed shape -- Epi's edit diff (src/tui/tools/mutating.ts) expects numbered "+N"/"-N"/" N" rows, ` +
           `context rows numbered in old-file lines, and a "..." line where unchanged lines were left out. Pi's output:\n${diff}`,
       );
     },
   },
 ];
 
-/** Every `PI_*` name in the Pi runtime code mmp loads: each @earendil-works package's dist/, at the
+/** Every `PI_*` name in the Pi runtime code epi loads: each @earendil-works package's dist/, at the
  * top level and nested under pi-coding-agent, except pi-coding-agent's single-file `bundle/` and
- * Bun-binary `bun/` builds, which mmp never imports. Comments count too: cheaper than parsing,
+ * Bun-binary `bun/` builds, which epi never imports. Comments count too: cheaper than parsing,
  * and a name only mentioned still has to be classified. Also returns the names with a read site
  * (`readSites.names`, plus `readSites.constants` for `process.env[ENV_X]`, resolved by the caller
  * through config.js) and, per file, how many names Pi builds from `APP_NAME.toUpperCase()`. */
@@ -884,7 +884,7 @@ function mcpHandlerSource(indexText, event) {
 function checkMcpOwnReportsInRpc(indexText, indexPath) {
   const why = "src/extensions/mcp.ts leaves these reports to Pi in rpc and adds, at session_shutdown, only the failed servers Pi has not reported, matched line by line (dogfood D52)";
   // reportProblems(): one `<name>: <describeState()>` line per failed or needs-sign-in server, each
-  // indented by two spaces under "MCP servers need attention:" -- MMP compares its own lines (the
+  // indented by two spaces under "MCP servers need attention:" -- Epi compares its own lines (the
   // same describeState() text, from the "/mcp" completions) with these.
   assert.match(
     indexText,
@@ -909,7 +909,7 @@ function checkMcpOwnReportsInRpc(indexText, indexPath) {
   );
 }
 
-test("the mcp-own-reports-in-rpc check catches mutations of Pi's MCP extension MMP's rpc reports depend on (D56)", () => {
+test("the mcp-own-reports-in-rpc check catches mutations of Pi's MCP extension Epi's rpc reports depend on (D56)", () => {
   const indexPath = join(piDist, "extensions", "mcp", "index.js");
   const indexText = readFileSync(indexPath, "utf8");
   checkMcpOwnReportsInRpc(indexText, indexPath);
@@ -1038,12 +1038,12 @@ test("every join(piDist, ...)/importFromPi/createRequire(piEntry).resolve deep r
 
 // src/tui/services.ts copies this rule (assertValidSessionId is not exported from the package root)
 // so that an invalid --session-id is refused before anything looks it up, as Pi's main() does.
-test("Pi's session id rule is the one MMP checks --session-id against", () => {
+test("Pi's session id rule is the one Epi checks --session-id against", () => {
   const piRule = /export function assertValidSessionId\(id\) \{\s*if \(!(\/.*\/)\.test\(id\)\) \{\s*throw new Error\("([^"]*)"\);/.exec(
     readFileSync(join(piDist, "core", "session-manager.js"), "utf8"),
   );
   assert.ok(piRule, "core/session-manager.js no longer defines assertValidSessionId this way");
-  const mmp = readFileSync(join(root, "src", "tui", "services.ts"), "utf8");
-  assert.ok(mmp.includes(`if (!${piRule[1]}.test(id))`), `MMP's copy differs from Pi's pattern ${piRule[1]}`);
-  assert.ok(mmp.includes(JSON.stringify(piRule[2])), "MMP's copy differs from Pi's message");
+  const epi = readFileSync(join(root, "src", "tui", "services.ts"), "utf8");
+  assert.ok(epi.includes(`if (!${piRule[1]}.test(id))`), `Epi's copy differs from Pi's pattern ${piRule[1]}`);
+  assert.ok(epi.includes(JSON.stringify(piRule[2])), "Epi's copy differs from Pi's message");
 });

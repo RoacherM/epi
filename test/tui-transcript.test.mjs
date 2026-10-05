@@ -4,13 +4,13 @@ import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 
 import { piTui } from "../dist/tui/pi-tui.js";
-import { createMmpTheme } from "../dist/tui/theme.js";
+import { createEpiTheme } from "../dist/tui/theme.js";
 import { Transcript } from "../dist/tui/transcript.js";
 import { AssistantBlock } from "../dist/tui/assistant-block.js";
 import { UserMessageBlock } from "../dist/tui/chrome.js";
 
 initTheme("dark");
-const theme = createMmpTheme("dark");
+const theme = createEpiTheme("dark");
 
 function stubTui() {
   return { requestRender() {} };
@@ -56,10 +56,10 @@ test("a notice does not hide the welcome page, but a real message does", () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   transcript.header.addChild({ render: () => ["WELCOME PAGE"], invalidate() {} });
 
-  transcript.notice("/tree is not in MMP TUI v2 yet");
+  transcript.notice("/tree is not in Epi TUI v2 yet");
   let rendered = transcript.root.render(80).join("\n");
   assert.match(rendered, /WELCOME PAGE/, "the header must still render after a notice");
-  assert.match(rendered, /not in MMP TUI v2 yet/, "the notice itself must still show");
+  assert.match(rendered, /not in Epi TUI v2 yet/, "the notice itself must still show");
 
   transcript.handle({
     type: "message_start",
@@ -567,7 +567,7 @@ test("user messages and tool-call-free assistant messages are each one OSC 133 p
 
   const text = new AssistantBlock(theme, assistantMessage([{ type: "text", text: "answer" }]), [], false, false).render(60);
   assert.deepEqual(starts(text), [0]);
-  // Thinking then text: MMP splits this into segments, but it is still one zone, starting on row 0.
+  // Thinking then text: Epi splits this into segments, but it is still one zone, starting on row 0.
   const thinking = new AssistantBlock(theme, assistantMessage([
     { type: "thinking", thinking: "hmm" }, { type: "text", text: "answer" },
   ]), [], false, false).render(60);

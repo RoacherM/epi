@@ -3,7 +3,7 @@
 import { CredentialSynchronizationError, ExtensionSelectorComponent, LoginDialogComponent, ModelSelectorComponent, OAuthSelectorComponent, resolveCliModel, } from "@earendil-works/pi-coding-agent";
 import { dialog, selectInEditorSlot } from "./dialogs.js";
 import { errorText } from "./errors.js";
-import { resolveMmpPaths } from "../paths.js";
+import { resolveEpiPaths } from "../paths.js";
 import { findNearestProjectManifest } from "../project.js";
 import { projectTrustOptions, saveProjectTrustChoice } from "../trust-prompt.js";
 const CANCELLED = "Login cancelled";
@@ -106,7 +106,7 @@ async function startLogin(host, option, onBack) {
             prompt: (prompt) => authPrompt(host, dialog, prompt),
             notify: (event) => authNotify(dialog, event),
         }, {
-            // Pi's loginProvider: "Sign in with ChatGPT" refuses to start without it. Stored in MMP's own
+            // Pi's loginProvider: "Sign in with ChatGPT" refuses to start without it. Stored in Epi's own
             // settings (<agentDir>/settings.json), created on first use.
             getDeviceId: () => session.settingsManager.getOrCreateDeviceId(),
         });
@@ -138,7 +138,7 @@ async function startLogin(host, option, onBack) {
         host.notice(`${done}, but its model catalog could not be refreshed; using cached models.`, "warning");
     }
     if (previousModelMissing) {
-        // Pi picks a per-provider default from a table it does not export; MMP asks instead.
+        // Pi picks a per-provider default from a table it does not export; Epi asks instead.
         await runModel(host, option.id, { persist: true, title: `${done}. Pick a model:` });
     }
     else {
@@ -154,7 +154,7 @@ function showAmbientAuth(host, option, methodName) {
             restore();
             resolve();
         }, option.name, `${option.name} setup`);
-        dialog.showInfo(`${methodName ?? "Authentication"} is configured outside MMP (environment or models.json).`, [], true);
+        dialog.showInfo(`${methodName ?? "Authentication"} is configured outside Epi (environment or models.json).`, [], true);
         restore = host.takeEditorSlot(dialog);
     });
 }
@@ -277,9 +277,9 @@ export async function runModel(host, query, options = {}) {
 }
 /** `/trust`: same options and store as the first-run prompt (src/trust-prompt.ts), for the current project root. */
 export async function runTrust(host) {
-    const candidate = findNearestProjectManifest(host.cwd, resolveMmpPaths(process.env).globalManifest);
+    const candidate = findNearestProjectManifest(host.cwd, resolveEpiPaths(process.env).globalManifest);
     if (candidate === undefined) {
-        host.notice("No .mmp/mmp.json project found from the current directory.", "warning");
+        host.notice("No .epi/epi.json project found from the current directory.", "warning");
         return;
     }
     const choices = projectTrustOptions(candidate.root);
@@ -292,14 +292,14 @@ export async function runTrust(host) {
             return;
         if (choice.updates.length > 0) {
             saveProjectTrustChoice(host.agentDir, choice);
-            host.notice(`Saved: ${choice.label}. Takes effect after restarting mmp (manifest extensions cannot be hot-loaded).`);
+            host.notice(`Saved: ${choice.label}. Takes effect after restarting epi (manifest extensions cannot be hot-loaded).`);
         }
         else {
             host.notice(`${choice.label}: not saved.`);
         }
     }, () => done(), {
         description: `${candidate.root}\n` +
-            "This lets MMP read .mmp/mmp.json and load its rules, skills and extensions (extensions run code).",
+            "This lets Epi read .epi/epi.json and load its rules, skills and extensions (extensions run code).",
     }), undefined);
 }
 async function selectModel(host, model, persist) {

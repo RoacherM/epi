@@ -74,7 +74,7 @@ export function createKeyActions() {
             },
         },
         {
-            // Pi: clear the editor. MMP also aborts a running turn and quits on a second press (4.7).
+            // Pi: clear the editor. Epi also aborts a running turn and quits on a second press (4.7).
             id: "app.clear",
             run: (host) => {
                 if (host.getEditorText() !== "") {
@@ -117,7 +117,7 @@ export function createKeyActions() {
             run: (host) => runModel(host, ""),
         },
         {
-            // Unbound by default in MMP (keybindings.ts MMP_DEFAULT_KEYS, decision K1).
+            // Unbound by default in Epi (keybindings.ts EPI_DEFAULT_KEYS, decision K1).
             id: "app.model.cycleForward",
             run: (host) => cycleModel(host, "forward"),
         },
@@ -126,7 +126,7 @@ export function createKeyActions() {
             run: (host) => cycleModel(host, "backward"),
         },
         {
-            // K1: MMP swaps Pi's Enter/Alt+Enter semantics while a turn runs. Enter already queues a
+            // K1: Epi swaps Pi's Enter/Alt+Enter semantics while a turn runs. Enter already queues a
             // follow-up (submit() in app.ts); Alt+Enter steers it into the current turn instead.
             id: "app.message.followUp",
             when: (host) => host.session().isStreaming,

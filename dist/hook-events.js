@@ -1,7 +1,7 @@
-export const MMP_TASK_HOOK_CHANNEL = "mmp/hooks/task/v1";
+export const EPI_TASK_HOOK_CHANNEL = "epi/hooks/task/v1";
 export async function emitTaskHook(events, event, context) {
     const request = { event, context };
-    events.emit(MMP_TASK_HOOK_CHANNEL, request);
+    events.emit(EPI_TASK_HOOK_CHANNEL, request);
     return request.run === undefined
         ? { action: "continue" }
         : request.run();

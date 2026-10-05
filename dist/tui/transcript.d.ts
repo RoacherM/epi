@@ -60,7 +60,7 @@ export declare class Transcript {
      * toggle. */
     setThinkingExpanded(expanded: boolean): void;
     /**
-     * A notice ("/tree is not in MMP TUI v2 yet", an extension load warning) is not a real
+     * A notice ("/tree is not in Epi TUI v2 yet", an extension load warning) is not a real
      * message: it must not count toward messageCount, which gates the welcome page's header.
      */
     notice(text: string, tone?: "info" | "warning" | "error"): void;

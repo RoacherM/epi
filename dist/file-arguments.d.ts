@@ -13,7 +13,7 @@ export interface FileArgumentsResult {
 }
 /** Reads each `@file` argument: text files are inlined, image files are noted by path and read as
  * an attachment, a missing file throws (instead of Pi's `console.error` + `process.exit(1)`) so
- * the caller can report it through MMP's normal preflight-error path. An empty file is skipped,
+ * the caller can report it through Epi's normal preflight-error path. An empty file is skipped,
  * matching Pi. Raw bytes are kept as-is; AgentSession resizes for the model at send time
  * (agent-session.js's `_normalizePromptImages`), so there's no need to do it here too. */
 export declare function processFileArguments(fileArgs: readonly string[], cwd: string): Promise<FileArgumentsResult>;

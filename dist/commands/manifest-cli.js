@@ -1,26 +1,26 @@
-// `mmp install/remove/uninstall/list/config` (docs/cli-design.md §3): every one of these reads or
-// writes a Manifest (~/.mmp/mmp.json, or the project's .mmp/mmp.json with -l) through the existing
+// `epi install/remove/uninstall/list/config` (docs/cli-design.md §3): every one of these reads or
+// writes a Manifest (~/.epi/epi.json, or the project's .epi/epi.json with -l) through the existing
 // manifest code (../manifest.ts), never through Pi's own settings.json or package manager --
 // Rules/Skills/Extensions are declared by the Manifest alone (docs/cli-design.md §0).
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { MmpArgumentError, MmpConfigError } from "../errors.js";
+import { EpiArgumentError, EpiConfigError } from "../errors.js";
 import { BUILT_IN_EXTENSION_NAMES, BUILT_IN_EXTENSIONS, resolveManifest, } from "../manifest.js";
-import { resolveMmpPaths } from "../paths.js";
+import { resolveEpiPaths } from "../paths.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "../project.js";
 import { discoverSkillRoots } from "../skill-discovery.js";
 function globalTarget() {
-    return { path: resolveMmpPaths(process.env).globalManifest, source: "global" };
+    return { path: resolveEpiPaths(process.env).globalManifest, source: "global" };
 }
 /** `-l`: the project Manifest for the current directory. Unlike run-time discovery (project.ts),
- * this does not walk up to an ancestor -- "local" means "here", so `mmp install -l` can create a
+ * this does not walk up to an ancestor -- "local" means "here", so `epi install -l` can create a
  * project's first Manifest in the directory the user is standing in. */
 function projectTarget(cwd) {
-    return { path: join(cwd, ".mmp", "mmp.json"), source: "project" };
+    return { path: join(cwd, ".epi", "epi.json"), source: "project" };
 }
 /**
- * The rule (DEVELOPMENT.md §8.2 rule 1, `mmp list`'s own check below): a project's `.mmp/mmp.json`
+ * The rule (DEVELOPMENT.md §8.2 rule 1, `epi list`'s own check below): a project's `.epi/epi.json`
  * is only read when the project is trusted -- `resolveManifest` itself just resolves declared paths,
  * it doesn't execute any Rule/Skill/Extension, but reading an untrusted project's file at all (its
  * declared paths, its JSON) is exactly what an untrusted project must not get to influence. This
@@ -28,20 +28,20 @@ function projectTarget(cwd) {
  * project-scope package/config commands need `--approve` (package-manager-cli.js's
  * `writesProjectPackageConfig`/`isProjectTrusted` checks): an explicit `--approve`/`--no-approve`
  * overrides the saved decision for this run only (never persisted, same as `resolveProjectManifest`
- * in project.ts); otherwise the last decision from `mmp --approve`/`/trust` applies.
+ * in project.ts); otherwise the last decision from `epi --approve`/`/trust` applies.
  */
 export function assertProjectTrustedFor(cwd, approveOverride) {
-    const agentDir = resolveMmpPaths(process.env).agentDir;
+    const agentDir = resolveEpiPaths(process.env).agentDir;
     const trusted = approveOverride ?? readProjectTrustDecision(agentDir, cwd) === true;
     if (trusted)
         return;
     const manifestPath = projectTarget(cwd).path;
     if (approveOverride === false) {
         // The user just said --no-approve; suggesting "use --approve" here would be self-contradictory.
-        throw new MmpArgumentError(`Project (${manifestPath}): refused by --no-approve`);
+        throw new EpiArgumentError(`Project (${manifestPath}): refused by --no-approve`);
     }
-    // Same line `mmp list` prints for an untrusted project Manifest (runListCommand, below).
-    throw new MmpArgumentError(`Project (${manifestPath}): not trusted -- not read (mmp --approve or /trust)`);
+    // Same line `epi list` prints for an untrusted project Manifest (runListCommand, below).
+    throw new EpiArgumentError(`Project (${manifestPath}): not trusted -- not read (epi --approve or /trust)`);
 }
 function detectIndent(raw) {
     const match = /\n([ \t]+)\S/.exec(raw);
@@ -58,15 +58,15 @@ function readManifestJson(path) {
     }
     catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        throw new MmpConfigError(`${path}: invalid JSON: ${detail}`);
+        throw new EpiConfigError(`${path}: invalid JSON: ${detail}`);
     }
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        throw new MmpConfigError(`${path}: manifest must be a JSON object`);
+        throw new EpiConfigError(`${path}: manifest must be a JSON object`);
     }
     return { indent: detectIndent(raw), json: parsed };
 }
 /** Writes the mutated manifest, preserving the file's existing indent, then re-validates it through
- * the real manifest loader (manifest.ts) -- the same checks every `mmp` run applies. An invalid
+ * the real manifest loader (manifest.ts) -- the same checks every `epi` run applies. An invalid
  * result is never left on disk: the previous content (or no file, if there wasn't one) is restored
  * and the validation error re-thrown. */
 function writeManifest(target, mutate) {
@@ -130,7 +130,7 @@ function runCheckCommand(command, args, timeoutMs) {
  */
 function assertNotFlagLike(value, label) {
     if (value.startsWith("-")) {
-        throw new MmpArgumentError(`${label} looks like a command-line flag, not a source: ${value}`);
+        throw new EpiArgumentError(`${label} looks like a command-line flag, not a source: ${value}`);
     }
 }
 async function defaultCheckSourceExists(source, options) {
@@ -140,23 +140,23 @@ async function defaultCheckSourceExists(source, options) {
     if (source.type === "npm") {
         const result = await runCheckCommand("npm", ["view", "--", source.spec, "version"], timeoutMs);
         if (result.missing)
-            throw new MmpArgumentError("npm is not on PATH; cannot verify the package exists");
+            throw new EpiArgumentError("npm is not on PATH; cannot verify the package exists");
         if (!result.ok) {
-            throw new MmpArgumentError(`npm package not found: ${source.spec}${result.stderr ? `\n${result.stderr}` : ""}`);
+            throw new EpiArgumentError(`npm package not found: ${source.spec}${result.stderr ? `\n${result.stderr}` : ""}`);
         }
         return;
     }
     const result = await runCheckCommand("git", ["ls-remote", "--", source.url], timeoutMs);
     if (result.missing)
-        throw new MmpArgumentError("git is not on PATH; cannot verify the repository exists");
+        throw new EpiArgumentError("git is not on PATH; cannot verify the repository exists");
     if (!result.ok) {
-        throw new MmpArgumentError(`git repository not reachable: ${source.url}${result.stderr ? `\n${result.stderr}` : ""}`);
+        throw new EpiArgumentError(`git repository not reachable: ${source.url}${result.stderr ? `\n${result.stderr}` : ""}`);
     }
 }
-/** Mirrors Pi's own `isOfflineModeEnabled` (package-manager.js): PI_OFFLINE (here always MMP_OFFLINE's
+/** Mirrors Pi's own `isOfflineModeEnabled` (package-manager.js): PI_OFFLINE (here always EPI_OFFLINE's
  * value, src/pi-env.ts) disables every
  * network-backed resolution Pi does, including this same kind of npm/git existence check, so
- * `mmp install` skips it here too instead of failing on a check nothing intends to satisfy. */
+ * `epi install` skips it here too instead of failing on a check nothing intends to satisfy. */
 function isOffline() {
     const value = process.env.PI_OFFLINE;
     return value === "1" || value?.toLowerCase() === "true" || value?.toLowerCase() === "yes";
@@ -233,16 +233,16 @@ function hasInvalidGitPath(path) {
 }
 /**
  * Parses and validates a `git:<spec>` source (the part after the `git:` prefix), scoped to the
- * shapes MMP's own docs show (docs/cli-design.md §3): a bare `host/path`, an explicit
+ * shapes Epi's own docs show (docs/cli-design.md §3): a bare `host/path`, an explicit
  * `https/http/ssh/git` URL, or `git@host:path` scp syntax, each optionally with an `@ref`. Mirrors
  * the structural checks Pi's own parseGitUrl/buildGitSource (utils/git.js, not exported) apply --
  * host present (a dot, or "localhost", for the bare form), only those four schemes, at least an
- * org/repo path, no unsafe path parts -- so a spec Pi's own loader would reject at `mmp` startup is
+ * org/repo path, no unsafe path parts -- so a spec Pi's own loader would reject at `epi` startup is
  * caught here first, before it's ever written to the Manifest, instead of surfacing as a confusing
  * "not reachable" from a mis-built check URL (or, worse, silently written and failing only on the
- * next `mmp` run). This is a deliberate subset: it doesn't replicate parseGitUrl's
+ * next `epi` run). This is a deliberate subset: it doesn't replicate parseGitUrl's
  * hosted-git-info-based shorthand (an unprefixed "user/repo" resolving to GitHub, bitbucket
- * detection, and the like), since MMP's own git: examples always give an explicit host.
+ * detection, and the like), since Epi's own git: examples always give an explicit host.
  */
 function parseGitSpec(spec) {
     const { repo } = splitGitRef(spec);
@@ -251,35 +251,35 @@ function parseGitSpec(spec) {
     if (scpLikeMatch) {
         const host = scpLikeMatch[1];
         if (!host || hasInvalidGitPath(scpLikeMatch[2])) {
-            throw new MmpArgumentError(`git source is not a valid repository: git:${spec}`);
+            throw new EpiArgumentError(`git source is not a valid repository: git:${spec}`);
         }
         return { url: repo };
     }
     const schemeMatch = /^([a-z][a-z0-9+.-]*):\/\//i.exec(repo);
     if (schemeMatch) {
         if (!GIT_URL_SCHEMES.has(schemeMatch[1].toLowerCase() + ":")) {
-            throw new MmpArgumentError(`git source uses an unsupported scheme (${schemeMatch[1]}:); only https, http, ssh, and git are accepted: git:${spec}`);
+            throw new EpiArgumentError(`git source uses an unsupported scheme (${schemeMatch[1]}:); only https, http, ssh, and git are accepted: git:${spec}`);
         }
         let parsed;
         try {
             parsed = new URL(repo);
         }
         catch {
-            throw new MmpArgumentError(`git source is not a valid URL: git:${spec}`);
+            throw new EpiArgumentError(`git source is not a valid URL: git:${spec}`);
         }
         if (!parsed.hostname || hasInvalidGitPath(parsed.pathname)) {
-            throw new MmpArgumentError(`git source is not a valid repository: git:${spec}`);
+            throw new EpiArgumentError(`git source is not a valid repository: git:${spec}`);
         }
         return { url: repo };
     }
     const slashIndex = repo.indexOf("/");
     if (slashIndex < 0) {
-        throw new MmpArgumentError(`git source is not a valid repository (expected host/path): git:${spec}`);
+        throw new EpiArgumentError(`git source is not a valid repository (expected host/path): git:${spec}`);
     }
     const host = repo.slice(0, slashIndex);
     const path = repo.slice(slashIndex + 1);
     if ((!host.includes(".") && host !== "localhost") || hasInvalidGitPath(path)) {
-        throw new MmpArgumentError(`git source is not a valid repository (expected host/path): git:${spec}`);
+        throw new EpiArgumentError(`git source is not a valid repository (expected host/path): git:${spec}`);
     }
     return { url: `https://${repo}` };
 }
@@ -287,8 +287,8 @@ function parseGitSpec(spec) {
  * Validates the source before it's ever written to the Manifest (docs/cli-design.md §3), and
  * returns the value to actually store. An `npm:`/`git:` source needs a non-empty package spec that
  * actually resolves (checked via `checkSourceExists`); it's stored as-is. A local path is resolved
- * against the current directory -- where the user typing `mmp install ./ext.mjs` is standing, same
- * as Pi's own `install` -- not against the Manifest's own directory (`~/.mmp/` for a global install,
+ * against the current directory -- where the user typing `epi install ./ext.mjs` is standing, same
+ * as Pi's own `install` -- not against the Manifest's own directory (`~/.epi/` for a global install,
  * or the project root with `-l`, neither of which is where a relative path on the command line means
  * anything); the absolute result is stored, so manifest.ts's own manifest-relative resolution never
  * re-resolves it against the wrong base.
@@ -297,7 +297,7 @@ async function validateAndResolveSource(source, checkSourceExists) {
     if (source.startsWith("npm:") || source.startsWith("git:")) {
         const spec = source.slice(source.indexOf(":") + 1);
         if (spec.length === 0) {
-            throw new MmpArgumentError(`extension package source is empty: ${source}`);
+            throw new EpiArgumentError(`extension package source is empty: ${source}`);
         }
         if (source.startsWith("npm:")) {
             assertNotFlagLike(spec, "npm package");
@@ -311,61 +311,61 @@ async function validateAndResolveSource(source, checkSourceExists) {
     }
     const resolved = isAbsolute(source) ? source : resolve(process.cwd(), source);
     if (!existsSync(resolved)) {
-        throw new MmpArgumentError(`extension path does not exist: ${resolved}`);
+        throw new EpiArgumentError(`extension path does not exist: ${resolved}`);
     }
     return resolved;
 }
 /** `-h`/`--help` anywhere in argv, matching Pi's own subcommand help check (dist/main.js's
  * `isAuthCommandHelp`, dist/package-manager-cli.js's `rest.includes("-h") || rest.includes("--help")`)
- * -- MMP's own `mmp auth --help` (auth-cli.ts) already works this way. */
+ * -- Epi's own `epi auth --help` (auth-cli.ts) already works this way. */
 export function isHelpRequested(argv) {
     return argv.includes("-h") || argv.includes("--help");
 }
-/** Mirrors Pi's `printPackageCommandHelp("install")` (dist/package-manager-cli.js), in MMP's own
+/** Mirrors Pi's `printPackageCommandHelp("install")` (dist/package-manager-cli.js), in Epi's own
  * words: a Manifest instead of settings.json. */
 function renderInstallHelp() {
     return `Usage:
-  mmp install <source> [-l] [--approve|--no-approve] [--offline]
+  epi install <source> [-l] [--approve|--no-approve] [--offline]
 
 Add an extension source to the Manifest.
 
 Options:
-  -l, --local        Write the project Manifest (.mmp/mmp.json) instead of the global one (~/.mmp/mmp.json)
+  -l, --local        Write the project Manifest (.epi/epi.json) instead of the global one (~/.epi/epi.json)
   -a, --approve      Trust the project Manifest for this -l write, even if the project isn't
-                      otherwise trusted (this run only; does not persist -- use mmp --approve or
+                      otherwise trusted (this run only; does not persist -- use epi --approve or
                       /trust to persist it)
   -na, --no-approve  Refuse an -l write even if the project is otherwise trusted
-  --offline          Skip checking that an npm:/git: source actually resolves (like MMP_OFFLINE)
+  --offline          Skip checking that an npm:/git: source actually resolves (like EPI_OFFLINE)
 
 Examples:
-  mmp install npm:@foo/bar
-  mmp install git:github.com/user/repo
-  mmp install git:github.com/user/repo@v1.0
-  mmp install ./local/path
+  epi install npm:@foo/bar
+  epi install git:github.com/user/repo
+  epi install git:github.com/user/repo@v1.0
+  epi install ./local/path
 `;
 }
 /** Mirrors Pi's `printPackageCommandHelp("remove")`. */
 function renderRemoveHelp(commandName) {
     return `Usage:
-  mmp ${commandName} <source> [-l] [--approve|--no-approve]
+  epi ${commandName} <source> [-l] [--approve|--no-approve]
 
 Remove an extension source from the Manifest.
-Alias: mmp ${commandName === "remove" ? "uninstall" : "remove"} <source> [-l] [--approve|--no-approve]
+Alias: epi ${commandName === "remove" ? "uninstall" : "remove"} <source> [-l] [--approve|--no-approve]
 
 Options:
-  -l, --local        Remove from the project Manifest (.mmp/mmp.json) instead of the global one (~/.mmp/mmp.json)
+  -l, --local        Remove from the project Manifest (.epi/epi.json) instead of the global one (~/.epi/epi.json)
   -a, --approve      Trust the project Manifest for this -l write, even if the project isn't
                       otherwise trusted (this run only; does not persist)
   -na, --no-approve  Refuse an -l write even if the project is otherwise trusted
 
 Examples:
-  mmp ${commandName} npm:@foo/bar
+  epi ${commandName} npm:@foo/bar
 `;
 }
 /** Mirrors Pi's `printPackageCommandHelp("list")`. */
 function renderListHelp() {
     return `Usage:
-  mmp list
+  epi list
 
 List the Rules, Skills, and Extensions declared by the global and project Manifest.
 `;
@@ -373,14 +373,14 @@ List the Rules, Skills, and Extensions declared by the global and project Manife
 /** Mirrors Pi's `printConfigCommandHelp` (dist/package-manager-cli.js). */
 function renderConfigHelp() {
     return `Usage:
-  mmp config [-l] [--approve|--no-approve]
+  epi config [-l] [--approve|--no-approve]
 
 Open the Manifest in $VISUAL or $EDITOR.
-Without -l, edits the global Manifest (~/.mmp/mmp.json). Saved changes are re-validated; an
+Without -l, edits the global Manifest (~/.epi/epi.json). Saved changes are re-validated; an
 invalid result is discarded and the previous Manifest kept.
 
 Options:
-  -l, --local        Edit the project Manifest (.mmp/mmp.json) instead of the global one
+  -l, --local        Edit the project Manifest (.epi/epi.json) instead of the global one
   -a, --approve      Trust the project Manifest for this -l edit, even if the project isn't
                       otherwise trusted (this run only; does not persist)
   -na, --no-approve  Refuse an -l edit even if the project is otherwise trusted
@@ -417,15 +417,15 @@ function parseSourceArgs(argv, commandName) {
             continue;
         }
         if (argument.startsWith("-")) {
-            throw new MmpArgumentError(`Unknown option for mmp ${commandName}: ${argument}`);
+            throw new EpiArgumentError(`Unknown option for epi ${commandName}: ${argument}`);
         }
         if (source !== undefined) {
-            throw new MmpArgumentError(`mmp ${commandName} accepts exactly one source`);
+            throw new EpiArgumentError(`epi ${commandName} accepts exactly one source`);
         }
         source = argument;
     }
     if (source === undefined) {
-        throw new MmpArgumentError(`mmp ${commandName} requires a source`);
+        throw new EpiArgumentError(`epi ${commandName} requires a source`);
     }
     return { source, local, approveOverride, offline };
 }
@@ -447,7 +447,7 @@ export async function runInstallCommand(argv, options) {
             extensions.push(source);
         return { ...json, version: 1, extensions };
     });
-    process.stdout.write(`Installed ${source} into ${target.path}. Restart mmp for it to take effect.\n`);
+    process.stdout.write(`Installed ${source} into ${target.path}. Restart epi for it to take effect.\n`);
     return 0;
 }
 export async function runRemoveCommand(argv, commandName) {
@@ -472,14 +472,14 @@ export async function runRemoveCommand(argv, commandName) {
         ? `${source} is built in and already off: "disable" in ${target.path} lists it.`
         : `${source} is built in and stays on; to turn it off, add "disable": ["${source}"] to ${target.path}.`;
     if (!removed) {
-        process.stderr.write(`mmp: no matching extension source ${JSON.stringify(source)} in ${target.path}\n`);
+        process.stderr.write(`epi: no matching extension source ${JSON.stringify(source)} in ${target.path}\n`);
         if (builtIn)
             process.stderr.write(`${disableHint}\n`);
         return 1;
     }
     process.stdout.write(builtIn
         ? `Removed ${source} from ${target.path}. ${disableHint}\n`
-        : `Removed ${source} from ${target.path}. Restart mmp for it to take effect.\n`);
+        : `Removed ${source} from ${target.path}. Restart epi for it to take effect.\n`);
     return 0;
 }
 function describeManifest(label, manifest, lines) {
@@ -509,9 +509,9 @@ export function runListCommand(argv) {
         return 0;
     }
     if (argv.length > 0) {
-        throw new MmpArgumentError("mmp list takes no arguments");
+        throw new EpiArgumentError("epi list takes no arguments");
     }
-    const mmpPaths = resolveMmpPaths(process.env);
+    const epiPaths = resolveEpiPaths(process.env);
     const global = globalTarget();
     const lines = [];
     const globalManifest = resolveManifest(global.path, "global");
@@ -525,9 +525,9 @@ export function runListCommand(argv) {
     else {
         // Same rule as every real run (DEVELOPMENT.md §8.2 rule 1): before a trust decision, at most
         // check the Manifest exists -- never read its declared Rules/Skills/Extensions.
-        const trusted = readProjectTrustDecision(mmpPaths.agentDir, process.cwd()) === true;
+        const trusted = readProjectTrustDecision(epiPaths.agentDir, process.cwd()) === true;
         if (!trusted) {
-            lines.push(`Project (${projectCandidate.manifestPath}): not trusted -- not read (mmp --approve or /trust)`);
+            lines.push(`Project (${projectCandidate.manifestPath}): not trusted -- not read (epi --approve or /trust)`);
         }
         else {
             trustedProjectRoot = projectCandidate.root;
@@ -538,8 +538,8 @@ export function runListCommand(argv) {
     }
     const discovered = discoverSkillRoots({
         environment: process.env,
-        mmpHome: mmpPaths.mmpHome,
-        agentDir: mmpPaths.agentDir,
+        epiHome: epiPaths.epiHome,
+        agentDir: epiPaths.agentDir,
         trustedProjectRoot,
     });
     lines.push("Discovered skill roots:");
@@ -566,7 +566,7 @@ export async function runConfigCommand(argv) {
     }
     const { local, approveOverride, rest } = parseScopeFlags(argv);
     if (rest.length > 0) {
-        throw new MmpArgumentError(`Unknown option for mmp config: ${rest[0]}`);
+        throw new EpiArgumentError(`Unknown option for epi config: ${rest[0]}`);
     }
     if (local)
         assertProjectTrustedFor(process.cwd(), approveOverride);
@@ -578,7 +578,7 @@ export async function runConfigCommand(argv) {
     const before = readFileSync(target.path, "utf8");
     const editorCommand = process.env.VISUAL || process.env.EDITOR;
     if (!editorCommand) {
-        throw new MmpConfigError("Set $VISUAL or $EDITOR to edit the Manifest with `mmp config`");
+        throw new EpiConfigError("Set $VISUAL or $EDITOR to edit the Manifest with `epi config`");
     }
     const [editor, ...editorArgs] = editorCommand.split(" ");
     const exitCode = await new Promise((resolvePromise) => {
@@ -587,7 +587,7 @@ export async function runConfigCommand(argv) {
         child.on("close", (code) => resolvePromise(code ?? 1));
     });
     if (exitCode !== 0) {
-        process.stderr.write(`mmp: editor exited with status ${exitCode}; ${target.path} left unchanged\n`);
+        process.stderr.write(`epi: editor exited with status ${exitCode}; ${target.path} left unchanged\n`);
         return exitCode;
     }
     try {
@@ -597,10 +597,10 @@ export async function runConfigCommand(argv) {
         // Invalid result: restore the file exactly as it was before the edit (docs/cli-design.md §3).
         writeFileSync(target.path, before);
         const message = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`mmp: ${message}\n${target.path} left unchanged.\n`);
+        process.stderr.write(`epi: ${message}\n${target.path} left unchanged.\n`);
         return 2;
     }
-    process.stdout.write(`Saved ${target.path}. Restart mmp for changes to take effect.\n`);
+    process.stdout.write(`Saved ${target.path}. Restart epi for changes to take effect.\n`);
     return 0;
 }
 //# sourceMappingURL=manifest-cli.js.map

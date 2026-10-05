@@ -23,13 +23,13 @@ const settings = { compaction: { keepRecentTokens: 0, reserveTokens: 120_000 } }
 const longPrompt = "word ".repeat(8000);
 
 function makeHome(t) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-quit-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-quit-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [hangingCompact] }));
-  writeFileSync(join(home, ".mmp", "pi", "settings.json"), JSON.stringify(settings));
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_FAUX_ABORT_MARK: join(root, "aborted") };
+  mkdirSync(join(home, ".epi", "pi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [hangingCompact] }));
+  writeFileSync(join(home, ".epi", "pi", "settings.json"), JSON.stringify(settings));
+  const env = { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1", EPI_FAUX_ABORT_MARK: join(root, "aborted") };
   return { root, env };
 }
 
@@ -37,12 +37,12 @@ function runApp(t, steps, extraEnv = {}, nodeArgs = []) {
   const { root, env } = makeHome(t);
   const result = spawnSync(process.execPath, [...nodeArgs, harness], {
     cwd: root,
-    env: { ...env, ...extraEnv, MMP_TUI_HARNESS: JSON.stringify({ steps }) },
+    env: { ...env, ...extraEnv, EPI_TUI_HARNESS: JSON.stringify({ steps }) },
     encoding: "utf8",
     timeout: 60_000,
   });
   assert.equal(result.status, 0, result.stderr);
-  return { ...JSON.parse(result.stdout), stderr: result.stderr, aborted: existsSync(env.MMP_FAUX_ABORT_MARK) };
+  return { ...JSON.parse(result.stdout), stderr: result.stderr, aborted: existsSync(env.EPI_FAUX_ABORT_MARK) };
 }
 
 const firstTurn = [["waitReady"], ["type", "go"], ["key", "enter"], ["waitFor", { regex: "BEFORE-COMPACT[\\s\\S]*Worked for" }]];
@@ -77,9 +77,9 @@ test("double Ctrl+C during /compact aborts it, quits, and leaves nothing on the 
 
 test("a session_shutdown handler that never returns can't hang quitting: it exits and says why", (t) => {
   const started = Date.now();
-  const result = runApp(t, [...autoCompaction, ["key", "ctrl+d"]], { MMP_FAUX_HANG_SHUTDOWN: "1" });
+  const result = runApp(t, [...autoCompaction, ["key", "ctrl+d"]], { EPI_FAUX_HANG_SHUTDOWN: "1" });
   assert.equal(result.exit, 0);
-  assert.match(result.stderr, /mmp: the session did not shut down within 3s \(a session_shutdown handler has not returned\); exiting anyway\./);
+  assert.match(result.stderr, /epi: the session did not shut down within 3s \(a session_shutdown handler has not returned\); exiting anyway\./);
   assert.equal(result.afterExit.buffer, "normal");
   assert.ok(Date.now() - started < 30_000);
 });
@@ -87,9 +87,9 @@ test("a session_shutdown handler that never returns can't hang quitting: it exit
 // Pi routes a handler's error to the UI's onError, which was a transcript notice drawn after the TUI
 // had already stopped, so nobody saw it (dogfood D41).
 test("an error thrown by a session_shutdown handler while quitting is written to stderr", (t) => {
-  const result = runApp(t, [["waitReady"], ["key", "ctrl+d"]], { MMP_FAUX_THROW_SHUTDOWN: "1" });
+  const result = runApp(t, [["waitReady"], ["key", "ctrl+d"]], { EPI_FAUX_THROW_SHUTDOWN: "1" });
   assert.equal(result.exit, 0);
-  assert.match(result.stderr, /mmp: Extension error \(.*faux-hanging-compact\.mjs, session_shutdown\): .*SHUTDOWN-BOOM/);
+  assert.match(result.stderr, /epi: Extension error \(.*faux-hanging-compact\.mjs, session_shutdown\): .*SHUTDOWN-BOOM/);
   assert.deepEqual(result.afterExit.screen.filter((row) => row !== ""), []);
 });
 
@@ -103,7 +103,7 @@ test("after Ctrl+G, the TUI redraws in full and quitting leaves nothing on the s
     ["key", "ctrl+c"], editorCleared, ["key", "ctrl+d"],
   ], { EDITOR: `${process.execPath} ${fakeEditor}` });
   assert.equal(result.exit, 0);
-  assert.match(result.screens.afterEdit.join("\n"), /mmp v[\s\S]*FROM-EXTERNAL-EDITOR/);
+  assert.match(result.screens.afterEdit.join("\n"), /epi v[\s\S]*FROM-EXTERNAL-EDITOR/);
   assert.equal(result.afterExit.buffer, "normal");
   assert.deepEqual(result.afterExit.screen.filter((row) => row !== ""), []);
 });
@@ -115,19 +115,19 @@ test("while suspended with Ctrl+Z the shell's screen is clean; after it, the TUI
   ], {}, ["--import", fakeSuspend]);
   assert.equal(result.exit, 0);
   assert.deepEqual(result.screens.suspended.filter((row) => row !== ""), []);
-  assert.match(result.screens.resumed.join("\n"), /mmp v[\s\S]*❯ draft/);
+  assert.match(result.screens.resumed.join("\n"), /epi v[\s\S]*❯ draft/);
   assert.equal(result.afterExit.buffer, "normal");
   assert.deepEqual(result.afterExit.screen.filter((row) => row !== ""), []);
 });
 
-/** Runs the real `mmp` CLI (fake-tty.mjs makes its pipes look like a terminal), calls `drive` with
+/** Runs the real `epi` CLI (fake-tty.mjs makes its pipes look like a terminal), calls `drive` with
  * a waiter for stdout text, and resolves with the exit status once it exits, or "did not exit". */
 async function runCli(t, args, extraEnv, drive) {
   const { root, env } = makeHome(t);
   const ttyLog = join(root, "tty.log");
-  const child = spawn(process.execPath, ["--import", fakeTty, cli, "--no-project", "--provider", "mmp-faux", "--model", "compactor", ...args], {
+  const child = spawn(process.execPath, ["--import", fakeTty, cli, "--no-project", "--provider", "epi-faux", "--model", "compactor", ...args], {
     cwd: root,
-    env: { ...env, ...extraEnv, MMP_FAKE_TTY_LOG: ttyLog },
+    env: { ...env, ...extraEnv, EPI_FAKE_TTY_LOG: ttyLog },
     stdio: ["pipe", "pipe", "pipe"],
   });
   let stdout = "";
@@ -145,17 +145,17 @@ async function runCli(t, args, extraEnv, drive) {
   try {
     await drive(child, waitFor);
     const status = await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve("did not exit"), 8000))]);
-    return { status, stdout, stderr, rawModes: existsSync(ttyLog) ? readFileSync(ttyLog, "utf8").trim().split("\n") : [], aborted: existsSync(env.MMP_FAUX_ABORT_MARK) };
+    return { status, stdout, stderr, rawModes: existsSync(ttyLog) ? readFileSync(ttyLog, "utf8").trim().split("\n") : [], aborted: existsSync(env.EPI_FAUX_ABORT_MARK) };
   } finally {
     child.kill("SIGKILL");
   }
 }
 
 // The request ignores its abort signal and holds a timer, as the magpie request's open socket did,
-// so the process only exits if MMP exits it. The two positional messages are sent at startup: the
+// so the process only exits if Epi exits it. The two positional messages are sent at startup: the
 // second goes over the threshold, so Pi compacts before sending it.
-test("the mmp process exits on Ctrl+D even while a compaction request ignores its abort", async (t) => {
-  const result = await runCli(t, ["go", longPrompt], { MMP_FAUX_IGNORE_ABORT: "1" }, async (child, waitFor) => {
+test("the epi process exits on Ctrl+D even while a compaction request ignores its abort", async (t) => {
+  const result = await runCli(t, ["go", longPrompt], { EPI_FAUX_IGNORE_ABORT: "1" }, async (child, waitFor) => {
     await waitFor("Compacting…");
     await new Promise((resolve) => setTimeout(resolve, 200));
     child.stdin.write("\x04");
@@ -168,8 +168,8 @@ test("the mmp process exits on Ctrl+D even while a compaction request ignores it
 
 // A session_start handler that never returns keeps bind() awaiting; the keys are live by then, and
 // quitting used to stop the TUI but leave the process running (dogfood D41).
-test("the mmp process exits on Ctrl+D while a session_start handler never returns", async (t) => {
-  const result = await runCli(t, [], { MMP_FAUX_HANG_START: "1" }, async (child, waitFor) => {
+test("the epi process exits on Ctrl+D while a session_start handler never returns", async (t) => {
+  const result = await runCli(t, [], { EPI_FAUX_HANG_START: "1" }, async (child, waitFor) => {
     await waitFor("❯");
     await new Promise((resolve) => setTimeout(resolve, 200));
     child.stdin.write("\x04");

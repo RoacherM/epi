@@ -1,4 +1,4 @@
-// `mmp --list-models [search]`: MMP's own, not piMain's (dogfood D48). Pi's main.js builds the
+// `epi --list-models [search]`: Epi's own, not piMain's (dogfood D48). Pi's main.js builds the
 // same runtime `-p` does, but its `--list-models` branch reports only the settings diagnostics and
 // then exits 0 -- the extension diagnostics `-p` stops on (a provider registration that failed, an
 // extension that failed to load) are dropped, and an empty list prints Pi's own "Use /login ...
@@ -30,7 +30,7 @@ type ListedModel = { provider: string; id: string; contextWindow: number; maxTok
 const NO_MODELS_MESSAGE = `No models available. ${PROVIDER_LOGIN_HELP}`;
 
 /** Whether piMain would take its `--list-models` branch for these args: it checks `--export` first
- * (and `--help`/`--version`, which MMP already handles before reaching here). */
+ * (and `--help`/`--version`, which Epi already handles before reaching here). */
 export function isListModelsRun(piArgs: readonly string[]): boolean {
   const parsed = parseArgs([...piArgs]);
   return parsed.listModels !== undefined && parsed.export === undefined && !parsed.help && !parsed.version;
@@ -71,7 +71,7 @@ function formatModelTable(models: readonly ListedModel[]): string {
 }
 
 function writeAndExit(stream: NodeJS.WriteStream, text: string, code: number): void {
-  // Like Pi's own branch, exit rather than drain: a loaded extension (mmp:mcp among them) may hold
+  // Like Pi's own branch, exit rather than drain: a loaded extension (epi:mcp among them) may hold
   // the event loop open.
   stream.write(text, () => process.exit(code));
 }

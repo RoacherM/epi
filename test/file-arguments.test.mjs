@@ -7,7 +7,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { MmpArgumentError } from "../dist/errors.js";
+import { EpiArgumentError } from "../dist/errors.js";
 import { buildTuiInitialMessages, processFileArguments } from "../dist/file-arguments.js";
 
 const ONE_PIXEL_PNG = Buffer.from(
@@ -16,7 +16,7 @@ const ONE_PIXEL_PNG = Buffer.from(
 );
 
 function tempDir(t) {
-  const dir = mkdtempSync(join(tmpdir(), "mmp-file-args-"));
+  const dir = mkdtempSync(join(tmpdir(), "epi-file-args-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
@@ -48,11 +48,11 @@ test("an empty file is skipped, matching Pi", async (t) => {
   assert.deepEqual(imagePaths, []);
 });
 
-test("a missing file throws MmpArgumentError instead of exiting the process", async (t) => {
+test("a missing file throws EpiArgumentError instead of exiting the process", async (t) => {
   const dir = tempDir(t);
   await assert.rejects(
     () => processFileArguments(["nope.txt"], dir),
-    (error) => error instanceof MmpArgumentError && /File not found/.test(error.message),
+    (error) => error instanceof EpiArgumentError && /File not found/.test(error.message),
   );
 });
 

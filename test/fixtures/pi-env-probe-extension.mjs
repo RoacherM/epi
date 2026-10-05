@@ -1,5 +1,5 @@
-// Records, from inside a running mmp, what Pi's own code makes of the PI_* environment (dogfood
-// D63, src/pi-env.ts). Writes MMP_PI_ENV_PROBE_OUT at session_start:
+// Records, from inside a running epi, what Pi's own code makes of the PI_* environment (dogfood
+// D63, src/pi-env.ts). Writes EPI_PI_ENV_PROBE_OUT at session_start:
 // - networkAllowed: what Pi passed as context.allowNetwork to this provider's refreshModels during
 //   one refresh without an explicit allowNetwork, which takes Pi's ModelRuntime default: "online
 //   unless PI_OFFLINE" (core/model-runtime.js). This refreshModels never touches the network.
@@ -11,7 +11,7 @@ import { createFauxCore, fauxAssistantMessage, fauxText } from "@earendil-works/
 import { detectCapabilities } from "@earendil-works/pi-tui";
 
 export default function (pi) {
-  const core = createFauxCore({ provider: "mmp-env-probe", models: [{ id: "probe" }] });
+  const core = createFauxCore({ provider: "epi-env-probe", models: [{ id: "probe" }] });
   core.setResponses([() => fauxAssistantMessage(fauxText("ok"))]);
   const models = core.models.map((model) => ({
     id: model.id,
@@ -23,7 +23,7 @@ export default function (pi) {
     maxTokens: model.maxTokens,
   }));
   let refreshContexts = [];
-  pi.registerProvider("mmp-env-probe", {
+  pi.registerProvider("epi-env-probe", {
     baseUrl: "http://localhost:0",
     apiKey: "probe-key",
     api: core.api,
@@ -36,9 +36,9 @@ export default function (pi) {
   });
   pi.on("session_start", async (_event, ctx) => {
     refreshContexts = [];
-    await ctx.modelRegistry.refresh({ providers: ["mmp-env-probe"] });
+    await ctx.modelRegistry.refresh({ providers: ["epi-env-probe"] });
     writeFileSync(
-      process.env.MMP_PI_ENV_PROBE_OUT,
+      process.env.EPI_PI_ENV_PROBE_OUT,
       JSON.stringify({
         networkAllowed: refreshContexts.includes(true),
         hyperlinks: detectCapabilities(() => false).hyperlinks,

@@ -1,23 +1,23 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-import type { MmpRuntimeIdentity } from "./runtime-identity.js";
+import type { EpiRuntimeIdentity } from "./runtime-identity.js";
 
 const MAX_PANEL_WIDTH = 108;
 const SPLIT_LAYOUT_WIDTH = 84;
 const HERO_WIDTH = 36;
 
-const MMP_LOGO = [
-  ["███   ███", "███   ███", "██████ "],
-  ["████ ████", "████ ████", "██   ██"],
-  ["██ ███ ██", "██ ███ ██", "██████ "],
-  ["██  █  ██", "██  █  ██", "██     "],
-  ["██     ██", "██     ██", "██     "],
+const EPI_LOGO = [
+  ["███████", "██████ ", "██████"],
+  ["██     ", "██   ██", "  ██  "],
+  ["█████  ", "██████ ", "  ██  "],
+  ["██     ", "██     ", "  ██  "],
+  ["███████", "██     ", "██████"],
 ] as const;
 
-export type MmpStartupTheme = Pick<Theme, "bold" | "fg" | "italic">;
+export type EpiStartupTheme = Pick<Theme, "bold" | "fg" | "italic">;
 
-export interface MmpStartupPageOptions {
+export interface EpiStartupPageOptions {
   modelName?: string;
   modelProvider?: string;
   modelId?: string;
@@ -35,11 +35,11 @@ function center(text: string, width: number): string {
 }
 
 function topBorder(
-  identity: MmpRuntimeIdentity,
-  theme: MmpStartupTheme,
+  identity: EpiRuntimeIdentity,
+  theme: EpiStartupTheme,
   width: number,
 ): string {
-  const title = theme.fg("muted", ` mmp v${identity.runtime.version} `);
+  const title = theme.fg("muted", ` epi v${identity.runtime.version} `);
   const fillWidth = Math.max(0, width - visibleWidth(title) - 3);
   return [
     theme.fg("borderAccent", "╭─"),
@@ -48,17 +48,17 @@ function topBorder(
   ].join("");
 }
 
-function divider(theme: MmpStartupTheme, width: number): string {
+function divider(theme: EpiStartupTheme, width: number): string {
   return theme.fg("borderMuted", `├${"─".repeat(Math.max(0, width - 2))}┤`);
 }
 
-function bottomBorder(theme: MmpStartupTheme, width: number): string {
+function bottomBorder(theme: EpiStartupTheme, width: number): string {
   return theme.fg("borderAccent", `╰${"─".repeat(Math.max(0, width - 2))}╯`);
 }
 
 function framed(
   content: string,
-  theme: MmpStartupTheme,
+  theme: EpiStartupTheme,
   width: number,
 ): string {
   return [
@@ -79,7 +79,7 @@ function splitWidths(width: number): { left: number; right: number } {
 function splitLine(
   left: string,
   right: string,
-  theme: MmpStartupTheme,
+  theme: EpiStartupTheme,
   width: number,
 ): string {
   const columns = splitWidths(width);
@@ -96,7 +96,7 @@ function splitLine(
   ].join("");
 }
 
-function splitBottom(theme: MmpStartupTheme, width: number): string {
+function splitBottom(theme: EpiStartupTheme, width: number): string {
   const columns = splitWidths(width);
   return theme.fg(
     "borderAccent",
@@ -104,17 +104,17 @@ function splitBottom(theme: MmpStartupTheme, width: number): string {
   );
 }
 
-function logoRows(theme: MmpStartupTheme): string[] {
-  return MMP_LOGO.map(([firstM, secondM, p]) => [
-    theme.fg("syntaxKeyword", firstM),
+function logoRows(theme: EpiStartupTheme): string[] {
+  return EPI_LOGO.map(([e, p, i]) => [
+    theme.fg("syntaxKeyword", e),
     "  ",
-    theme.fg("accent", secondM),
+    theme.fg("accent", p),
     "  ",
-    theme.fg("syntaxFunction", p),
+    theme.fg("syntaxFunction", i),
   ].join(""));
 }
 
-function projectState(identity: MmpRuntimeIdentity): string {
+function projectState(identity: EpiRuntimeIdentity): string {
   const project = identity.manifests.project;
   if (project.discovery === "disabled") {
     return "disabled by --no-project";
@@ -129,25 +129,25 @@ function projectState(identity: MmpRuntimeIdentity): string {
 }
 
 function manifestState(
-  identity: MmpRuntimeIdentity,
-  theme: MmpStartupTheme,
+  identity: EpiRuntimeIdentity,
+  theme: EpiStartupTheme,
 ): string {
   return identity.manifests.global.loaded
     ? theme.fg("success", "loaded")
     : theme.fg("warning", "not configured");
 }
 
-function dataLabel(text: string, theme: MmpStartupTheme): string {
+function dataLabel(text: string, theme: EpiStartupTheme): string {
   return theme.fg("dim", text.padEnd(10, " "));
 }
 
-function heading(text: string, theme: MmpStartupTheme): string {
+function heading(text: string, theme: EpiStartupTheme): string {
   return theme.bold(theme.fg("accent", text));
 }
 
 function assemblyRows(
-  identity: MmpRuntimeIdentity,
-  theme: MmpStartupTheme,
+  identity: EpiRuntimeIdentity,
+  theme: EpiStartupTheme,
   width: number,
 ): string[] {
   const resources = identity.declaredResources;
@@ -163,26 +163,26 @@ function assemblyRows(
   return [
     heading("ASSEMBLY", theme),
     `${dataLabel("runtime", theme)}Pi ${identity.runtime.engineVersion}`,
-    `${dataLabel("identity", theme)}${theme.fg("success", "mmp:runtime active")}`,
+    `${dataLabel("identity", theme)}${theme.fg("success", "epi:runtime active")}`,
     `${dataLabel("manifest", theme)}${manifestState(identity, theme)}`,
     `${dataLabel("project", theme)}${projectState(identity)}`,
     `${dataLabel("resources", theme)}rules ${resources.rules.length} · ${rootsLabel} · ext ${extensionCount}`,
     rule,
     heading("COMPOSITION", theme),
     `${theme.fg("mdCode", "rules + skills + extensions")}`,
-    `${theme.fg("dim", "                 └──▶ ")}${theme.bold(theme.fg("accent", "MMP"))}${theme.fg("dim", " ──▶ ")}${theme.bold("Pi")}`,
+    `${theme.fg("dim", "                 └──▶ ")}${theme.bold(theme.fg("accent", "Epi"))}${theme.fg("dim", " ──▶ ")}${theme.bold("Pi")}`,
     rule,
     heading("CONFIGURE", theme),
     theme.fg("mdCode", identity.manifests.global.path),
-    `${theme.fg("mdCode", "/mmp")} inspect · ${theme.fg("mdCode", "/login")} authenticate`,
+    `${theme.fg("mdCode", "/epi")} inspect · ${theme.fg("mdCode", "/login")} authenticate`,
     `${theme.fg("mdCode", "/trust")} project manifest`,
     `${theme.fg("dim", "/reload Rules + Skills · restart Extensions")}`,
   ];
 }
 
 function modelMeta(
-  identity: MmpRuntimeIdentity,
-  options: MmpStartupPageOptions,
+  identity: EpiRuntimeIdentity,
+  options: EpiStartupPageOptions,
 ): string {
   const provider = options.modelProvider;
   return provider === undefined
@@ -191,16 +191,16 @@ function modelMeta(
 }
 
 function heroRows(
-  identity: MmpRuntimeIdentity,
-  theme: MmpStartupTheme,
-  options: MmpStartupPageOptions,
+  identity: EpiRuntimeIdentity,
+  theme: EpiStartupTheme,
+  options: EpiStartupPageOptions,
 ): string[] {
   return [
     theme.bold("Welcome back"),
     "",
     ...logoRows(theme),
     "",
-    theme.bold(theme.fg("text", "Make My Pi")),
+    theme.bold(theme.fg("text", "Epi")),
     theme.italic(theme.fg("muted", "Compose Pi your way.")),
     "",
     theme.fg("text", options.modelName ?? options.modelId ?? "No model selected"),
@@ -212,8 +212,8 @@ function heroRows(
 }
 
 function startupTip(
-  identity: MmpRuntimeIdentity,
-  theme: MmpStartupTheme,
+  identity: EpiRuntimeIdentity,
+  theme: EpiStartupTheme,
   width: number,
 ): string {
   const prefix = theme.italic(theme.fg("warning", "Tip:"));
@@ -224,10 +224,10 @@ function startupTip(
 }
 
 function renderSplit(
-  identity: MmpRuntimeIdentity,
-  theme: MmpStartupTheme,
+  identity: EpiRuntimeIdentity,
+  theme: EpiStartupTheme,
   width: number,
-  options: MmpStartupPageOptions,
+  options: EpiStartupPageOptions,
 ): string[] {
   const columns = splitWidths(width);
   const left = heroRows(identity, theme, options);
@@ -250,10 +250,10 @@ function renderSplit(
 }
 
 function renderNarrow(
-  identity: MmpRuntimeIdentity,
-  theme: MmpStartupTheme,
+  identity: EpiRuntimeIdentity,
+  theme: EpiStartupTheme,
   width: number,
-  options: MmpStartupPageOptions,
+  options: EpiStartupPageOptions,
 ): string[] {
   const innerWidth = Math.max(0, width - 4);
   const hero = heroRows(identity, theme, options);
@@ -262,8 +262,7 @@ function renderNarrow(
     : [
         theme.bold("Welcome back"),
         "",
-        theme.bold(theme.fg("accent", "MMP")),
-        theme.bold("Make My Pi"),
+        theme.bold(theme.fg("accent", "Epi")),
         theme.italic(theme.fg("muted", "Compose Pi your way.")),
         "",
       ];
@@ -281,15 +280,15 @@ function renderNarrow(
   return lines;
 }
 
-export function renderMmpStartupPage(
-  identity: MmpRuntimeIdentity,
-  theme: MmpStartupTheme,
+export function renderEpiStartupPage(
+  identity: EpiRuntimeIdentity,
+  theme: EpiStartupTheme,
   terminalWidth: number,
-  options: MmpStartupPageOptions = {},
+  options: EpiStartupPageOptions = {},
 ): string[] {
   const width = Math.max(1, Math.min(MAX_PANEL_WIDTH, Math.floor(terminalWidth)));
   if (width < 12) {
-    return [truncateToWidth(`MMP · Make My Pi`, width, "…")];
+    return [truncateToWidth("Epi", width, "…")];
   }
   return width >= SPLIT_LAYOUT_WIDTH
     ? renderSplit(identity, theme, width, options)

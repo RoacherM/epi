@@ -63,7 +63,7 @@ export function endOnClosedPipe(stream, onClosed) {
 /**
  * Guards stdout and stderr (before the takeover, so Pi's output guard binds the wrappers) and returns an
  * inline extension that aborts the run and skips further prompts once stdout's reader has gone. A
- * closed stderr (`2>&1 | head`) only stops MMP writing there: nothing could show an error anyway.
+ * closed stderr (`2>&1 | head`) only stops Epi writing there: nothing could show an error anyway.
  * Print/json runs only: host.ts leaves `--mode rpc` to Pi.
  */
 export function guardClosedStdout() {
@@ -76,7 +76,7 @@ export function guardClosedStdout() {
     });
     endOnClosedPipe(process.stderr, () => { });
     return {
-        name: "mmp:closed-stdout",
+        name: "epi:closed-stdout",
         factory(pi) {
             let abort;
             onStdoutClosed.push(() => abort?.());

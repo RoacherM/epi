@@ -1,15 +1,15 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MmpConfigError } from "../errors.js";
-import { MMP_TASK_HOOK_CHANNEL, isTaskHookBridgeRequest, } from "../hook-events.js";
+import { EpiConfigError } from "../errors.js";
+import { EPI_TASK_HOOK_CHANNEL, isTaskHookBridgeRequest, } from "../hook-events.js";
 import { HooksRuntime } from "../hooks-runtime.js";
 import { loadTaskAgents } from "../task-agents.js";
 function failureMessage(error) {
     const detail = error instanceof Error ? error.message : String(error);
-    return `MMP hook handler failed: ${detail}`;
+    return `Epi hook handler failed: ${detail}`;
 }
 /**
- * `context.ui.notify` shows up in MMP's own TUI (`transcript.notice`) and in Pi's `rpc` mode (its
+ * `context.ui.notify` shows up in Epi's own TUI (`transcript.notice`) and in Pi's `rpc` mode (its
  * own notify method over the RPC channel), but Pi's `print` and `json` modes use a no-op UI context
  * (`noOpUIContext.notify` in Pi's `core/extensions/runner.js`) -- a hook failure there would
  * otherwise leave the turn blocked with no visible reason at all ("failures must show"). Writing
@@ -20,12 +20,12 @@ function notifyVisibly(context, text, type) {
     const message = displayLine(text);
     context.ui.notify(message, type);
     if (context.mode === "print" || context.mode === "json") {
-        process.stderr.write(`mmp: ${message}\n`);
+        process.stderr.write(`epi: ${message}\n`);
     }
 }
 /**
  * Hook reasons and a failing command's stderr tail are text from user-configured programs. Shown
- * raw, a newline breaks the one-line TUI notice and the `mmp: ...` stderr line, and an escape
+ * raw, a newline breaks the one-line TUI notice and the `epi: ...` stderr line, and an escape
  * sequence restyles or moves the terminal. Drops ANSI escape sequences and other control
  * characters and joins the lines with " | ". The text's own spacing is kept.
  */
@@ -51,8 +51,8 @@ function notifyFailure(context, error) {
  */
 function promptBlockedMessage(decision) {
     const verb = decision.action === "cancel" ? "cancelled" : "blocked";
-    // No reason: just say what happened. blockReason()'s "Blocked by MMP hook" fallback would read
-    // "Prompt cancelled by user_prompt hook: Blocked by MMP hook".
+    // No reason: just say what happened. blockReason()'s "Blocked by Epi hook" fallback would read
+    // "Prompt cancelled by user_prompt hook: Blocked by Epi hook".
     const reason = displayLine(decision.reason ?? "");
     return `Prompt ${verb} by user_prompt hook${reason.length > 0 ? `: ${reason}` : ""}`;
 }
@@ -67,7 +67,7 @@ function notifyPromptFailClosed(context, text, type) {
     }
     catch (error) {
         const detail = displayLine(error instanceof Error ? error.message : String(error));
-        process.stderr.write(`mmp: ${displayLine(text)} (could not show the notice: ${detail})\n`);
+        process.stderr.write(`epi: ${displayLine(text)} (could not show the notice: ${detail})\n`);
     }
 }
 function taskPayload(event) {
@@ -155,16 +155,16 @@ function compactPayload(event, context) {
     };
 }
 function blockReason(decision) {
-    return decision.reason ?? "Blocked by MMP hook";
+    return decision.reason ?? "Blocked by Epi hook";
 }
 export function createHooksInlineExtension(options) {
-    // Agent files are only read for a hooks.json that has an agent handler: mmp:hooks is on by default
+    // Agent files are only read for a hooks.json that has an agent handler: epi:hooks is on by default
     // (decision H3/K4), and with no such hook it must not fail on, or even read, agents/ -- which
-    // also keeps a broken agent file from failing a run whose mmp:task is disabled.
+    // also keeps a broken agent file from failing a run whose epi:task is disabled.
     const usesAgents = options.hooks.some((hook) => hook.handlers.some((handler) => handler.type === "agent"));
     const agents = usesAgents
         ? loadTaskAgents({
-            globalAgentsDir: join(options.mmpHome, "agents"),
+            globalAgentsDir: join(options.epiHome, "agents"),
             projectAgentsDir: options.projectAgentsDir,
         })
         : [];
@@ -172,23 +172,23 @@ export function createHooksInlineExtension(options) {
     for (const hook of options.hooks) {
         for (const handler of hook.handlers) {
             if (handler.type === "agent" && !agentNames.has(handler.agent)) {
-                throw new MmpConfigError(`${hook.declaredIn}: hook references unknown agent ${JSON.stringify(handler.agent)}`);
+                throw new EpiConfigError(`${hook.declaredIn}: hook references unknown agent ${JSON.stringify(handler.agent)}`);
             }
         }
     }
     const workerPath = options.workerPath ?? fileURLToPath(new URL("../worker.js", import.meta.url));
     return {
-        name: "mmp:hooks",
+        name: "epi:hooks",
         factory: (pi) => {
             const runtime = new HooksRuntime({
                 hooks: options.hooks,
                 agentDir: options.agentDir,
                 agents,
                 workerPath,
-                capsuleRoot: join(options.mmpHome, "runtime", "hooks-task"),
-                artifactRoot: join(options.mmpHome, "artifacts", "hooks-task"),
+                capsuleRoot: join(options.epiHome, "runtime", "hooks-task"),
+                artifactRoot: join(options.epiHome, "artifacts", "hooks-task"),
             });
-            const unsubscribeTaskHooks = pi.events.on(MMP_TASK_HOOK_CHANNEL, (value) => {
+            const unsubscribeTaskHooks = pi.events.on(EPI_TASK_HOOK_CHANNEL, (value) => {
                 if (!isTaskHookBridgeRequest(value)) {
                     return;
                 }

@@ -22,12 +22,12 @@ export function pause(ms, signal) {
 
 export function registerFaux(pi, { models, responses, tokensPerSecond, reasoning = false }) {
   const core = createFauxCore({
-    provider: "mmp-faux",
+    provider: "epi-faux",
     models: models.map((id) => ({ id })),
     ...(tokensPerSecond === undefined ? {} : { tokensPerSecond }),
   });
   core.setResponses(responses);
-  pi.registerProvider("mmp-faux", {
+  pi.registerProvider("epi-faux", {
     baseUrl: "http://localhost:0",
     apiKey: "faux-test-key",
     api: core.api,

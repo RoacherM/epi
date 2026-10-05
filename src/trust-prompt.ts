@@ -1,6 +1,6 @@
 // First-run "trust this project?" prompt (DEVELOPMENT.md 8.2). Interactive runs only: when a
-// project .mmp/mmp.json is found and nothing (flag or saved decision) has decided its trust yet,
-// MMP asks before resolving its own assembly and starting the TUI (src/host.ts). The TUI's
+// project .epi/epi.json is found and nothing (flag or saved decision) has decided its trust yet,
+// Epi asks before resolving its own assembly and starting the TUI (src/host.ts). The TUI's
 // `/trust` command (src/tui/commands.ts) reuses projectTrustOptions for the same choices.
 import { dirname } from "node:path";
 
@@ -14,7 +14,7 @@ export interface ShouldAskProjectTrustOptions {
   noProject: boolean;
   /** From --approve/--no-approve, or a trust choice already made earlier in this run. */
   trustOverride: boolean | undefined;
-  /** The nearest ancestor with .mmp/mmp.json, or undefined when none was found. */
+  /** The nearest ancestor with .epi/epi.json, or undefined when none was found. */
   projectRoot: string | undefined;
   /** ProjectTrustStore.get(projectRoot): null means no one has decided yet. */
   savedDecision: boolean | null;
@@ -37,7 +37,7 @@ export interface ProjectTrustChoice {
 }
 
 /**
- * Mirrors Pi's own trust prompt options (core/trust-manager.js getProjectTrustOptions), which MMP
+ * Mirrors Pi's own trust prompt options (core/trust-manager.js getProjectTrustOptions), which Epi
  * cannot import directly: index.js only re-exports ProjectTrustStore and
  * hasTrustRequiringProjectResources from that module. Saved decisions still go through the same
  * exported ProjectTrustStore, so both stores stay compatible.
@@ -98,7 +98,7 @@ export async function askProjectTrust(options: AskProjectTrustOptions): Promise<
   container.addChild(new piTui.Text("Trust project folder?", 0, 0));
   container.addChild(new piTui.Text(options.root, 0, 1));
   container.addChild(new piTui.Text(
-    "This lets MMP read .mmp/mmp.json and load its rules, skills and extensions (extensions run code).",
+    "This lets Epi read .epi/epi.json and load its rules, skills and extensions (extensions run code).",
     0,
     1,
   ));
@@ -121,7 +121,7 @@ export async function askProjectTrust(options: AskProjectTrustOptions): Promise<
   });
 }
 
-/** Persists the chosen updates (if any) to the same store MMP's `/trust` and classic Pi's `/trust` use. */
+/** Persists the chosen updates (if any) to the same store Epi's `/trust` and classic Pi's `/trust` use. */
 export function saveProjectTrustChoice(agentDir: string, choice: ProjectTrustChoice): void {
   if (choice.updates.length > 0) {
     new ProjectTrustStore(agentDir).setMany(choice.updates);

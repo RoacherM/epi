@@ -7,7 +7,7 @@ import test from "node:test";
 import { createBashTool, createEditTool, createWriteTool, generateDiffString } from "@earendil-works/pi-coding-agent";
 
 import { piTui } from "../dist/tui/pi-tui.js";
-import { createMmpTheme } from "../dist/tui/theme.js";
+import { createEpiTheme } from "../dist/tui/theme.js";
 import {
   bashRenderers,
   editRenderers,
@@ -15,7 +15,7 @@ import {
   writeRenderers,
 } from "../dist/tui/tools/mutating.js";
 
-const theme = createMmpTheme("dark");
+const theme = createEpiTheme("dark");
 // The theme picks truecolor or 256-color codes from the terminal, so compare against its own codes.
 const fg = (color) => theme.getFgAnsi(color);
 
@@ -389,7 +389,7 @@ test("write: new file collapsed shows line count, expanded shows first 10 lines"
 });
 
 test("real tools execution against temporary files fed to mutating renderers", async (t) => {
-  const tmp = mkdtempSync(join(tmpdir(), "mmp-mutating-test-"));
+  const tmp = mkdtempSync(join(tmpdir(), "epi-mutating-test-"));
   t.after(() => rmSync(tmp, { recursive: true, force: true }));
 
   const context = { cwd: tmp };
@@ -477,7 +477,7 @@ test("real tools execution against temporary files fed to mutating renderers", a
 // Renders a real Pi edit of a file whose lines read "line 1".."line N", so every unchanged or removed
 // row names its own old line number. Returns the stripped rows.
 async function renderRealEdit(t, edits, lineCount = 40) {
-  const tmp = mkdtempSync(join(tmpdir(), "mmp-multi-hunk-"));
+  const tmp = mkdtempSync(join(tmpdir(), "epi-multi-hunk-"));
   t.after(() => rmSync(tmp, { recursive: true, force: true }));
   const content = Array.from({ length: lineCount }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
   await createWriteTool(tmp).execute("w", { path: "f.txt", content });

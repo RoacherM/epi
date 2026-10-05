@@ -19,19 +19,19 @@ const ONE_PIXEL_PNG = Buffer.from(
 );
 
 function runApp(t, extensions, steps, { env: extraEnv = {}, args, columns, rows } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-paste-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-paste-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({
         steps,
         ...(args === undefined ? {} : { args }),
         ...(columns === undefined ? {} : { columns }),
@@ -198,13 +198,13 @@ test("a chip pasted into the draft survives Alt+Up restoring a queued follow-up 
 });
 
 test("Ctrl+V with a big block of text on the clipboard folds into a chip too, same as a terminal paste", (t) => {
-  const clipboardFile = join(mkdtempSync(join(tmpdir(), "mmp-clipboard-text-")), "clipboard.txt");
+  const clipboardFile = join(mkdtempSync(join(tmpdir(), "epi-clipboard-text-")), "clipboard.txt");
   t.after(() => rmSync(clipboardFile, { recursive: true, force: true }));
   writeFileSync(clipboardFile, PASTE_LINES.join("\n"));
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
     ["waitReady"], ["key", "ctrl+v"], chipDrawn, ["mark", "afterPaste"],
     ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],
-  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterPaste, /\[Pasted: 4 lines\]/);
 });
 
@@ -219,13 +219,13 @@ test("a paste ending with a newline shows the real line count, not one more", (t
   assert.doesNotMatch(marks.afterPaste, /\[Pasted: 41 lines\]/);
 });
 
-// Item 6 (docs/tui-design.md 4.3): an image queued as a follow-up while a turn is streaming (MMP's
+// Item 6 (docs/tui-design.md 4.3): an image queued as a follow-up while a turn is streaming (Epi's
 // Enter semantics, docs/tui-design.md 4.7) used to vanish on Alt+Up along with any text -- app.ts's
 // clearAllQueues only ever read session.clearQueue()'s plain string arrays. Recovered here via the
 // underlying Agent's public peekQueuedMessages() (see clearAllQueues's own comment for why that's
-// possible for the session's own queue, unlike compactionQueue which was always MMP's own data).
+// possible for the session's own queue, unlike compactionQueue which was always Epi's own data).
 test("Alt+Up restores an image queued as a follow-up while streaming, not just the text", (t) => {
-  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-queue-image-"));
+  const clipboardDir = mkdtempSync(join(tmpdir(), "epi-clipboard-queue-image-"));
   t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
@@ -235,7 +235,7 @@ test("Alt+Up restores an image queued as a follow-up while streaming, not just t
     ["key", "enter"], ["waitFor", "Follow-up:"], ["mark", "queued"], // queues it as a follow-up (still streaming)
     ["key", "alt+up"], ["waitFor", { regex: "❯ .*\\[Image #\\d+\\]" }], ["mark", "restored"],
     ["detach"],
-  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.queued, /Follow-up:/);
   const afterRestore = since(marks.queued, marks.restored);
   assert.match(afterRestore, /\[Image #\d+\]/);
@@ -247,7 +247,7 @@ test("Alt+Up restores an image queued as a follow-up while streaming, not just t
 // *second* follow-up queued in the same turn is fully recoverable too, including its image -- not
 // just the first one (covered by the single-message test above).
 test("Alt+Up restores a second queued follow-up's image too, not just the first message's", (t) => {
-  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-second-queued-"));
+  const clipboardDir = mkdtempSync(join(tmpdir(), "epi-clipboard-second-queued-"));
   t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
@@ -258,7 +258,7 @@ test("Alt+Up restores a second queued follow-up's image too, not just the first 
     ["waitFor", "Follow-up: second"], ["mark", "queued"],
     ["key", "alt+up"], ["waitFor", { regex: "❯ [\\s\\S]*second [\\s\\S]*\\[Image #\\d+\\]" }], ["mark", "restored"],
     ["detach"],
-  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   const afterRestore = since(marks.queued, marks.restored);
   assert.match(afterRestore, /first/);
   assert.match(afterRestore, /second/);
@@ -274,7 +274,7 @@ test("Alt+Up restores a second queued follow-up's image too, not just the first 
 // (wrongly) that the real message had no image, losing it. Pairing by content instead (does a peeked
 // message's own text equal this queued text) finds the real message correctly regardless of order.
 test("a queued follow-up's image isn't lost or misattributed to an extension's injected followUp custom message", (t) => {
-  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-inject-"));
+  const clipboardDir = mkdtempSync(join(tmpdir(), "epi-clipboard-inject-"));
   t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
@@ -287,7 +287,7 @@ test("a queued follow-up's image isn't lost or misattributed to an extension's i
     ["waitFor", "Follow-up: real"], ["mark", "queued"],
     ["key", "alt+up"], ["waitFor", { regex: "❯ .*\\[Image #\\d+\\]" }], ["mark", "restored"],
     ["detach"],
-  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   const afterRestore = since(marks.queued, marks.restored);
   assert.match(afterRestore, /real/);
   assert.match(afterRestore, /\[Image #\d+\]/);
@@ -302,7 +302,7 @@ test("a queued follow-up's image isn't lost or misattributed to an extension's i
 // *steering* content instead of the real queued follow-up -- losing its image the same way, just
 // through the fix's own new gate rather than the original positional-pairing bug.
 test("a queued follow-up's image survives an injected custom message using the default (steer) delivery", (t) => {
-  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-inject-default-"));
+  const clipboardDir = mkdtempSync(join(tmpdir(), "epi-clipboard-inject-default-"));
   t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
@@ -315,41 +315,41 @@ test("a queued follow-up's image survives an injected custom message using the d
     ["waitFor", "Follow-up: real"], ["mark", "queued"],
     ["key", "alt+up"], ["waitFor", { regex: "❯ .*\\[Image #\\d+\\]" }], ["mark", "restored"],
     ["detach"],
-  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   const afterRestore = since(marks.queued, marks.restored);
   assert.match(afterRestore, /real/);
   assert.match(afterRestore, /\[Image #\d+\]/);
 });
 
 test("Ctrl+V with an image on the clipboard (via the test seam) becomes an [Image #1] chip with a dimensioned preview, and is sent as an attachment", (t) => {
-  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-image-"));
+  const clipboardDir = mkdtempSync(join(tmpdir(), "epi-clipboard-image-"));
   t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
   const { marks } = runApp(t, [fixture("faux-echo-images.mjs")], [
     ["waitReady"], ["key", "ctrl+v"], ["waitFor", "Image #1 ─ PNG · 1x1 · 0.1 KB"], ["mark", "afterPaste"],
     ["key", "enter"], ["waitFor", "ECHO:[Image #1]|IMAGES:image/png"], ["mark", "sent"], ["key", "ctrl+d"],
-  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterPaste, /\[Image #1\]/);
   assert.match(marks.afterPaste, /Image #1 ─ PNG · 1x1 · 0\.1 KB/);
   assert.match(marks.sent, /ECHO:\[Image #1\]\|IMAGES:image\/png/);
 });
 
 test("an @image argument is attached as an image to the initial message", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-image-arg-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-image-arg-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("faux-echo-images.mjs")] }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fixture("faux-echo-images.mjs")] }));
   writeFileSync(join(root, "pic.png"), ONE_PIXEL_PNG);
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({
         args: ["--no-project", "@pic.png", "describe it"],
         steps: [["waitReady"], ["waitFor", "IMAGES:image/png", { all: true }], ["mark", "afterStartup"], ["key", "ctrl+d"]],
       }),
@@ -393,7 +393,7 @@ test("double-click on the chip through the real mouse-dispatch path expands it (
 // Shift+Tab, Esc, Ctrl+D -- was dropped, because the shortcut listener only accepted the editor.
 test("shortcuts still work after clicking a chip (Ctrl+V pastes again)", (t) => {
   const rows = 40;
-  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-click-then-paste-"));
+  const clipboardDir = mkdtempSync(join(tmpdir(), "epi-click-then-paste-"));
   t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
@@ -402,7 +402,7 @@ test("shortcuts still work after clicking a chip (Ctrl+V pastes again)", (t) => 
     ["mouse", { x: 2 + 4 + 2, y: rows - 4, clicks: 1 }], ["wait", 300],
     ["key", "ctrl+v"], ["wait", 500], ["mark", "afterPaste"],
     ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],
-  ], { rows, env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { rows, env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterPaste, /\[Image #1\]/);
 });
 
@@ -451,7 +451,7 @@ for (const columns of [40, 80, 120]) {
 // the chip deletion and open path completion on `see foo ` (the harness cwd holds `home/`), so
 // Enter picked `home/` instead of sending. Each removal key that reached that state gets a test.
 function chipRemovalSends(t, removeKeyStep) {
-  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-chip-removal-"));
+  const clipboardDir = mkdtempSync(join(tmpdir(), "epi-clipboard-chip-removal-"));
   t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
@@ -459,7 +459,7 @@ function chipRemovalSends(t, removeKeyStep) {
     ["waitReady"], ["type", "see foo "], ["key", "ctrl+v"], ["waitFor", "[Image #1]"], ["mark", "chip"],
     removeKeyStep, ["wait", 150], ["mark", "removed"], // well past Pi's 20ms autocomplete debounce
     ["key", "enter"], ["waitFor", "ECHO:see foo"], ["mark", "sent"], ["key", "ctrl+d"],
-  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   const afterRemoval = since(marks.chip, marks.removed);
   assert.doesNotMatch(afterRemoval, /\[Image #1\]/, "the chip should be gone from the redrawn prompt");
   assert.doesNotMatch(afterRemoval, /home\//, "no path-completion row should be drawn");
@@ -481,7 +481,7 @@ test("Alt+Backspace deleting an image chip, then Enter, sends the message", (t) 
 // Dogfood D27: the synthetic keystrokes that finish a half-deleted label were each their own Pi
 // undo snapshot, so Ctrl+- brought the label back one character at a time.
 test("one Ctrl+- after Backspace deleted an image chip brings the whole chip back, attached", (t) => {
-  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-chip-undo-"));
+  const clipboardDir = mkdtempSync(join(tmpdir(), "epi-clipboard-chip-undo-"));
   t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
@@ -490,13 +490,13 @@ test("one Ctrl+- after Backspace deleted an image chip brings the whole chip bac
     ["key", "backspace"], ["waitGone", "[Image #1]"],
     ["raw", "\x1f"], ["waitFor", "❯ see foo [Image #1]"], ["wait", 150], ["mark", "undone"],
     ["key", "enter"], ["waitFor", "ECHO:see foo [Image #1]|IMAGES:image/png"], ["mark", "sent"], ["key", "ctrl+d"],
-  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.undone, /❯ see foo \[Image #1\]/);
   assert.match(marks.sent, /ECHO:see foo \[Image #1\]\|IMAGES:image\/png/);
 });
 
 test("Tab still completes a path right after an image chip was deleted", (t) => {
-  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-clipboard-chip-tab-"));
+  const clipboardDir = mkdtempSync(join(tmpdir(), "epi-clipboard-chip-tab-"));
   t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
@@ -504,6 +504,6 @@ test("Tab still completes a path right after an image chip was deleted", (t) => 
     ["waitReady"], ["type", "see foo "], ["key", "ctrl+v"], ["waitFor", "[Image #1]"],
     ["key", "backspace"], ["wait", 150], ["key", "tab"], ["waitFor", "❯ see foo home/"], ["mark", "completed"],
     ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],
-  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.completed, /❯ see foo home\//);
 });

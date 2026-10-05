@@ -18,7 +18,7 @@ import { describe, test } from "node:test";
 import { getSelectListTheme, initTheme } from "@earendil-works/pi-coding-agent";
 
 import { ChipEditor, labelStoredImages, unattachedImageLabels } from "../dist/tui/paste-chips.js";
-import { createMmpTheme } from "../dist/tui/theme.js";
+import { createEpiTheme } from "../dist/tui/theme.js";
 import { Transcript } from "../dist/tui/transcript.js";
 
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
@@ -33,14 +33,14 @@ const since = (earlierMark, laterMark) => laterMark.slice(earlierMark.length);
 const sentMessage = (...numbers) => new RegExp(`❯ ${numbers.map((n) => `\\[Image #${n}\\]`).join(" ?")}\\s+\\d+:\\d\\d [AP]M`);
 
 function setup(t, extensions, settings, clipboardBytes = ONE_PIXEL_PNG) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-image-numbering-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-image-numbering-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   if (settings !== undefined) {
-    mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
-    writeFileSync(join(home, ".mmp", "pi", "settings.json"), JSON.stringify(settings));
+    mkdirSync(join(home, ".epi", "pi"), { recursive: true });
+    writeFileSync(join(home, ".epi", "pi", "settings.json"), JSON.stringify(settings));
   }
   const clipboardFile = join(root, "clipboard.png");
   writeFileSync(clipboardFile, clipboardBytes);
@@ -48,15 +48,15 @@ function setup(t, extensions, settings, clipboardBytes = ONE_PIXEL_PNG) {
   const env = {
     PATH: process.env.PATH,
     HOME: home,
-    MMP_HOME: join(home, ".mmp"),
-    MMP_OFFLINE: "1",
-    MMP_TEST_CLIPBOARD_FILE: clipboardFile,
+    EPI_HOME: join(home, ".epi"),
+    EPI_OFFLINE: "1",
+    EPI_TEST_CLIPBOARD_FILE: clipboardFile,
   };
   // Asynchronous, so the app-driven tests below can run side by side.
   return async (steps, args) => {
     const child = spawn(process.execPath, [harness], {
       cwd: root,
-      env: { ...env, MMP_TUI_HARNESS: JSON.stringify({ steps, ...(args === undefined ? {} : { args }) }) },
+      env: { ...env, EPI_TUI_HARNESS: JSON.stringify({ steps, ...(args === undefined ? {} : { args }) }) },
       timeout: 60_000,
     });
     let stdout = "";
@@ -475,7 +475,7 @@ describe("image numbering", { concurrency: Math.min(8, Math.max(2, availablePara
     const session = (messages) => ({ messages, sessionManager: { getCwd: () => "/tmp" }, extensionRunner: { getMarkdownTransformers: () => [] } });
     const image = { type: "image", data: "AAAA", mimeType: "image/png" };
     const user = (text, images) => ({ role: "user", timestamp: 0, content: [{ type: "text", text }, ...Array(images).fill(image)] });
-    const transcript = new Transcript({ requestRender() {} }, createMmpTheme("dark"), session([]));
+    const transcript = new Transcript({ requestRender() {} }, createEpiTheme("dark"), session([]));
     transcript.reset(session([user("a [Image #1] [Image #4]", 2), user("old", 1)]));
     assert.equal(transcript.highestImageNumber, 4);
     const rendered = transcript.root.render(80).join("\n");
@@ -646,7 +646,7 @@ describe("image numbering", { concurrency: Math.min(8, Math.max(2, availablePara
       { type: "compaction", summary: "the user sent [Image #3]" },
     ];
     const session = (sessionManager) => ({ messages: [], sessionManager, extensionRunner: { getMarkdownTransformers: () => [] } });
-    const transcript = new Transcript({ requestRender() {} }, createMmpTheme("dark"), session({ getCwd: () => "/tmp" }));
+    const transcript = new Transcript({ requestRender() {} }, createEpiTheme("dark"), session({ getCwd: () => "/tmp" }));
     transcript.reset(session({ getCwd: () => "/tmp", getBranch: () => branch }));
     assert.equal(transcript.highestImageNumber, 3, "user entries only");
     transcript.reset(session({ getCwd: () => "/tmp" })); // a stub without getBranch

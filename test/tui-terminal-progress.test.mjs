@@ -14,19 +14,19 @@ const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 function run(t, steps, { extension = "faux-echo.mjs", settings } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-terminal-progress-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-terminal-progress-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const project = join(root, "project");
-  mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
+  mkdirSync(join(home, ".epi", "pi"), { recursive: true });
   mkdirSync(project);
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture(extension)] }));
-  if (settings !== undefined) writeFileSync(join(home, ".mmp", "pi", "settings.json"), JSON.stringify(settings));
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fixture(extension)] }));
+  if (settings !== undefined) writeFileSync(join(home, ".epi", "pi", "settings.json"), JSON.stringify(settings));
   const result = spawnSync(process.execPath, [harness], {
     cwd: project,
     env: {
-      PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ steps }),
+      PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ steps }),
     },
     encoding: "utf8",
     timeout: 60_000,

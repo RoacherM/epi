@@ -135,7 +135,7 @@ export class Transcript {
             block.setGlobalExpanded(expanded);
     }
     /**
-     * A notice ("/tree is not in MMP TUI v2 yet", an extension load warning) is not a real
+     * A notice ("/tree is not in Epi TUI v2 yet", an extension load warning) is not a real
      * message: it must not count toward messageCount, which gates the welcome page's header.
      */
     notice(text, tone = "info") {
@@ -194,7 +194,7 @@ export class Transcript {
                 // "CallToolResult"/console output there); a separate top-level block for the same call
                 // would duplicate it. Mirrors Pi's own interactive-mode.js: "Nested calls (from codemode
                 // scripts) are shown inside their parent's row" -- `if (event.parentToolCallId) break;`.
-                // Unlike Pi's pendingTools.get() (a plain no-op lookup for an unknown id), MMP's tool()
+                // Unlike Pi's pendingTools.get() (a plain no-op lookup for an unknown id), Epi's tool()
                 // helper always creates a new entry on first reference, so update/end must skip explicitly
                 // too, not just rely on start never having created one.
                 if (event.parentToolCallId !== undefined)
@@ -387,7 +387,7 @@ export class Transcript {
                 existing.updateArgs(args);
             return existing;
         }
-        // Pi's built-in tools come with Pi's own renderers; MMP swaps in its grok-style ones. Extension
+        // Pi's built-in tools come with Pi's own renderers; Epi swaps in its grok-style ones. Extension
         // tools, including an extension overriding a built-in name, keep their own renderers.
         const definition = this.session.getToolDefinition(toolName);
         const isBuiltIn = this.session.getAllTools().find((tool) => tool.name === toolName)?.sourceInfo.source === "builtin";

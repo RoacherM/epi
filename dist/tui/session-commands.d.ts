@@ -31,8 +31,8 @@ export declare function runCompact(host: CommandHost, customInstructions: string
 export type ResumeOutcome = "resumed" | "cancelled" | "exited";
 /** `/resume`: session selector for the current cwd (Tab switches to "all", like Pi's). Picking a
  * session hands off to `runtime.switchSession`, whose rebind callback (app.ts's `bind`) replays
- * the transcript. Sessions only ever come from the session manager's own directory, which MMP
- * points at `~/.mmp/pi/sessions` (never Pi's `~/.pi/agent`); see services.ts and paths.ts. */
+ * the transcript. Sessions only ever come from the session manager's own directory, which Epi
+ * points at `~/.epi/pi/sessions` (never Pi's `~/.pi/agent`); see services.ts and paths.ts. */
 export declare function runResume(host: CommandHost): Promise<ResumeOutcome>;
 /** `/thinking [level]`: set directly when the level is valid for the current model, otherwise
  * open the selector (also reachable with no argument). */

@@ -1,13 +1,13 @@
-// Dogfood D54: `mmp -p hi | head -c1` (or `| true`) crashed with Node's unhandled EPIPE stack and
+// Dogfood D54: `epi -p hi | head -c1` (or `| true`) crashed with Node's unhandled EPIPE stack and
 // exit 1, killing a session_shutdown handler half way. Pi's print mode writes stdout through
 // core/output-guard.js, which binds `process.stdout.write` when stdout is taken over (`takeOverStdout`),
 // retries only ENOBUFS/EAGAIN and otherwise calls process.exit(1); nothing listens for the stream's
 // `error` event (docs/pi-internals.md `output-guard-stdout-write`).
 //
-// MMP treats a reader that has gone away as a normal end, like ripgrep or fd rather than a SIGPIPE
+// Epi treats a reader that has gone away as a normal end, like ripgrep or fd rather than a SIGPIPE
 // kill: stop writing, stop the run (nobody reads the rest), let Pi dispose the session as usual so
 // session_shutdown handlers finish, and exit with the run's own code, quietly. stderr gets the same
-// treatment without stopping the run (`2>&1 | head -c1` closes both; MMP's own final flush in
+// treatment without stopping the run (`2>&1 | head -c1` closes both; Epi's own final flush in
 // host.ts hit EPIPE there). Any other write error still fails loudly (hard rule 3).
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 
@@ -75,7 +75,7 @@ export function endOnClosedPipe(stream: NodeJS.WriteStream, onClosed: () => void
 /**
  * Guards stdout and stderr (before the takeover, so Pi's output guard binds the wrappers) and returns an
  * inline extension that aborts the run and skips further prompts once stdout's reader has gone. A
- * closed stderr (`2>&1 | head`) only stops MMP writing there: nothing could show an error anyway.
+ * closed stderr (`2>&1 | head`) only stops Epi writing there: nothing could show an error anyway.
  * Print/json runs only: host.ts leaves `--mode rpc` to Pi.
  */
 export function guardClosedStdout(): InlineExtension {
@@ -88,7 +88,7 @@ export function guardClosedStdout(): InlineExtension {
   endOnClosedPipe(process.stderr, () => {});
 
   return {
-    name: "mmp:closed-stdout",
+    name: "epi:closed-stdout",
     factory(pi) {
       let abort: (() => void) | undefined;
       onStdoutClosed.push(() => abort?.());

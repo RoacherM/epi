@@ -1,6 +1,6 @@
 // `node --import` hook for the D6 test (test/mcp.test.mjs): Pi's extensions/mcp/runtime.js loads
 // as usual, except that constructing an McpServerConnection throws -- so the failure lands inside
-// Pi's own startup chain (createConnection), after MMP's mmp:mcp factory has already loaded the
+// Pi's own startup chain (createConnection), after Epi's epi:mcp factory has already loaded the
 // same file for its transport. Test only: matches Pi's file by path, so if Pi moves runtime.js the
 // hook stops applying and the test fails on the missing error line.
 import { registerHooks } from "node:module";

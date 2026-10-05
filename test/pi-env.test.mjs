@@ -1,7 +1,7 @@
 // Dogfood D63 (src/pi-env.ts, docs/cli-design.md §2.1): the PI_* variables a user set for their
-// own Pi never change mmp; MMP's own MMP_* names reach Pi instead. Observed from inside real mmp
+// own Pi never change epi; Epi's own EPI_* names reach Pi instead. Observed from inside real epi
 // runs through Pi's own code paths (model network policy, pi-tui capability detection, the Pi
-// version read at import time, the managed fd directory), not by reading MMP's table back.
+// version read at import time, the managed fd directory), not by reading Epi's table back.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -18,17 +18,17 @@ const findExtension = fileURLToPath(new URL("./fixtures/faux-find-tool.mjs", imp
 const networkGuard = fileURLToPath(new URL("./fixtures/network-guard.mjs", import.meta.url));
 
 function fixture(t, extensions) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-pi-env-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-pi-env-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const project = join(root, "project");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
   mkdirSync(project, { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
-  return { root, home, project, mmpHome: join(home, ".mmp") };
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
+  return { root, home, project, epiHome: join(home, ".epi") };
 }
 
-/** `mmp -p hi` with the probe's faux model. Runs without MMP_OFFLINE are deliberately online, so
+/** `epi -p hi` with the probe's faux model. Runs without EPI_OFFLINE are deliberately online, so
  * network-guard.mjs refuses (and records) the main thread's fetch and TCP/TLS connects; every test
  * asserts which ones there were. */
 function runProbe(t, env) {
@@ -37,15 +37,15 @@ function runProbe(t, env) {
   const guardOut = join(f.root, "network.txt");
   const result = spawnSync(
     process.execPath,
-    ["--import", networkGuard, cliPath, "--no-project", "--model", "mmp-env-probe/probe", "-p", "hi"],
+    ["--import", networkGuard, cliPath, "--no-project", "--model", "epi-env-probe/probe", "-p", "hi"],
     {
       cwd: f.project,
       env: {
         PATH: process.env.PATH,
         HOME: f.home,
-        MMP_HOME: f.mmpHome,
-        MMP_PI_ENV_PROBE_OUT: probeOut,
-        MMP_NETWORK_GUARD_OUT: guardOut,
+        EPI_HOME: f.epiHome,
+        EPI_PI_ENV_PROBE_OUT: probeOut,
+        EPI_NETWORK_GUARD_OUT: guardOut,
         ...env,
       },
       input: "",
@@ -58,7 +58,7 @@ function runProbe(t, env) {
   // Magpie that is one connection to its loopback gateway. Nothing else may connect.
   assert.equal(
     existsSync(guardOut) ? readFileSync(guardOut, "utf8") : "",
-    env.MMP_OFFLINE === undefined ? "connect 127.0.0.1:3425\n" : "",
+    env.EPI_OFFLINE === undefined ? "connect 127.0.0.1:3425\n" : "",
     "an unexpected connection was attempted",
   );
   return { ...JSON.parse(readFileSync(probeOut, "utf8")), fixture: f };
@@ -68,7 +68,7 @@ function runProbe(t, env) {
 // `path: null` for TCP, which an `!== undefined` check once took for a pipe (D63 review 1).
 // 192.0.2.1 is TEST-NET-1: no DNS lookup, and nothing answers if the guard lets it through.
 test("network-guard refuses http.get and https.get, and still allows a Unix socket", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-network-guard-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-network-guard-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const guardOut = join(root, "network.txt");
   const script = `
@@ -93,7 +93,7 @@ test("network-guard refuses http.get and https.get, and still allows a Unix sock
     server.close();
   `;
   const result = spawnSync(process.execPath, ["--import", networkGuard, "--input-type=module", "-e", script], {
-    env: { PATH: process.env.PATH, MMP_NETWORK_GUARD_OUT: guardOut },
+    env: { PATH: process.env.PATH, EPI_NETWORK_GUARD_OUT: guardOut },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -106,45 +106,45 @@ test("network-guard refuses http.get and https.get, and still allows a Unix sock
   assert.equal(readFileSync(guardOut, "utf8"), "connect 192.0.2.1:80\nconnect 192.0.2.1:443\n");
 });
 
-test("PI_OFFLINE alone (a Pi user's setting) leaves mmp online", (t) => {
+test("PI_OFFLINE alone (a Pi user's setting) leaves epi online", (t) => {
   const probe = runProbe(t, { PI_OFFLINE: "1" });
   assert.equal(probe.networkAllowed, true, "Pi's model runtime went offline");
   assert.equal(probe.env.PI_OFFLINE, undefined);
 });
 
-test("MMP_OFFLINE makes mmp offline", (t) => {
-  const probe = runProbe(t, { MMP_OFFLINE: "1" });
+test("EPI_OFFLINE makes epi offline", (t) => {
+  const probe = runProbe(t, { EPI_OFFLINE: "1" });
   assert.equal(probe.networkAllowed, false);
   assert.equal(probe.env.PI_OFFLINE, "1");
 });
 
-test("PI_HYPERLINKS alone has no effect on mmp; MMP_HYPERLINKS does", (t) => {
-  assert.equal(runProbe(t, { MMP_OFFLINE: "1", PI_HYPERLINKS: "1" }).hyperlinks, false);
-  assert.equal(runProbe(t, { MMP_OFFLINE: "1", MMP_HYPERLINKS: "1" }).hyperlinks, true);
+test("PI_HYPERLINKS alone has no effect on epi; EPI_HYPERLINKS does", (t) => {
+  assert.equal(runProbe(t, { EPI_OFFLINE: "1", PI_HYPERLINKS: "1" }).hyperlinks, false);
+  assert.equal(runProbe(t, { EPI_OFFLINE: "1", EPI_HYPERLINKS: "1" }).hyperlinks, true);
 });
 
-test("no PI_* value from the user's environment reaches Pi; each MMP_* knob does", (t) => {
+test("no PI_* value from the user's environment reaches Pi; each EPI_* knob does", (t) => {
   const userValues = Object.fromEntries(Object.keys(PI_ENV_RULES).map((name) => [name, `/pi-user/${name}`]));
-  const mmpValues = Object.fromEntries(
+  const epiValues = Object.fromEntries(
     Object.values(PI_ENV_RULES)
       .filter((rule) => rule.kind === "bridged")
-      .map((rule) => [rule.mmp, `mmp-${rule.mmp}`]),
+      .map((rule) => [rule.epi, `epi-${rule.epi}`]),
   );
-  // The probe's run stays offline through MMP_OFFLINE; its value is what Pi's PI_OFFLINE gets.
-  const probe = runProbe(t, { ...userValues, ...mmpValues, MMP_OFFLINE: "1" });
+  // The probe's run stays offline through EPI_OFFLINE; its value is what Pi's PI_OFFLINE gets.
+  const probe = runProbe(t, { ...userValues, ...epiValues, EPI_OFFLINE: "1" });
   const expected = {
-    PI_CODING_AGENT_DIR: join(probe.fixture.mmpHome, "pi"),
+    PI_CODING_AGENT_DIR: join(probe.fixture.epiHome, "pi"),
     PI_SKIP_VERSION_CHECK: "1",
   };
   for (const [name, rule] of Object.entries(PI_ENV_RULES)) {
-    if (rule.kind === "bridged") expected[name] = rule.mmp === "MMP_OFFLINE" ? "1" : `mmp-${rule.mmp}`;
+    if (rule.kind === "bridged") expected[name] = rule.epi === "EPI_OFFLINE" ? "1" : `epi-${rule.epi}`;
   }
   assert.deepEqual(probe.env, expected);
 });
 
 // Pi's config.js reads PI_PACKAGE_DIR while it is being imported (package.json -> VERSION), before
-// any of MMP's run code: only a bridge that runs first keeps the user's value out.
-test("PI_PACKAGE_DIR, read by Pi at import time, does not change mmp's Pi", (t) => {
+// any of Epi's run code: only a bridge that runs first keeps the user's value out.
+test("PI_PACKAGE_DIR, read by Pi at import time, does not change epi's Pi", (t) => {
   const f = fixture(t, []);
   const fakePackage = join(f.root, "pi-package");
   mkdirSync(fakePackage);
@@ -153,7 +153,7 @@ test("PI_PACKAGE_DIR, read by Pi at import time, does not change mmp's Pi", (t) 
   const piVersion = JSON.parse(readFileSync(piPackageJson, "utf8")).version;
   const result = spawnSync(process.execPath, [cliPath, "--version"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, PI_PACKAGE_DIR: fakePackage },
+    env: { PATH: process.env.PATH, HOME: f.home, EPI_HOME: f.epiHome, PI_PACKAGE_DIR: fakePackage },
     encoding: "utf8",
   });
   assert.equal(result.status, 0, result.stderr);
@@ -161,13 +161,13 @@ test("PI_PACKAGE_DIR, read by Pi at import time, does not change mmp's Pi", (t) 
 });
 
 // Pi's utils/tools-manager.js fixes its managed fd/rg directory (<agent dir>/bin) at import time,
-// which used to be before MMP set PI_CODING_AGENT_DIR: mmp ran (and would have downloaded) fd in
+// which used to be before Epi set PI_CODING_AGENT_DIR: epi ran (and would have downloaded) fd in
 // ~/.pi/agent/bin, or in the user's own PI_CODING_AGENT_DIR.
-test("Pi's find tool uses fd from MMP's agent dir, never Pi's or the user's", (t) => {
+test("Pi's find tool uses fd from Epi's agent dir, never Pi's or the user's", (t) => {
   const f = fixture(t, [findExtension]);
   const ran = join(f.root, "fd-ran.txt");
   const userAgentDir = join(f.root, "user-pi-agent");
-  const binDirs = [join(f.mmpHome, "pi", "bin"), join(f.home, ".pi", "agent", "bin"), join(userAgentDir, "bin")];
+  const binDirs = [join(f.epiHome, "pi", "bin"), join(f.home, ".pi", "agent", "bin"), join(userAgentDir, "bin")];
   for (const dir of binDirs) {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "fd"), `#!/bin/sh\necho '${dir}' >> '${ran}'\n`);
@@ -175,10 +175,10 @@ test("Pi's find tool uses fd from MMP's agent dir, never Pi's or the user's", (t
   }
   const result = spawnSync(
     process.execPath,
-    [cliPath, "--no-project", "--tools", "find", "--model", "mmp-faux/finder", "-p", "hi"],
+    [cliPath, "--no-project", "--tools", "find", "--model", "epi-faux/finder", "-p", "hi"],
     {
       cwd: f.project,
-      env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1", PI_CODING_AGENT_DIR: userAgentDir },
+      env: { PATH: process.env.PATH, HOME: f.home, EPI_HOME: f.epiHome, EPI_OFFLINE: "1", PI_CODING_AGENT_DIR: userAgentDir },
       input: "",
       encoding: "utf8",
       timeout: 60_000,
@@ -189,9 +189,9 @@ test("Pi's find tool uses fd from MMP's agent dir, never Pi's or the user's", (t
   assert.equal(readFileSync(ran, "utf8"), `${binDirs[0]}\n`);
 });
 
-test("isolatePiEnvironment: an unusable MMP_HOME leaves the agent dir unset; MMP_* values copy as-is", () => {
-  const env = { MMP_HOME: "relative", PI_CODING_AGENT_DIR: "/pi-user", PI_OFFLINE: "1", MMP_SESSION_DIR: "", OTHER: "kept" };
+test("isolatePiEnvironment: an unusable EPI_HOME leaves the agent dir unset; EPI_* values copy as-is", () => {
+  const env = { EPI_HOME: "relative", PI_CODING_AGENT_DIR: "/pi-user", PI_OFFLINE: "1", EPI_SESSION_DIR: "", OTHER: "kept" };
   isolatePiEnvironment(env);
   // "" stays "": Pi itself treats an empty PI_CODING_AGENT_SESSION_DIR as unset.
-  assert.deepEqual(env, { MMP_HOME: "relative", MMP_SESSION_DIR: "", PI_CODING_AGENT_SESSION_DIR: "", OTHER: "kept" });
+  assert.deepEqual(env, { EPI_HOME: "relative", EPI_SESSION_DIR: "", PI_CODING_AGENT_SESSION_DIR: "", OTHER: "kept" });
 });

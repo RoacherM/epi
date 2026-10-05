@@ -1,5 +1,5 @@
 // /share, /bug, /changelog (docs/tui-design.md 4.6). NOT Pi's /bug (uploads to the Pi
-// developers) or /changelog (Pi's own bundled changelog file) -- MMP's own GitHub repo instead.
+// developers) or /changelog (Pi's own bundled changelog file) -- Epi's own GitHub repo instead.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -9,17 +9,17 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { fetchReleaseNotes, fitIssueBody, MAX_ISSUE_URL_LENGTH } from "../dist/tui/share-commands.js";
-import { MMP_REPO } from "../dist/update.js";
+import { EPI_REPO } from "../dist/update.js";
 
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 function runApp(t, extensions, steps, { path } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-share-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-share-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
@@ -27,9 +27,9 @@ function runApp(t, extensions, steps, { path } = {}) {
       // (even if installed on the dev machine) must never run: these tests assert on canned output.
       PATH: path ?? "",
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ steps }),
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ steps }),
     },
     encoding: "utf8",
     timeout: 60_000,
@@ -41,7 +41,7 @@ function runApp(t, extensions, steps, { path } = {}) {
 
 /** A fake `gh` on its own PATH dir: real `gh` (if installed on the dev machine) never runs. */
 function fakeGh(t, script) {
-  const dir = mkdtempSync(join(tmpdir(), "mmp-fake-gh-"));
+  const dir = mkdtempSync(join(tmpdir(), "epi-fake-gh-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, "gh");
   writeFileSync(path, script);
@@ -127,7 +127,7 @@ test("/bug's consent prompt says what the URL actually carries, not that nothing
   assert.match(marks.consentShown, /summary/);
 });
 
-test("/bug [description], declining the summary, prints a prefilled GitHub issue URL with MMP's repo and versions", (t) => {
+test("/bug [description], declining the summary, prints a prefilled GitHub issue URL with Epi's repo and versions", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-echo.mjs")], [
     ["waitReady"],
     ["type", "/bug the sky is falling"], ["key", "enter"], ["wait", 500], ["mark", "consentShown"],
@@ -140,7 +140,7 @@ test("/bug [description], declining the summary, prints a prefilled GitHub issue
   assert.match(marks.summaryPrompt.slice(marks.descriptionShown.length), /Include a summary\?/);
   const report = marks.afterBug.slice(marks.summaryPrompt.length);
   assert.match(report, /Open this URL to file the report:/);
-  assert.match(report, new RegExp(`github\\.com/${MMP_REPO}/issues/new\\?title=`));
+  assert.match(report, new RegExp(`github\\.com/${EPI_REPO}/issues/new\\?title=`));
   assert.match(report, /the+sky+is+falling|the%20sky%20is%20falling/);
   assert.match(report, /Versions/);
   assert.match(out, /EXIT=0/);
@@ -151,7 +151,7 @@ test("fitIssueBody truncates a long body so the whole issue URL stays within the
   const hugeBody = "x".repeat(20_000);
   const result = fitIssueBody(title, hugeBody);
   assert.match(result, /\[truncated to fit the URL length limit\]$/);
-  const url = `https://github.com/${MMP_REPO}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(result)}`;
+  const url = `https://github.com/${EPI_REPO}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(result)}`;
   assert.ok(url.length <= MAX_ISSUE_URL_LENGTH, url.length);
   // A short body is left alone.
   assert.equal(fitIssueBody(title, "short body"), "short body");
@@ -169,7 +169,7 @@ test("changelog is offline: shows a clear message and never reaches the network"
 
 test("fetchReleaseNotes formats releases from the GitHub API and surfaces a non-OK response as an error", async () => {
   const releases = await fetchReleaseNotes(async (url) => {
-    assert.match(url, new RegExp(`repos/${MMP_REPO}/releases$`));
+    assert.match(url, new RegExp(`repos/${EPI_REPO}/releases$`));
     return { ok: true, json: async () => ([
       { tag_name: "v0.2.0", body: "New: /tree, /fork, /clone" },
       { tag_name: "v0.1.0", body: "" },

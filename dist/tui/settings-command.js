@@ -1,7 +1,7 @@
 // /settings (docs/tui-design.md 4.6): Pi's SettingsSelectorComponent (settings-selector.js) cut down
-// to the items MMP's interface honours. Pi's component builds all of its items in the constructor
+// to the items Epi's interface honours. Pi's component builds all of its items in the constructor
 // with no way to leave any out (SettingsList.items is private), so this builds the same pi-tui
-// SettingsList with MMP's own item list. Ids, labels, descriptions and values are Pi's, checked
+// SettingsList with Epi's own item list. Ids, labels, descriptions and values are Pi's, checked
 // against Pi's real component by test/tui-settings.test.mjs; the items left out and why are listed
 // in docs/tui-design.md 4.6.
 import { DynamicBorder, getSettingsListTheme, keyText } from "@earendil-works/pi-coding-agent";
@@ -23,10 +23,10 @@ function formatHttpIdleTimeoutMs(timeoutMs) {
 const CACHE_WARMING_MODES = ["off", "streaming", "idle"];
 const bool = (value) => (value ? "true" : "false");
 /**
- * MMP's show-hardware-cursor value. Pi's getShowHardwareCursor falls back to the PI_HARDWARE_CURSOR
- * environment variable when settings.json has no value; MMP never honours a user's Pi environment
- * (like MMP_SESSION_DIR instead of PI_CODING_AGENT_SESSION_DIR, docs/cli-design.md), so unset is
- * off. Global settings are all of MMP's settings: its SettingsManager never loads a project's
+ * Epi's show-hardware-cursor value. Pi's getShowHardwareCursor falls back to the PI_HARDWARE_CURSOR
+ * environment variable when settings.json has no value; Epi never honours a user's Pi environment
+ * (like EPI_SESSION_DIR instead of PI_CODING_AGENT_SESSION_DIR, docs/cli-design.md), so unset is
+ * off. Global settings are all of Epi's settings: its SettingsManager never loads a project's
  * .pi/settings.json (services.ts, `projectTrusted: false`).
  */
 export function showHardwareCursor(settings) {
@@ -132,7 +132,7 @@ export function settingsItems(host) {
             item: {
                 id: "steering-mode",
                 label: "Steering mode",
-                // Pi says "Enter": MMP swaps Enter and Alt+Enter while a turn runs (docs/tui-design.md 4.7),
+                // Pi says "Enter": Epi swaps Enter and Alt+Enter while a turn runs (docs/tui-design.md 4.7),
                 // so steering is the app.message.followUp key here.
                 description: `${keyText("app.message.followUp")} while streaming queues steering messages. 'one-at-a-time': deliver one, wait for response. 'all': deliver all at once.`,
                 currentValue: session.steeringMode,
@@ -144,7 +144,7 @@ export function settingsItems(host) {
             item: {
                 id: "follow-up-mode",
                 label: "Follow-up mode",
-                // Pi names its app.message.followUp key; in MMP a follow-up is plain Enter (4.7).
+                // Pi names its app.message.followUp key; in Epi a follow-up is plain Enter (4.7).
                 description: "Enter while streaming queues follow-up messages until agent stops. 'one-at-a-time': deliver one, wait for response. 'all': deliver all at once.",
                 currentValue: session.followUpMode,
                 values: ["one-at-a-time", "all"],

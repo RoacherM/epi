@@ -8,9 +8,9 @@ import { googleGenerativeAIApi } from "@earendil-works/pi-ai/api/google-generati
 const DISCOVERY_TIMEOUT_MS = 2000;
 /** Loopback Magpie accepts any key; `/login` stores a real one in auth.json, which takes precedence. */
 const MAGPIE_DEFAULT_KEY = "magpie";
-/** Test seam: MMP_TEST_MAGPIE_URL points MMP at a local fake gateway instead of the real one. */
+/** Test seam: EPI_TEST_MAGPIE_URL points Epi at a local fake gateway instead of the real one. */
 export function magpieBaseUrl() {
-    return process.env.MMP_TEST_MAGPIE_URL ?? "http://127.0.0.1:3425";
+    return process.env.EPI_TEST_MAGPIE_URL ?? "http://127.0.0.1:3425";
 }
 const catalogModelSchema = z.object({
     id: z.string().min(1),
@@ -162,8 +162,8 @@ const blocksOf = (message) => typeof message.content === "string" ? [{ type: "te
 /** Anthropic caps tool IDs at 64 characters (pi-ai's normalizeToolCallId fills them up to that
  * for other providers' IDs), so a long ID becomes a hash instead of growing past the cap. */
 function renamedToolId(id) {
-    const prefixed = `mmp_${id}`;
-    return prefixed.length <= 64 ? prefixed : `mmp_${createHash("sha256").update(id).digest("hex").slice(0, 40)}`;
+    const prefixed = `epi_${id}`;
+    return prefixed.length <= 64 ? prefixed : `epi_${createHash("sha256").update(id).digest("hex").slice(0, 40)}`;
 }
 /** Magpie's claude/ route continues its own upstream session when a request carries tool IDs it
  * issued, and then forwards only the tool results: a steer message sent after them is dropped
@@ -213,7 +213,7 @@ function changedCatalogEntry(stored, baseUrl, fresh) {
         : { models: fresh, checkedAt: Date.now(), etag: tag };
 }
 /** Catalog writes still running, so a session shutdown can wait for them: a process that exits
- * while Pi is taking the models-store lock leaves models-store.json.lock behind, and the next mmp
+ * while Pi is taking the models-store lock leaves models-store.json.lock behind, and the next epi
  * waits up to 30 s for it (Fable F5: rpc's background refresh, then the client closes stdin). */
 export function createWriteTracker() {
     const pending = new Set();

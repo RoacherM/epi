@@ -6,7 +6,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 
-import { MmpConfigError } from "./errors.js";
+import { EpiConfigError } from "./errors.js";
 
 const MANIFEST_KEYS: Readonly<Record<string, true>> = {
   version: true,
@@ -17,26 +17,26 @@ const MANIFEST_KEYS: Readonly<Record<string, true>> = {
 };
 
 export const BUILT_IN_EXTENSIONS: Readonly<Record<BuiltInExtensionName, true>> = {
-  "mmp:task": true,
-  "mmp:mcp": true,
-  "mmp:hooks": true,
+  "epi:task": true,
+  "epi:mcp": true,
+  "epi:hooks": true,
 };
 
 /** Built-in capabilities in the order they load when no Manifest names them (decision H3/K4: on
  * by default, turned off with `"disable"`). */
-export const BUILT_IN_EXTENSION_NAMES: readonly BuiltInExtensionName[] = ["mmp:task", "mmp:mcp", "mmp:hooks"];
+export const BUILT_IN_EXTENSION_NAMES: readonly BuiltInExtensionName[] = ["epi:task", "epi:mcp", "epi:hooks"];
 
 export type ResourceSource = "global" | "project";
 /** `"default"`: a built-in no Manifest lists in `"extensions"`, on because built-ins are on by
  * default; it has no `declaredIn`. */
 export type InlineExtensionSource = ResourceSource | "default";
 export type ResourceKind = "rule" | "skill" | "extension";
-export type BuiltInExtensionName = "mmp:task" | "mmp:mcp" | "mmp:hooks";
+export type BuiltInExtensionName = "epi:task" | "epi:mcp" | "epi:hooks";
 /** Which fixed auto-discovery directory a skill root came from (docs/decisions.md S1); undefined
  * for a skill declared explicitly in a Manifest. */
-export type DiscoveredSkillProvenance = "agents" | "mmp" | "project";
+export type DiscoveredSkillProvenance = "agents" | "epi" | "project";
 
-export interface MmpManifestV1 {
+export interface EpiManifestV1 {
   version: 1;
   rules?: string[];
   skills?: string[];
@@ -78,7 +78,7 @@ export interface ResolvedManifest {
 }
 
 interface LoadedManifest {
-  manifest: MmpManifestV1;
+  manifest: EpiManifestV1;
   loaded: boolean;
 }
 
@@ -95,12 +95,12 @@ function parseStringList(
     return undefined;
   }
   if (!Array.isArray(value)) {
-    throw new MmpConfigError(`${manifestPath}: ${field} must be an array`);
+    throw new EpiConfigError(`${manifestPath}: ${field} must be an array`);
   }
 
   return value.map((entry, index) => {
     if (typeof entry !== "string" || entry.trim().length === 0) {
-      throw new MmpConfigError(
+      throw new EpiConfigError(
         `${manifestPath}: ${field}[${index}] must be a non-empty string`,
       );
     }
@@ -118,20 +118,20 @@ function loadManifest(manifestPath: string): LoadedManifest {
     parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new MmpConfigError(`${manifestPath}: invalid JSON: ${detail}`);
+    throw new EpiConfigError(`${manifestPath}: invalid JSON: ${detail}`);
   }
 
   if (!isJsonObject(parsed)) {
-    throw new MmpConfigError(`${manifestPath}: manifest must be a JSON object`);
+    throw new EpiConfigError(`${manifestPath}: manifest must be a JSON object`);
   }
 
   for (const key of Object.keys(parsed)) {
     if (MANIFEST_KEYS[key] !== true) {
-      throw new MmpConfigError(`${manifestPath}: unknown field ${JSON.stringify(key)}`);
+      throw new EpiConfigError(`${manifestPath}: unknown field ${JSON.stringify(key)}`);
     }
   }
   if (parsed.version !== 1) {
-    throw new MmpConfigError(`${manifestPath}: version must be exactly 1`);
+    throw new EpiConfigError(`${manifestPath}: version must be exactly 1`);
   }
 
   const rules = parseStringList(parsed.rules, "rules", manifestPath);
@@ -156,7 +156,7 @@ function loadManifest(manifestPath: string): LoadedManifest {
 }
 
 /** Whether this Manifest's `"disable"` lists `name`. Reads the file only: a command that asks just
- * this (`mmp mcp list`) is not stopped by a declared path that does not exist. */
+ * this (`epi mcp list`) is not stopped by a declared path that does not exist. */
 export function manifestDisables(manifestPath: string, name: BuiltInExtensionName): boolean {
   return loadManifest(manifestPath).manifest.disable?.includes(name) === true;
 }
@@ -174,24 +174,24 @@ function resolveExistingPath(
   try {
     canonicalPath = realpathSync(absolutePath);
   } catch {
-    throw new MmpConfigError(
+    throw new EpiConfigError(
       `${manifestPath}: declared ${kind} path does not exist: ${declaredPath}`,
     );
   }
 
   const stats = statSync(canonicalPath);
   if (kind === "rule" && !stats.isFile()) {
-    throw new MmpConfigError(
+    throw new EpiConfigError(
       `${manifestPath}: rule path must be a file: ${declaredPath}`,
     );
   }
   if (kind === "extension" && !stats.isFile() && !stats.isDirectory()) {
-    throw new MmpConfigError(
+    throw new EpiConfigError(
       `${manifestPath}: extension path must be a file or directory: ${declaredPath}`,
     );
   }
   if (kind === "skill" && !stats.isFile() && !stats.isDirectory()) {
-    throw new MmpConfigError(
+    throw new EpiConfigError(
       `${manifestPath}: skill path must be a file or directory: ${declaredPath}`,
     );
   }
@@ -230,9 +230,9 @@ export function resolveManifest(
   }
 
   for (const extension of manifest.extensions ?? []) {
-    if (extension.startsWith("mmp:")) {
+    if (extension.startsWith("epi:")) {
       if (BUILT_IN_EXTENSIONS[extension as BuiltInExtensionName] !== true) {
-        throw new MmpConfigError(
+        throw new EpiConfigError(
           `${manifestPath}: unknown built-in extension ${JSON.stringify(extension)}`,
         );
       }
@@ -249,7 +249,7 @@ export function resolveManifest(
 
     const packageSource = extension.startsWith("npm:") || extension.startsWith("git:");
     if (packageSource && extension.slice(extension.indexOf(":") + 1).length === 0) {
-      throw new MmpConfigError(
+      throw new EpiConfigError(
         `${manifestPath}: extension package source is empty: ${extension}`,
       );
     }
@@ -270,13 +270,13 @@ export function resolveManifest(
   const disableList = manifest.disable ?? [];
   disableList.forEach((name, index) => {
     if (BUILT_IN_EXTENSIONS[name as BuiltInExtensionName] !== true) {
-      throw new MmpConfigError(
+      throw new EpiConfigError(
         `${manifestPath}: disable[${index}]: ${JSON.stringify(name)} is not a built-in capability ` +
           `(only ${BUILT_IN_EXTENSION_NAMES.join(", ")} can be disabled)`,
       );
     }
     if (seenExtensions.has(name)) {
-      throw new MmpConfigError(
+      throw new EpiConfigError(
         `${manifestPath}: ${JSON.stringify(name)} is listed in both "extensions" and "disable"; keep one`,
       );
     }

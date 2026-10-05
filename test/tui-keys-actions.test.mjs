@@ -13,19 +13,19 @@ const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 function runApp(t, extensions, steps, { env: extraEnv = {}, inspect } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-keys-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-keys-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ steps }),
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ steps }),
       ...extraEnv,
     },
     encoding: "utf8",
@@ -173,7 +173,7 @@ const ONE_PIXEL_PNG = Buffer.from(
 );
 
 test("Ctrl+G opening $EDITOR shows a notice for an image chip it drops from the prompt", (t) => {
-  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-editor-image-"));
+  const clipboardDir = mkdtempSync(join(tmpdir(), "epi-editor-image-"));
   t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
@@ -181,21 +181,21 @@ test("Ctrl+G opening $EDITOR shows a notice for an image chip it drops from the 
     ["waitReady"], ["key", "ctrl+v"], ["waitFor", "[Image #1]"], // pastes [Image #1] into the draft
     ["key", "ctrl+g"], ["waitFor", "FROM-EXTERNAL-EDITOR"], ["waitFor", "dropped 1 image"], ["mark", "afterEdit"],
     ["detach"],
-  ], { env: { EDITOR: `${process.execPath} ${fixture("fake-editor.mjs")}`, MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { env: { EDITOR: `${process.execPath} ${fixture("fake-editor.mjs")}`, EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterEdit, /FROM-EXTERNAL-EDITOR/);
   assert.match(marks.afterEdit, /dropped 1 image/);
 });
 
 test("Ctrl+V pastes text from the clipboard into the editor", (t) => {
-  // MMP_TEST_CLIPBOARD_FILE (src/tui/clipboard.ts) swaps the real system clipboard for a plain
+  // EPI_TEST_CLIPBOARD_FILE (src/tui/clipboard.ts) swaps the real system clipboard for a plain
   // file, so this never reads the developer's actual clipboard or writes a stray image to tmpdir.
-  const clipboardFile = join(mkdtempSync(join(tmpdir(), "mmp-clipboard-test-")), "clipboard.txt");
+  const clipboardFile = join(mkdtempSync(join(tmpdir(), "epi-clipboard-test-")), "clipboard.txt");
   t.after(() => rmSync(clipboardFile, { force: true }));
   writeFileSync(clipboardFile, "PASTED-TEXT");
   const { text: out, marks } = runApp(t, [fixture("faux-two-models.mjs")], [
     ["waitReady"], ["key", "ctrl+v"], ["waitFor", "PASTED-TEXT"], ["mark", "afterPaste"], ["key", "ctrl+c"], editorCleared,
     ["key", "ctrl+d"],
-  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(out, /EXIT=0/);
   assert.match(marks.afterPaste, /PASTED-TEXT/);
 });
@@ -203,25 +203,25 @@ test("Ctrl+V pastes text from the clipboard into the editor", (t) => {
 test("a kitty-protocol key release does not run the shortcut a second time (one chip per Ctrl+V)", (t) => {
   // Ghostty/kitty/WezTerm send press and release for each key when the kitty keyboard protocol's
   // event-type flag is on (pi-tui asks for it). Ctrl+V here is CSI 118;5u; the release adds :3.
-  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-kitty-release-"));
+  const clipboardDir = mkdtempSync(join(tmpdir(), "epi-kitty-release-"));
   t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
   const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
     ["waitReady"], ["raw", "\x1b[118;5u"], ["raw", "\x1b[118;5:3u"], ["wait", 500], ["mark", "afterPaste"],
     ["key", "ctrl+c"], ["wait", 300], ["key", "ctrl+d"],
-  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterPaste, /\[Image #1\]/);
   assert.doesNotMatch(marks.afterPaste, /\[Image #2\]/);
 });
 
 test("Ctrl+V on an empty clipboard says so instead of doing nothing", (t) => {
-  const clipboardFile = join(mkdtempSync(join(tmpdir(), "mmp-clipboard-empty-")), "clipboard.txt");
+  const clipboardFile = join(mkdtempSync(join(tmpdir(), "epi-clipboard-empty-")), "clipboard.txt");
   t.after(() => rmSync(clipboardFile, { force: true }));
   writeFileSync(clipboardFile, "");
   const { marks } = runApp(t, [fixture("faux-two-models.mjs")], [
     ["waitReady"], ["key", "ctrl+v"], ["wait", 500], ["mark", "afterPaste"], ["key", "ctrl+d"],
-  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterPaste, /Nothing to paste/);
 });
 

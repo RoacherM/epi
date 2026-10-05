@@ -10,8 +10,8 @@ import { computeSha256, renderInstallScript, runRelease, tagExists } from "../sc
 const installTemplate = readFileSync(new URL("../install.sh", import.meta.url), "utf8");
 
 function makeCwd(version) {
-  const cwd = mkdtempSync(join(tmpdir(), "mmp-release-test-"));
-  writeFileSync(join(cwd, "package.json"), JSON.stringify({ name: "mmp", version }));
+  const cwd = mkdtempSync(join(tmpdir(), "epi-release-test-"));
+  writeFileSync(join(cwd, "package.json"), JSON.stringify({ name: "epi", version }));
   return cwd;
 }
 
@@ -32,15 +32,15 @@ function fakeExec(script) {
 
 test("renderInstallScript fills in both placeholders", () => {
   const rendered = renderInstallScript(installTemplate, { version: "1.2.3", sha256: "a".repeat(64) });
-  assert.match(rendered, /MMP_VERSION="1\.2\.3"/);
+  assert.match(rendered, /EPI_VERSION="1\.2\.3"/);
   assert.match(rendered, new RegExp(`DEFAULT_PACKAGE_SHA256="${"a".repeat(64)}"`));
-  assert.doesNotMatch(rendered, /__MMP_VERSION__|__MMP_PACKAGE_SHA256__/);
+  assert.doesNotMatch(rendered, /__EPI_VERSION__|__EPI_PACKAGE_SHA256__/);
 });
 
 test("renderInstallScript throws if a placeholder is missing", () => {
   assert.throws(
     () => renderInstallScript("no placeholders here", { version: "1.2.3", sha256: "a".repeat(64) }),
-    /__MMP_VERSION__/,
+    /__EPI_VERSION__/,
   );
 });
 
@@ -48,7 +48,7 @@ test("renderInstallScript rejects an invalid version (e.g. a 'v' prefix or a pre
   for (const version of ["v1.2.3", "1.2", "1.2.3-beta.1", "not-a-version"]) {
     assert.throws(
       () => renderInstallScript(installTemplate, { version, sha256: "a".repeat(64) }),
-      /invalid MMP version/,
+      /invalid Epi version/,
     );
   }
 });
@@ -89,7 +89,7 @@ test("runRelease skips when the tag already exists, without packing or calling g
 test("runRelease packs, hashes, renders install.sh, and publishes both assets", () => {
   const cwd = makeCwd("2.5.0");
   try {
-    const tarballName = "mmp-2.5.0.tgz";
+    const tarballName = "epi-2.5.0.tgz";
     const tarballContent = Buffer.from("fixture tarball\n");
     const expectedSha256 = createHash("sha256").update(tarballContent).digest("hex");
 
@@ -104,14 +104,14 @@ test("runRelease packs, hashes, renders install.sh, and publishes both assets", 
         assert.equal(args[0], "release");
         assert.equal(args[1], "create");
         assert.equal(args[2], "v2.5.0");
-        assert.match(args[3], /mmp-2\.5\.0\.tgz$/);
+        assert.match(args[3], /epi-2\.5\.0\.tgz$/);
         assert.match(args[4], /install\.sh$/);
         assert.ok(args.includes("--generate-notes"));
         // The rendered install.sh actually has the real version+hash baked in.
         const rendered = readFileSync(args[4], "utf8");
-        assert.match(rendered, /MMP_VERSION="2\.5\.0"/);
+        assert.match(rendered, /EPI_VERSION="2\.5\.0"/);
         assert.match(rendered, new RegExp(`DEFAULT_PACKAGE_SHA256="${expectedSha256}"`));
-        return { status: 0, stdout: "https://github.com/RoacherM/mmp/releases/tag/v2.5.0\n", stderr: "" };
+        return { status: 0, stdout: "https://github.com/RoacherM/epi/releases/tag/v2.5.0\n", stderr: "" };
       },
     });
 
@@ -130,7 +130,7 @@ test("runRelease packs, hashes, renders install.sh, and publishes both assets", 
 });
 
 test("computeSha256 matches node:crypto on a real file", () => {
-  const dir = mkdtempSync(join(tmpdir(), "mmp-sha-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "epi-sha-test-"));
   try {
     const filePath = join(dir, "file.bin");
     const content = Buffer.from("hello world\n");

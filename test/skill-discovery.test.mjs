@@ -1,9 +1,9 @@
-// Skill auto-discovery (docs/decisions.md S1): beyond the Manifest, MMP loads skills from exactly
-// three fixed directories -- global ~/.agents/skills, MMP's own <MMP_HOME>/skills, and a trusted
-// project's .mmp/skills -- and never from any Pi skill location or a project's .agents/skills
+// Skill auto-discovery (docs/decisions.md S1): beyond the Manifest, Epi loads skills from exactly
+// three fixed directories -- global ~/.agents/skills, Epi's own <EPI_HOME>/skills, and a trusted
+// project's .epi/skills -- and never from any Pi skill location or a project's .agents/skills
 // (test/ambient-isolation.test.mjs and test/tui-services.test.mjs already cover those as forbidden;
 // removing the one now-legitimate ~/.agents/skills plant from that shared fixture is this change's
-// only edit there). Every run here uses a temp HOME/MMP_HOME -- never the real user's home.
+// only edit there). Every run here uses a temp HOME/EPI_HOME -- never the real user's home.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -18,33 +18,33 @@ const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-skill-discovery-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-skill-discovery-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const project = join(root, "project");
-  const mmpHome = join(home, ".mmp");
-  mkdirSync(mmpHome, { recursive: true });
+  const epiHome = join(home, ".epi");
+  mkdirSync(epiHome, { recursive: true });
   mkdirSync(project, { recursive: true });
-  return { root, home, project, mmpHome };
+  return { root, home, project, epiHome };
 }
 
 function writeGlobalManifest(f, manifest = { version: 1 }) {
-  writeFileSync(join(f.mmpHome, "mmp.json"), JSON.stringify(manifest));
+  writeFileSync(join(f.epiHome, "epi.json"), JSON.stringify(manifest));
 }
 
-/** Runs the real TUI against a temp HOME/MMP_HOME and opens the `/skill:` completion dropdown --
+/** Runs the real TUI against a temp HOME/EPI_HOME and opens the `/skill:` completion dropdown --
  * one of the model-visible signals the task names (alongside the system prompt's skill list) for
  * proving a skill is actually loaded, not just present on disk. `args` is threaded to
- * `prepareMmpRun` (e.g. `["--approve"]` to trust the fixture's project for this run). */
+ * `prepareEpiRun` (e.g. `["--approve"]` to trust the fixture's project for this run). */
 function skillDropdown(f, args) {
   const result = spawnSync(process.execPath, [harness], {
     cwd: f.project,
     env: {
       PATH: process.env.PATH,
       HOME: f.home,
-      MMP_HOME: f.mmpHome,
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({
+      EPI_HOME: f.epiHome,
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({
         args,
         steps: [
           ["waitReady"],
@@ -63,7 +63,7 @@ function skillDropdown(f, args) {
 function dryRun(f, args) {
   const result = spawnSync(process.execPath, [cliPath, ...args, "--dry-run"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, EPI_HOME: f.epiHome, EPI_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -71,77 +71,77 @@ function dryRun(f, args) {
   return JSON.parse(result.stdout);
 }
 
-test("auto-discovers skills from ~/.agents/skills, MMP's own skills dir, and a trusted project's .mmp/skills", (t) => {
+test("auto-discovers skills from ~/.agents/skills, Epi's own skills dir, and a trusted project's .epi/skills", (t) => {
   const f = fixture(t);
   plantSkill(join(f.home, ".agents", "skills"), "discovered-agents-skill");
-  plantSkill(join(f.mmpHome, "skills"), "discovered-mmp-skill");
-  mkdirSync(join(f.project, ".mmp"), { recursive: true });
-  plantSkill(join(f.project, ".mmp", "skills"), "discovered-project-skill");
-  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
+  plantSkill(join(f.epiHome, "skills"), "discovered-epi-skill");
+  mkdirSync(join(f.project, ".epi"), { recursive: true });
+  plantSkill(join(f.project, ".epi", "skills"), "discovered-project-skill");
+  writeFileSync(join(f.project, ".epi", "epi.json"), JSON.stringify({ version: 1 }));
   writeGlobalManifest(f);
 
   const dropdown = skillDropdown(f, ["--approve"]);
-  for (const name of ["discovered-agents-skill", "discovered-mmp-skill", "discovered-project-skill"]) {
+  for (const name of ["discovered-agents-skill", "discovered-epi-skill", "discovered-project-skill"]) {
     assert.match(dropdown, new RegExp(name), `${name} not offered by /skill: completion`);
   }
 });
 
-test("a project's .mmp/skills is ignored without a .mmp/mmp.json (not an MMP project at all)", (t) => {
+test("a project's .epi/skills is ignored without a .epi/epi.json (not an Epi project at all)", (t) => {
   const f = fixture(t);
   writeGlobalManifest(f);
-  // .mmp/skills exists, but there is no .mmp/mmp.json anywhere above cwd -- findNearestProjectManifest
+  // .epi/skills exists, but there is no .epi/epi.json anywhere above cwd -- findNearestProjectManifest
   // never finds this project, so no trust decision is ever made and its skills stay unread, "--approve"
   // notwithstanding.
-  plantSkill(join(f.project, ".mmp", "skills"), "no-manifest-project-skill");
+  plantSkill(join(f.project, ".epi", "skills"), "no-manifest-project-skill");
 
   const dropdown = skillDropdown(f, ["--approve"]);
   assert.doesNotMatch(dropdown, /no-manifest-project-skill/);
 });
 
-test("a project's .mmp/skills is ignored when the project is not trusted", (t) => {
+test("a project's .epi/skills is ignored when the project is not trusted", (t) => {
   const f = fixture(t);
   writeGlobalManifest(f);
-  mkdirSync(join(f.project, ".mmp"), { recursive: true });
-  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
-  plantSkill(join(f.project, ".mmp", "skills"), "untrusted-project-skill");
+  mkdirSync(join(f.project, ".epi"), { recursive: true });
+  writeFileSync(join(f.project, ".epi", "epi.json"), JSON.stringify({ version: 1 }));
+  plantSkill(join(f.project, ".epi", "skills"), "untrusted-project-skill");
 
   // No --approve, no trust.json: docs/development.md §8.2 rule 1 -- undecided projects are not trusted.
   const dropdown = skillDropdown(f, []);
   assert.doesNotMatch(dropdown, /untrusted-project-skill/);
 });
 
-test("a declared skill root dedupes with the matching auto-discovered MMP skills root (declared wins)", (t) => {
+test("a declared skill root dedupes with the matching auto-discovered Epi skills root (declared wins)", (t) => {
   const f = fixture(t);
-  plantSkill(join(f.mmpHome, "skills"), "declared-and-discovered-skill");
+  plantSkill(join(f.epiHome, "skills"), "declared-and-discovered-skill");
   writeGlobalManifest(f, { version: 1, skills: ["./skills"] });
 
   const output = dryRun(f, ["--no-project"]);
   assert.equal(output.skills.length, 1, JSON.stringify(output.skills));
   assert.equal(output.skills[0].discovered, undefined, "a declared root must not be tagged as discovered");
   assert.equal(output.skills[0].source, "global");
-  assert.equal(output.skills[0].value, realpathSync(join(f.mmpHome, "skills")));
+  assert.equal(output.skills[0].value, realpathSync(join(f.epiHome, "skills")));
 });
 
 test("--dry-run reports provenance for each auto-discovered skill root", (t) => {
   const f = fixture(t);
   plantSkill(join(f.home, ".agents", "skills"), "agents-provenance-skill");
-  plantSkill(join(f.mmpHome, "skills"), "mmp-provenance-skill");
+  plantSkill(join(f.epiHome, "skills"), "epi-provenance-skill");
   writeGlobalManifest(f);
 
   const output = dryRun(f, ["--no-project"]);
   const byProvenance = Object.fromEntries(output.skills.map((skill) => [skill.discovered, skill.value]));
   assert.equal(byProvenance.agents, realpathSync(join(f.home, ".agents", "skills")));
-  assert.equal(byProvenance.mmp, realpathSync(join(f.mmpHome, "skills")));
+  assert.equal(byProvenance.epi, realpathSync(join(f.epiHome, "skills")));
 });
 
-test("mmp list reports discovered skill roots with provenance", (t) => {
+test("epi list reports discovered skill roots with provenance", (t) => {
   const f = fixture(t);
   plantSkill(join(f.home, ".agents", "skills"), "list-agents-skill");
   writeGlobalManifest(f);
 
   const result = spawnSync(process.execPath, [cliPath, "list"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, EPI_HOME: f.epiHome, EPI_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -151,13 +151,13 @@ test("mmp list reports discovered skill roots with provenance", (t) => {
   assert.match(result.stdout, new RegExp(`${escapedPath} \\(discovered: agents\\)`));
 });
 
-test("mmp list reports no discovered skill roots when none exist", (t) => {
+test("epi list reports no discovered skill roots when none exist", (t) => {
   const f = fixture(t);
   writeGlobalManifest(f);
 
   const result = spawnSync(process.execPath, [cliPath, "list"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, EPI_HOME: f.epiHome, EPI_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -166,22 +166,22 @@ test("mmp list reports no discovered skill roots when none exist", (t) => {
 });
 
 test("/reload picks up a skill created after startup", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-skill-reload-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-skill-reload-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  const mmpHome = join(home, ".mmp");
-  mkdirSync(mmpHome, { recursive: true });
-  writeFileSync(join(mmpHome, "mmp.json"), JSON.stringify({ version: 1 }));
-  const skillsDir = join(mmpHome, "skills");
+  const epiHome = join(home, ".epi");
+  mkdirSync(epiHome, { recursive: true });
+  writeFileSync(join(epiHome, "epi.json"), JSON.stringify({ version: 1 }));
+  const skillsDir = join(epiHome, "skills");
 
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: mmpHome,
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({
+      EPI_HOME: epiHome,
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({
         steps: [
           ["waitReady"],
           ["type", "/skill:"], ["wait", 300], ["mark", "dropdownBefore"],
@@ -203,29 +203,29 @@ test("/reload picks up a skill created after startup", (t) => {
   assert.match(marks.dropdownAfter.slice(marks.reloaded.length), /reload-discovered-skill/);
 });
 
-// Hard rule 1 (AGENTS.md): MMP never reads Pi's own state, even through a symlink one of the
-// three fixed discovery roots happens to be or contain. <MMP_HOME>/pi is Pi's state dir (auth,
+// Hard rule 1 (AGENTS.md): Epi never reads Pi's own state, even through a symlink one of the
+// three fixed discovery roots happens to be or contain. <EPI_HOME>/pi is Pi's state dir (auth,
 // sessions, model catalog, settings), not a skills location; `sessions` below just stands for
 // any folder inside it.
-test("a trusted project's .mmp/skills symlinked to a folder inside Pi's state dir is rejected, not silently skipped", (t) => {
+test("a trusted project's .epi/skills symlinked to a folder inside Pi's state dir is rejected, not silently skipped", (t) => {
   const f = fixture(t);
   writeGlobalManifest(f);
-  mkdirSync(join(f.project, ".mmp"), { recursive: true });
-  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
-  const piStateFolder = join(f.mmpHome, "pi", "sessions");
+  mkdirSync(join(f.project, ".epi"), { recursive: true });
+  writeFileSync(join(f.project, ".epi", "epi.json"), JSON.stringify({ version: 1 }));
+  const piStateFolder = join(f.epiHome, "pi", "sessions");
   mkdirSync(piStateFolder, { recursive: true });
-  symlinkSync(piStateFolder, join(f.project, ".mmp", "skills"));
+  symlinkSync(piStateFolder, join(f.project, ".epi", "skills"));
 
   const result = spawnSync(process.execPath, [cliPath, "--approve", "--dry-run"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, EPI_HOME: f.epiHome, EPI_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
   assert.equal(result.status, 2, `expected a config-error exit, got:\n${result.stdout}${result.stderr}`);
   assert.equal(result.stdout, "");
   assert.match(result.stderr, /inside Pi's own data/);
-  assert.match(result.stderr, /\.mmp[\\/]skills/);
+  assert.match(result.stderr, /\.epi[\\/]skills/);
 });
 
 test("~/.agents/skills symlinked into Pi's own agent skills dir is rejected", (t) => {
@@ -238,7 +238,7 @@ test("~/.agents/skills symlinked into Pi's own agent skills dir is rejected", (t
 
   const result = spawnSync(process.execPath, [cliPath, "--no-project", "--dry-run"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, EPI_HOME: f.epiHome, EPI_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -246,16 +246,16 @@ test("~/.agents/skills symlinked into Pi's own agent skills dir is rejected", (t
   assert.match(result.stderr, /inside Pi's own data/);
 });
 
-test("MMP's own <MMP_HOME>/skills symlinked to a folder inside Pi's state dir is rejected", (t) => {
+test("Epi's own <EPI_HOME>/skills symlinked to a folder inside Pi's state dir is rejected", (t) => {
   const f = fixture(t);
-  const piStateFolder = join(f.mmpHome, "pi", "sessions");
+  const piStateFolder = join(f.epiHome, "pi", "sessions");
   mkdirSync(piStateFolder, { recursive: true });
-  symlinkSync(piStateFolder, join(f.mmpHome, "skills"));
+  symlinkSync(piStateFolder, join(f.epiHome, "skills"));
   writeGlobalManifest(f);
 
   const result = spawnSync(process.execPath, [cliPath, "--no-project", "--dry-run"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, EPI_HOME: f.epiHome, EPI_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -264,11 +264,11 @@ test("MMP's own <MMP_HOME>/skills symlinked to a folder inside Pi's state dir is
 });
 
 // A root that CONTAINS Pi's state is as bad as one inside it: Pi's skill loader recurses into
-// subdirectories, so `.mmp/skills -> <mmpHome>` would reach anything inside <mmpHome>/pi.
+// subdirectories, so `.epi/skills -> <epiHome>` would reach anything inside <epiHome>/pi.
 function rejectedDryRun(f, args) {
   const result = spawnSync(process.execPath, [cliPath, ...args, "--dry-run"], {
     cwd: f.project,
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: f.mmpHome, MMP_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, EPI_HOME: f.epiHome, EPI_OFFLINE: "1" },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -277,36 +277,36 @@ function rejectedDryRun(f, args) {
   return result.stderr;
 }
 
-test("a trusted project's .mmp/skills symlinked to <MMP_HOME> (an ancestor of Pi's state dir) is rejected", (t) => {
+test("a trusted project's .epi/skills symlinked to <EPI_HOME> (an ancestor of Pi's state dir) is rejected", (t) => {
   const f = fixture(t);
   writeGlobalManifest(f);
-  mkdirSync(join(f.project, ".mmp"), { recursive: true });
-  writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
-  plantSkill(join(f.mmpHome, "pi", "sessions"), "stray-skill-in-pi-state");
-  symlinkSync(f.mmpHome, join(f.project, ".mmp", "skills"));
+  mkdirSync(join(f.project, ".epi"), { recursive: true });
+  writeFileSync(join(f.project, ".epi", "epi.json"), JSON.stringify({ version: 1 }));
+  plantSkill(join(f.epiHome, "pi", "sessions"), "stray-skill-in-pi-state");
+  symlinkSync(f.epiHome, join(f.project, ".epi", "skills"));
 
   const stderr = rejectedDryRun(f, ["--approve"]);
-  assert.match(stderr, /\.mmp[\\/]skills: resolves to /);
-  assert.match(stderr, /which contains Pi's own data at .*[\\/]\.mmp[\\/]pi/);
+  assert.match(stderr, /\.epi[\\/]skills: resolves to /);
+  assert.match(stderr, /which contains Pi's own data at .*[\\/]\.epi[\\/]pi/);
 });
 
-test("~/.agents/skills symlinked to HOME (an ancestor of ~/.pi and <MMP_HOME>/pi) is rejected", (t) => {
+test("~/.agents/skills symlinked to HOME (an ancestor of ~/.pi and <EPI_HOME>/pi) is rejected", (t) => {
   const f = fixture(t);
   writeGlobalManifest(f);
-  // No ~/.pi and no <MMP_HOME>/pi on disk: the check is path-based, not existence-based.
+  // No ~/.pi and no <EPI_HOME>/pi on disk: the check is path-based, not existence-based.
   mkdirSync(join(f.home, ".agents"), { recursive: true });
   symlinkSync(f.home, join(f.home, ".agents", "skills"));
 
   const stderr = rejectedDryRun(f, ["--no-project"]);
   assert.match(stderr, /\.agents[\\/]skills: resolves to /);
-  assert.match(stderr, /which contains Pi's own data at .*[\\/](\.pi|\.mmp[\\/]pi)\b/);
+  assert.match(stderr, /which contains Pi's own data at .*[\\/](\.pi|\.epi[\\/]pi)\b/);
 });
 
-test("MMP's own <MMP_HOME>/skills symlinked to HOME is rejected", (t) => {
+test("Epi's own <EPI_HOME>/skills symlinked to HOME is rejected", (t) => {
   const f = fixture(t);
   writeGlobalManifest(f);
-  mkdirSync(join(f.mmpHome, "pi"), { recursive: true });
-  symlinkSync(f.home, join(f.mmpHome, "skills"));
+  mkdirSync(join(f.epiHome, "pi"), { recursive: true });
+  symlinkSync(f.home, join(f.epiHome, "skills"));
 
   const stderr = rejectedDryRun(f, ["--no-project"]);
   assert.match(stderr, /which contains Pi's own data at /);
@@ -323,13 +323,13 @@ function caseInsensitiveFs(dir) {
 for (const [name, target, args, setup] of [
   ["~/.agents/skills -> ~/.PI/agent/skills", (f) => join(f.home, ".PI", "agent", "skills"), ["--no-project"],
     (f) => plantSkill(join(f.home, ".pi", "agent", "skills"), "pi-only-skill")],
-  ["project .mmp/skills -> ~/.MMP/PI/sessions", (f) => join(f.home, ".MMP", "PI", "sessions"), ["--approve"],
-    (f) => plantSkill(join(f.mmpHome, "pi", "sessions"), "stray-skill-in-pi-state")],
-  ["project .mmp/skills -> ~/.MMP", (f) => join(f.home, ".MMP"), ["--approve"],
-    (f) => plantSkill(join(f.mmpHome, "pi", "sessions"), "stray-skill-in-pi-state")],
+  ["project .epi/skills -> ~/.Epi/PI/sessions", (f) => join(f.home, ".Epi", "PI", "sessions"), ["--approve"],
+    (f) => plantSkill(join(f.epiHome, "pi", "sessions"), "stray-skill-in-pi-state")],
+  ["project .epi/skills -> ~/.Epi", (f) => join(f.home, ".Epi"), ["--approve"],
+    (f) => plantSkill(join(f.epiHome, "pi", "sessions"), "stray-skill-in-pi-state")],
   // The project dir exists on disk as `.PI`; the link spells `.pi`. realpathSync.native returns
   // `.PI`, so the `.pi` segment rule must compare case-insensitively.
-  ["project .mmp/skills -> ./.pi/skills with the dir on disk as .PI", (f) => join(f.project, ".pi", "skills"), ["--approve"],
+  ["project .epi/skills -> ./.pi/skills with the dir on disk as .PI", (f) => join(f.project, ".pi", "skills"), ["--approve"],
     (f) => plantSkill(join(f.project, ".PI", "skills"), "project-pi-skill")],
 ]) {
   test(`a case-variant symlink into Pi's data is rejected on a case-insensitive filesystem: ${name}`, (t) => {
@@ -341,11 +341,11 @@ for (const [name, target, args, setup] of [
     writeGlobalManifest(f);
     setup(f);
     const link = args[0] === "--approve"
-      ? join(f.project, ".mmp", "skills")
+      ? join(f.project, ".epi", "skills")
       : join(f.home, ".agents", "skills");
     if (args[0] === "--approve") {
-      mkdirSync(join(f.project, ".mmp"), { recursive: true });
-      writeFileSync(join(f.project, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
+      mkdirSync(join(f.project, ".epi"), { recursive: true });
+      writeFileSync(join(f.project, ".epi", "epi.json"), JSON.stringify({ version: 1 }));
     } else {
       mkdirSync(join(f.home, ".agents"), { recursive: true });
     }

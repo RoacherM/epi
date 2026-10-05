@@ -29,7 +29,7 @@ const fakeWorker = fileURLToPath(
 );
 
 function createFixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-hooks-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-hooks-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   return root;
 }
@@ -352,7 +352,7 @@ test("Pi tool_call mapping fails closed on block and timeout", async (t) => {
   };
   const inline = createHooksInlineExtension({
     hooks: [hook("tool_call", [command("block")], { toolName: "bash" })],
-    mmpHome: root,
+    epiHome: root,
     agentDir: join(root, "pi"),
     projectAgentsDir: undefined,
     workerPath: fakeWorker,
@@ -404,7 +404,7 @@ test("Pi maps prompt transforms, result replacements, and compaction cancellatio
       hook("tool_result", [command("replace")]),
       hook("before_compact", [command("block")]),
     ],
-    mmpHome: root,
+    epiHome: root,
     agentDir: join(root, "pi"),
     projectAgentsDir: undefined,
     workerPath: fakeWorker,
@@ -493,7 +493,7 @@ for (const mode of ["print", "json"]) {
       hooks: [hook("user_prompt", [
         { type: "command", command: "./does-not-exist.mjs", args: [], timeoutMs: 1000 },
       ])],
-      mmpHome: root,
+      epiHome: root,
       agentDir: join(root, "pi"),
       projectAgentsDir: undefined,
       workerPath: fakeWorker,
@@ -539,7 +539,7 @@ for (const [action, verb, reason] of [
       const handlers = new Map();
       const inline = createHooksInlineExtension({
         hooks: [hook("user_prompt", [command(action)])],
-        mmpHome: root,
+        epiHome: root,
         agentDir: join(root, "pi"),
         projectAgentsDir: undefined,
         workerPath: fakeWorker,
@@ -559,7 +559,7 @@ for (const [action, verb, reason] of [
       assert.deepEqual(result, { action: "handled" });
       const expected = `Prompt ${verb} by user_prompt hook: ${reason}`;
       assert.deepEqual(notifications, [{ message: expected, level: "warning" }]);
-      assert.equal(stderr(), mode === "tui" ? "" : `mmp: ${expected}\n`);
+      assert.equal(stderr(), mode === "tui" ? "" : `epi: ${expected}\n`);
       await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, context);
     });
   }
@@ -570,7 +570,7 @@ async function runUserPromptHook(t, handler, mode, notify) {
   const handlers = new Map();
   const inline = createHooksInlineExtension({
     hooks: [hook("user_prompt", [handler])],
-    mmpHome: root,
+    epiHome: root,
     agentDir: join(root, "pi"),
     projectAgentsDir: undefined,
     workerPath: fakeWorker,
@@ -585,7 +585,7 @@ async function runUserPromptHook(t, handler, mode, notify) {
 }
 
 // D46: with no reason, the notice used to end in blockReason()'s tool_call fallback, so a cancel read
-// "Prompt cancelled by user_prompt hook: Blocked by MMP hook".
+// "Prompt cancelled by user_prompt hook: Blocked by Epi hook".
 // (Only cancel can omit it: the hook decision schema requires a block reason.)
 for (const mode of ["print", "tui"]) {
   test(`a user_prompt hook cancel with no reason says only that (${mode} mode)`, async (t) => {
@@ -596,7 +596,7 @@ for (const mode of ["print", "tui"]) {
     assert.deepEqual(result, { action: "handled" });
     const expected = "Prompt cancelled by user_prompt hook";
     assert.deepEqual(notifications, [{ message: expected, level: "warning" }]);
-    assert.equal(stderr(), mode === "tui" ? "" : `mmp: ${expected}\n`);
+    assert.equal(stderr(), mode === "tui" ? "" : `epi: ${expected}\n`);
   });
 }
 
@@ -609,11 +609,11 @@ test("a user_prompt hook's block reason is shown as one line without control cha
   });
   const expected = "Prompt blocked by user_prompt hook: line1 | red end";
   assert.deepEqual(notifications, [expected]);
-  assert.equal(stderr(), `mmp: ${expected}\n`);
+  assert.equal(stderr(), `epi: ${expected}\n`);
 });
 
 test("a failing hook's stderr tail is shown as one line without control characters", async (t) => {
-  const failingScript = join(tmpdir(), `mmp-hooks-dirty-${process.pid}.mjs`);
+  const failingScript = join(tmpdir(), `epi-hooks-dirty-${process.pid}.mjs`);
   writeFileSync(
     failingScript,
     "process.stderr.write('first\\n\\x1b[31msecond\\x1b[0m\\r\\n'); process.exit(3);\n",
@@ -630,7 +630,7 @@ test("a failing hook's stderr tail is shown as one line without control characte
   assert.equal(notifications.length, 1);
   assert.match(notifications[0], /exited with code 3: .*: first \| second$/);
   assert.doesNotMatch(notifications[0], /[\x00-\x1f]/);
-  assert.equal(stderr(), `mmp: ${notifications[0]}\n`);
+  assert.equal(stderr(), `epi: ${notifications[0]}\n`);
 });
 
 // D46: the block notice used to be sent inside the try around the hook run, so a notify that threw
@@ -647,7 +647,7 @@ test("a notify that throws on a user_prompt block keeps the prompt blocked and i
   assert.deepEqual(notifications, ["Prompt blocked by user_prompt hook: blocked:user_prompt"]);
   assert.equal(
     stderr(),
-    "mmp: Prompt blocked by user_prompt hook: blocked:user_prompt (could not show the notice: notify broke)\n",
+    "epi: Prompt blocked by user_prompt hook: blocked:user_prompt (could not show the notice: notify broke)\n",
   );
 });
 
@@ -659,13 +659,13 @@ test("a notify that throws on a user_prompt hook failure keeps the prompt blocke
   });
   assert.deepEqual(result, { action: "handled" });
   assert.equal(notifications.length, 1);
-  assert.equal(stderr(), `mmp: ${notifications[0]} (could not show the notice: notify broke)\n`);
+  assert.equal(stderr(), `epi: ${notifications[0]} (could not show the notice: notify broke)\n`);
 });
 
 // B5 review F3/F4: an unterminated OSC used to swallow the rest of the text, and runs of the text's
 // own spaces were squeezed to one.
 async function failingTailNotice(t, stderrText) {
-  const failingScript = join(tmpdir(), `mmp-hooks-tail-${process.pid}.mjs`);
+  const failingScript = join(tmpdir(), `epi-hooks-tail-${process.pid}.mjs`);
   writeFileSync(failingScript, `process.stderr.write(${JSON.stringify(stderrText)}); process.exit(3);\n`);
   t.after(() => rmSync(failingScript, { force: true }));
   const notifications = [];
@@ -687,23 +687,23 @@ test("a hook's stderr tail keeps its own spacing", async (t) => {
   assert.match(await failingTailNotice(t, "col1   col2\ncol3\n"), /: col1   col2 \| col3$/);
 });
 
-// D26 end to end: the real CLI and the real TUI, with a global mmp:hooks user_prompt block hook
+// D26 end to end: the real CLI and the real TUI, with a global epi:hooks user_prompt block hook
 // and a faux model that would echo the prompt if it ever got through.
 function blockingHookHome(t) {
   const root = createFixture(t);
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({
     version: 1,
-    extensions: ["mmp:hooks", fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url))],
+    extensions: ["epi:hooks", fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url))],
   }));
-  writeFileSync(join(home, ".mmp", "hooks.json"), JSON.stringify({
+  writeFileSync(join(home, ".epi", "hooks.json"), JSON.stringify({
     version: 1,
     hooks: [{ event: "user_prompt", handlers: [command("block", 5000)] }],
   }));
   return {
     root,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1" },
   };
 }
 
@@ -717,17 +717,17 @@ async function runNode(args, { cwd, env }) {
   return { code, stdout, stderr };
 }
 
-test("mmp -p shows a user_prompt hook's block reason on stderr and sends nothing", async (t) => {
+test("epi -p shows a user_prompt hook's block reason on stderr and sends nothing", async (t) => {
   const { root, env } = blockingHookHome(t);
   const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 
   const result = await runNode(
-    [cli, "--no-project", "--model", "mmp-faux/echo", "-p", "hello"],
+    [cli, "--no-project", "--model", "epi-faux/echo", "-p", "hello"],
     { cwd: root, env },
   );
 
   assert.equal(result.stdout, "", "the blocked prompt must not reach the model");
-  assert.match(result.stderr, /mmp: Prompt blocked by user_prompt hook: blocked:user_prompt/);
+  assert.match(result.stderr, /epi: Prompt blocked by user_prompt hook: blocked:user_prompt/);
 });
 
 test("the TUI shows a user_prompt hook's block reason as a notice and sends nothing", async (t) => {
@@ -747,7 +747,7 @@ test("the TUI shows a user_prompt hook's block reason as a notice and sends noth
     cwd: root,
     env: {
       ...env,
-      MMP_TUI_HARNESS: JSON.stringify({ args: ["--no-project", "--model", "mmp-faux/echo"], steps }),
+      EPI_TUI_HARNESS: JSON.stringify({ args: ["--no-project", "--model", "epi-faux/echo"], steps }),
     },
   });
 
@@ -764,7 +764,7 @@ test("a user_prompt hook spawn failure does not also spam stderr in tui mode (ui
     hooks: [hook("user_prompt", [
       { type: "command", command: "./does-not-exist.mjs", args: [], timeoutMs: 1000 },
     ])],
-    mmpHome: root,
+    epiHome: root,
     agentDir: join(root, "pi"),
     projectAgentsDir: undefined,
     workerPath: fakeWorker,
@@ -799,7 +799,7 @@ test("a non-zero exit's stderr tail is included in the hook failure message", as
     hooks: [hook("tool_call", [
       { type: "command", command: process.execPath, args: [failingScript], timeoutMs: 1000 },
     ], { toolName: "bash" })],
-    mmpHome: root,
+    epiHome: root,
     agentDir: join(root, "pi"),
     projectAgentsDir: undefined,
     workerPath: fakeWorker,
@@ -832,7 +832,7 @@ test("the stderr tail keeps the END of a long failure, not the start", async (t)
     hooks: [hook("tool_call", [
       { type: "command", command: process.execPath, args: [failingScript], timeoutMs: 5000 },
     ], { toolName: "bash" })],
-    mmpHome: root,
+    epiHome: root,
     agentDir: join(root, "pi"),
     projectAgentsDir: undefined,
     workerPath: fakeWorker,
@@ -900,7 +900,7 @@ test("an http hook failure never repeats a secret from an ${ENV}-expanded URL", 
   const handlers = new Map();
   const inline = createHooksInlineExtension({
     hooks: loaded.hooks,
-    mmpHome: root,
+    epiHome: root,
     agentDir: join(root, "pi"),
     projectAgentsDir: undefined,
     workerPath: fakeWorker,
@@ -940,7 +940,7 @@ test("hook config rejects an http URL with credentials without repeating them", 
     assert.throws(
       () => loadHooksConfig(configPath, "global", { HOOK_SECRET: "sk-live-SUPERSECRET" }),
       (error) => {
-        assert.equal(error.name, "MmpConfigError");
+        assert.equal(error.name, "EpiConfigError");
         assert.match(error.message, /hooks handler 0\.url must not contain credentials/);
         assert.doesNotMatch(error.message, /SUPERSECRET/);
         assert.ok(!error.message.includes("${HOOK_SECRET}"), error.message);
@@ -989,7 +989,7 @@ for (const [name, url, stubFetch] of [
     const handlers = new Map();
     const inline = createHooksInlineExtension({
       hooks,
-      mmpHome: root,
+      epiHome: root,
       agentDir: join(root, "pi"),
       projectAgentsDir: undefined,
       workerPath: fakeWorker,
@@ -1049,7 +1049,7 @@ test("a session_start hook failure also falls back to stderr outside the TUI", a
     hooks: [hook("session_start", [
       { type: "command", command: "./does-not-exist.mjs", args: [], timeoutMs: 1000 },
     ])],
-    mmpHome: root,
+    epiHome: root,
     agentDir: join(root, "pi"),
     projectAgentsDir: undefined,
     workerPath: fakeWorker,
@@ -1078,7 +1078,7 @@ test("hook extension rejects unknown agent handlers before Pi starts", (t) => {
         prompt: "decide",
         timeoutMs: 1000,
       }])],
-      mmpHome: root,
+      epiHome: root,
       agentDir: join(root, "pi"),
       projectAgentsDir: undefined,
       workerPath: fakeWorker,

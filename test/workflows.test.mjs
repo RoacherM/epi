@@ -91,7 +91,7 @@ test("pi-upgrade.yml parses, runs the gate, and branches on the result", () => {
 
   const prStep = job.steps.find((step) => step.name === "Open or update the upgrade PR");
   // One fixed branch, not one per version (must-fix #4): otherwise two Pi releases landing before
-  // the first PR merges would each bump MMP to the same next patch version.
+  // the first PR merges would each bump Epi to the same next patch version.
   assert.equal(prStep.env.BRANCH, "pi-upgrade");
   // The token is only ever handed to steps that actually push/call gh, never to checkout, and is
   // injected into the remote URL (not persisted by checkout) only in this step.

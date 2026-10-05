@@ -1,16 +1,16 @@
 import { join } from "node:path";
 import { getDocsPath } from "@earendil-works/pi-coding-agent";
 import { builtInOffInstruction } from "./assembly.js";
-/** MMP's own hint after an extension load failure, in every mode. Pi's (`Start without extensions
- * using "pi -ne"`) names a Pi command and a flag MMP does not have (hard rule 4); nothing reaches
+/** Epi's own hint after an extension load failure, in every mode. Pi's (`Start without extensions
+ * using "pi -ne"`) names a Pi command and a flag Epi does not have (hard rule 4); nothing reaches
  * Pi's code that prints it any more (decision N1). */
-export const EXTENSION_LOAD_FAILURE_HINT = 'Hint: Fix the extension, or remove it from the Manifest that declares it ("mmp list" shows which).';
-/** Pi names an inline extension `<inline:NAME>` in its load errors. mmp:mcp also loads `codemode`
+export const EXTENSION_LOAD_FAILURE_HINT = 'Hint: Fix the extension, or remove it from the Manifest that declares it ("epi list" shows which).';
+/** Pi names an inline extension `<inline:NAME>` in its load errors. epi:mcp also loads `codemode`
  * and `tool-search` (src/extensions/index.ts), so their failures are turned off with it. */
-const BUILT_IN_PATH = /^<inline:(mmp:(?:task|mcp|hooks)|codemode|tool-search)>$/;
+const BUILT_IN_PATH = /^<inline:(epi:(?:task|mcp|hooks)|codemode|tool-search)>$/;
 const LOADED_WITH = {
-    codemode: "mmp:mcp",
-    "tool-search": "mmp:mcp",
+    codemode: "epi:mcp",
+    "tool-search": "epi:mcp",
 };
 /**
  * The hint after extension load failures (`failedPaths` as Pi names them). A built-in is on by
@@ -35,16 +35,16 @@ export function extensionLoadFailureHint(failedPaths, assembly) {
             : `${name} is loaded with ${builtIn}, which is built in and on by default`;
         return `Hint: ${what}; another extension may clash with it (a tool or command of the same ` +
             `name). Turn ${builtIn} off: ${builtInOffInstruction(builtIn, assembly)}. ` +
-            'Or remove the other extension from its Manifest ("mmp list" shows which).';
+            'Or remove the other extension from its Manifest ("epi list" shows which).';
     });
     if (other)
         lines.unshift(EXTENSION_LOAD_FAILURE_HINT);
     return lines.join("\n");
 }
-/** MMP's own login guidance: `--list-models`' empty list (dogfood D48) and, in place of Pi's, every
+/** Epi's own login guidance: `--list-models`' empty list (dogfood D48) and, in place of Pi's, every
  * "no model / no API key" error (D55). */
-export const PROVIDER_LOGIN_HELP = "Log in to a provider with /login inside mmp (OAuth or API key), or declare " +
-    "a provider extension in the Manifest (mmp install <source>, or mmp config).";
+export const PROVIDER_LOGIN_HELP = "Log in to a provider with /login inside epi (OAuth or API key), or declare " +
+    "a provider extension in the Manifest (epi install <source>, or epi config).";
 /**
  * The exact text of `core/auth-guidance.js`'s `getProviderLoginHelp()` (not exported), which ends
  * Pi's "No models available." / "No model selected." / "No API key found for ..." errors with links
@@ -61,10 +61,10 @@ export function piProviderLoginHelp() {
  * `chalk.red(formatNoModelsAvailableMessage())` on a color terminal splits the guidance there. */
 const SGR_LINE_BREAK = String.raw `(?:\x1b\[[\d;]*m)*\r?\n(?:\x1b\[[\d;]*m)*`;
 /**
- * Dogfood D55: swaps Pi's login guidance for MMP's in text on its way to the user (a TUI notice or
+ * Dogfood D55: swaps Pi's login guidance for Epi's in text on its way to the user (a TUI notice or
  * error line, Pi's stderr, and Pi's JSON lines on stdout, where it arrives JSON-escaped). The error
  * before it ("No API key found for ...") is kept as it is. Plain or colored line by line by chalk
- * (D57); MMP's guidance is one line, so the codes inside Pi's go with it.
+ * (D57); Epi's guidance is one line, so the codes inside Pi's go with it.
  */
 export function rewritePiText(text) {
     if (!text.includes("Use /login to log into a provider"))

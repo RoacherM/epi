@@ -23,7 +23,7 @@ const fakeWorker = fileURLToPath(
 );
 
 function createFixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-task-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-task-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   return root;
 }
@@ -166,7 +166,7 @@ test("inline extension registers task lifecycle and session-scoped todo tools", 
     },
   };
   const inline = createTaskInlineExtension({
-    mmpHome: root,
+    epiHome: root,
     agentDir: join(root, "pi"),
     projectAgentsDir: undefined,
     workerPath: fakeWorker,

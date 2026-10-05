@@ -16,21 +16,21 @@ const fauxEcho = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.u
 const slowSessionStart = fileURLToPath(new URL("./fixtures/slow-session-start-extension.mjs", import.meta.url));
 
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-pi-args-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-pi-args-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const project = join(root, "project");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
   mkdirSync(project, { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
+  const env = { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1" };
   return { root, home, project, env };
 }
 
 function runSdkPath(f, options) {
   return spawnSync(process.execPath, [runnerPath], {
     cwd: f.project,
-    env: { ...f.env, MMP_SDK_RUNNER: JSON.stringify(options) },
+    env: { ...f.env, EPI_SDK_RUNNER: JSON.stringify(options) },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -54,7 +54,7 @@ test("--exclude-tools bash,edit,write leaves only the tools not named", (t) => {
   const f = fixture(t);
   const result = runSdkPath(f, { args: ["--no-project", "--exclude-tools", "bash,edit,write"], dumpTools: true });
   assert.equal(result.status, 0, result.stderr);
-  // mmp:task is on by default (decision H3/K4) and its tools are not named, so they stay.
+  // epi:task is on by default (decision H3/K4) and its tools are not named, so they stay.
   assert.deepEqual(JSON.parse(result.stdout), ["read", "task", "task_status", "task_wait", "task_cancel", "todo"]);
 });
 
@@ -71,7 +71,7 @@ test("--no-session leaves no file under the sessions directory after a turn", (t
   const result = runSdkPath(f, { args: ["--no-project", "--no-session"], prompt: "hi" });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /ECHO:hi/);
-  const sessionsDir = join(f.home, ".mmp", "pi", "sessions");
+  const sessionsDir = join(f.home, ".epi", "pi", "sessions");
   if (existsSync(sessionsDir)) {
     const cwdDirs = readdirSync(sessionsDir);
     for (const dir of cwdDirs) {
@@ -98,7 +98,7 @@ for (const [flag, args] of [
 // file-arguments.test.mjs for @file's own unit tests, and the harness tests below for both, driven
 // through the real start.ts/app.ts sequence.
 
-test("--resume no longer needs MMP_TUI=v2 and builds a session normally on the SDK path", (t) => {
+test("--resume no longer needs EPI_TUI=v2 and builds a session normally on the SDK path", (t) => {
   const f = fixture(t);
   const result = runSdkPath(f, { args: ["--no-project", "--resume"], prompt: "hi" });
   assert.equal(result.status, 0, result.stderr);
@@ -124,7 +124,7 @@ test("--fork --session-id naming an existing local session is refused, like Pi",
   const f = fixture(t);
   const seeded = runSdkPath(f, { prompt: "hi" });
   assert.equal(seeded.status, 0, seeded.stderr);
-  const sessionsDir = join(f.home, ".mmp", "pi", "sessions");
+  const sessionsDir = join(f.home, ".epi", "pi", "sessions");
   const cwdDir = readdirSync(sessionsDir)[0];
   const sessionFile = readdirSync(join(sessionsDir, cwdDir)).find((name) => name.endsWith(".jsonl"));
   const sessionPath = join(sessionsDir, cwdDir, sessionFile);
@@ -138,19 +138,19 @@ test("--fork --session-id naming an existing local session is refused, like Pi",
 });
 
 function runHarness(t, extensions, args, steps) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-initial-msg-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-initial-msg-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   const result = spawnSync(process.execPath, [harnessPath], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ args, steps }),
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ args, steps }),
     },
     encoding: "utf8",
     timeout: 60_000,
@@ -160,7 +160,7 @@ function runHarness(t, extensions, args, steps) {
   return { ...parsed, text: `EXIT=${parsed.exit}\n${parsed.output}` };
 }
 
-test('mmp "hello" sends it as the first prompt without any typing', (t) => {
+test('epi "hello" sends it as the first prompt without any typing', (t) => {
   const { text: out, marks } = runHarness(t, [fauxEcho], ["--no-project", "hello"], [
     ["waitReady"], ["waitFor", "ECHO:hello", { all: true }], ["mark", "afterStartup"],
     ["key", "ctrl+d"],
@@ -169,21 +169,21 @@ test('mmp "hello" sends it as the first prompt without any typing', (t) => {
   assert.match(out, /EXIT=0/);
 });
 
-test('mmp @file.txt inlines the file into the first prompt (docs/cli-design.md §2)', (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-file-arg-"));
+test('epi @file.txt inlines the file into the first prompt (docs/cli-design.md §2)', (t) => {
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-file-arg-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
   writeFileSync(join(root, "note.txt"), "the file's own content");
   const result = spawnSync(process.execPath, [harnessPath], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({
         args: ["--no-project", "@note.txt", "hello"],
         steps: [["waitReady"], ["waitFor", { regex: "ECHO:.*note\\.txt.*the file's own content.*hello", flags: "s" }, { all: true }], ["mark", "afterStartup"], ["key", "ctrl+d"]],
       }),
@@ -196,7 +196,7 @@ test('mmp @file.txt inlines the file into the first prompt (docs/cli-design.md �
   assert.match(parsed.marks.afterStartup, /ECHO:.*note\.txt.*the file's own content.*hello/s);
 });
 
-test("mmp --verbose shows loaded resources, model, and session as startup notices", (t) => {
+test("epi --verbose shows loaded resources, model, and session as startup notices", (t) => {
   const { text: out, marks } = runHarness(t, [fauxEcho], ["--no-project", "--verbose"], [
     ["waitReady"], ["mark", "afterStartup"],
     ["key", "ctrl+d"],
@@ -209,7 +209,7 @@ test("mmp --verbose shows loaded resources, model, and session as startup notice
 
 // Bug 2 (docs/tui-design.md §15): the initial-messages loop called submit(text), the same pipeline
 // Enter uses. submit() unconditionally clears the editor and history before doing anything else
-// (and would run MMP's own built-ins for e.g. `mmp /new`), so a positional CLI message sent once
+// (and would run Epi's own built-ins for e.g. `epi /new`), so a positional CLI message sent once
 // startup finished wiped out whatever the startup gate (submit()'s `!ready` branch) had just put
 // back into the editor for text typed before startup was ready. Pi's own interactive-mode.js
 // (~855-864) sends initial messages straight through session.prompt(), bypassing that pipeline
@@ -240,14 +240,14 @@ test("an initial CLI message does not wipe out text the startup gate had just re
 });
 
 // Pi 1.0 (#10236): `--provider` without `--model` used to be ignored silently and the default model
-// of another provider ran. Pi's buildSessionOptions (main.js) now fails with an error; MMP's own copy
+// of another provider ran. Pi's buildSessionOptions (main.js) now fails with an error; Epi's own copy
 // of that logic (services.ts) must too, so the TUI stops at startup like -p does.
 test("--provider without --model stops the TUI with Pi's error, like -p", (t) => {
   const f = fixture(t);
   const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
   const fakeTty = fileURLToPath(new URL("./fixtures/fake-tty.mjs", import.meta.url));
-  const expected = /--provider requires --model \(for example: --provider mmp-faux --model <pattern>\)/;
-  for (const args of [["--import", fakeTty, cli, "--no-project", "--provider", "mmp-faux"], [cli, "--no-project", "--provider", "mmp-faux", "-p", "hi"]]) {
+  const expected = /--provider requires --model \(for example: --provider epi-faux --model <pattern>\)/;
+  for (const args of [["--import", fakeTty, cli, "--no-project", "--provider", "epi-faux"], [cli, "--no-project", "--provider", "epi-faux", "-p", "hi"]]) {
     const result = spawnSync(process.execPath, args, { cwd: f.project, env: f.env, input: "", encoding: "utf8", timeout: 30_000 });
     assert.equal(result.status, 1, `${args.join(" ")}\n${result.stdout}${result.stderr}`);
     assert.match(result.stderr, expected);
@@ -265,7 +265,7 @@ const fauxReasoningEcho = fileURLToPath(new URL("./fixtures/faux-reasoning-echo.
 
 function reasoningFixture(t) {
   const f = fixture(t);
-  writeFileSync(join(f.home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxReasoningEcho] }));
+  writeFileSync(join(f.home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fauxReasoningEcho] }));
   return f;
 }
 
@@ -277,32 +277,32 @@ function startedModel(f, args) {
 }
 
 for (const [args, expected] of [
-  [["--model", "mmp-faux/thinker-b", "--thinking", "high"], "high"],
-  [["--model", "mmp-faux/thinker-b:low"], "low"],
-  [["--model", "mmp-faux/thinker-b:low", "--thinking", "high"], "high"],
-  [["--models", "mmp-faux/thinker-b:low"], "low"],
-  [["--models", "mmp-faux/thinker-b:low", "--thinking", "high"], "high"],
+  [["--model", "epi-faux/thinker-b", "--thinking", "high"], "high"],
+  [["--model", "epi-faux/thinker-b:low"], "low"],
+  [["--model", "epi-faux/thinker-b:low", "--thinking", "high"], "high"],
+  [["--models", "epi-faux/thinker-b:low"], "low"],
+  [["--models", "epi-faux/thinker-b:low", "--thinking", "high"], "high"],
 ]) {
-  test(`${args.join(" ")} starts mmp-faux/thinker-b at thinking ${expected}`, (t) => {
+  test(`${args.join(" ")} starts epi-faux/thinker-b at thinking ${expected}`, (t) => {
     const started = startedModel(reasoningFixture(t), args);
-    assert.deepEqual({ model: started.model, thinkingLevel: started.thinkingLevel }, { model: "mmp-faux/thinker-b", thinkingLevel: expected });
+    assert.deepEqual({ model: started.model, thinkingLevel: started.thinkingLevel }, { model: "epi-faux/thinker-b", thinkingLevel: expected });
   });
 }
 
 test("--continue keeps the session's stored thinking level; --continue --thinking replaces it", (t) => {
   const f = reasoningFixture(t);
-  const seeded = runSdkPath(f, { args: ["--no-project", "--model", "mmp-faux/thinker-b", "--thinking", "low"], prompt: "hi" });
+  const seeded = runSdkPath(f, { args: ["--no-project", "--model", "epi-faux/thinker-b", "--thinking", "low"], prompt: "hi" });
   assert.equal(seeded.status, 0, seeded.stderr);
   assert.match(seeded.stdout, /OK/);
   assert.equal(startedModel(f, ["--continue"]).thinkingLevel, "low");
   const overridden = startedModel(f, ["--continue", "--thinking", "high"]);
-  assert.deepEqual({ model: overridden.model, thinkingLevel: overridden.thinkingLevel }, { model: "mmp-faux/thinker-b", thinkingLevel: "high" });
+  assert.deepEqual({ model: overridden.model, thinkingLevel: overridden.thinkingLevel }, { model: "epi-faux/thinker-b", thinkingLevel: "high" });
 });
 
 test("an invalid --thinking level is reported on stderr and does not stop startup", (t) => {
   const f = reasoningFixture(t);
-  const valid = startedModel(f, ["--model", "mmp-faux/thinker-b"]);
-  const started = startedModel(f, ["--model", "mmp-faux/thinker-b", "--thinking", "bogus"]);
-  assert.match(started.stderr, /^mmp: .*bogus/m);
+  const valid = startedModel(f, ["--model", "epi-faux/thinker-b"]);
+  const started = startedModel(f, ["--model", "epi-faux/thinker-b", "--thinking", "bogus"]);
+  assert.match(started.stderr, /^epi: .*bogus/m);
   assert.equal(started.thinkingLevel, valid.thinkingLevel);
 });

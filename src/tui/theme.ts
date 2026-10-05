@@ -127,8 +127,8 @@ const DAY_BG = {
 export type ThemeAppearance = "dark" | "light";
 
 const THEMES = {
-  dark: { name: "mmp-grok-night", fg: NIGHT_FG, bg: NIGHT_BG },
-  light: { name: "mmp-grok-day", fg: DAY_FG, bg: DAY_BG },
+  dark: { name: "epi-grok-night", fg: NIGHT_FG, bg: NIGHT_BG },
+  light: { name: "epi-grok-day", fg: DAY_FG, bg: DAY_BG },
 } as const;
 
 /** v1: COLORFGBG when the terminal sets it, otherwise dark. Querying the terminal is spike S7. */
@@ -141,7 +141,7 @@ export function detectAppearance(environment: NodeJS.ProcessEnv): ThemeAppearanc
   return index <= 6 || index === 8 ? "dark" : "light";
 }
 
-export function createMmpTheme(appearance: ThemeAppearance): Theme {
+export function createEpiTheme(appearance: ThemeAppearance): Theme {
   const { name, fg, bg } = THEMES[appearance];
   const mode = piTui.getCapabilities().trueColor ? "truecolor" : "256color";
   return new Theme(fg, bg, mode, { name });
@@ -151,11 +151,11 @@ export function createMmpTheme(appearance: ThemeAppearance): Theme {
  * Pi's exported components read a process-wide theme that only `initTheme(name)` can set. It loads
  * `<getAgentDir()>/themes/<name>.json`, where getAgentDir reads PI_CODING_AGENT_DIR (without it Pi
  * would look in ~/.pi/agent), and it silently falls back to Pi's own theme when anything is off.
- * So this sets the directory itself and then checks that the global theme really is MMP's.
+ * So this sets the directory itself and then checks that the global theme really is Epi's.
  */
-export function installMmpTheme(agentDir: string, appearance: ThemeAppearance): Theme {
+export function installEpiTheme(agentDir: string, appearance: ThemeAppearance): Theme {
   process.env.PI_CODING_AGENT_DIR = agentDir;
-  const theme = createMmpTheme(appearance);
+  const theme = createEpiTheme(appearance);
   const themesDir = join(agentDir, "themes");
   mkdirSync(themesDir, { recursive: true });
   for (const [themeAppearance, { name, fg, bg }] of Object.entries(THEMES)) {
@@ -166,7 +166,7 @@ export function installMmpTheme(agentDir: string, appearance: ThemeAppearance): 
   }
   initTheme(THEMES[appearance].name);
   if (getMarkdownTheme().heading("x") !== theme.fg("mdHeading", "x")) {
-    throw new Error(`Pi did not load the MMP theme ${THEMES[appearance].name} from ${themesDir}`);
+    throw new Error(`Pi did not load the Epi theme ${THEMES[appearance].name} from ${themesDir}`);
   }
   return theme;
 }

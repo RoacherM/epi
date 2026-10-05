@@ -1,5 +1,5 @@
 // A line diff with line numbers and in-line emphasis, from Pi's own `diff` package (pi-internals
-// row `pi-diff-package`: a dependency of pi-coding-agent, not of MMP, resolved from Pi's install).
+// row `pi-diff-package`: a dependency of pi-coding-agent, not of Epi, resolved from Pi's install).
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 

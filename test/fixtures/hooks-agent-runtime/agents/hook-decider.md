@@ -1,6 +1,6 @@
 ---
 name: hook-decider
-description: Returns the deterministic MMP Hook acceptance decision.
+description: Returns the deterministic Epi Hook acceptance decision.
 model: openai/gpt-4o-mini
 tools: read
 timeoutSeconds: 60
