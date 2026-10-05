@@ -24,6 +24,7 @@ palette = [
     (127, 127, 127), (255, 0, 0), (0, 255, 0), (255, 255, 0),
     (92, 92, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255),
 ]
+BLOCKS = {"█": (0, 2), "▀": (0, 1), "▄": (1, 2)}  # covered halves of the cell, top to bottom
 levels = (0, 95, 135, 175, 215, 255)
 palette += [(r, g, b) for r in levels for g in levels for b in levels]
 palette += [(8 + n * 10,) * 3 for n in range(24)]
@@ -49,6 +50,12 @@ for row, cells in enumerate(data["cells"]):
             continue
         if cell["dim"]:
             fg = tuple((f + b) // 2 for f, b in zip(fg, bg))
+        # Terminals draw block elements themselves, filling the cell; the font's glyphs leave gaps
+        # between rows, which would cut the startup logo into strips.
+        if cell["text"] in BLOCKS:
+            top, bottom = BLOCKS[cell["text"]]
+            draw.rectangle((x, y + ch * top // 2, x + cw - 1, y + ch * bottom // 2 - 1), fill=fg)
+            continue
         draw.text((x, y + 5), cell["text"], font=fonts[cell["bold"], cell["italic"]], fill=fg)
         if cell["underline"]:
             draw.line((x, y + 35, x + cw * cell["width"], y + 35), fill=fg)

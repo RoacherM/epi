@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="240" viewBox="0 0 660 240" role="img" aria-label="epi">
+  <title>epi</title>
+  <defs>
+    <linearGradient id="word" gradientUnits="userSpaceOnUse" x1="330" y1="0" x2="560" y2="0">
+      <stop offset="0" stop-color="#7357d4"/>
+      <stop offset="1" stop-color="#3f6ad8"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(20 21)">
+    <rect x="0" y="0" width="231" height="33" fill="#7357d4"/>
+    <rect x="0" y="66" width="231" height="33" fill="#3f6ad8"/>
+    <rect x="33" y="99" width="33" height="99" fill="#3f6ad8"/>
+    <rect x="165" y="99" width="33" height="99" fill="#3f6ad8"/>
+    <text x="309" y="170" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="164" font-weight="500" fill="url(#word)">epi</text>
+  </g>
+</svg>

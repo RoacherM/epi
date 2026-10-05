@@ -68,8 +68,18 @@ const assembly = {
   externalExtensions: [],
 };
 
-// The brand line under the logo: "Epi" centered on its own, not the "Epi ──▶ Pi" composition row.
-const BRAND_LINE = /\s{2,}Epi\s{2,}│/;
+// The whole logo, row by row: the mark (bars and legs), then the wordmark e, p, i.
+const LOGO_ROWS = [
+  "██████████████                    ",
+  "                               ▀  ",
+  "██████████████   ▄▀▀▀▄ █▀▀▀▄ ▀▀█  ",
+  "  ██      ██     █▀▀▀▀ █   █   █  ",
+  "  ██      ██     ▀▄▄▄▀ █▄▄▄▀ ▄▄█▄▄",
+  "  ██      ██           █          ",
+];
+const LOGO = new RegExp(LOGO_ROWS.map((row) => `│\\s*${escapeRegExp(row)}\\s*│[^\\n]*`).join("\\n"));
+const MARK_ONLY = /│\s+██████████████\s+│/;
+const WORDMARK_LINE = /\s{2,}epi\s{2,}│/;
 
 function assertFits(lines, width) {
   for (const line of lines) {
@@ -90,7 +100,7 @@ test("wide startup page presents the Epi brand and assembly controls", () => {
 
   assertFits(lines, 108);
   assert.match(output, new RegExp(`epi v${escapeRegExp(EPI_VERSION)}`));
-  assert.match(output, BRAND_LINE);
+  assert.match(output, LOGO);
   assert.match(output, /Compose Pi your way\./);
   assert.match(output, /MoonshotAI: Kimi K2\.5/);
   assert.match(output, new RegExp(`openrouter · Pi ${escapeRegExp(PI_VERSION)}`));
@@ -126,9 +136,21 @@ test("narrow startup page remains within the terminal width", () => {
   const output = lines.join("\n");
 
   assertFits(lines, 44);
-  assert.match(output, BRAND_LINE);
+  assert.match(output, LOGO);
   assert.match(output, /ASSEMBLY/);
   assert.match(output, /CONFIGURE/);
+});
+
+test("a column narrower than the logo shows the mark with the wordmark under it", () => {
+  // 88 columns: the split layout's left column is 32 wide; 37: the narrow layout's inner width is 33.
+  for (const width of [88, 37]) {
+    const lines = renderEpiStartupPage(identity, theme, width);
+    const output = lines.join("\n");
+    assertFits(lines, width);
+    assert.match(output, MARK_ONLY, `mark at ${width}`);
+    assert.match(output, WORDMARK_LINE, `wordmark at ${width}`);
+    assert.doesNotMatch(output, LOGO, `whole logo at ${width}`);
+  }
 });
 
 test("runtime extension installs the startup page only in TUI mode", async () => {
@@ -171,7 +193,7 @@ test("runtime extension installs the startup page only in TUI mode", async () =>
   const component = headerFactory({}, theme);
   const lines = component.render(80);
   assertFits(lines, 80);
-  assert.match(lines.join("\n"), BRAND_LINE);
+  assert.match(lines.join("\n"), LOGO);
   assert.match(lines.join("\n"), /Fixture Model/);
   assert.equal(typeof component.invalidate, "function");
 });

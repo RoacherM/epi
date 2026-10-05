@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/epi-logo-light.svg">
+    <img src="docs/assets/epi-logo-dark.svg" alt="epi" width="330">
+  </picture>
+</p>
+
 # Epi
 
 > Compose Pi your way.
