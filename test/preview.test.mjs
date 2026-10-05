@@ -11,7 +11,10 @@ import test from "node:test";
 
 import { PREVIEW_VERSION } from "../dist/extensions/preview.js";
 import { clock, humanSize, kindOf, loadDoc, printable, readListing } from "../dist/extensions/preview/files.js";
-import { Player, stillJob } from "../dist/extensions/preview/media.js";
+import { Player, StillCache, stillJob } from "../dist/extensions/preview/media.js";
+import { Viewer } from "../dist/extensions/preview/view.js";
+import { createMmpTheme } from "../dist/tui/theme.js";
+import { piTui } from "../dist/tui/pi-tui.js";
 
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const ONE_PIXEL_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jq1kAAAAASUVORK5CYII=", "base64");
@@ -511,4 +514,38 @@ test("a looping GIF does not wait for sound", async (t) => {
   const lag = (Date.now() - started) / 1000 - gif.position;
   assert.ok(lag < 0.4, `picture is ${lag} s behind the wall clock`);
   assert.equal(pidsOf().length, 1, "a GIF needs the frame source only");
+});
+
+// A stand-in ffprobe for the viewer's probe: a ten-second clip at 30 fps.
+function fakeProbe(dir) {
+  writeFileSync(join(dir, "ffprobe"), `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({ streams: [{ width: 640, height: 360, codec_name: "h264", avg_frame_rate: "30/1" }], format: { duration: "10" } }));\n`);
+  chmodSync(join(dir, "ffprobe"), 0o755);
+  execFileSync(join(dir, "ffprobe"));
+}
+
+// The viewer now draws through the player pane; its status line must stay byte for byte what it was.
+test("the video viewer's status line: state, time and duration, progress bar, and its key hints", async (t) => {
+  fakeMediaTools(t);
+  fakeProbe(process.env.PATH);
+  const dir = tempDir(t);
+  writeFileSync(join(dir, "clip.mp4"), "not really a video");
+  const theme = createMmpTheme("dark");
+  const viewer = new Viewer({ requestRender() {}, terminal: { rows: 40 } }, theme, entryOf(dir, "clip.mp4"), new StillCache(() => {}));
+  t.after(() => viewer.dispose());
+  await until(() => viewer.render(68, 20).status !== ` ${theme.fg("dim", "q back")}`, "the probe to answer");
+  // Five seconds in and paused, so the position cannot move between the key and the check.
+  viewer.handleInput("l");
+  viewer.handleInput(" ");
+  const hint = "space play/pause · ←/→ 5s · i insert · q back";
+  const frame = viewer.render(68, 20);
+  assert.equal(
+    frame.status,
+    ` ${theme.fg("accent", "⏸ 0:05 / 0:10")}  ${theme.fg("accent", "━━")}${theme.fg("dim", "──")}  ${theme.fg("dim", hint)}`,
+  );
+  assert.equal(piTui.visibleWidth(frame.status), 67);
+  assert.equal(frame.body.length, 20);
+  // At 40 columns there is no room for the bar; the page cuts the rest of the row.
+  const narrow = viewer.render(40, 20);
+  assert.equal(piTui.visibleWidth(narrow.status) <= 40, true);
+  assert.match(narrow.status.replace(/\x1b\[[0-9;]*m/g, ""), /^ ⏸ 0:05 \/ 0:10    space play\/pause/);
 });

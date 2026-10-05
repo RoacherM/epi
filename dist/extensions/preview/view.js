@@ -7,7 +7,8 @@ import { piTui } from "../../tui/pi-tui.js";
 import { centered, imageBody, pad, scrollbar, scrollFromBar } from "./draw.js";
 import { existsSync, statSync } from "node:fs";
 import { clock, HEX_BYTES, humanSize, icon, kindOf, loadDoc, localTime, MAX_TEXT_BYTES, permString, printable, readListing, restat } from "./files.js";
-import { audioWave, Player, probe, SEEK_SECONDS, StillCache, stillJob } from "./media.js";
+import { probe, StillCache, stillJob } from "./media.js";
+import { PlayerPane } from "./player-pane.js";
 import { Finder, LinePrompt } from "./search.js";
 const { Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } = piTui;
 /** Rows the page itself takes around a view's body: the top border, the title row, the key row,
@@ -32,11 +33,10 @@ export class Viewer {
     info;
     /** The probe has answered (or failed): a video waits for it, to play at the source's frame rate. */
     probed = false;
-    player;
-    /** Size of the last rendered body and where the video progress bar sits, for the mouse. */
+    pane;
+    /** Size of the last rendered body, for the mouse. */
     width = 0;
     height = 0;
-    progress;
     constructor(tui, theme, entry, stills) {
         this.tui = tui;
         this.theme = theme;
@@ -61,8 +61,8 @@ export class Viewer {
     }
     dispose() {
         lastScroll.set(`view:${this.entry.path}`, this.scroll);
-        this.player?.stop();
-        this.player = undefined;
+        this.pane?.dispose();
+        this.pane = undefined;
     }
     /** Typing a search or a line number: every key goes to the prompt, not to the view. */
     get busy() {
@@ -123,17 +123,7 @@ export class Viewer {
         if (data === "i")
             return "insert";
         if (this.mode === "video") {
-            const player = this.player;
-            if (!player)
-                return undefined;
-            if (data === " " || data === "p")
-                player.toggle();
-            else if (matchesKey(data, "right") || data === "l")
-                player.seek(player.position + SEEK_SECONDS);
-            else if (matchesKey(data, "left") || data === "h")
-                player.seek(player.position - SEEK_SECONDS);
-            else if (data === "g" || data === "0")
-                player.seek(0);
+            this.pane?.handleInput(data);
             return undefined;
         }
         if (this.mode === "image") {
@@ -169,17 +159,7 @@ export class Viewer {
     /** `x`/`y` are relative to the body; `y === height` is the status row. */
     handleMouse(event, x, y) {
         if (this.mode === "video") {
-            const player = this.player;
-            if (!player || (event.type !== "press" && event.type !== "drag"))
-                return;
-            if (y === this.height && this.progress && x >= this.progress.start) {
-                const ratio = Math.min(1, (x - this.progress.start) / Math.max(1, this.progress.width - 1));
-                if (this.info?.duration)
-                    player.seek(ratio * this.info.duration);
-            }
-            else if (y < this.height && event.type === "press") {
-                player.toggle();
-            }
+            this.pane?.handleMouse(event, x, y);
             return;
         }
         if (this.mode !== "text")
@@ -250,8 +230,8 @@ export class Viewer {
         const th = this.theme;
         const name = th.fg("accent", this.entry.label);
         if (!restat(this.entry)) {
-            this.player?.stop();
-            this.player = undefined;
+            this.pane?.dispose();
+            this.pane = undefined;
             return {
                 title: name,
                 body: centered(th.fg("error", `${this.entry.label} not found`), width, height).map((line) => pad(line, width)),
@@ -295,46 +275,17 @@ export class Viewer {
             return { title, body, status: ` ${th.fg("dim", "i insert · q back")}` };
         }
         // video
-        const frameHeight = Math.max(1, height - 1);
         if (!this.probed) {
             return { title, body: centered(th.fg("dim", "loading…"), width, height).map((line) => pad(line, width)), status: ` ${th.fg("dim", "q back")}` };
         }
-        if (!this.player || this.player.width !== width || this.player.height !== frameHeight) {
-            const resumeAt = this.player?.position ?? 0;
-            const playing = this.player?.playing ?? true;
-            this.player?.stop();
-            this.player = new Player(this.entry.path, width, frameHeight, extname(this.entry.name).toLowerCase() === ".gif", () => this.tui.requestRender(), this.info?.fps === undefined ? {} : { fps: this.info.fps });
-            this.player.playing = playing;
-            this.player.play(resumeAt);
-        }
-        const player = this.player;
-        const frameBody = player.error
-            ? centered(th.fg("error", player.error), width, frameHeight)
-            : player.frameBase64
-                ? (() => {
-                    const rendered = imageBody(player.frameBase64, "image/png", th, width, frameHeight, this.entry.path, undefined, player.imageId, true);
-                    player.imageId = rendered.imageId;
-                    return rendered.lines;
-                })()
-                : centered(th.fg("dim", "loading…"), width, frameHeight);
-        const meterLabel = ` sound ${player.audioLevelDb === undefined ? "--" : `${Math.round(player.audioLevelDb)}dB`} `;
-        const meterWidth = Math.max(0, width - visibleWidth(meterLabel));
-        const wave = audioWave(player.audioHistory, meterWidth);
-        const meter = th.fg("dim", meterLabel) + th.fg("accent", wave);
-        const body = [...frameBody, meter];
-        const state = player.ended ? "■" : player.playing ? "▶" : "⏸";
-        const duration = info?.duration ?? 0;
-        const time = `${state} ${clock(player.position)}${duration ? ` / ${clock(duration)}` : ""}`;
-        const hint = "space play/pause · ←/→ 5s · i insert · q back";
-        const barWidth = Math.max(0, width - visibleWidth(time) - visibleWidth(hint) - 6);
-        const filled = duration ? Math.round(Math.min(1, player.position / duration) * barWidth) : 0;
-        this.progress = { start: visibleWidth(time) + 3, width: barWidth };
-        const progress = th.fg("accent", "━".repeat(filled)) + th.fg("dim", "─".repeat(Math.max(0, barWidth - filled)));
-        return {
-            title,
-            body: body.map((line) => pad(line, width)),
-            status: ` ${th.fg("accent", time)}  ${progress}  ${th.fg("dim", hint)}`,
-        };
+        this.pane ??= new PlayerPane({
+            video: this.entry.path,
+            loop: extname(this.entry.name).toLowerCase() === ".gif",
+            label: this.entry.path,
+            ...(info?.duration ? { duration: info.duration } : {}),
+            ...(info?.fps === undefined ? {} : { fps: info.fps }),
+        }, { tui: this.tui, theme: th, hint: "i insert · q back" });
+        return { title, ...this.pane.render(width, height) };
     }
 }
 export class FileBrowser {
