@@ -13,11 +13,11 @@ import {
   shortenPath,
 } from "../dist/tui/chrome.js";
 import { piTui } from "../dist/tui/pi-tui.js";
-import { createMmpTheme } from "../dist/tui/theme.js";
+import { createEpiTheme } from "../dist/tui/theme.js";
 import { toolBlock } from "../dist/tui/tools/block.js";
 import { bashRenderers } from "../dist/tui/tools/mutating.js";
 
-const theme = createMmpTheme("dark");
+const theme = createEpiTheme("dark");
 const WIDTHS = [20, 40, 80, 120];
 const plain = (line) => line.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -34,7 +34,7 @@ function fakeTui() {
 }
 
 test("paths shorten like grok: ~ for home, middle components to one letter, last two full", () => {
-  assert.equal(shortenPath("/Users/me/Desktop/Projects/sides/mmp", "/Users/me"), "~/D/P/sides/mmp");
+  assert.equal(shortenPath("/Users/me/Desktop/Projects/sides/epi", "/Users/me"), "~/D/P/sides/epi");
   assert.equal(shortenPath("/d/a/b/charlie/delta", "/Users/me"), "/d/a/b/charlie/delta");
   assert.equal(shortenPath("/Users/me", "/Users/me"), "~");
   assert.equal(shortenPath("/Users/meow/x", "/Users/me"), "/U/meow/x");

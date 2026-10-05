@@ -1,4 +1,4 @@
-// MMP TUI v2: fullscreen grok-build layout, transcript, prompt, extension host, lifecycle.
+// Epi TUI v2: fullscreen grok-build layout, transcript, prompt, extension host, lifecycle.
 // Layout and data flow follow docs/tui-design.md 2.2 and 4.1.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -45,7 +45,7 @@ export interface TuiAppOptions {
   runtime: AgentSessionRuntime;
   theme: Theme;
   cwd: string;
-  /** MMP's Pi state directory (~/.mmp/pi): keybindings.json is read from here. */
+  /** Epi's Pi state directory (~/.epi/pi): keybindings.json is read from here. */
   agentDir: string;
   logDirectory: string;
   /** The project this process assembled its manifest from; used to refuse a cross-project switch. */
@@ -268,7 +268,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
 
   // ── settings (/settings, docs/tui-design.md 4.6) ────────────────────────────
   /** The interface half of Pi's applyRuntimeSettings (interactive-mode.js ~1510), for the settings
-   * MMP's interface honours. Runs before the first frame, so a saved value is in effect from the
+   * Epi's interface honours. Runs before the first frame, so a saved value is in effect from the
    * start, not only after bind(). */
   function applyUiSettings(): void {
     const settings = session.settingsManager;
@@ -493,12 +493,12 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     try {
       const outcome = await Promise.race([runtime.dispose().then(() => "disposed" as const), timedOut]);
       if (outcome === "timeout") {
-        process.stderr.write(`mmp: the session did not shut down within ${SHUTDOWN_TIMEOUT_MS / 1000}s ` +
+        process.stderr.write(`epi: the session did not shut down within ${SHUTDOWN_TIMEOUT_MS / 1000}s ` +
           "(a session_shutdown handler has not returned); exiting anyway.\n");
       }
       return code;
     } catch (error) {
-      process.stderr.write(`mmp: shutting down the session failed: ${errorText(error)}\n`);
+      process.stderr.write(`epi: shutting down the session failed: ${errorText(error)}\n`);
       return 1;
     } finally {
       clearTimeout(timer);
@@ -509,7 +509,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   const onCrash = (error: unknown) => {
     // Leave the alternate screen before the stack trace, or the user's terminal stays wrecked.
     stopTui();
-    process.stderr.write(`mmp: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    process.stderr.write(`epi: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
     process.exit(1);
   };
   process.on("SIGTERM", onSignal);
@@ -539,12 +539,12 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     if (!exiting) {
       exiting = true;
       stopTui();
-      process.stderr.write(`mmp: ${prefix}: ${errorText(error)}\n`);
+      process.stderr.write(`epi: ${prefix}: ${errorText(error)}\n`);
     }
     process.exit(1);
   }
   // Wrapping these three in one place covers every call site that can replace the session --
-  // app.ts's own commandContextActions below, MMP's /new builtin (builtins.ts calls
+  // app.ts's own commandContextActions below, Epi's /new builtin (builtins.ts calls
   // host.runtime.newSession() directly), and session-commands.ts's /resume -- without each of them
   // repeating the same failure handling.
   const originalNewSession = runtime.newSession.bind(runtime);
@@ -648,7 +648,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
         break;
       // Manual /compact runs with isStreaming false, so it needs its own turn-status entry (Pi
       // shows a CompactionStatusIndicator and lets Esc cancel it via a temporary onEscape override;
-      // MMP's app.interrupt checks session.isCompacting instead, so the shared turn state suffices).
+      // Epi's app.interrupt checks session.isCompacting instead, so the shared turn state suffices).
       case "compaction_start":
         showTerminalProgress();
         turn = turn === undefined
@@ -658,7 +658,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       case "compaction_end":
         clearTerminalProgress();
         // Pi's interactive mode clears its compaction indicator here unconditionally and shows the
-        // working one again on the next agent_start. MMP has one shared turn state, so: inside the
+        // working one again on the next agent_start. Epi has one shared turn state, so: inside the
         // agent loop (a threshold compaction before the next request) the request follows; after a
         // successful overflow compaction the retry's agent_start follows; otherwise nothing does.
         if (session.isStreaming && (inAgentLoop || event.willRetry)) setActivity("Waiting for response…");
@@ -763,7 +763,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       // would never be seen; Pi loses it the same way (dogfood D41).
       onError: (error) => {
         const text = `Extension error (${error.extensionPath}, ${error.event}): ${error.error}`;
-        if (tuiStopped) process.stderr.write(`mmp: ${text}\n`);
+        if (tuiStopped) process.stderr.write(`epi: ${text}\n`);
         else transcript.notice(text, "error");
       },
     });
@@ -832,7 +832,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
    * plus app.ts's own compaction queue, combined and cleared -- with images recovered (item 6:
    * images used to be silently dropped on restore).
    *
-   * compactionQueue is MMP's own array (submit()'s isCompacting branch, below) and always keeps its
+   * compactionQueue is Epi's own array (submit()'s isCompacting branch, below) and always keeps its
    * images intact. The session's own steering/followUp queues (AgentSession's private
    * `_steeringMessages`/`_followUpMessages`, backing getSteeringMessages/getFollowUpMessages/
    * clearQueue) are typed as plain `string[]` -- Pi's own upstream restoreQueuedMessagesToEditor
@@ -982,7 +982,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     if (await runUserBash(commandHost, trimmed)) return;
     if (session.isCompacting) {
       // session.prompt() throws while compaction is running (Pi's queueCompactionMessage);
-      // MMP's Enter is Pi's Alt+Enter follow-up semantics (docs/tui-design.md 4.7 table). An
+      // Epi's Enter is Pi's Alt+Enter follow-up semantics (docs/tui-design.md 4.7 table). An
       // extension command runs immediately even during compaction instead of queuing (Pi's
       // handleFollowUp/handleSubmit, interactive-mode.js ~2604-2611/~3530-3538).
       if (isExtensionCommand) {
@@ -1055,8 +1055,8 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
 
   // Only on the very first bind: /new, /resume and /reload also call bind() and must not replay it.
   // Pi's own interactive-mode.js (~855-864): sent directly through session.prompt(), not through
-  // submit()'s full pipeline -- submit() clears the editor/history and runs MMP's built-ins (e.g.
-  // `mmp /new`), which would wipe whatever the startup gate above just put back into the editor.
+  // submit()'s full pipeline -- submit() clears the editor/history and runs Epi's built-ins (e.g.
+  // `epi /new`), which would wipe whatever the startup gate above just put back into the editor.
   // `initialImages` (an `@image` argument) pairs with the first message only, as Pi's own
   // initialMessage/initialImages does. Not awaited before `finished`: quitting while one of them is
   // still running must not wait for its prompt to settle (a request can ignore its abort, D35).
@@ -1080,7 +1080,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     ready = true;
     if (options.resumeOnStart === true) {
       // Bug 8: Pi's own --resume exits with "No session selected" when nothing is picked (main.js
-      // ~327-336's selectSession/process.exit(0)); MMP used to just carry on in the fresh default
+      // ~327-336's selectSession/process.exit(0)); Epi used to just carry on in the fresh default
       // session bind() already set up above. Ctrl+D ("exited") already quit the app itself inside
       // runResume (host.exit(0)) -- nothing more to do here for that case.
       const outcome = await runResume(commandHost);

@@ -4,16 +4,16 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 
-import { MMP_PACKAGE_VERSION as MMP_VERSION } from "./mmp-package-version.mjs";
+import { EPI_PACKAGE_VERSION as EPI_VERSION } from "./epi-package-version.mjs";
 
 const args = process.argv.slice(2);
 if (args.includes("--dry-run")) {
   process.stdout.write(`${JSON.stringify({
-    mmpVersion: MMP_VERSION,
+    epiVersion: EPI_VERSION,
     piVersion: PI_VERSION,
-    mmpHome: process.env.MMP_HOME,
-    agentDir: `${process.env.MMP_HOME}/pi`,
-    globalManifest: `${process.env.MMP_HOME}/mmp.json`,
+    epiHome: process.env.EPI_HOME,
+    agentDir: `${process.env.EPI_HOME}/pi`,
+    globalManifest: `${process.env.EPI_HOME}/epi.json`,
     projectDiscovery: "ignored",
     rules: [],
     skills: [],

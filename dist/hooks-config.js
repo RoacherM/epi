@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { z } from "zod";
-import { MmpConfigError } from "./errors.js";
+import { EpiConfigError } from "./errors.js";
 const HOOK_EVENT_NAMES = [
     "session_start",
     "session_shutdown",
@@ -78,13 +78,13 @@ function configError(configPath, error) {
     const location = issue?.path.length === 0
         ? "hooks config"
         : issue?.path.map(String).join(".") ?? "hooks config";
-    return new MmpConfigError(`${configPath}: ${location}: ${issue?.message ?? "invalid hooks config"}`);
+    return new EpiConfigError(`${configPath}: ${location}: ${issue?.message ?? "invalid hooks config"}`);
 }
 function expandEnvironment(value, environment, configPath, location) {
     return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name) => {
         const resolved = environment[name];
         if (resolved === undefined) {
-            throw new MmpConfigError(`${configPath}: ${location} references missing environment variable ${name}`);
+            throw new EpiConfigError(`${configPath}: ${location} references missing environment variable ${name}`);
         }
         return resolved;
     });
@@ -138,14 +138,14 @@ function resolveHandler(handler, configPath, environment, index) {
     if (handler.type === "http") {
         const url = expandEnvironment(handler.url, environment, configPath, `${location}.url`);
         if (!z.url().safeParse(url).success) {
-            throw new MmpConfigError(`${configPath}: ${location}.url must be a valid URL`);
+            throw new EpiConfigError(`${configPath}: ${location}.url must be a valid URL`);
         }
         // fetch (undici) always rejects a URL with user:password@, and its error text repeats the whole
         // expanded URL -- so such a config can never work and would only leak the credentials. The
         // message names the field, never its value.
         const parsed = new URL(url);
         if (parsed.username !== "" || parsed.password !== "") {
-            throw new MmpConfigError(`${configPath}: ${location}.url must not contain credentials (user:password@); send them in a header instead`);
+            throw new EpiConfigError(`${configPath}: ${location}.url must not contain credentials (user:password@); send them in a header instead`);
         }
         return {
             ...handler,
@@ -173,7 +173,7 @@ export function loadHooksConfig(configPath, source, environment = process.env) {
         return { path: configPath, source, loaded: false, hooks: [] };
     }
     if (!statSync(configPath).isFile()) {
-        throw new MmpConfigError(`${configPath}: hooks config must be a file`);
+        throw new EpiConfigError(`${configPath}: hooks config must be a file`);
     }
     let raw;
     try {
@@ -181,7 +181,7 @@ export function loadHooksConfig(configPath, source, environment = process.env) {
     }
     catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        throw new MmpConfigError(`${configPath}: invalid JSON: ${detail}`);
+        throw new EpiConfigError(`${configPath}: invalid JSON: ${detail}`);
     }
     const parsed = hooksConfigSchema.safeParse(raw);
     if (!parsed.success) {

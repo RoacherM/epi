@@ -1,8 +1,8 @@
 // Bug 1 (docs/tui-design.md 15): app key actions (Esc, Ctrl+D, Ctrl+C, Ctrl+L, …) must only fire
-// when the prompt editor has focus. Before the fix, MMP's tui.addInputListener ran the key table
+// when the prompt editor has focus. Before the fix, Epi's tui.addInputListener ran the key table
 // before the focused component (pi-tui dispatches input listeners first), so a dialog/selector
 // occupying the editor slot never saw these keys at all: Esc aborted the running turn instead of
-// closing the dialog, Ctrl+D quit MMP, Ctrl+C hit the "press again to quit" counter, and Ctrl+L
+// closing the dialog, Ctrl+D quit Epi, Ctrl+C hit the "press again to quit" counter, and Ctrl+L
 // opened a second selector on top of the first. The shortcuts bar must also switch to the dialog's
 // keys while a dialog holds the editor slot (4.1: the bar follows focus).
 import assert from "node:assert/strict";
@@ -17,19 +17,19 @@ const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 function runApp(t, extensions, steps) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-focus-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-focus-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ steps }),
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ steps }),
     },
     encoding: "utf8",
     timeout: 60_000,
@@ -58,12 +58,12 @@ test("Esc closes an extension selector opened during a turn instead of aborting 
   assert.doesNotMatch(out, /Press Ctrl\+C again to quit/);
 });
 
-test("Ctrl+D does not quit MMP while a selector is open", (t) => {
+test("Ctrl+D does not quit Epi while a selector is open", (t) => {
   const { text: out } = runApp(t, [fixture("ui-probe-extension.mjs")], [
     ["waitReady"], ["type", "/choose"], ["key", "enter"],
     ["waitFor", "CHOOSE-ONE"],
     ["key", "ctrl+d"], ["wait", 300],
-    // If Ctrl+D had quit MMP, the process would already be gone and this selection could never
+    // If Ctrl+D had quit Epi, the process would already be gone and this selection could never
     // be made or reported; if it only reached the dialog (no binding there, so nothing happened),
     // the app is still alive and the selector still has focus.
     ["key", "down"], ["key", "enter"], ["waitFor", "select result: beta"],

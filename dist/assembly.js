@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { MmpConfigError } from "./errors.js";
+import { EpiConfigError } from "./errors.js";
 import { BUILT_IN_EXTENSION_NAMES, resolveManifest, } from "./manifest.js";
 import { resolveProjectManifest, } from "./project.js";
 import { discoverSkillRoots } from "./skill-discovery.js";
@@ -35,10 +35,10 @@ function loadRulesText(rules) {
         }
         catch (error) {
             const detail = error instanceof Error ? error.message : String(error);
-            throw new MmpConfigError(`failed to read rule ${rule.value}: ${detail}`);
+            throw new EpiConfigError(`failed to read rule ${rule.value}: ${detail}`);
         }
     });
-    return `# MMP Rules\n\n${contents.join("\n\n")}`;
+    return `# Epi Rules\n\n${contents.join("\n\n")}`;
 }
 export function resolveAssembly(options) {
     const globalManifest = resolveManifest(options.globalManifestPath, "global");
@@ -56,7 +56,7 @@ export function resolveAssembly(options) {
     const rules = mergeUnique([globalManifest.rules, projectRules], (resource) => resource.value);
     const discoveredSkills = discoverSkillRoots({
         environment: options.environment,
-        mmpHome: options.mmpHome,
+        epiHome: options.epiHome,
         agentDir: options.agentDir,
         trustedProjectRoot: project.discovery === "loaded" ? project.state?.root : undefined,
     });

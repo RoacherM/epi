@@ -7,7 +7,7 @@ export interface ShouldAskProjectTrustOptions {
     noProject: boolean;
     /** From --approve/--no-approve, or a trust choice already made earlier in this run. */
     trustOverride: boolean | undefined;
-    /** The nearest ancestor with .mmp/mmp.json, or undefined when none was found. */
+    /** The nearest ancestor with .epi/epi.json, or undefined when none was found. */
     projectRoot: string | undefined;
     /** ProjectTrustStore.get(projectRoot): null means no one has decided yet. */
     savedDecision: boolean | null;
@@ -20,7 +20,7 @@ export interface ProjectTrustChoice {
     updates: ProjectTrustUpdate[];
 }
 /**
- * Mirrors Pi's own trust prompt options (core/trust-manager.js getProjectTrustOptions), which MMP
+ * Mirrors Pi's own trust prompt options (core/trust-manager.js getProjectTrustOptions), which Epi
  * cannot import directly: index.js only re-exports ProjectTrustStore and
  * hasTrustRequiringProjectResources from that module. Saved decisions still go through the same
  * exported ProjectTrustStore, so both stores stay compatible.
@@ -38,6 +38,6 @@ export interface AskProjectTrustOptions {
  * TUI v2 can start its own session right after.
  */
 export declare function askProjectTrust(options: AskProjectTrustOptions): Promise<ProjectTrustChoice>;
-/** Persists the chosen updates (if any) to the same store MMP's `/trust` and classic Pi's `/trust` use. */
+/** Persists the chosen updates (if any) to the same store Epi's `/trust` and classic Pi's `/trust` use. */
 export declare function saveProjectTrustChoice(agentDir: string, choice: ProjectTrustChoice): void;
 //# sourceMappingURL=trust-prompt.d.ts.map

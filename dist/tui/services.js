@@ -1,4 +1,4 @@
-// Terminal-free construction of the Pi session, for every mode that runs one: MMP's interactive
+// Terminal-free construction of the Pi session, for every mode that runs one: Epi's interactive
 // host and print/json/rpc (src/noninteractive.ts; decision N1). Everything that decides what the
 // model sees lives here, so it can be tested without a terminal.
 import { existsSync } from "node:fs";
@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createAgentSessionFromServices, createAgentSessionRuntime, createAgentSessionServices, parseArgs, resolveCliModel, resolveModelScopeWithDiagnostics, SessionManager, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { builtInOffInstruction } from "../assembly.js";
 import { BUILT_IN_EXTENSION_NAMES } from "../manifest.js";
-import { MmpArgumentError } from "../errors.js";
+import { EpiArgumentError } from "../errors.js";
 import { extensionLoadFailureHint } from "../pi-output.js";
 import { notRunningWarnings, settleRegisteredProviders } from "../provider-startup.js";
 import { crossProjectRefusal } from "./project-guard.js";
@@ -45,14 +45,14 @@ export function configureHttp(settingsManager) {
     configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
 }
 function createSettingsManager(cwd, agentDir) {
-    // Project .pi/settings.json is Pi's config, never MMP's (docs/decisions.md C1).
+    // Project .pi/settings.json is Pi's config, never Epi's (docs/decisions.md C1).
     return SettingsManager.create(cwd, agentDir, { projectTrusted: false });
 }
 /**
  * Mirrors the tilde-expansion half of Pi's own `normalizePath` (utils/paths.js, not exported by
  * the SDK): `~` and `~/...` only. SessionManager's own statics already call the real
  * `normalizePath` on whatever sessionDir they're given, so this only has to get `~` out of the way
- * before MMP's own pre-SessionManager code (resolveSessionArg, below) touches the same string.
+ * before Epi's own pre-SessionManager code (resolveSessionArg, below) touches the same string.
  */
 function expandTilde(value) {
     if (value === "~")
@@ -63,11 +63,11 @@ function expandTilde(value) {
     return value;
 }
 /**
- * Which Pi CLI arguments MMP's TUI host understands, in one place, so it's easy to see what's
+ * Which Pi CLI arguments Epi's TUI host understands, in one place, so it's easy to see what's
  * missing. `isInteractivePiRun` (../interactive.ts) already keeps `--print`/`-p`, `--mode json/rpc`,
  * `--help`/`-h`, `--list-models` and `--export` off the TUI (print/json/rpc reach this module through
  * ../noninteractive.ts instead; `--resume` is refused there, since it needs the TUI's selector). Resource flags (`--extension`,
- * `--skill`, `--theme`, `--system-prompt`, ...) are rejected even earlier, in parseMmpArgs
+ * `--skill`, `--theme`, `--system-prompt`, ...) are rejected even earlier, in parseEpiArgs
  * (../args.ts), before Pi's own parser ever sees them.
  *
  * Supported here (mirrors Pi's own handling in dist/main.js and dist/cli/args.js):
@@ -77,25 +77,25 @@ function expandTilde(value) {
  *   `/resume` uses, once the TUI has started; see start.ts's `startupOptionsFromPiArgs` and
  *   session-commands.ts's `runResume`), and positional messages (sent as the first prompt once
  *   the TUI is up). `--verbose` and `@file` arguments are also supported, but not parsed here:
- *   `--verbose` is read by `createMmpRuntimeExtension` (../extensions/runtime.ts), which shows
+ *   `--verbose` is read by `createEpiRuntimeExtension` (../extensions/runtime.ts), which shows
  *   startup details as transcript notices on `session_start`; `@file` text is inlined into the
  *   first message by start.ts's `startupOptionsFromPiArgs` (../file-arguments.ts) before it ever
- *   reaches `createMmpRuntime`.
+ *   reaches `createEpiRuntime`.
  *
  * Anything else Pi's parser can set is unsupported: this throws before the TUI starts rather
  * than silently dropping it.
  */
 const UNSUPPORTED_PI_ARGS = [
-    { present: (parsed) => parsed.useTheme !== undefined, flag: "--use-theme", reason: "MMP has its own theme" },
-    { present: (parsed) => parsed.tuiMode !== undefined, flag: "--tui-mode", reason: "MMP's TUI is fullscreen only" },
+    { present: (parsed) => parsed.useTheme !== undefined, flag: "--use-theme", reason: "Epi has its own theme" },
+    { present: (parsed) => parsed.tuiMode !== undefined, flag: "--tui-mode", reason: "Epi's TUI is fullscreen only" },
 ];
 function unsupportedFlagError(flag, reason) {
-    return new MmpArgumentError(`${flag} is not supported by MMP: ${reason}.`);
+    return new EpiArgumentError(`${flag} is not supported by Epi: ${reason}.`);
 }
 function validateSupportedPiArgs(parsed) {
     const fatal = parsed.diagnostics.find((diagnostic) => diagnostic.type === "error");
     if (fatal !== undefined) {
-        throw new MmpArgumentError(fatal.message);
+        throw new EpiArgumentError(fatal.message);
     }
     for (const { present, flag, reason } of UNSUPPORTED_PI_ARGS) {
         if (present(parsed)) {
@@ -107,7 +107,7 @@ function validateSupportedPiArgs(parsed) {
  * as early as Pi's main.js does: before anything looks the id up. */
 function assertValidSessionId(id) {
     if (!/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(id)) {
-        throw new MmpArgumentError("Session id must be non-empty, contain only alphanumeric characters, '-', '_', and '.', and start and end with an alphanumeric character");
+        throw new EpiArgumentError("Session id must be non-empty, contain only alphanumeric characters, '-', '_', and '.', and start and end with an alphanumeric character");
     }
 }
 /** Mirrors Pi's validateForkFlags/validateSessionIdFlags (main.js): reject flag combinations that
@@ -123,7 +123,7 @@ function validateSessionFlagCombinations(parsed) {
             parsed.noSession === true ? "--no-session" : undefined,
         ].filter((flag) => flag !== undefined);
         if (conflicts.length > 0) {
-            throw new MmpArgumentError(`--fork cannot be combined with ${conflicts.join(", ")}`);
+            throw new EpiArgumentError(`--fork cannot be combined with ${conflicts.join(", ")}`);
         }
     }
     if (parsed.sessionId !== undefined) {
@@ -133,7 +133,7 @@ function validateSessionFlagCombinations(parsed) {
             parsed.resume === true ? "--resume" : undefined,
         ].filter((flag) => flag !== undefined);
         if (conflicts.length > 0) {
-            throw new MmpArgumentError(`--session-id cannot be combined with ${conflicts.join(", ")}`);
+            throw new EpiArgumentError(`--session-id cannot be combined with ${conflicts.join(", ")}`);
         }
     }
 }
@@ -167,18 +167,18 @@ async function resolveSessionArg(argument, cwd, sessionDir) {
 function refuseCrossProjectSession(argument, sessionPath, projectIdentity) {
     const refusal = crossProjectRefusal(sessionPath, projectIdentity);
     if (refusal !== undefined) {
-        // Pi's own CLI offers to fork a cross-project match in interactively (promptConfirm); MMP has
+        // Pi's own CLI offers to fork a cross-project match in interactively (promptConfirm); Epi has
         // no prompt this early, so it names the flag that does the same thing without one.
-        throw new MmpArgumentError(`${refusal}\nOr use --fork ${argument} to copy it into this project.`);
+        throw new EpiArgumentError(`${refusal}\nOr use --fork ${argument} to copy it into this project.`);
     }
 }
 /** Pi's own resolution order (main.js ~536-539): --session-dir, then its ENV_SESSION_DIR
- * (PI_CODING_AGENT_SESSION_DIR), then the sessionDir setting. MMP never reads Pi's variable here --
- * a Pi user's own PI_CODING_AGENT_SESSION_DIR must not silently redirect MMP's sessions (no shared
- * config, docs/cli-design.md §2) -- so this is MMP_SESSION_DIR instead, same semantics. `~` is
+ * (PI_CODING_AGENT_SESSION_DIR), then the sessionDir setting. Epi never reads Pi's variable here --
+ * a Pi user's own PI_CODING_AGENT_SESSION_DIR must not silently redirect Epi's sessions (no shared
+ * config, docs/cli-design.md §2) -- so this is EPI_SESSION_DIR instead, same semantics. `~` is
  * expanded here; SessionManager's own statics expand it again (harmless). */
 function startupSessionDir(parsed, settingsManager) {
-    const envSessionDir = process.env.MMP_SESSION_DIR;
+    const envSessionDir = process.env.EPI_SESSION_DIR;
     return (parsed.sessionDir !== undefined ? expandTilde(parsed.sessionDir) : undefined) ??
         (envSessionDir !== undefined && envSessionDir !== "" ? expandTilde(envSessionDir) : undefined) ??
         settingsManager.getSessionDir();
@@ -192,11 +192,11 @@ async function buildSessionManager(parsed, cwd, sessionDir, projectIdentity, war
         // Mirrors Pi's own createSessionManager check (main.js ~289-294): --fork --session-id <id> that
         // already names a local session would otherwise silently fork over/alongside it.
         if (parsed.sessionId !== undefined && SessionManager.findById(cwd, parsed.sessionId, sessionDir) !== undefined) {
-            throw new MmpArgumentError(`Session already exists with id '${parsed.sessionId}'`);
+            throw new EpiArgumentError(`Session already exists with id '${parsed.sessionId}'`);
         }
         const resolved = await resolveSessionArg(parsed.fork, cwd, sessionDir);
         if (resolved.type === "not_found") {
-            throw new MmpArgumentError(`No session found matching '${parsed.fork}'`);
+            throw new EpiArgumentError(`No session found matching '${parsed.fork}'`);
         }
         // --fork always lands in this cwd's project (forkFrom's targetCwd, below), regardless of which
         // project the source session came from, so it needs no project-identity check.
@@ -205,13 +205,13 @@ async function buildSessionManager(parsed, cwd, sessionDir, projectIdentity, war
         }
         catch (error) {
             // Pi's forkSessionOrExit: a source that is missing or not a session file is the user's argument.
-            throw new MmpArgumentError(error instanceof Error ? error.message : String(error));
+            throw new EpiArgumentError(error instanceof Error ? error.message : String(error));
         }
     }
     if (parsed.session !== undefined) {
         const resolved = await resolveSessionArg(parsed.session, cwd, sessionDir);
         if (resolved.type === "not_found") {
-            throw new MmpArgumentError(`No session found matching '${parsed.session}'`);
+            throw new EpiArgumentError(`No session found matching '${parsed.session}'`);
         }
         refuseCrossProjectSession(parsed.session, resolved.path, projectIdentity);
         return SessionManager.open(resolved.path, sessionDir);
@@ -240,7 +240,7 @@ const OFF_SWITCHABLE = new Set(BUILT_IN_EXTENSION_NAMES);
 /**
  * Two extensions may not register the same command. Pi would rename both to "/name:1" and
  * "/name:2", so the name the user types and the documentation gives silently stops working, or runs
- * the other extension's command. MMP refuses that at startup and says which extensions clash. Same
+ * the other extension's command. Epi refuses that at startup and says which extensions clash. Same
  * rule for every extension, built-in or not (docs/architecture.md §3.5).
  */
 function duplicateCommandDiagnostics(services, assembly) {
@@ -257,7 +257,7 @@ function duplicateCommandDiagnostics(services, assembly) {
         return {
             type: "error",
             message: `The command "/${name}" is registered by more than one extension: ${paths.join(", ")}. ` +
-                `Rename it in one of them, or remove one from the Manifest that declares it ("mmp list" shows which).${turnOff}`,
+                `Rename it in one of them, or remove one from the Manifest that declares it ("epi list" shows which).${turnOff}`,
         };
     });
 }
@@ -364,14 +364,14 @@ function toolOptions(parsed) {
         ...(noTools === undefined ? {} : { noTools }),
     };
 }
-export async function createMmpRuntime(options) {
+export async function createEpiRuntime(options) {
     process.env.PI_CODING_AGENT_DIR = options.agentDir;
     const parsed = parseArgs([...options.piArgs]);
     validateSupportedPiArgs(parsed);
     validateSessionFlagCombinations(parsed);
     // Non-fatal parse diagnostics (e.g. an invalid --thinking level falls back to the default
     // instead of erroring); Pi's own CLI prints these too instead of dropping them.
-    const warn = options.warn ?? ((message) => void process.stderr.write(`mmp: ${message}\n`));
+    const warn = options.warn ?? ((message) => void process.stderr.write(`epi: ${message}\n`));
     for (const diagnostic of parsed.diagnostics) {
         warn(diagnostic.message);
     }
@@ -381,7 +381,7 @@ export async function createMmpRuntime(options) {
         process.env.PI_OFFLINE = "1";
     }
     if (parsed.name !== undefined && parsed.name.trim() === "") {
-        throw new MmpArgumentError("--name requires a non-empty value");
+        throw new EpiArgumentError("--name requires a non-empty value");
     }
     const startupSettingsManager = createSettingsManager(options.cwd, options.agentDir);
     configureHttpAtStartup(startupSettingsManager);
@@ -429,7 +429,7 @@ export async function createMmpRuntime(options) {
         }
         // Warnings/info used to go straight to stderr here, which runs on every /new and /resume, not
         // just startup -- after the TUI's alt screen is up, that writes raw over the fullscreen UI. Pi
-        // shows startup diagnostics in the transcript instead (interactive-mode.js ~817); MMP's `bind()`
+        // shows startup diagnostics in the transcript instead (interactive-mode.js ~817); Epi's `bind()`
         // does the same with `runtime.diagnostics`, so nothing is dropped, it just isn't printed here.
         // Error diagnostics are fatal only for the initial runtime, like Pi: its factory never throws for
         // them, and main.js exits on them after the first createAgentSessionRuntime only (~737-746).
@@ -480,10 +480,10 @@ export async function createMmpRuntime(options) {
     }
     // Pi prompts to continue in the launch cwd when a stored session's cwd is missing (main.js
     // ~541-554's getMissingSessionCwdIssue/promptForMissingSessionCwd), before the TUI exists to
-    // prompt in. MMP fails fast here instead, pre-TUI, naming the fix Pi's own prompt offers.
+    // prompt in. Epi fails fast here instead, pre-TUI, naming the fix Pi's own prompt offers.
     const sessionCwd = sessionManager.getCwd();
     if (sessionManager.getSessionFile() !== undefined && !existsSync(sessionCwd)) {
-        throw new MmpArgumentError(`Session working directory does not exist: ${sessionCwd}\n` +
+        throw new EpiArgumentError(`Session working directory does not exist: ${sessionCwd}\n` +
             `Current working directory: ${options.cwd}\n` +
             `Use --fork instead of --session/--continue/--session-id to copy it into the current directory.`);
     }

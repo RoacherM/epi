@@ -17,7 +17,7 @@ import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { randomUUID } from "node:crypto";
 
-import { MmpConfigError } from "./errors.js";
+import { EpiConfigError } from "./errors.js";
 import type { TaskAgentDefinition } from "./task-agents.js";
 
 export type TaskJobStatus =
@@ -162,10 +162,10 @@ export class TaskRuntime {
     this.maxOutputBytes = options.maxOutputBytes ?? 64 * 1024;
     this.killGraceMs = options.killGraceMs ?? 2_000;
     if (this.maxConcurrency <= 0 || !Number.isInteger(this.maxConcurrency)) {
-      throw new MmpConfigError("task maxConcurrency must be a positive integer");
+      throw new EpiConfigError("task maxConcurrency must be a positive integer");
     }
     if (this.maxOutputBytes <= 0 || !Number.isInteger(this.maxOutputBytes)) {
-      throw new MmpConfigError("task maxOutputBytes must be a positive integer");
+      throw new EpiConfigError("task maxOutputBytes must be a positive integer");
     }
   }
 

@@ -1,5 +1,5 @@
 // Pi interface inventory (docs/pi-upgrade-design.md 3, "Pi 接口清单"): statically collects every
-// name MMP imports from Pi's three pinned packages and asserts each still exists in the installed
+// name Epi imports from Pi's three pinned packages and asserts each still exists in the installed
 // package. A Pi upgrade that deletes or renames one of these (as 0.84 did to pi-ai's `complete`)
 // fails here with the exact symbol and the file that imports it, instead of surfacing as a build
 // error or a runtime crash somewhere else.
@@ -50,7 +50,7 @@ function namedExportReExports(file, pkg, exportClause, declarationTypeOnly) {
   return results;
 }
 
-/** Every name MMP statically imports from, or re-exports from, one of PACKAGES:
+/** Every name Epi statically imports from, or re-exports from, one of PACKAGES:
  * `{ file, pkg, name, typeOnly }`. Handles `import { X } from pkg` and `export { X } from pkg`
  * (including their `type`-only forms) identically -- both are checked against the installed
  * package the same way. A namespace form (`import * as ns from pkg`, `export * from pkg`) has no
@@ -134,7 +134,7 @@ function typeExportNames(pkg) {
   return new Set(checker.getExportsOfModule(moduleSymbol).map((symbol) => symbol.name));
 }
 
-test("every name MMP imports from Pi's three pinned packages exists in the installed package", async () => {
+test("every name Epi imports from Pi's three pinned packages exists in the installed package", async () => {
   const imports = collectImports();
   assert.ok(imports.length > 50, `expected many Pi imports across src/, found ${imports.length} -- collectImports() likely broke`);
 

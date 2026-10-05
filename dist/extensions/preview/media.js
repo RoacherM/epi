@@ -38,8 +38,8 @@ function spawnErrorText(command, error) {
         ? `${command} not found: install ffmpeg to view video`
         : errorText(error);
 }
-/** Every media child still running. They are killed when MMP exits, whatever the overlay was
- * doing: ffplay has no pipe to MMP and would otherwise go on playing sound. */
+/** Every media child still running. They are killed when Epi exits, whatever the overlay was
+ * doing: ffplay has no pipe to Epi and would otherwise go on playing sound. */
 const liveChildren = new Set();
 let exitHookInstalled = false;
 function track(child) {
@@ -105,7 +105,7 @@ export async function probe(path) {
 }
 /** Quick Look thumbnail as PNG bytes for formats the terminal cannot draw directly (PDF/HEIC/etc.). */
 async function quickLookPng(path) {
-    const dir = mkdtempSync(join(tmpdir(), "mmp-preview-"));
+    const dir = mkdtempSync(join(tmpdir(), "epi-preview-"));
     try {
         await run("qlmanage", ["-t", "-s", "1024", "-o", dir, path]);
         return readFileSync(join(dir, `${basename(path)}.png`));

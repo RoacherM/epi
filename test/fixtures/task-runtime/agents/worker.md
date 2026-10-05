@@ -1,6 +1,6 @@
 ---
 name: worker
-description: Returns a deterministic token for MMP Task acceptance.
+description: Returns a deterministic token for Epi Task acceptance.
 model: openai/gpt-4o-mini
 tools: read
 timeoutSeconds: 60

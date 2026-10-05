@@ -6,7 +6,7 @@ import sys
 from PIL import Image, ImageDraw, ImageFont
 
 data = json.load(sys.stdin)
-font_dir = Path(os.environ.get("MMP_SCREENSHOT_FONT_DIR", "/usr/share/fonts/truetype/dejavu"))
+font_dir = Path(os.environ.get("EPI_SCREENSHOT_FONT_DIR", "/usr/share/fonts/truetype/dejavu"))
 fonts = {
     (False, False): "DejaVuSansMono.ttf",
     (True, False): "DejaVuSansMono-Bold.ttf",

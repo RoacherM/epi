@@ -1,4 +1,4 @@
-# SoL-Pi 调研与 MMP 借鉴方案
+# SoL-Pi 调研与 Epi 借鉴方案
 
 日期：2026-09-14。调研对象：NVlabs/SoL-Pi，commit d7ecfc0（2026-09-11）。
 下文引用的源码路径都相对于 SoL-Pi 仓库根目录；Pi 源码路径相对于 npm 包 `@earendil-works/pi-coding-agent` 解包后的目录。
@@ -105,9 +105,9 @@ cacheWriteReadRatio 默认 12.5，对应 Anthropic 缓存写 1.25 倍、读 0.1 
 调用归约模型的路径：优先用 `context.modelRegistry.complete()`；当这个方法不存在时，退回 `getApiKeyAndHeaders()` 拿鉴权再直接调 pi-ai 的 complete。
 来源：provider.ts 第 115 到 145 行。
 
-## 3. 与 MMP 固定的 Pi 0.83.0 兼容性验证
+## 3. 与 Epi 固定的 Pi 0.83.0 兼容性验证
 
-MMP 固定依赖 `@earendil-works/pi-coding-agent@0.83.0`（package.json）。
+Epi 固定依赖 `@earendil-works/pi-coding-agent@0.83.0`（package.json）。
 我在临时目录里把 SoL-Pi 的开发依赖换成 0.83.0 后做了两件事。
 
 类型检查 `npx tsc --noEmit`：通过。
@@ -125,36 +125,36 @@ Action Fusion、ObservationPack、EPR 的全部用例在 0.83.0 上通过。
 
 两个原本未确认的点现已确认：
 第一，Pi 0.83.0 的 `--extension git:<host>/<owner>/<repo>` 会在启动时经 `resourceLoader` 交给 `packageManager.resolveExtensionSources()`，后者能解析 npm: 和 git: 两种来源（dist/core/resource-loader.js 第 276 行；dist/core/package-manager.js 第 1145 到 1165 行）。
-所以 MMP Manifest 里声明 git 来源在 0.83 上可用。
+所以 Epi Manifest 里声明 git 来源在 0.83 上可用。
 第二，`modelRegistry.complete()` 在 0.83.0 的 d.ts 里不存在，只有 `getApiKeyAndHeaders()`（dist/core/model-registry.d.ts 第 29 行）；0.84.2 才加了 `complete()`（第 33 行）。
 EPR 对此有回退路径，所以在 0.83.0 上也能跑。
 
-## 4. 对 MMP 的意义
+## 4. 对 Epi 的意义
 
-MMP 的定位是"确定性的 Pi 宿主"：一切来自 Manifest，未声明即不存在，Pi 自己拥有 Auto Compact，MMP 不做自定义 Compact 和自定义 TUI renderer（docs/development.md 第 3.1 节、第 3.4 节、非目标列表）。
+Epi 的定位是"确定性的 Pi 宿主"：一切来自 Manifest，未声明即不存在，Pi 自己拥有 Auto Compact，Epi 不做自定义 Compact 和自定义 TUI renderer（docs/development.md 第 3.1 节、第 3.4 节、非目标列表）。
 拿这条边界去对照四个机制：
 
 OCC 没有越界。它不替换 Pi 的压缩算法，只是决定"什么时候"调 `context.compact()`，压缩本身仍是 Pi 原生的。
-MMP 的 hooks 事件里已经有 `before_compact`，说明"压缩时机"本来就是 MMP 愿意暴露的面。
+Epi 的 hooks 事件里已经有 `before_compact`，说明"压缩时机"本来就是 Epi 愿意暴露的面。
 
 ObservationPack 和 Action Fusion 完全是本地逻辑，不多调模型，不碰会话文件，风险最低，收益最直接（ObservationPack 一项就占了三分之二的成本下降）。
 
-EPR 每次要多调一个模型，还依赖特定 provider，和 MMP 已有的 agents/*.md 模型档案是同一类需求。
+EPR 每次要多调一个模型，还依赖特定 provider，和 Epi 已有的 agents/*.md 模型档案是同一类需求。
 
 ## 5. 建议的落地路径
 
-第一步，先用而不写：在 `~/.mmp/mmp.json` 的 extensions 里加 `git:github.com/NVlabs/SoL-Pi`，配置放 `~/.mmp/pi/sol-pi.json`（因为 MMP 把 agentDir 设成 `~/.mmp/pi`，SoL-Pi 的 `getAgentDir()` 会读到这里）。
+第一步，先用而不写：在 `~/.epi/epi.json` 的 extensions 里加 `git:github.com/NVlabs/SoL-Pi`，配置放 `~/.epi/pi/sol-pi.json`（因为 Epi 把 agentDir 设成 `~/.epi/pi`，SoL-Pi 的 `getAgentDir()` 会读到这里）。
 先开 observationPack 和 actionFusion，用真实工作量感受一周。
-这一步不改 MMP 一行代码，随时可撤。
+这一步不改 Epi 一行代码，随时可撤。
 
-第二步，把 ObservationPack 和 Action Fusion 做成 MMP 内建扩展（形如 `mmp:observation-pack`、`mmp:action-fusion`），配置进 Manifest，沿用 MMP 的 fail-fast 校验和 dry-run 溯源输出。
-理由：这两个机制不涉及模型调用和压缩策略，最容易照 MMP 的口味重写，也最容易在 `--dry-run` 里说清楚"哪个工具被谁替换了"。
+第二步，把 ObservationPack 和 Action Fusion 做成 Epi 内建扩展（形如 `epi:observation-pack`、`epi:action-fusion`），配置进 Manifest，沿用 Epi 的 fail-fast 校验和 dry-run 溯源输出。
+理由：这两个机制不涉及模型调用和压缩策略，最容易照 Epi 的口味重写，也最容易在 `--dry-run` 里说清楚"哪个工具被谁替换了"。
 
 第三步，OCC。两条路选一条：把 Pi 升到 0.84.2 后直接采用 SoL-Pi 的 OCC；或者留在 0.83.0，接受每次压缩多一次请求，先定位那次多余调用的来源。
-我倾向前者，0.83.1 到 0.84.2 的 CHANGELOG 没有删除任何 MMP 在用的符号，升级成本可控。
-无论哪条路，OCC 的"计划工具"可以和 MMP 的 `mmp:task` 合并：任务节点完成本来就是 MMP 的一等事件，天然就是 OCC 需要的边界。
+我倾向前者，0.83.1 到 0.84.2 的 CHANGELOG 没有删除任何 Epi 在用的符号，升级成本可控。
+无论哪条路，OCC 的"计划工具"可以和 Epi 的 `epi:task` 合并：任务节点完成本来就是 Epi 的一等事件，天然就是 OCC 需要的边界。
 
-第四步，EPR 放最后。归约模型通过 MMP 的 agents/*.md 档案声明，而不是像 SoL-Pi 那样写死 provider 和 model，这样更符合"一切来自 Manifest"。
+第四步，EPR 放最后。归约模型通过 Epi 的 agents/*.md 档案声明，而不是像 SoL-Pi 那样写死 provider 和 model，这样更符合"一切来自 Manifest"。
 
 ## 6. 来源清单
 

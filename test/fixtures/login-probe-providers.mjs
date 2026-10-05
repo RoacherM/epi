@@ -5,7 +5,7 @@
 //   the app (Pi's showAmbientAuthDialog path).
 export default function (pi) {
   pi.registerProvider({
-    id: "mmp-device-probe",
+    id: "epi-device-probe",
     name: "Device Probe",
     auth: {
       oauth: {
@@ -24,7 +24,7 @@ export default function (pi) {
     getModels: () => [],
   });
   pi.registerProvider({
-    id: "mmp-ambient-probe",
+    id: "epi-ambient-probe",
     name: "Ambient Probe",
     auth: {
       apiKey: {

@@ -33,15 +33,15 @@ const worker = fileURLToPath(new URL("../dist/worker.js", import.meta.url));
 const signal = () => new AbortController().signal;
 
 function setup(t, baseUrl) {
-  const home = mkdtempSync(join(tmpdir(), "mmp-magpie-"));
+  const home = mkdtempSync(join(tmpdir(), "epi-magpie-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  const mmpHome = join(home, ".mmp");
-  mkdirSync(join(mmpHome, "pi"), { recursive: true });
+  const epiHome = join(home, ".epi");
+  mkdirSync(join(epiHome, "pi"), { recursive: true });
   return {
-    home, mmpHome,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: mmpHome, MMP_SKIP_VERSION_CHECK: "1", MMP_TEST_MAGPIE_URL: baseUrl },
+    home, epiHome,
+    env: { PATH: process.env.PATH, HOME: home, EPI_HOME: epiHome, EPI_SKIP_VERSION_CHECK: "1", EPI_TEST_MAGPIE_URL: baseUrl },
     otherProvider(url) {
-      writeFileSync(join(mmpHome, "pi", "models.json"), JSON.stringify({ providers: { other: { baseUrl: url + "/v1", api: "openai-completions", apiKey: "other", models: [{ id: "echo" }] } } }));
+      writeFileSync(join(epiHome, "pi", "models.json"), JSON.stringify({ providers: { other: { baseUrl: url + "/v1", api: "openai-completions", apiKey: "other", models: [{ id: "echo" }] } } }));
     },
   };
 }
@@ -352,13 +352,13 @@ test("a steer message after a tool call renames that request's tool IDs, so the 
   assert.deepEqual(ids(), ["toolu_1", "toolu_1"]);
   let seen;
   await models.streamSimple(claude, toolTurn("The secret word is BANANA."), { maxTokens: 64, onPayload: (payload) => { seen = payload; } }).result();
-  assert.deepEqual(ids(), ["mmp_toolu_1", "mmp_toolu_1"]);
-  assert.equal(seen.messages.at(-2).content[0].tool_use_id, "mmp_toolu_1", "the caller's onPayload sees the request that is sent");
+  assert.deepEqual(ids(), ["epi_toolu_1", "epi_toolu_1"]);
+  assert.equal(seen.messages.at(-2).content[0].tool_use_id, "epi_toolu_1", "the caller's onPayload sees the request that is sent");
   assert.match(JSON.stringify(server.state.requests.at(-1).body.messages.at(-1)), /BANANA/);
   await models.streamSimple(claude, toolTurn("Steer"), { maxTokens: 64, onPayload: (payload) => ({ ...payload, max_tokens: 7 }) }).result();
   assert.equal(server.state.requests.at(-1).body.max_tokens, 7, "a caller's replacement payload still wins");
   await models.streamSimple(codex, toolTurn("Steer"), { maxTokens: 64 }).result();
-  assert.doesNotMatch(JSON.stringify(server.state.requests.at(-1).body), /mmp_toolu/, "only the Messages protocol is touched");
+  assert.doesNotMatch(JSON.stringify(server.state.requests.at(-1).body), /epi_toolu/, "only the Messages protocol is touched");
   assert.equal(renameToolIdsAfterSteer({ messages: [{ role: "user", content: "hi" }] }), undefined);
 });
 
@@ -372,12 +372,12 @@ test("steer renaming keeps tool IDs within Anthropic's 64 characters and counts 
   ] });
   const renamed = renameToolIdsAfterSteer(payload({ type: "text", text: "steer" }));
   const [first, second] = renamed.messages[1].content.map((block) => block.id);
-  assert.ok(first.length <= 64 && first.startsWith("mmp_"), first);
+  assert.ok(first.length <= 64 && first.startsWith("epi_"), first);
   assert.equal(renamed.messages[2].content[0].tool_use_id, first);
-  assert.equal(second, "mmp_toolu_2");
+  assert.equal(second, "epi_toolu_2");
   assert.notEqual(renameToolIdsAfterSteer(payload({ type: "text", text: "steer" })).messages[1].content[0].id, renameToolIdsAfterSteer({ ...payload({ type: "text", text: "s" }), messages: payload({ type: "text", text: "s" }).messages.map((m) => JSON.parse(JSON.stringify(m).replaceAll(long, long.slice(0, -1) + "y"))) }).messages[1].content[0].id);
   const image = renameToolIdsAfterSteer(payload({ type: "image", source: { type: "base64", media_type: "image/png", data: "x" } }));
-  assert.equal(image.messages[1].content[1].id, "mmp_toolu_2");
+  assert.equal(image.messages[1].content[1].id, "epi_toolu_2");
 });
 
 test("image input, abort, malformed stream and context overflow retain Pi adapter semantics", async (t) => {
@@ -423,7 +423,7 @@ test("bundled provider works without any configuration; an unchanged catalog lea
   assert.match(listed.stdout, /magpie +claude\/claude-opus-test/);
   assert.match(listed.stdout, /magpie +codex\/gpt-test/);
   assert.equal(listed.stderr, "");
-  const storePath = join(fixture.mmpHome, "pi", "models-store.json");
+  const storePath = join(fixture.epiHome, "pi", "models-store.json");
   const saved = statSync(storePath).mtimeMs;
   for (const id of ["claude/claude-opus-test", "codex/gpt-test", "other/chat", "antigravity/gemini-3-flash"]) {
     const output = await cliRun(fixture, ["--provider", "magpie", "--model", id, ...printArgs]);
@@ -448,7 +448,7 @@ test("the saved default provider, scoped models and any provider casing all sele
   ];
   for (const { settings, args } of cases) {
     const fixture = setup(t, server.baseUrl);
-    if (settings) writeFileSync(join(fixture.mmpHome, "pi", "settings.json"), JSON.stringify(settings));
+    if (settings) writeFileSync(join(fixture.epiHome, "pi", "settings.json"), JSON.stringify(settings));
     server.state.requests.length = 0;
     const output = await cliRun(fixture, [...args, ...printArgs]);
     assert.equal(output.stdout.trim(), "MAGPIE_OK 你好", `${args.join(" ")}\n${output.stderr}`);
@@ -464,8 +464,8 @@ test("the saved Magpie default is picked even when Pi's registration refresh fin
   const slowRefresh = fileURLToPath(new URL("./fixtures/slow-registration-refresh.mjs", import.meta.url));
   for (const mode of [["-p", "hi"], ["--mode", "json", "hi"]]) {
     const fixture = setup(t, server.baseUrl);
-    writeFileSync(join(fixture.mmpHome, "mmp.json"), JSON.stringify({ version: 1, extensions: [slowRefresh] }));
-    writeFileSync(join(fixture.mmpHome, "pi", "settings.json"), JSON.stringify({ defaultProvider: "magpie", defaultModel: "claude/claude-opus-test" }));
+    writeFileSync(join(fixture.epiHome, "epi.json"), JSON.stringify({ version: 1, extensions: [slowRefresh] }));
+    writeFileSync(join(fixture.epiHome, "pi", "settings.json"), JSON.stringify({ defaultProvider: "magpie", defaultModel: "claude/claude-opus-test" }));
     const output = await cliRun(fixture, ["--thinking", "off", "--no-tools", "--no-session", ...mode]);
     assert.match(output.stdout, /MAGPIE_OK 你好/, output.stderr);
   }
@@ -480,15 +480,15 @@ test("--model without the magpie/ prefix finds a Magpie model on the first run",
   }
 });
 
-test("help, dry-run and offline (any MMP_OFFLINE value, like Pi) do not discover models", async (t) => {
+test("help, dry-run and offline (any EPI_OFFLINE value, like Pi) do not discover models", async (t) => {
   const server = await serverFor(t);
   const fixture = setup(t, server.baseUrl);
   await cliRun(fixture, ["--help"]);
   await cliRun(fixture, ["--dry-run"]);
   await cliRun(fixture, ["--list-models", "--offline"]);
-  await cliRun(fixture, ["--list-models"], { MMP_OFFLINE: "1" });
-  await cliRun(fixture, ["--list-models"], { MMP_OFFLINE: "true" });
-  await cliRun(fixture, ["--provider", "magpie", "--list-models"], { MMP_OFFLINE: "yes" });
+  await cliRun(fixture, ["--list-models"], { EPI_OFFLINE: "1" });
+  await cliRun(fixture, ["--list-models"], { EPI_OFFLINE: "true" });
+  await cliRun(fixture, ["--provider", "magpie", "--list-models"], { EPI_OFFLINE: "yes" });
   assert.equal(server.state.requests.length, 0);
 });
 
@@ -511,7 +511,7 @@ test("a gateway that is not running is silent, until the run fails to find the M
     return true;
   });
   // With a list saved by an earlier run the model is found, and the request reports the connection failure.
-  writeFileSync(join(fixture.mmpHome, "pi", "models-store.json"), JSON.stringify({
+  writeFileSync(join(fixture.epiHome, "pi", "models-store.json"), JSON.stringify({
     magpie: { models: parseMagpieModels({ data: magpieCatalog }, absent), checkedAt: Date.now(), etag: JSON.stringify([absent]) },
   }));
   await assert.rejects(cliRun(fixture, magpieArgs), (error) => {
@@ -529,7 +529,7 @@ test("a gateway that is not running is named when settings or a pattern select M
   const magpieDefault = { defaultProvider: "magpie", defaultModel: "claude/claude-opus-test" };
   const withSettings = (settings, other) => {
     const fixture = setup(t, absent);
-    writeFileSync(join(fixture.mmpHome, "pi", "settings.json"), JSON.stringify(settings));
+    writeFileSync(join(fixture.epiHome, "pi", "settings.json"), JSON.stringify(settings));
     if (other) fixture.otherProvider(server.baseUrl);
     return fixture;
   };
@@ -547,7 +547,7 @@ test("a gateway that is not running is named when settings or a pattern select M
   // The task worker, model from settings.
   const fixture = withSettings(magpieDefault, false);
   const capsulePath = join(fixture.home, "capsule.json");
-  writeFileSync(capsulePath, JSON.stringify({ version: 1, task: "hi", cwd: fixture.home, agentDir: join(fixture.mmpHome, "pi"), systemPrompt: "", tools: [] }));
+  writeFileSync(capsulePath, JSON.stringify({ version: 1, task: "hi", cwd: fixture.home, agentDir: join(fixture.epiHome, "pi"), systemPrompt: "", tools: [] }));
   // In the worker's reported error (what the task tool passes on), not only on stderr.
   await assert.rejects(
     run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000 }),
@@ -557,15 +557,15 @@ test("a gateway that is not running is named when settings or a pattern select M
 
 // The catalog saved at startup must not leave Pi's store needing its lock again: rpc refreshes in
 // the background, and a client that closes stdin early ended the process inside that read,
-// leaving models-store.json.lock for the next mmp to wait 30 s on.
+// leaving models-store.json.lock for the next epi to wait 30 s on.
 test("rpc on a first run leaves no lock file in the agent directory when the client closes stdin early", async (t) => {
   const server = await serverFor(t);
   const fauxEcho = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
   for (const delay of [0, 100, 250]) {
     const fixture = setup(t, server.baseUrl);
-    writeFileSync(join(fixture.mmpHome, "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
+    writeFileSync(join(fixture.epiHome, "epi.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
     await new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [cli, "--no-project", "--thinking", "off", "--no-tools", "--no-session", "--model", "mmp-faux/echo", "--mode", "rpc"], { cwd: fixture.home, env: fixture.env, stdio: ["pipe", "pipe", "pipe"] });
+      const child = spawn(process.execPath, [cli, "--no-project", "--thinking", "off", "--no-tools", "--no-session", "--model", "epi-faux/echo", "--mode", "rpc"], { cwd: fixture.home, env: fixture.env, stdio: ["pipe", "pipe", "pipe"] });
       const timer = setTimeout(() => child.kill("SIGKILL"), 25000);
       child.stdout.resume();
       child.stderr.resume();
@@ -573,7 +573,7 @@ test("rpc on a first run leaves no lock file in the agent directory when the cli
       child.on("error", reject);
       child.on("close", () => { clearTimeout(timer); resolve(); });
     });
-    const agentDir = join(fixture.mmpHome, "pi");
+    const agentDir = join(fixture.epiHome, "pi");
     assert.equal(existsSync(join(agentDir, "models-store.json")), true, `delay ${delay}: the catalog was not saved`);
     assert.deepEqual(readdirSync(agentDir).filter((file) => file.includes(".lock")), [], `stdin closed after ${delay} ms`);
   }
@@ -599,7 +599,7 @@ test("catalog failure is visible, retains saved models, and doesn't break anothe
 test("a /login API key is used for discovery and inference; --api-key replaces it for inference", async (t) => {
   const server = await serverFor(t);
   const fixture = setup(t, server.baseUrl);
-  writeFileSync(join(fixture.mmpHome, "pi", "auth.json"), JSON.stringify({ magpie: { type: "api_key", key: "stored-key" } }));
+  writeFileSync(join(fixture.epiHome, "pi", "auth.json"), JSON.stringify({ magpie: { type: "api_key", key: "stored-key" } }));
   for (const key of ["stored-key", "runtime-key"]) {
     const extra = key === "runtime-key" ? ["--api-key", key] : [];
     await cliRun(fixture, ["--provider", "magpie", "--model", "claude/claude-opus-test", ...printArgs, ...extra]);
@@ -611,7 +611,7 @@ test("a /login API key is used for discovery and inference; --api-key replaces i
     assert.ok(inference.length >= 1);
     for (const request of inference) assert.equal(request.headers["x-api-key"], key);
   }
-  const store = readFileSync(join(fixture.mmpHome, "pi", "models-store.json"), "utf8");
+  const store = readFileSync(join(fixture.epiHome, "pi", "models-store.json"), "utf8");
   assert.doesNotMatch(store, /stored-key|runtime-key/);
 });
 
@@ -620,7 +620,7 @@ test("isolated Task worker calls Magpie, and refreshes the catalog like every ot
   const fixture = setup(t, server.baseUrl);
   const runWorker = async (model) => {
     const capsulePath = join(fixture.home, "capsule.json");
-    writeFileSync(capsulePath, JSON.stringify({ version: 1, task: "hi", cwd: fixture.home, agentDir: join(fixture.mmpHome, "pi"), systemPrompt: "Be concise.", model, tools: [] }));
+    writeFileSync(capsulePath, JSON.stringify({ version: 1, task: "hi", cwd: fixture.home, agentDir: join(fixture.epiHome, "pi"), systemPrompt: "Be concise.", model, tools: [] }));
     const output = await run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000 });
     const events = output.stdout.trim().split("\n").map((line) => JSON.parse(line));
     assert.equal(events.at(-1).ok, true, output.stdout + output.stderr);

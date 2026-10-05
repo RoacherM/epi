@@ -1,4 +1,4 @@
-// Test seam: MMP_TEST_CLIPBOARD_FILE swaps the system clipboard for a plain file, so tests never
+// Test seam: EPI_TEST_CLIPBOARD_FILE swaps the system clipboard for a plain file, so tests never
 // read or write the developer's real clipboard. Used only by /copy (session-commands.ts) and
 // Ctrl+V (key-handlers.ts); set only by test/tui-commands-session.test.mjs,
 // test/tui-keys-actions.test.mjs and test/tui-paste-chips.test.mjs.
@@ -15,7 +15,7 @@ const { detectSupportedImageMimeType } = (await import(pathToFileURL(join(piDist
 };
 
 function testFile(): string | undefined {
-  return process.env.MMP_TEST_CLIPBOARD_FILE;
+  return process.env.EPI_TEST_CLIPBOARD_FILE;
 }
 
 /** `/copy` and the `app.message.copy` key: write text to the clipboard (or the test file). */

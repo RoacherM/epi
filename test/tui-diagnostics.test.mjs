@@ -1,4 +1,4 @@
-// Bug 6 (docs/tui-design.md §15): createMmpRuntime's runtime factory (src/tui/services.ts) wrote
+// Bug 6 (docs/tui-design.md §15): createEpiRuntime's runtime factory (src/tui/services.ts) wrote
 // non-fatal diagnostics (e.g. a --models pattern that matches nothing) straight to stderr, inside
 // the same factory /new and /resume re-invoke -- so on those, the warning landed raw inside the
 // fullscreen alt-screen UI instead of the transcript, and `runtime.diagnostics` was otherwise never
@@ -19,19 +19,19 @@ const harnessPath = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.m
 const fauxEcho = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
 
 function runHarness(t, args, steps) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-diagnostics-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-diagnostics-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fauxEcho] }));
   const result = spawnSync(process.execPath, [harnessPath], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ args, steps }),
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ args, steps }),
     },
     encoding: "utf8",
     timeout: 60_000,
@@ -67,26 +67,26 @@ test("a --models scope warning also shows in the transcript on /new, not on stde
   assert.doesNotMatch(stderr, /No models match pattern/);
 });
 
-// The startup error lists diagnostics in Pi's order (createMmpRuntime's factory in services.ts):
+// The startup error lists diagnostics in Pi's order (createEpiRuntime's factory in services.ts):
 // createAgentSessionServices' own, then extension load failures, then the model diagnostics from
 // --provider/--model, then --api-key's, and last the hint for the failed extension. One input
 // that trips all four, so a reordering shows up as a different first line.
 test("the TUI startup error lists services, extension and model diagnostics in that order, then the hint", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-diagnostics-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-diagnostics-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
   const broken = join(root, "broken-extension.mjs");
   writeFileSync(broken, "throw new Error(\"broken-extension-marker\");\n");
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEcho, broken] }));
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fauxEcho, broken] }));
   const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
   const fakeTty = fileURLToPath(new URL("./fixtures/fake-tty.mjs", import.meta.url));
   const result = spawnSync(
     process.execPath,
-    ["--import", fakeTty, cli, "--no-project", "--bogus-flag", "--provider", "mmp-faux", "--api-key", "k"],
+    ["--import", fakeTty, cli, "--no-project", "--bogus-flag", "--provider", "epi-faux", "--api-key", "k"],
     {
       cwd: root,
-      env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" },
+      env: { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1" },
       input: "",
       encoding: "utf8",
       timeout: 60_000,
@@ -95,9 +95,9 @@ test("the TUI startup error lists services, extension and model diagnostics in t
   assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
   const lines = result.stderr.trimEnd().split("\n");
   const expected = [
-    /^mmp: Unknown option: --bogus-flag$/,
+    /^epi: Unknown option: --bogus-flag$/,
     /^Failed to load extension "[^"]*broken-extension\.mjs": .*broken-extension-marker$/,
-    /^--provider requires --model \(for example: --provider mmp-faux --model <pattern>\)$/,
+    /^--provider requires --model \(for example: --provider epi-faux --model <pattern>\)$/,
     /^--api-key requires a model to be specified via --model, --provider\/--model, or --models$/,
   ];
   assert.equal(lines.length, expected.length + 1, result.stderr);

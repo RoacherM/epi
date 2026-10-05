@@ -2,12 +2,12 @@ import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { ChangeLedger } from "./preview/ledger.js";
-/** The extension's own version, apart from MMP's (docs/architecture.md: built-in extensions are
+/** The extension's own version, apart from Epi's (docs/architecture.md: built-in extensions are
  * versioned on their own; the change log is in docs/guide/preview.md, the tags are preview-v*). */
 export const PREVIEW_VERSION = "0.3.0";
 /** The pi.events channel other extensions ask for the video player on (docs/preview-design.md §5.2):
  * they emit `{}` and find `player` filled in when emit returns. */
-export const PREVIEW_PLAYER_CHANNEL = "mmp/preview/player/v1";
+export const PREVIEW_PLAYER_CHANNEL = "epi/preview/player/v1";
 /** What createPane rejects: an empty video, or a line break in a header, which would split ffmpeg's
  * `-headers` value into other headers. */
 function checkPaneSource(source) {
@@ -21,7 +21,7 @@ function checkPaneSource(source) {
 }
 /**
  * `/preview [path]`: the page for seeing what the agent changed, and any other file, without
- * leaving MMP (docs/preview-design.md): the agent's changes with their diffs, and a three-pane file
+ * leaving Epi (docs/preview-design.md): the agent's changes with their diffs, and a three-pane file
  * browser with a viewer for text, Markdown, binaries, images and video. A bundled interface feature
  * for the interactive TUI, not a Manifest capability: it registers one command and event handlers,
  * and nothing the model sees. The page (pi-tui components, ffmpeg handling) loads on first use.
@@ -32,7 +32,7 @@ function fileReference(path) {
 }
 export function createPreviewInlineExtension() {
     return {
-        name: "mmp:preview",
+        name: "epi:preview",
         factory: (pi) => {
             // One ledger per session: the factory runs again for /new, /resume, /fork and /reload.
             const ledger = new ChangeLedger();

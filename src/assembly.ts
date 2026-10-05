@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-import { MmpConfigError } from "./errors.js";
+import { EpiConfigError } from "./errors.js";
 import {
   BUILT_IN_EXTENSION_NAMES,
   resolveManifest,
@@ -19,9 +19,9 @@ import { discoverSkillRoots } from "./skill-discovery.js";
 export interface ResolveAssemblyOptions {
   agentDir: string;
   globalManifestPath: string;
-  /** MMP's own home (parent of `pi/` and `mmp.json`); `<mmpHome>/skills` is one of the three fixed
+  /** Epi's own home (parent of `pi/` and `epi.json`); `<epiHome>/skills` is one of the three fixed
    * auto-discovery roots (docs/decisions.md S1). */
-  mmpHome: string;
+  epiHome: string;
   cwd: string;
   noProject: boolean;
   projectTrustOverride: boolean | undefined;
@@ -85,10 +85,10 @@ function loadRulesText(rules: readonly ResolvedResource[]): string {
       return readFileSync(rule.value, "utf8");
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      throw new MmpConfigError(`failed to read rule ${rule.value}: ${detail}`);
+      throw new EpiConfigError(`failed to read rule ${rule.value}: ${detail}`);
     }
   });
-  return `# MMP Rules\n\n${contents.join("\n\n")}`;
+  return `# Epi Rules\n\n${contents.join("\n\n")}`;
 }
 
 export function resolveAssembly(
@@ -112,7 +112,7 @@ export function resolveAssembly(
   );
   const discoveredSkills = discoverSkillRoots({
     environment: options.environment,
-    mmpHome: options.mmpHome,
+    epiHome: options.epiHome,
     agentDir: options.agentDir,
     trustedProjectRoot: project.discovery === "loaded" ? project.state?.root : undefined,
   });

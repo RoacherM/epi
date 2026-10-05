@@ -1,11 +1,11 @@
-// `mmp auth print-api-key|print-bearer-token|check` (docs/cli-design.md §3), mirroring Pi's own
+// `epi auth print-api-key|print-bearer-token|check` (docs/cli-design.md §3), mirroring Pi's own
 // `runAuthCommand`/`resolveCredentialForPrint`/`checkProviderAuth` (dist/main.js,
 // dist/cli/credential-print.js, dist/cli/auth-check.js -- none of the three are exported) using
-// only ModelRuntime and resolveCliModel, which are. Credentials are read from MMP's own agent
+// only ModelRuntime and resolveCliModel, which are. Credentials are read from Epi's own agent
 // directory: host.ts sets PI_CODING_AGENT_DIR before this runs, so ModelRuntime's default auth/
-// models paths already resolve under `~/.mmp/pi`, never `~/.pi/agent`.
+// models paths already resolve under `~/.epi/pi`, never `~/.pi/agent`.
 import { ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
-import { MmpArgumentError } from "../errors.js";
+import { EpiArgumentError } from "../errors.js";
 const AUTH_KINDS = ["print-api-key", "print-bearer-token", "check"];
 const DURATION_UNIT_MS = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 };
 /** Mirrors Pi's getAuthCredential (dist/cli/auth-command.js, not exported): an API key credential
@@ -18,9 +18,9 @@ function extractCredential(auth) {
 }
 function renderAuthHelp() {
     return `Usage:
-  mmp auth print-api-key --provider <provider> [--model <model>]
-  mmp auth print-bearer-token --provider <provider> [--model <model>] [--min-expiry <duration>]
-  mmp auth check --provider <provider> [--model <model>] [--json] [--credentials] [--no-refresh]
+  epi auth print-api-key --provider <provider> [--model <model>]
+  epi auth print-bearer-token --provider <provider> [--model <model>] [--min-expiry <duration>]
+  epi auth check --provider <provider> [--model <model>] [--json] [--credentials] [--no-refresh]
 
 Auth commands require at least one of --provider or --model. Checks refresh expired OAuth
 credentials by default; --no-refresh prevents this. --credentials emits the credential, or
@@ -31,7 +31,7 @@ includes it in JSON output.
 function parseMinExpiry(value) {
     const match = value ? /^(\d+)(ms|s|m|h)$/i.exec(value) : undefined;
     if (!match) {
-        throw new MmpArgumentError("--min-expiry must use a duration such as 30m or 1h");
+        throw new EpiArgumentError("--min-expiry must use a duration such as 30m or 1h");
     }
     return Number(match[1]) * DURATION_UNIT_MS[match[2].toLowerCase()];
 }
@@ -39,7 +39,7 @@ function parseAuthArgv(argv) {
     const commandToken = argv[0];
     const kind = AUTH_KINDS.find((candidate) => candidate === commandToken);
     if (kind === undefined) {
-        throw new MmpArgumentError(`Unknown auth command ${JSON.stringify(commandToken ?? "")}. Use "mmp auth print-api-key", "mmp auth print-bearer-token", or "mmp auth check".`);
+        throw new EpiArgumentError(`Unknown auth command ${JSON.stringify(commandToken ?? "")}. Use "epi auth print-api-key", "epi auth print-bearer-token", or "epi auth check".`);
     }
     let provider;
     let model;
@@ -59,14 +59,14 @@ function parseAuthArgv(argv) {
         }
         if (argument === "--min-expiry") {
             if (kind !== "print-bearer-token") {
-                throw new MmpArgumentError("--min-expiry is only supported by print-bearer-token");
+                throw new EpiArgumentError("--min-expiry is only supported by print-bearer-token");
             }
             minExpiryMs = parseMinExpiry(argv[++index]);
             continue;
         }
         if (argument === "--json" || argument === "--credentials" || argument === "--no-refresh") {
             if (kind !== "check") {
-                throw new MmpArgumentError(`${argument} is only supported by auth check`);
+                throw new EpiArgumentError(`${argument} is only supported by auth check`);
             }
             if (argument === "--json")
                 json = true;
@@ -76,10 +76,10 @@ function parseAuthArgv(argv) {
                 noRefresh = true;
             continue;
         }
-        throw new MmpArgumentError(`Unknown option ${argument} for mmp auth ${commandToken}`);
+        throw new EpiArgumentError(`Unknown option ${argument} for epi auth ${commandToken}`);
     }
     if (!provider && !model) {
-        throw new MmpArgumentError(`mmp auth ${commandToken} requires --provider <provider> or --model <model>`);
+        throw new EpiArgumentError(`epi auth ${commandToken} requires --provider <provider> or --model <model>`);
     }
     return {
         kind,
@@ -102,12 +102,12 @@ async function resolvePrintCredential(args, modelRuntime, signal) {
     if (args.provider) {
         const provider = modelRuntime.getProvider(args.provider);
         if (!provider) {
-            throw new MmpArgumentError(`Unknown provider "${args.provider}". Use --list-models to see available providers.`);
+            throw new EpiArgumentError(`Unknown provider "${args.provider}". Use --list-models to see available providers.`);
         }
         if (args.model) {
             const resolved = resolveCliModel({ cliProvider: provider.id, cliModel: args.model, modelRuntime });
             if (resolved.error || !resolved.model) {
-                throw new MmpArgumentError(resolved.error ?? "Unable to resolve the requested provider/model");
+                throw new EpiArgumentError(resolved.error ?? "Unable to resolve the requested provider/model");
             }
             providers.push({ id: provider.id, model: resolved.model });
         }
@@ -125,7 +125,7 @@ async function resolvePrintCredential(args, modelRuntime, signal) {
             }
         }
         if (providers.length === 0) {
-            throw new MmpArgumentError(`Model "${args.model}" not found. Use --list-models to see available models.`);
+            throw new EpiArgumentError(`Model "${args.model}" not found. Use --list-models to see available models.`);
         }
     }
     const credentials = [];
@@ -152,14 +152,14 @@ async function resolvePrintCredential(args, modelRuntime, signal) {
         const providerId = providers[0]?.id;
         const type = providerId ? credentialTypes.get(providerId) : undefined;
         if (args.provider && kind === "api_key" && type === "oauth") {
-            throw new MmpArgumentError(`Provider "${providerId}" is configured with OAuth, not an API key`);
+            throw new EpiArgumentError(`Provider "${providerId}" is configured with OAuth, not an API key`);
         }
         if (args.provider && kind === "bearer_token" && type !== "oauth") {
-            throw new MmpArgumentError(`Provider "${providerId}" is not configured with an OAuth bearer token`);
+            throw new EpiArgumentError(`Provider "${providerId}" is not configured with an OAuth bearer token`);
         }
-        throw new MmpArgumentError(`No usable ${kind === "api_key" ? "API key" : "OAuth bearer token"} is configured`);
+        throw new EpiArgumentError(`No usable ${kind === "api_key" ? "API key" : "OAuth bearer token"} is configured`);
     }
-    throw new MmpArgumentError(`Multiple configured providers matched (${credentials.map(({ providerId }) => providerId).join(", ")}). Specify --provider.`);
+    throw new EpiArgumentError(`Multiple configured providers matched (${credentials.map(({ providerId }) => providerId).join(", ")}). Specify --provider.`);
 }
 /** Mirrors Pi's checkProviderAuth (dist/cli/auth-check.js). */
 async function checkProviderAuth(args, modelRuntime, refresh) {
@@ -167,12 +167,12 @@ async function checkProviderAuth(args, modelRuntime, refresh) {
     if (args.model) {
         const resolved = resolveCliModel({ ...(args.provider === undefined ? {} : { cliProvider: args.provider }), cliModel: args.model, modelRuntime });
         if (resolved.error || !resolved.model) {
-            throw new MmpArgumentError(resolved.error ?? `Unable to resolve model "${args.model}"`);
+            throw new EpiArgumentError(resolved.error ?? `Unable to resolve model "${args.model}"`);
         }
         provider = resolved.model.provider;
     }
     if (!provider) {
-        throw new MmpArgumentError("Unable to resolve an auth provider");
+        throw new EpiArgumentError("Unable to resolve an auth provider");
     }
     if (modelRuntime.getError()) {
         return { status: "invalid", provider, reason: "invalid_state" };

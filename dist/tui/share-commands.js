@@ -3,19 +3,19 @@
 // /share mirrors Pi's shareSession (modes/interactive/session-share.js, not exported): same
 // cancelable-`gh gist create` flow and the same external requirement (a logged-in `gh`), built
 // from BorderedLoader (exported) and the public `session.exportToHtml`. Deviations: no Radius
-// upload (Pi's own hosted service; MMP has no Radius identity to share through) and a plain gist
+// upload (Pi's own hosted service; Epi has no Radius identity to share through) and a plain gist
 // URL instead of Pi's `getShareViewerUrl` preview page (internal, not exported).
 //
 // /bug and /changelog are NOT Pi's (docs/tui-design.md 4.6 P1 note): Pi's `/bug` uploads to the Pi
 // developers and `/changelog` reads Pi's own bundled changelog file, neither of which is right for
-// MMP. Both instead use MMP's own GitHub repo, the same one src/update.ts already names.
+// Epi. Both instead use Epi's own GitHub repo, the same one src/update.ts already names.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BorderedLoader, VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
-import { MMP_VERSION } from "../version.js";
-import { MMP_REPO } from "../update.js";
+import { EPI_VERSION } from "../version.js";
+import { EPI_REPO } from "../update.js";
 import { confirmInEditorSlot, editInEditorSlot } from "./dialogs.js";
 import { errorText } from "./errors.js";
 import { piTui } from "./pi-tui.js";
@@ -24,7 +24,7 @@ import { piTui } from "./pi-tui.js";
  * there is no confirmation dialog -- only the loader's own Esc-to-cancel, which is what Pi calls
  * its "consent/cancel flow" for share (session-share.js has no confirm() call either). */
 export async function runShare(host) {
-    const tempDir = mkdtempSync(join(tmpdir(), "mmp-share-"));
+    const tempDir = mkdtempSync(join(tmpdir(), "epi-share-"));
     const htmlFile = join(tempDir, "session.html");
     try {
         try {
@@ -89,7 +89,7 @@ async function shareViaGist(host, filePath) {
 }
 // ── /bug ────────────────────────────────────────────────────────────────────
 /** Best-effort: the URL is always printed first, so a failed or unavailable opener loses nothing.
- * Gated on PI_OFFLINE (set from MMP_OFFLINE, which the whole test suite sets, or by --offline;
+ * Gated on PI_OFFLINE (set from EPI_OFFLINE, which the whole test suite sets, or by --offline;
  * src/pi-env.ts) so tests never pop a real
  * browser tab; `.on("error", ...)` swallows a missing `open`/`xdg-open`/`start` instead of letting
  * an unhandled child 'error' event hit app.ts's uncaughtException handler. */
@@ -107,7 +107,7 @@ function openInBrowser(url) {
 }
 export const MAX_ISSUE_URL_LENGTH = 8_000;
 function issueUrl(title, body) {
-    return `https://github.com/${MMP_REPO}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
+    return `https://github.com/${EPI_REPO}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
 }
 /** Cuts the body (never the title) until the whole URL fits `MAX_ISSUE_URL_LENGTH`, noting the cut
  * so the reporter knows the issue page doesn't have everything that was written. Exported for
@@ -124,11 +124,11 @@ export function fitIssueBody(title, body) {
     return `${cut}${note}`;
 }
 /** `/bug [description]`: consent, optional description, optional model-written summary, then a
- * prefilled "new issue" URL on MMP's own GitHub repo -- never Pi's upload. The URL is always
+ * prefilled "new issue" URL on Epi's own GitHub repo -- never Pi's upload. The URL is always
  * printed (it's the actual deliverable in a headless run); opening a browser is best-effort. */
 export async function runBug(host, args) {
-    const consent = await confirmInEditorSlot(host, "Report a bug", "Opens a prefilled GitHub 'new issue' page on MMP's repo. The URL itself carries your " +
-        "description, the MMP and pinned Pi versions, and, if you choose, a short summary of this " +
+    const consent = await confirmInEditorSlot(host, "Report a bug", "Opens a prefilled GitHub 'new issue' page on Epi's repo. The URL itself carries your " +
+        "description, the Epi and pinned Pi versions, and, if you choose, a short summary of this " +
         "session written by the current model -- that's everything the browser (and your OS) sees the " +
         "moment it opens, whether or not you go on to submit it. GitHub itself only gets it if you " +
         "review the page and click Submit.\n\nContinue?");
@@ -168,7 +168,7 @@ export async function runBug(host, args) {
     const title = hint === "" ? "Bug report" : hint.slice(0, 80);
     const sections = [
         hint === "" ? undefined : `## Description\n\n${hint}`,
-        `## Versions\n\n- mmp: ${MMP_VERSION}\n- pi (pinned): ${PI_VERSION}`,
+        `## Versions\n\n- epi: ${EPI_VERSION}\n- pi (pinned): ${PI_VERSION}`,
         summary === undefined ? undefined : `## Session summary\n\n${summary}`,
     ].filter((section) => section !== undefined);
     const body = fitIssueBody(title, sections.join("\n\n"));
@@ -179,7 +179,7 @@ export async function runBug(host, args) {
 /** Pure and unit-testable without a subprocess, like src/update.ts's own fetch functions
  * (test/update.test.mjs): takes an injectable `fetch` instead of adding a new env-var seam. */
 export async function fetchReleaseNotes(fetchImpl = fetch) {
-    const response = await fetchImpl(`https://api.github.com/repos/${MMP_REPO}/releases`, {
+    const response = await fetchImpl(`https://api.github.com/repos/${EPI_REPO}/releases`, {
         signal: AbortSignal.timeout(5_000),
         headers: { accept: "application/vnd.github+json" },
     });
@@ -193,10 +193,10 @@ export async function fetchReleaseNotes(fetchImpl = fetch) {
         body: typeof release.body === "string" && release.body.trim() !== "" ? release.body : "(no notes)",
     }));
 }
-/** `/changelog`: MMP's own GitHub releases (not Pi's bundled changelog file). */
+/** `/changelog`: Epi's own GitHub releases (not Pi's bundled changelog file). */
 export async function runChangelog(host) {
     if (process.env.PI_OFFLINE !== undefined) {
-        host.notice("Offline: can't reach GitHub for the changelog. Run mmp update to check for a new release once online.", "warning");
+        host.notice("Offline: can't reach GitHub for the changelog. Run epi update to check for a new release once online.", "warning");
         return;
     }
     let releases;

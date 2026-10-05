@@ -66,7 +66,7 @@ function jobResult(job) {
     };
 }
 // -----------------------------------------------------------------------------
-// grok-style renderers (docs/tui-design.md 4.2). Without these, MMP's generic tool-block
+// grok-style renderers (docs/tui-design.md 4.2). Without these, Epi's generic tool-block
 // fallback (src/tui/tools/block.ts) prints the raw JSON from jobResult()/todo's result text.
 // -----------------------------------------------------------------------------
 /** A minimal Component: these renderers don't need width-aware wrapping or reuse. */
@@ -132,18 +132,18 @@ function renderTodoResult(result, options, theme) {
 }
 export function createTaskInlineExtension(options) {
     const agents = loadTaskAgents({
-        globalAgentsDir: join(options.mmpHome, "agents"),
+        globalAgentsDir: join(options.epiHome, "agents"),
         projectAgentsDir: options.projectAgentsDir,
     });
     const workerPath = options.workerPath ?? fileURLToPath(new URL("../worker.js", import.meta.url));
     return {
-        name: "mmp:task",
+        name: "epi:task",
         factory(pi) {
             const runtime = new TaskRuntime({
                 workerPath,
                 agentDir: options.agentDir,
-                capsuleRoot: join(options.mmpHome, "runtime", "task"),
-                artifactRoot: join(options.mmpHome, "artifacts", "task"),
+                capsuleRoot: join(options.epiHome, "runtime", "task"),
+                artifactRoot: join(options.epiHome, "artifacts", "task"),
                 agents,
                 ...(options.maxConcurrency === undefined
                     ? {}
@@ -166,7 +166,7 @@ export function createTaskInlineExtension(options) {
                 name: "task",
                 label: "Task",
                 description: [
-                    "Run a bounded task in an isolated MMP worker.",
+                    "Run a bounded task in an isolated Epi worker.",
                     `Available agents: ${availableAgents.map((agent) => `${agent.name} (${agent.description})`).join(", ") || "none"}.`,
                 ].join(" "),
                 promptSnippet: "Delegate bounded work to an isolated configured agent.",
@@ -193,7 +193,7 @@ export function createTaskInlineExtension(options) {
                         }, ctx);
                         if (startDecision.action === "block" ||
                             startDecision.action === "cancel") {
-                            throw new Error(startDecision.reason ?? "task start blocked by MMP hook");
+                            throw new Error(startDecision.reason ?? "task start blocked by Epi hook");
                         }
                         const started = runtime.start({
                             agent: params.agent,
@@ -227,7 +227,7 @@ export function createTaskInlineExtension(options) {
             pi.registerTool({
                 name: "task_status",
                 label: "Task status",
-                description: "Return the current state of one MMP task job.",
+                description: "Return the current state of one Epi task job.",
                 executionMode: "parallel",
                 renderResult: renderTaskResult,
                 parameters: Type.Object({ jobId: Type.String() }),
@@ -243,7 +243,7 @@ export function createTaskInlineExtension(options) {
             pi.registerTool({
                 name: "task_wait",
                 label: "Task wait",
-                description: "Wait for an MMP task job to finish or until timeoutSeconds elapses.",
+                description: "Wait for an Epi task job to finish or until timeoutSeconds elapses.",
                 executionMode: "parallel",
                 renderResult: renderTaskResult,
                 parameters: Type.Object({
@@ -269,7 +269,7 @@ export function createTaskInlineExtension(options) {
             pi.registerTool({
                 name: "task_cancel",
                 label: "Task cancel",
-                description: "Cancel a queued or running MMP task job and its process tree.",
+                description: "Cancel a queued or running Epi task job and its process tree.",
                 executionMode: "parallel",
                 renderResult: renderTaskResult,
                 parameters: Type.Object({ jobId: Type.String() }),
@@ -290,7 +290,7 @@ export function createTaskInlineExtension(options) {
             pi.registerTool({
                 name: "todo",
                 label: "Todo",
-                description: "Manage the current MMP session checklist.",
+                description: "Manage the current Epi session checklist.",
                 renderResult: renderTodoResult,
                 parameters: Type.Object({
                     action: Type.Union([

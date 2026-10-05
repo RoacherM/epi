@@ -1,28 +1,28 @@
 // Auto-discovery of skill roots beyond the Manifest (docs/decisions.md S1). Exactly three fixed
 // directories are ever consulted -- never Pi's own skill locations (~/.pi/agent/skills, a
 // project's .pi/skills) and never a project's .agents/skills (not a location the user chose for
-// MMP). None of them may resolve into, or contain, Pi's state: <MMP_HOME>/pi (where MMP keeps
+// Epi). None of them may resolve into, or contain, Pi's state: <EPI_HOME>/pi (where Epi keeps
 // Pi's auth, sessions, model catalog and settings) or ~/.pi. A missing directory is skipped, not
 // an error.
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
-import { MmpConfigError } from "./errors.js";
+import { EpiConfigError } from "./errors.js";
 import type { DiscoveredSkillProvenance, ResolvedResource } from "./manifest.js";
 import { resolveHomeDir } from "./paths.js";
 
 export interface DiscoverSkillRootsOptions {
-  /** Same environment `resolveMmpPaths`/`resolveAssembly` were given; HOME here (when set) is
+  /** Same environment `resolveEpiPaths`/`resolveAssembly` were given; HOME here (when set) is
    * honored instead of the real `os.homedir()` so tests never touch the real user's home. */
   environment: NodeJS.ProcessEnv;
-  mmpHome: string;
-  /** `<mmpHome>/pi`, the directory where MMP keeps Pi's runtime state (auth, sessions, model
+  epiHome: string;
+  /** `<epiHome>/pi`, the directory where Epi keeps Pi's runtime state (auth, sessions, model
    * catalog, settings). It is not a skills location: a discovered root resolving inside it or to
-   * one of its ancestors (e.g. a project's `.mmp/skills` symlinked to it or to `<mmpHome>`) is
+   * one of its ancestors (e.g. a project's `.epi/skills` symlinked to it or to `<epiHome>`) is
    * rejected, not silently skipped. */
   agentDir: string;
   /** The trusted project's root (ProjectManifestState.root), or undefined when there is no
-   * trusted project for this run -- the same gate `.mmp/mmp.json` itself uses. */
+   * trusted project for this run -- the same gate `.epi/epi.json` itself uses. */
   trustedProjectRoot: string | undefined;
 }
 
@@ -80,14 +80,14 @@ function hasPiPathSegment(canonicalPath: string): boolean {
   return canonicalPath.split(sep).some((segment) => segment.toLowerCase() === ".pi");
 }
 
-/** Hard rule 1 (AGENTS.md): MMP never reads Pi's own state, even through a symlink a project or
- * ~/.agents/skills happens to contain. Pi's state is `<MMP_HOME>/pi` (MMP's Pi state dir: auth,
+/** Hard rule 1 (AGENTS.md): Epi never reads Pi's own state, even through a symlink a project or
+ * ~/.agents/skills happens to contain. Pi's state is `<EPI_HOME>/pi` (Epi's Pi state dir: auth,
  * sessions, model catalog, settings) and `~/.pi`. Rejected outright (the same way an invalid
  * Manifest path fails, not silently skipped like a merely-missing directory):
  * - a root inside Pi's state: under one of those dirs, or containing a `.pi` segment
- *   (e.g. a project's `.mmp/skills -> <MMP_HOME>/pi/sessions`);
+ *   (e.g. a project's `.epi/skills -> <EPI_HOME>/pi/sessions`);
  * - a root that contains Pi's state: an ancestor of one of those dirs
- *   (e.g. `.mmp/skills -> <MMP_HOME>` or `~/.agents/skills -> ~`), since Pi's skill loader
+ *   (e.g. `.epi/skills -> <EPI_HOME>` or `~/.agents/skills -> ~`), since Pi's skill loader
  *   recurses into subdirectories. `piDataDirs` are canonical (see canonicalPath). */
 function assertNotPiPath(
   declaredDir: string,
@@ -95,14 +95,14 @@ function assertNotPiPath(
   piDataDirs: readonly string[],
 ): void {
   if (piDataDirs.some((dir) => isUnderOrEqual(canonical, dir)) || hasPiPathSegment(canonical)) {
-    throw new MmpConfigError(
-      `${declaredDir}: resolves to ${canonical}, inside Pi's own data -- MMP never auto-discovers skills there, even via a symlink`,
+    throw new EpiConfigError(
+      `${declaredDir}: resolves to ${canonical}, inside Pi's own data -- Epi never auto-discovers skills there, even via a symlink`,
     );
   }
   const contained = piDataDirs.find((dir) => isUnderOrEqual(dir, canonical));
   if (contained !== undefined) {
-    throw new MmpConfigError(
-      `${declaredDir}: resolves to ${canonical}, which contains Pi's own data at ${contained} -- MMP never auto-discovers skills there, even via a symlink`,
+    throw new EpiConfigError(
+      `${declaredDir}: resolves to ${canonical}, which contains Pi's own data at ${contained} -- Epi never auto-discovers skills there, even via a symlink`,
     );
   }
 }
@@ -113,10 +113,10 @@ export function discoverSkillRoots(
   const home = resolveHomeDir(options.environment);
   const candidates: DiscoveryCandidate[] = [
     { dir: join(home, ".agents", "skills"), provenance: "agents", source: "global" },
-    { dir: join(options.mmpHome, "skills"), provenance: "mmp", source: "global" },
+    { dir: join(options.epiHome, "skills"), provenance: "epi", source: "global" },
     ...(options.trustedProjectRoot === undefined
       ? []
-      : [{ dir: join(options.trustedProjectRoot, ".mmp", "skills"), provenance: "project" as const, source: "project" as const }]),
+      : [{ dir: join(options.trustedProjectRoot, ".epi", "skills"), provenance: "project" as const, source: "project" as const }]),
   ];
   // Canonicalized the same way every candidate is below. ~/.pi is listed in both its path-wise
   // form (what a recursive walk from an ancestor reaches) and its realpath (if it is a symlink);

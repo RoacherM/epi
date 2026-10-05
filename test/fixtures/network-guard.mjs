@@ -1,11 +1,11 @@
-// Preload (`node --import`) for runs that deliberately leave mmp online: the main thread's `fetch`
-// and TCP/TLS connects (net, tls, http, https) are refused and recorded in MMP_NETWORK_GUARD_OUT,
+// Preload (`node --import`) for runs that deliberately leave epi online: the main thread's `fetch`
+// and TCP/TLS connects (net, tls, http, https) are refused and recorded in EPI_NETWORK_GUARD_OUT,
 // so a test can both stay offline and assert nothing tried to connect. Not covered: child
 // processes, worker threads, UDP and DNS lookups (test/pi-env.test.mjs checks the guard itself).
 import { appendFileSync } from "node:fs";
 import net from "node:net";
 
-const out = process.env.MMP_NETWORK_GUARD_OUT;
+const out = process.env.EPI_NETWORK_GUARD_OUT;
 function refuse(what) {
   appendFileSync(out, `${what}\n`);
   throw new Error(`network-guard: ${what} refused`);

@@ -18,9 +18,9 @@ Pi 内核不带 MCP。作者 badlogic 在 2026-01-08 的 issue 里给过一份�
 
 ### pi-mcp-adapter（nicobailon）：事实标准
 
-**已过期（2026-09-30，Pi 0.99 升级）**：MMP 当时（本文调研时）以库的方式内嵌它（package.json 里 `pi-mcp-adapter` 2.17.0，`mmp:mcp` 调 `createMcpAdapter`）；升级到 Pi 0.99 后已经整个去掉，改用 Pi 自己的原生 MCP 支持，见 [mcp-design.md](mcp-design.md)。下面这段仍是当时对 pi-mcp-adapter 本身的调研，作为第三方包的背景保留，不再代表 MMP 现在的接法。
+**已过期（2026-09-30，Pi 0.99 升级）**：Epi 当时（本文调研时）以库的方式内嵌它（package.json 里 `pi-mcp-adapter` 2.17.0，`epi:mcp` 调 `createMcpAdapter`）；升级到 Pi 0.99 后已经整个去掉，改用 Pi 自己的原生 MCP 支持，见 [mcp-design.md](mcp-design.md)。下面这段仍是当时对 pi-mcp-adapter 本身的调研，作为第三方包的背景保留，不再代表 Epi 现在的接法。
 仓库 https://github.com/nicobailon/pi-mcp-adapter ，约 1,460 星，MIT，最后提交 2026-09-13。
-npm 最新 2.33.0（2026-09-10）。MMP 用的 2.17.0 落后 16 个小版本。来源 https://registry.npmjs.org/pi-mcp-adapter
+npm 最新 2.33.0（2026-09-10）。Epi 用的 2.17.0 落后 16 个小版本。来源 https://registry.npmjs.org/pi-mcp-adapter
 官方 Discussions 里有用户说它是"我唯一持续在用的外部扩展"。来源 https://github.com/earendil-works/pi/discussions/3373
 
 设计要点（全部来自 README https://github.com/nicobailon/pi-mcp-adapter/blob/main/README.md ）：
@@ -104,17 +104,17 @@ luongnv89/pi-extensions：116 星，12 个扩展加 1 技能加 4 主题，偏�
 HerbertGao/pi-extensions：0 星，2026-08 新建，聚合包，转发 pi-cc-extensions、sol-pi、tintinweb/pi-subagents 等并 pin 住 18 个上游版本，有每日上游监控。来源 https://github.com/HerbertGao/pi-extensions
 qualisero/awesome-pi-agent：1,097 星但 README 自称已退休，2026-06 停更，不再参考。
 
-## 5. 对 MMP 的含义
+## 5. 对 Epi 的含义
 
-第一，0.84.0 成了新扩展的分水岭。tintinweb/pi-subagents 与 pi-cc-extensions 都要求 Pi ^0.84.0，SoL-Pi 固定 0.84.2。MMP 停在 0.83.0 会越来越装不上东西。这是升级 Pi 的第二个理由，第一个理由见 docs/sol-pi-research.md 里 OCC 的两个失败用例。
+第一，0.84.0 成了新扩展的分水岭。tintinweb/pi-subagents 与 pi-cc-extensions 都要求 Pi ^0.84.0，SoL-Pi 固定 0.84.2。Epi 停在 0.83.0 会越来越装不上东西。这是升级 Pi 的第二个理由，第一个理由见 docs/sol-pi-research.md 里 OCC 的两个失败用例。
 
-第二，MMP 的 `mmp:mcp` 已经站在正确的地基上，只是版本旧（**已过期，2026-09-30**：Pi 0.99 升级后 `mmp:mcp` 改用 Pi 原生 MCP，不再基于 pi-mcp-adapter，这一条不再适用，见 [mcp-design.md](mcp-design.md)）。pi-mcp-adapter 2.17.0 到 2.33.0 之间新增的 OAuth 凭据库、socket 传输、approveTools、Agent Plugins 导入，是否要暴露到 Manifest 需要另评估。
+第二，Epi 的 `epi:mcp` 已经站在正确的地基上，只是版本旧（**已过期，2026-09-30**：Pi 0.99 升级后 `epi:mcp` 改用 Pi 原生 MCP，不再基于 pi-mcp-adapter，这一条不再适用，见 [mcp-design.md](mcp-design.md)）。pi-mcp-adapter 2.17.0 到 2.33.0 之间新增的 OAuth 凭据库、socket 传输、approveTools、Agent Plugins 导入，是否要暴露到 Manifest 需要另评估。
 
-第三，子代理没有现成的"同进程"方案，社区一致用子进程。MMP 若要做 `mmp:agents`，可以沿用 Pi 官方示例的 `pi --mode json` 子进程模型，代理档案用 MMP 已有的 agents/*.md，这与 tintinweb 与 mjakl 的 Markdown 加 frontmatter 习惯一致。
+第三，子代理没有现成的"同进程"方案，社区一致用子进程。Epi 若要做 `epi:agents`，可以沿用 Pi 官方示例的 `pi --mode json` 子进程模型，代理档案用 Epi 已有的 agents/*.md，这与 tintinweb 与 mjakl 的 Markdown 加 frontmatter 习惯一致。
 
 第四，联网搜索直接用 pi-web-access，不值得自己写。它零配置能跑，后端最全，也最活跃。
 
-第五，一个确定性问题。Pi 0.83 把 `--extension git:...` 装进 `<agentDir>/tmp/extensions/`，若 git 来源不带 `@ref`，每次启动都会 git pull 刷新，离线时跳过。MMP Manifest 声明 git 来源时应强制要求带 `@ref`，否则"未声明即不存在"的承诺在版本维度上是空的。
+第五，一个确定性问题。Pi 0.83 把 `--extension git:...` 装进 `<agentDir>/tmp/extensions/`，若 git 来源不带 `@ref`，每次启动都会 git pull 刷新，离线时跳过。Epi Manifest 声明 git 来源时应强制要求带 `@ref`，否则"未声明即不存在"的承诺在版本维度上是空的。
 来源：pi-coding-agent 0.83.0 解包后 dist/core/package-manager.js 第 1019 到 1030 行、第 1566 到 1578 行，dist/utils/git.js 第 103 行（`pinned: Boolean(args.ref)`）。
 
 ## 6. 原始笔记

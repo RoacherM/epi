@@ -1,10 +1,10 @@
 # Preview 设计
 
-状态：2026-10-04 用户确认方向（"先不考虑修改功能，做好 preview 操作即可"）。本文是 `mmp:preview` 的设计文档；使用说明在 [guide/preview.md](guide/preview.md)，原则在 [architecture.md](architecture.md) §3.3，更早的讨论在 [notes/workspace-views.md](notes/workspace-views.md)。
+状态：2026-10-04 用户确认方向（"先不考虑修改功能，做好 preview 操作即可"）。本文是 `epi:preview` 的设计文档；使用说明在 [guide/preview.md](guide/preview.md)，原则在 [architecture.md](architecture.md) §3.3，更早的讨论在 [notes/workspace-views.md](notes/workspace-views.md)。
 
 ## 1. 目标和范围
 
-让人在 MMP 里看清 agent 改了什么，不用离开去开编辑器。
+让人在 Epi 里看清 agent 改了什么，不用离开去开编辑器。
 
 | 做 | 不做（以后再说） |
 |---|---|
@@ -58,7 +58,7 @@ agent 每次调用 `write` 或 `edit` 工具、工具还没执行时，preview �
 
 - `/` 输入要找的文字，回车；`n` / `N` 下一个、上一个；匹配处反显。
 - `:` 输入行号，回车跳过去（diff 里按新文件的行号）。
-- 每个文件记住上次看到的位置，在同一次 MMP 运行里有效。
+- 每个文件记住上次看到的位置，在同一次 Epi 运行里有效。
 
 ### 3.4 实时
 
@@ -82,7 +82,7 @@ agent 每次调用 `write` 或 `edit` 工具、工具还没执行时，preview �
 
 ### 5.1 为什么
 
-用户自己的扩展（在 `~/.mmp/extensions`，不随 MMP 发布）要在自己的界面里播放视频。以前它们用相对路径引用本机 yazi 扩展的 `Player` 类；yazi 收进仓库成为 `/preview` 以后，那份文件不再维护。内置扩展装在 MMP 的安装目录里，没有对外导出，扩展之间按 Pi 的做法通过 `pi.events` 通信（architecture.md：内置扩展用的接口和第三方扩展一样）。
+用户自己的扩展（在 `~/.epi/extensions`，不随 Epi 发布）要在自己的界面里播放视频。以前它们用相对路径引用本机 yazi 扩展的 `Player` 类；yazi 收进仓库成为 `/preview` 以后，那份文件不再维护。内置扩展装在 Epi 的安装目录里，没有对外导出，扩展之间按 Pi 的做法通过 `pi.events` 通信（architecture.md：内置扩展用的接口和第三方扩展一样）。
 
 对外的是一个画好的面板，不是 `Player` 类：调用方只给视频地址，拿回画好的行，按键和鼠标交给面板。这样 `Player` 的内部（ffmpeg 参数、帧格式、字段）可以继续改，不会弄坏别人的扩展；preview 自己的视频查看器也改用同一个面板，播放界面只有一份代码。
 
@@ -91,14 +91,14 @@ agent 每次调用 `write` 或 `edit` 工具、工具还没执行时，preview �
 ```
 其他扩展                                preview
   request = {}
-  pi.events.emit("mmp/preview/player/v1", request) ──▶ 监听方：request.player = api
+  pi.events.emit("epi/preview/player/v1", request) ──▶ 监听方：request.player = api
   （emit 返回时 request.player 已经填好）
   pane = await request.player.createPane(source, { tui, theme, hint })
 ```
 
-- Pi 的 `pi.events.emit` 同步调用每个监听方（Node 的 EventEmitter），所以 `emit` 返回时请求对象已经填好。`src/hook-events.ts` 的 `mmp/hooks/task/v1` 已经这样用；这依赖 Pi 的实现，登记在 pi-internals.md。
+- Pi 的 `pi.events.emit` 同步调用每个监听方（Node 的 EventEmitter），所以 `emit` 返回时请求对象已经填好。`src/hook-events.ts` 的 `epi/hooks/task/v1` 已经这样用；这依赖 Pi 的实现，登记在 pi-internals.md。
 - 什么时候拿：用到时再拿（例如按下"播放"时），不在扩展加载时拿，所以和扩展的加载顺序无关。
-- 拿不到（`request.player` 还是 `undefined`）：没有 preview（非交互模式、老版本 MMP、纯 Pi）。调用方自己显示错误，preview 不管。
+- 拿不到（`request.player` 还是 `undefined`）：没有 preview（非交互模式、老版本 Epi、纯 Pi）。调用方自己显示错误，preview 不管。
 - 频道名带 `v1`：接口有不兼容的改动时换新频道，旧频道可以同时保留。
 - `/reload` 以后 Pi 会取消旧的订阅（`loader.js` 的 `trackEventBusSubscription`），新的 preview 重新订阅，不会有两个监听方。
 
@@ -148,4 +148,4 @@ interface PreviewPlayerApi {
 | 模块 | 内容 |
 |---|---|
 | `preview/player-pane.ts` | `PlayerPane`：从 `view.ts` 的视频部分搬出来，查看器和其他扩展共用；构造是同步的，查看器直接 `new`。公开的来源类型叫 `PaneSource`，和 `media.ts` 内部的 `PlayerSource` 区分 |
-| `preview.ts` | 订阅 `mmp/preview/player/v1`，回应 `createPane`（async，里面才 `import`）；记下发出的面板，`session_shutdown` 时回收 |
+| `preview.ts` | 订阅 `epi/preview/player/v1`，回应 `createPane`（async，里面才 `import`）；记下发出的面板，`session_shutdown` 时回收 |

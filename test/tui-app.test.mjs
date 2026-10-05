@@ -10,20 +10,20 @@ const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 function runApp(t, extensions, steps, inspect, setup) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-app-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-app-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   setup?.(home);
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ steps }),
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ steps }),
     },
     encoding: "utf8",
     timeout: 60_000,
@@ -44,7 +44,7 @@ test("TUI v2 shows the welcome page, answers a prompt, and exits on Ctrl+D", (t)
     ["waitReady"], ["type", "hi"], ["key", "enter"], turnDone("PICKED=model-a"), ["key", "ctrl+d"],
   ]);
   assert.match(out, /EXIT=0/);
-  assert.match(out, /Make My Pi/);
+  assert.match(out, /\s{2,}Epi\s{2,}│/);
   assert.match(out, /PICKED=model-a/);
 });
 
@@ -64,7 +64,7 @@ test("TUI v2 runs a built-in tool call", (t) => {
   const { text: out, marks } = runApp(t, [fixture("faux-bash-tool.mjs")], [
     ["waitReady"], ["type", "run"], ["key", "enter"], turnDone("TOOL-DONE saw TOOL-RAN-42"), ["key", "ctrl+d"],
   ]);
-  // The shell really ran ($((40+2)) evaluated), and the card is MMP's collapsed bash renderer.
+  // The shell really ran ($((40+2)) evaluated), and the card is Epi's collapsed bash renderer.
   assert.match(out, /TOOL-DONE saw TOOL-RAN-42/);
   assert.match(out, /\$ echo TOOL-RAN/);
   assert.match(out, /exit 0/);
@@ -108,7 +108,7 @@ test("TUI v2 logs in with an API key, then asks for a model and uses it", (t) =>
     ["type", "/logout"], ["key", "enter"], ["waitFor", "Select provider to logout"], ["key", "enter"], ["waitFor", "Removed stored API key for OpenAI"], ["mark", "loggedOut"],
     ["key", "ctrl+d"],
   ], (home) => {
-    auth = JSON.parse(readFileSync(join(home, ".mmp", "pi", "auth.json"), "utf8"));
+    auth = JSON.parse(readFileSync(join(home, ".epi", "pi", "auth.json"), "utf8"));
   });
   assert.match(marks.method, /Select authentication method/);
   assert.match(marks.method, /Sign in with an API key/);
@@ -121,13 +121,13 @@ test("TUI v2 logs in with an API key, then asks for a model and uses it", (t) =>
   assert.match(marks.done, /Default model: openai\//);
   assert.match(marks.switched, /Model: openai\/gpt-4o-mini/);
   assert.match(marks.loggedOut, /Removed stored API key for OpenAI/);
-  // Credentials live in MMP's own agent dir, and /logout removed them.
+  // Credentials live in Epi's own agent dir, and /logout removed them.
   assert.equal(auth.openai, undefined);
 });
 
 // Pi 1.0: only subscription-backed providers (`auth.oauth.isSubscription`) say "subscription"; other
 // OAuth sign-ins such as OpenRouter's say "account". Pi's selector treats a missing flag as
-// "subscription", so MMP has to pass it, and its method label must not promise a subscription either.
+// "subscription", so Epi has to pass it, and its method label must not promise a subscription either.
 // The selector only tags entries when the list mixes auth types: /logout's list of stored credentials.
 test("TUI v2 /login and /logout label subscription and account sign-ins like Pi", (t) => {
   const oauth = { type: "oauth", access: "test-access", refresh: "test-refresh", expires: Date.now() + 86_400_000 };
@@ -137,8 +137,8 @@ test("TUI v2 /login and /logout label subscription and account sign-ins like Pi"
     ["type", "/logout"], ["key", "enter"], ["waitFor", "Select provider to logout"], ["waitFor", { regex: "OpenRouter[^\\n]*\\[" }], ["mark", "logout"],
     ["key", "esc"], ["wait", 200], ["key", "ctrl+d"],
   ], undefined, (home) => {
-    mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
-    writeFileSync(join(home, ".mmp", "pi", "auth.json"), JSON.stringify({
+    mkdirSync(join(home, ".epi", "pi"), { recursive: true });
+    writeFileSync(join(home, ".epi", "pi", "auth.json"), JSON.stringify({
       anthropic: oauth, openrouter: oauth, openai: { type: "api_key", key: "sk-test" },
     }));
   });
@@ -167,7 +167,7 @@ test("TUI v2 /login: cancelling the key prompt returns to the provider list", (t
     ["key", "esc"], ["waitFor", "Select authentication method"],
     ["key", "esc"], editorCleared, ["key", "ctrl+d"],
   ], (home) => {
-    try { auth = JSON.parse(readFileSync(join(home, ".mmp", "pi", "auth.json"), "utf8")); } catch { auth = {}; }
+    try { auth = JSON.parse(readFileSync(join(home, ".epi", "pi", "auth.json"), "utf8")); } catch { auth = {}; }
   });
   assert.match(marks.back.slice(marks.keyPrompt.length), /Select provider to configure/);
   assert.doesNotMatch(marks.back.slice(marks.keyPrompt.length), /Login to OpenAI failed|aborted/);
@@ -197,7 +197,7 @@ test("TUI v2 /login: Esc on the provider list returns to the method selector, li
 // Pi's loginProvider passes `{ getDeviceId: () => settingsManager.getOrCreateDeviceId() }` to
 // Models.login; without it pi-ai's "Sign in with ChatGPT" throws before it starts. The probe
 // provider's login fails with the ID it got, so nothing reaches a network or a browser.
-test("TUI v2 /login gives OAuth logins a stable device ID from MMP's own settings", (t) => {
+test("TUI v2 /login gives OAuth logins a stable device ID from Epi's own settings", (t) => {
   let settings;
   let piAgentDirExists;
   const { marks } = runApp(t, [fixture("login-probe-providers.mjs")], [
@@ -205,7 +205,7 @@ test("TUI v2 /login gives OAuth logins a stable device ID from MMP's own setting
     ["type", "/login device probe"], ["key", "enter"], ["waitFor", "Login to Device Probe failed"], ["mark", "second"],
     ["key", "ctrl+d"],
   ], (home) => {
-    const file = join(home, ".mmp", "pi", "settings.json");
+    const file = join(home, ".epi", "pi", "settings.json");
     settings = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
     piAgentDirExists = existsSync(join(home, ".pi"));
   });
@@ -233,20 +233,20 @@ test("TUI v2 /login: an ambient-only API-key provider shows a setup dialog, and 
     ["key", "esc"], editorCleared, ["mark", "closed"],
     ["key", "ctrl+d"],
   ]);
-  assert.match(marks.dialog, /Ambient Probe credentials is configured outside MMP/);
+  assert.match(marks.dialog, /Ambient Probe credentials is configured outside Epi/);
   assert.match(marks.dialog, /to close/);
   assert.match(marks.back.slice(marks.dialog.length), /Select provider to configure/);
-  assert.match(marks.direct.slice(marks.back.length), /Ambient Probe credentials is configured outside MMP/);
+  assert.match(marks.direct.slice(marks.back.length), /Ambient Probe credentials is configured outside Epi/);
   assert.doesNotMatch(marks.closed.slice(marks.direct.length), /Select provider to configure|Select authentication method/);
 });
 
-test("TUI v2 draws built-in tools with MMP's grok renderers instead of Pi's own", (t) => {
+test("TUI v2 draws built-in tools with Epi's grok renderers instead of Pi's own", (t) => {
   const { marks } = runApp(t, [fixture("faux-read-tool.mjs")], [
     ["waitReady"], ["type", "read it"], ["key", "enter"], turnDone("READ-DONE"), ["mark", "after"], ["key", "ctrl+d"],
   ]);
   assert.match(marks.after, /READ-DONE/);
   assert.match(marks.after, /read read-me\.txt/);
-  // MMP's collapsed read result states the line count; Pi's own renderer shows no such line.
+  // Epi's collapsed read result states the line count; Pi's own renderer shows no such line.
   assert.match(marks.after, /read-me\.txt \(\d+ lines\)/);
 });
 

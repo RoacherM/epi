@@ -1,5 +1,5 @@
 // Asks /preview for its video player over pi.events (docs/preview-design.md §5.2), the way another
-// extension would, and reports what it got through ctx.ui.notify and, when MMP_PLAYER_PROBE_OUT is
+// extension would, and reports what it got through ctx.ui.notify and, when EPI_PLAYER_PROBE_OUT is
 // set (-p has no UI), as JSON lines in that file. Used by test/preview.test.mjs.
 //   at load:       asks once in the factory, before the built-in extensions are loaded
 //   /askplayer:    asks now; says whether it got createPane, and whether the API is not the one
@@ -10,13 +10,13 @@
 //                  and reports the rejection (or that it got a pane)
 import { appendFileSync } from "node:fs";
 
-const CHANNEL = "mmp/preview/player/v1";
+const CHANNEL = "epi/preview/player/v1";
 let previousApi;
 let held;
 
 function report(ctx, text) {
   ctx?.ui.notify(text, "info");
-  if (process.env.MMP_PLAYER_PROBE_OUT) appendFileSync(process.env.MMP_PLAYER_PROBE_OUT, `${JSON.stringify(text)}\n`);
+  if (process.env.EPI_PLAYER_PROBE_OUT) appendFileSync(process.env.EPI_PLAYER_PROBE_OUT, `${JSON.stringify(text)}\n`);
 }
 
 function ask(pi) {

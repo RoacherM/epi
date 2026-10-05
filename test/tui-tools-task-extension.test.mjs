@@ -1,4 +1,4 @@
-// mmp:task's tools used to fall back to MMP's generic tool-block renderer, which just prints the
+// epi:task's tools used to fall back to Epi's generic tool-block renderer, which just prints the
 // raw JSON from jobResult()/todo's result text (src/tui/tools/block.ts fallbackResult). This
 // exercises the grok-style renderResult each tool now registers, the same way
 // tui-tools-mutating.test.mjs exercises Pi's own bash/edit/write tools.
@@ -11,19 +11,19 @@ import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 
 import { piTui } from "../dist/tui/pi-tui.js";
-import { createMmpTheme } from "../dist/tui/theme.js";
+import { createEpiTheme } from "../dist/tui/theme.js";
 import { createTaskInlineExtension } from "../dist/extensions/task.js";
 
 initTheme("dark");
-const theme = createMmpTheme("dark");
+const theme = createEpiTheme("dark");
 
 /** Loads the real extension and returns its registered tools, keyed by name. */
 function loadTools(t) {
-  const mmpHome = mkdtempSync(join(tmpdir(), "mmp-task-ext-"));
-  t.after(() => rmSync(mmpHome, { recursive: true, force: true }));
+  const epiHome = mkdtempSync(join(tmpdir(), "epi-task-ext-"));
+  t.after(() => rmSync(epiHome, { recursive: true, force: true }));
   const extension = createTaskInlineExtension({
-    mmpHome,
-    agentDir: join(mmpHome, "pi"),
+    epiHome,
+    agentDir: join(epiHome, "pi"),
     projectAgentsDir: undefined,
   });
   const tools = new Map();

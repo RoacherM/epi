@@ -21,7 +21,7 @@ const summary = (diff) => ({
 const fauxEdit = fileURLToPath(new URL("./fixtures/faux-edit-tool.mjs", import.meta.url));
 
 function tempDir(t) {
-  const dir = mkdtempSync(join(tmpdir(), "mmp-preview-changes-"));
+  const dir = mkdtempSync(join(tmpdir(), "epi-preview-changes-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
@@ -126,14 +126,14 @@ function runApp(t, steps, { rows } = {}) {
   const root = tempDir(t);
   const home = join(root, "home");
   const project = join(root, "project");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
   mkdirSync(project);
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxEdit] }));
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fauxEdit] }));
   const result = spawnSync(process.execPath, [harness], {
     cwd: project,
     env: {
-      PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ steps, args: ["--no-project", "--model", "mmp-faux/editor"], ...(rows === undefined ? {} : { rows }) }),
+      PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ steps, args: ["--no-project", "--model", "epi-faux/editor"], ...(rows === undefined ? {} : { rows }) }),
     },
     encoding: "utf8",
     timeout: 60_000,

@@ -1,18 +1,18 @@
-// Runs MMP's SDK path (src/tui) without a terminal, for startup-contract tests. It assembles the
-// Manifest exactly like `mmp` does, then builds the session the way the new interactive host will.
-// Usage: MMP_SDK_RUNNER='<json {args?, prompt?, dumpTools?}>' node sdk-path-runner.mjs
-// (MMP_HOME/HOME set by caller). `args` replaces the default `--no-project` entirely (not appended
+// Runs Epi's SDK path (src/tui) without a terminal, for startup-contract tests. It assembles the
+// Manifest exactly like `epi` does, then builds the session the way the new interactive host will.
+// Usage: EPI_SDK_RUNNER='<json {args?, prompt?, dumpTools?}>' node sdk-path-runner.mjs
+// (EPI_HOME/HOME set by caller). `args` replaces the default `--no-project` entirely (not appended
 // to it), so tests that need real project discovery (e.g. --approve) can pass their own.
-// First, like dist/cli.js: MMP_* -> PI_* before any Pi module loads (src/pi-env.ts).
+// First, like dist/cli.js: EPI_* -> PI_* before any Pi module loads (src/pi-env.ts).
 import "../../dist/isolate-pi-env.js";
-import { MmpPreflightError } from "../../dist/errors.js";
-import { prepareMmpRun } from "../../dist/host.js";
+import { EpiPreflightError } from "../../dist/errors.js";
+import { prepareEpiRun } from "../../dist/host.js";
 import { createRuntimeFromPrepared } from "../../dist/tui/start.js";
 
-const options = JSON.parse(process.env.MMP_SDK_RUNNER ?? "{}");
+const options = JSON.parse(process.env.EPI_SDK_RUNNER ?? "{}");
 
 try {
-  const runtime = await createRuntimeFromPrepared(prepareMmpRun(options.args ?? ["--no-project"]), process.cwd());
+  const runtime = await createRuntimeFromPrepared(prepareEpiRun(options.args ?? ["--no-project"]), process.cwd());
   await runtime.session.bindExtensions({ mode: "print" });
   // bindExtensions re-registers extension providers, which starts another un-awaited auth refresh.
   await runtime.services.modelRuntime.refresh({ allowNetwork: false });
@@ -34,6 +34,6 @@ try {
   }
   await runtime.dispose();
 } catch (error) {
-  process.stderr.write(`mmp: ${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = error instanceof MmpPreflightError ? error.exitCode : 1;
+  process.stderr.write(`epi: ${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = error instanceof EpiPreflightError ? error.exitCode : 1;
 }

@@ -20,11 +20,11 @@ const adapter = join(root, "scripts", "benchmark-adapter.mjs");
 const fakeHarness = join(root, "test", "fixtures", "fake-benchmark-harness.mjs");
 
 function createFixture() {
-  const fixtureRoot = mkdtempSync(join(tmpdir(), "mmp-benchmark-"));
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "epi-benchmark-"));
   const bundle = join(fixtureRoot, "bundle");
   mkdirSync(join(bundle, "pi", "sessions"), { recursive: true });
   mkdirSync(join(bundle, "runtime"), { recursive: true });
-  writeFileSync(join(bundle, "mmp.json"), '{"version":1}\n', "utf8");
+  writeFileSync(join(bundle, "epi.json"), '{"version":1}\n', "utf8");
   writeFileSync(join(bundle, "pi", "settings.json"), "{}\n", "utf8");
   writeFileSync(join(bundle, "pi", "auth.json"), '{"secret":"must-not-copy"}\n', "utf8");
   writeFileSync(join(bundle, "pi", "trust.json"), '{"trusted":true}\n', "utf8");
@@ -34,7 +34,7 @@ function createFixture() {
   return { fixtureRoot, bundle };
 }
 
-function runAdapter(fixture, name, prompt, extra = [], variant = "mmp-core-empty", env = {}) {
+function runAdapter(fixture, name, prompt, extra = [], variant = "epi-core-empty", env = {}) {
   const outputDir = join(fixture.fixtureRoot, name);
   const result = spawnSync(
     process.execPath,
@@ -94,8 +94,8 @@ test("benchmark adapter emits reproducible isolated trial artifacts without glob
     assert.equal(baseline.result.status, 0, baseline.result.stderr);
     assert.equal(baseline.metadata.harness, "pi");
     assert.equal(baseline.metadata.versions.pi, PI_VERSION);
-    assert.equal(existsSync(join(baseline.outputDir, "mmp-home", "mmp.json")), false);
-    assert.equal(existsSync(join(baseline.outputDir, "mmp-home", "pi", "settings.json")), true);
+    assert.equal(existsSync(join(baseline.outputDir, "epi-home", "epi.json")), false);
+    assert.equal(existsSync(join(baseline.outputDir, "epi-home", "pi", "settings.json")), true);
     assert.equal(first.metadata.result.success, true);
     assert.equal(first.metadata.result.failureCategory, null);
     assert.equal(first.metadata.assemblyDeterministic, true);
@@ -112,11 +112,11 @@ test("benchmark adapter emits reproducible isolated trial artifacts without glob
       trustFilePresent: false,
       capsuleFiles: [],
     });
-    assert.equal(existsSync(join(first.outputDir, "mmp-home", "pi", "auth.json")), false);
-    assert.equal(existsSync(join(first.outputDir, "mmp-home", "pi", "trust.json")), false);
-    assert.equal(existsSync(join(first.outputDir, "mmp-home", "pi", "sessions", "old.jsonl")), false);
-    assert.equal(existsSync(join(first.outputDir, "mmp-home", "runtime", "stale")), false);
-    assert.equal(existsSync(join(first.outputDir, "mmp-home", ".env")), false);
+    assert.equal(existsSync(join(first.outputDir, "epi-home", "pi", "auth.json")), false);
+    assert.equal(existsSync(join(first.outputDir, "epi-home", "pi", "trust.json")), false);
+    assert.equal(existsSync(join(first.outputDir, "epi-home", "pi", "sessions", "old.jsonl")), false);
+    assert.equal(existsSync(join(first.outputDir, "epi-home", "runtime", "stale")), false);
+    assert.equal(existsSync(join(first.outputDir, "epi-home", ".env")), false);
     const events = readFileSync(join(first.outputDir, "events.jsonl"), "utf8")
       .trim()
       .split("\n")
@@ -174,7 +174,7 @@ test("benchmark adapter ignores the operator's PI_PACKAGE_DIR", () => {
     const fakePackage = join(fixture.fixtureRoot, "pi-package");
     mkdirSync(fakePackage);
     writeFileSync(join(fakePackage, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "999.0.0" }));
-    const trial = runAdapter(fixture, "trial", "BENCHMARK_OK", [], "mmp-core-empty", { PI_PACKAGE_DIR: fakePackage });
+    const trial = runAdapter(fixture, "trial", "BENCHMARK_OK", [], "epi-core-empty", { PI_PACKAGE_DIR: fakePackage });
     assert.equal(trial.result.status, 0, trial.result.stderr);
     assert.equal(trial.metadata.versions.pi, PI_VERSION);
   } finally {

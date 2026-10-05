@@ -75,7 +75,7 @@ jobs:
 
       # --- Gate passed: open (or update) the upgrade PR -----------------------------------------
       # One fixed branch, not one per version (pre-merge review must-fix #4): otherwise a Pi release
-      # landing while yesterday's PR is still open would open a second PR bumping to the same MMP
+      # landing while yesterday's PR is still open would open a second PR bumping to the same Epi
       # patch version, and merging both would leave the release script silently skipping the second.
       - name: Open or update the upgrade PR
         if: steps.info.outputs.upgraded == 'true'

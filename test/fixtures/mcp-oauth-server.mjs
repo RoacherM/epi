@@ -1,4 +1,4 @@
-// A local, offline MCP Streamable HTTP server behind OAuth, for `mmp mcp login/logout` tests
+// A local, offline MCP Streamable HTTP server behind OAuth, for `epi mcp login/logout` tests
 // (test/mcp-cli.test.mjs). One HTTP server plays both parts, the way pi-mcp's discovery
 // (@earendil-works/pi-mcp's oauth/discovery.js) finds them with no protected resource metadata: the
 // authorization server is the origin, with RFC 8414 metadata, dynamic client registration, an

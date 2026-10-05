@@ -1,6 +1,6 @@
 import type { ResolvedAssembly } from "./assembly.js";
 import type { DiscoveredSkillProvenance, ResolvedDisabledExtension, ResolvedInlineExtension, ResolvedResource } from "./manifest.js";
-export interface MmpRuntimeResource {
+export interface EpiRuntimeResource {
     kind: ResolvedResource["kind"];
     value: string;
     source: ResolvedResource["source"];
@@ -8,32 +8,32 @@ export interface MmpRuntimeResource {
     /** Set only for an auto-discovered skill root; absent for anything declared in a Manifest. */
     discovered?: DiscoveredSkillProvenance;
 }
-export interface MmpRuntimeExtension {
+export interface EpiRuntimeExtension {
     name: string;
     source: ResolvedInlineExtension["source"];
     /** Absent for a built-in that is on by default (`source: "default"`). */
     declaredIn?: string;
 }
-export interface MmpRuntimeDisabledExtension {
+export interface EpiRuntimeDisabledExtension {
     name: string;
     source: ResolvedDisabledExtension["source"];
     declaredIn: string;
 }
-export interface MmpLoadedSkill {
+export interface EpiLoadedSkill {
     name: string;
     description: string;
     filePath: string;
     modelInvocable: boolean;
 }
-export interface MmpRuntimeIdentity {
+export interface EpiRuntimeIdentity {
     runtime: {
-        name: "MMP";
+        name: "Epi";
         version: string;
         engine: "Pi";
         engineVersion: string;
     };
     paths: {
-        mmpHome: string;
+        epiHome: string;
         agentDir: string;
     };
     manifests: {
@@ -55,21 +55,21 @@ export interface MmpRuntimeIdentity {
          * (docs/decisions.md S1); entries actually loaded from them are tagged `discovered` in
          * `skillRoots` below. Never Pi's own discovery paths (~/.pi/agent/skills, project .pi/skills)
          * or a project's .agents/skills, and never a root inside or containing Pi's state dir
-         * (`<mmpHome>/pi`: auth, sessions, model catalog, settings). */
+         * (`<epiHome>/pi`: auth, sessions, model catalog, settings). */
         fixedSkillRoots: readonly [string, string, string];
         /** Whether Pi's own ambient discovery paths (~/.pi/agent/skills, cwd .pi/skills, cwd
-         * .agents/skills, ...) were loaded -- always false; MMP always passes noSkills etc. and feeds
+         * .agents/skills, ...) were loaded -- always false; Epi always passes noSkills etc. and feeds
          * Pi only the paths in `skillRoots` via resources_discover. */
         piDiscoveryPathsLoaded: false;
     };
     declaredResources: {
-        rules: MmpRuntimeResource[];
-        skillRoots: MmpRuntimeResource[];
-        inlineExtensions: MmpRuntimeExtension[];
-        externalExtensions: MmpRuntimeResource[];
+        rules: EpiRuntimeResource[];
+        skillRoots: EpiRuntimeResource[];
+        inlineExtensions: EpiRuntimeExtension[];
+        externalExtensions: EpiRuntimeResource[];
         /** Built-ins turned off by a Manifest's `"disable"`; omitted when none are, so a run that
          * disables nothing shows the model the same inventory as before the field existed. */
-        disabledExtensions?: MmpRuntimeDisabledExtension[];
+        disabledExtensions?: EpiRuntimeDisabledExtension[];
     };
 }
 interface LoadedSkillLike {
@@ -78,16 +78,16 @@ interface LoadedSkillLike {
     filePath: string;
     disableModelInvocation: boolean;
 }
-export declare function createMmpRuntimeIdentity(options: {
-    mmpVersion: string;
+export declare function createEpiRuntimeIdentity(options: {
+    epiVersion: string;
     piVersion: string;
-    mmpHome: string;
+    epiHome: string;
     assembly: ResolvedAssembly;
-}): MmpRuntimeIdentity;
-export declare function normalizeLoadedSkills(skills: readonly LoadedSkillLike[] | undefined): MmpLoadedSkill[];
-export declare function createMmpRuntimeReport(identity: MmpRuntimeIdentity, loadedSkills: readonly MmpLoadedSkill[]): MmpRuntimeIdentity & {
-    loadedSkills: MmpLoadedSkill[];
+}): EpiRuntimeIdentity;
+export declare function normalizeLoadedSkills(skills: readonly LoadedSkillLike[] | undefined): EpiLoadedSkill[];
+export declare function createEpiRuntimeReport(identity: EpiRuntimeIdentity, loadedSkills: readonly EpiLoadedSkill[]): EpiRuntimeIdentity & {
+    loadedSkills: EpiLoadedSkill[];
 };
-export declare function renderMmpRuntimePrompt(identity: MmpRuntimeIdentity, loadedSkills: readonly MmpLoadedSkill[]): string;
+export declare function renderEpiRuntimePrompt(identity: EpiRuntimeIdentity, loadedSkills: readonly EpiLoadedSkill[]): string;
 export {};
 //# sourceMappingURL=runtime-identity.d.ts.map

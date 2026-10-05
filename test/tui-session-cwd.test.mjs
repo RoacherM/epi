@@ -1,4 +1,4 @@
-// Bug 1 (docs/tui-design.md 15): `createMmpRuntime` (src/tui/services.ts) passed the launch cwd,
+// Bug 1 (docs/tui-design.md 15): `createEpiRuntime` (src/tui/services.ts) passed the launch cwd,
 // not the session's own cwd, to `createAgentSessionRuntime`'s `cwd` option, which is what the
 // runtime factory builds services (tools, system prompt) from. A `--session <path>` naming a
 // session in a subfolder of the launch cwd ended up with a model whose tools ran in the launch
@@ -30,17 +30,17 @@ function writeSessionFile(path, cwd) {
 function fixture(t) {
   // Realpath immediately: macOS's tmpdir() is under a symlink, and the session header's cwd is
   // compared against SessionManager's own (realpath'd) reads of it.
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "mmp-session-cwd-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "epi-session-cwd-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const launchCwd = join(root, "launch");
   const sub = join(launchCwd, "sub");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
   mkdirSync(sub, { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fauxPwd] }));
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fauxPwd] }));
   const sessionFile = join(root, "sub-session.jsonl");
   writeSessionFile(sessionFile, sub);
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
+  const env = { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1" };
   return { root, home, launchCwd, sub, sessionFile, env };
 }
 
@@ -48,7 +48,7 @@ test("--session <subfolder session> gives the model's tools that session's cwd, 
   const f = fixture(t);
   const result = spawnSync(process.execPath, [runnerPath], {
     cwd: f.launchCwd,
-    env: { ...f.env, MMP_SDK_RUNNER: JSON.stringify({ args: ["--no-project", "--session", f.sessionFile], prompt: "go", dumpCwd: true }) },
+    env: { ...f.env, EPI_SDK_RUNNER: JSON.stringify({ args: ["--no-project", "--session", f.sessionFile], prompt: "go", dumpCwd: true }) },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -68,7 +68,7 @@ test("header, /trust's cwd, and !pwd all agree with the model's own tools at sta
     cwd: f.launchCwd,
     env: {
       ...f.env,
-      MMP_TUI_HARNESS: JSON.stringify({
+      EPI_TUI_HARNESS: JSON.stringify({
         args: ["--no-project", "--session", f.sessionFile],
         steps: [
           ["waitReady"], ["mark", "afterStartup"],

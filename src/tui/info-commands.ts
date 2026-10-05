@@ -81,7 +81,7 @@ export function usageBreakdown(entries: readonly SessionEntry[]): UsageBucket[] 
 
 /** `/session`: file, id, message and token counts, and cost (with a per-model breakdown when more
  * than one model was used). Pi also shows cache-waste and cache-warming detail built from internals
- * MMP has no access to (computeCacheWaste, formatCacheWarmingStatus); left out here. */
+ * Epi has no access to (computeCacheWaste, formatCacheWarmingStatus); left out here. */
 export async function runSession(host: CommandHost): Promise<void> {
   const session = host.session();
   const theme = host.theme;
@@ -127,7 +127,7 @@ export async function runSession(host: CommandHost): Promise<void> {
 
 // ── /hotkeys ─────────────────────────────────────────────────────────────────
 
-/** MMP's own app-level actions (src/tui/keys.ts), with the wording MMP actually implements: three
+/** Epi's own app-level actions (src/tui/keys.ts), with the wording Epi actually implements: three
  * of these read differently from Pi's table because docs/tui-design.md 4.7 deliberately remaps
  * them (Ctrl+P is kept for the command palette, so model cycling is unbound by default,
  * Enter/Alt+Enter swap follow-up/steer, Ctrl+C also aborts/quits). The rest of the wording tracks
@@ -167,7 +167,7 @@ const EDITOR_KEYS: { id: string; description: string }[] = [
   { id: "tui.editor.undo", description: "Undo" },
 ];
 
-/** Handled by pi-tui's TuiAltScreen itself (handleViewportInput), ahead of MMP's key table. */
+/** Handled by pi-tui's TuiAltScreen itself (handleViewportInput), ahead of Epi's key table. */
 const TRANSCRIPT_KEYS: { id: string; description: string }[] = [
   { id: "tui.altScreen.previousPrompt", description: "Jump to previous prompt or answer" },
   { id: "tui.altScreen.nextPrompt", description: "Jump to next prompt or answer" },
@@ -179,9 +179,9 @@ const TRANSCRIPT_KEYS: { id: string; description: string }[] = [
 
 type KeyId = Parameters<typeof keyText>[0];
 
-/** `/hotkeys`: every key MMP's app table (src/tui/keys.ts) and editor actually bind, with the keys
+/** `/hotkeys`: every key Epi's app table (src/tui/keys.ts) and editor actually bind, with the keys
  * resolved live through the installed KeybindingsManager (installKeybindings, keybindings.ts), so a
- * user remap in `~/.mmp/pi/keybindings.json` shows here too — unlike a hardcoded key label. */
+ * user remap in `~/.epi/pi/keybindings.json` shows here too — unlike a hardcoded key label. */
 export async function runHotkeys(host: CommandHost): Promise<void> {
   const theme = host.theme;
   const row = (id: string, description: string) => `${theme.fg("dim", keyText(id as KeyId) || "unbound")}  ${theme.fg("muted", description)}`;

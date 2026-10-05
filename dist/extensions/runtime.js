@@ -1,6 +1,6 @@
 import { findNearestProjectManifest } from "../project.js";
-import { createMmpRuntimeIdentity, createMmpRuntimeReport, normalizeLoadedSkills, renderMmpRuntimePrompt, } from "../runtime-identity.js";
-import { renderMmpStartupPage } from "../startup-page.js";
+import { createEpiRuntimeIdentity, createEpiRuntimeReport, normalizeLoadedSkills, renderEpiRuntimePrompt, } from "../runtime-identity.js";
+import { renderEpiStartupPage } from "../startup-page.js";
 import { crossProjectRefusal } from "../tui/project-guard.js";
 import { readUpdateCache, refreshUpdateCache, updateNotice } from "../update.js";
 function errorMessage(error) {
@@ -22,10 +22,10 @@ function reloadableAssembly(initial, next) {
         externalExtensions: initial.externalExtensions,
     };
 }
-/** `--verbose` in MMP's TUI (docs/cli-design.md §2): the startup details Pi's own verbose startup
- * shows (dist/modes/interactive/interactive-mode.js), reduced to what MMP tracks -- loaded
+/** `--verbose` in Epi's TUI (docs/cli-design.md §2): the startup details Pi's own verbose startup
+ * shows (dist/modes/interactive/interactive-mode.js), reduced to what Epi tracks -- loaded
  * resources, model, session -- shown as transcript notices via `context.ui.notify`, the same path
- * `/mmp`'s manifest-reload notice uses. Non-interactive runs (`-p`, `--mode json/rpc`) never build
+ * `/epi`'s manifest-reload notice uses. Non-interactive runs (`-p`, `--mode json/rpc`) never build
  * this extension against a "tui" context, so nothing extra prints there; `--verbose` reaches Pi's
  * own piMain unchanged for that path. */
 function notifyVerboseStartup(assembly, context) {
@@ -39,7 +39,7 @@ function notifyVerboseStartup(assembly, context) {
     const sessionFile = context.sessionManager.getSessionFile();
     context.ui.notify(`Session: ${sessionFile ?? "ephemeral (--no-session)"} (id ${context.sessionManager.getSessionId()})`);
 }
-export function createMmpRuntimeExtensions(initialIdentity, initialAssembly, resolveAssembly = () => initialAssembly, updateCheck, verbose = false) {
+export function createEpiRuntimeExtensions(initialIdentity, initialAssembly, resolveAssembly = () => initialAssembly, updateCheck, verbose = false) {
     // The last valid assembly: replaced only by a successful Manifest refresh, read by the runtime
     // and system-prompt extensions. It lives outside the factories on purpose: Pi re-runs them on
     // /reload, /new, session switch and fork, and a refresh that then fails must keep the last valid
@@ -51,43 +51,43 @@ export function createMmpRuntimeExtensions(initialIdentity, initialAssembly, res
     const launchCwd = process.cwd();
     let launchProject;
     const runtime = {
-        name: "mmp:runtime",
+        name: "epi:runtime",
         factory(pi) {
             let sessionActive = false;
             function showUpdateNotice(context) {
                 if (updateCheck === undefined || updateCheck.disabled) {
                     return;
                 }
-                const { mmpHome, currentVersion } = updateCheck;
+                const { epiHome, currentVersion } = updateCheck;
                 const show = (notice) => {
                     if (notice !== undefined && sessionActive) {
-                        context.ui.setStatus("mmp-update", context.ui.theme.fg("warning", notice));
+                        context.ui.setStatus("epi-update", context.ui.theme.fg("warning", notice));
                     }
                 };
-                show(updateNotice(readUpdateCache(mmpHome), currentVersion));
-                void refreshUpdateCache({ mmpHome }).then((cache) => show(updateNotice(cache, currentVersion)));
+                show(updateNotice(readUpdateCache(epiHome), currentVersion));
+                void refreshUpdateCache({ epiHome }).then((cache) => show(updateNotice(cache, currentVersion)));
             }
             function refreshManifest(context, showSuccess) {
                 try {
                     const resolved = resolveAssembly();
                     const extensionsChanged = extensionSelectionChanged(initialAssembly, resolved);
                     activeAssembly = reloadableAssembly(initialAssembly, resolved);
-                    activeIdentity = createMmpRuntimeIdentity({
-                        mmpVersion: initialIdentity.runtime.version,
+                    activeIdentity = createEpiRuntimeIdentity({
+                        epiVersion: initialIdentity.runtime.version,
                         piVersion: initialIdentity.runtime.engineVersion,
-                        mmpHome: initialIdentity.paths.mmpHome,
+                        epiHome: initialIdentity.paths.epiHome,
                         assembly: activeAssembly,
                     });
                     if (showSuccess) {
-                        const summary = `MMP reloaded ${activeAssembly.rules.length} rule files and ` +
+                        const summary = `Epi reloaded ${activeAssembly.rules.length} rule files and ` +
                             `${activeAssembly.skills.length} skill roots.`;
                         context.ui.notify(extensionsChanged
-                            ? `${summary} Extension changes require restarting MMP.`
+                            ? `${summary} Extension changes require restarting Epi.`
                             : summary, extensionsChanged ? "warning" : "info");
                     }
                 }
                 catch (error) {
-                    context.ui.notify(`MMP Manifest reload failed: ${errorMessage(error)}`, "error");
+                    context.ui.notify(`Epi Manifest reload failed: ${errorMessage(error)}`, "error");
                 }
             }
             // Dogfood D67: rpc's switch_session (and any other caller of Pi's switchSession) must refuse a
@@ -131,7 +131,7 @@ export function createMmpRuntimeExtensions(initialIdentity, initialAssembly, res
                                 modelProvider: model.provider,
                                 modelId: model.id,
                             };
-                        return renderMmpStartupPage(activeIdentity, theme, width, pageOptions);
+                        return renderEpiStartupPage(activeIdentity, theme, width, pageOptions);
                     },
                     invalidate() { },
                 }));
@@ -142,13 +142,13 @@ export function createMmpRuntimeExtensions(initialIdentity, initialAssembly, res
             pi.on("resources_discover", () => ({
                 skillPaths: activeAssembly.skills.map((skill) => skill.value),
             }));
-            pi.registerCommand("mmp", {
-                description: "Show the authoritative MMP runtime and resource inventory",
+            pi.registerCommand("epi", {
+                description: "Show the authoritative Epi runtime and resource inventory",
                 handler: async (_args, context) => {
                     const loadedSkills = normalizeLoadedSkills(context.getSystemPromptOptions().skills);
-                    const report = createMmpRuntimeReport(activeIdentity, loadedSkills);
+                    const report = createEpiRuntimeReport(activeIdentity, loadedSkills);
                     pi.sendMessage({
-                        customType: "mmp-runtime",
+                        customType: "epi-runtime",
                         content: JSON.stringify(report, null, 2),
                         display: true,
                         details: report,
@@ -161,7 +161,7 @@ export function createMmpRuntimeExtensions(initialIdentity, initialAssembly, res
     // emitBeforeAgentStart), so `sections` edits by any later before_agent_start handler -- Pi's MCP
     // `mcp_servers` list among them -- never reach the model. Hence a separate extension placed last.
     const systemPrompt = {
-        name: "mmp:system-prompt",
+        name: "epi:system-prompt",
         factory(pi) {
             pi.on("before_agent_start", (event) => {
                 const loadedSkills = normalizeLoadedSkills(event.systemPromptOptions.skills);
@@ -169,7 +169,7 @@ export function createMmpRuntimeExtensions(initialIdentity, initialAssembly, res
                 if (activeAssembly.rulesText.length > 0) {
                     promptParts.push(activeAssembly.rulesText);
                 }
-                promptParts.push(renderMmpRuntimePrompt(activeIdentity, loadedSkills));
+                promptParts.push(renderEpiRuntimePrompt(activeIdentity, loadedSkills));
                 return { systemPrompt: promptParts.join("\n\n") };
             });
         },

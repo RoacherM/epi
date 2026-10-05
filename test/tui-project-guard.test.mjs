@@ -1,6 +1,6 @@
 // Bug 2 (docs/tui-design.md §15): resuming a session from another project kept the launch
 // project's manifest (Rules/skills/extensions), because AgentSessionRuntime.switchSession only
-// re-creates services with the session's cwd -- MMP's manifest is fixed at launch and cannot be
+// re-creates services with the session's cwd -- Epi's manifest is fixed at launch and cannot be
 // hot-loaded. These tests fail before the guard existed (a cross-project switch silently succeeds)
 // and pass after it (project-guard.ts, wired into session-commands.ts and app.ts).
 import assert from "node:assert/strict";
@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { crossProjectRefusal } from "../dist/tui/project-guard.js";
-import { prepareMmpRun } from "../dist/host.js";
+import { prepareEpiRun } from "../dist/host.js";
 import { projectIdentityFromPrepared } from "../dist/tui/start.js";
 import { startMagpieServer } from "./fixtures/magpie-server.mjs";
 
@@ -39,7 +39,7 @@ function allSessionFiles(sessionsDir) {
 function seedSession(env, cwd) {
   const result = spawnSync(process.execPath, [runnerPath], {
     cwd,
-    env: { ...env, MMP_SDK_RUNNER: JSON.stringify({ args: ["--approve"], prompt: "hi" }) },
+    env: { ...env, EPI_SDK_RUNNER: JSON.stringify({ args: ["--approve"], prompt: "hi" }) },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -50,19 +50,19 @@ function fixture(t) {
   // Realpath immediately: macOS's tmpdir() is under a symlink (/var -> /private/var), but session
   // headers and findNearestProjectManifest both store/resolve realpaths, so comparisons below must
   // use the same canonical form the rest of the fixture is built from.
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "mmp-project-guard-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "epi-project-guard-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const projectA = join(root, "projectA");
   const projectASub = join(projectA, "sub");
   const projectB = join(root, "projectB");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  mkdirSync(join(projectA, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  mkdirSync(join(projectA, ".epi"), { recursive: true });
   mkdirSync(projectASub, { recursive: true });
-  mkdirSync(join(projectB, ".mmp"), { recursive: true });
-  writeFileSync(join(projectA, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [switchtoExtension] }));
-  writeFileSync(join(projectB, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [switchtoExtension] }));
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
+  mkdirSync(join(projectB, ".epi"), { recursive: true });
+  writeFileSync(join(projectA, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [switchtoExtension] }));
+  writeFileSync(join(projectB, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [switchtoExtension] }));
+  const env = { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1" };
   return { root, home, projectA, projectASub, projectB, env };
 }
 
@@ -72,19 +72,19 @@ test("crossProjectRefusal blocks a different project's session and allows the sa
   seedSession(f.env, f.projectASub);
   seedSession(f.env, f.projectB);
 
-  const sessionsDir = join(f.home, ".mmp", "pi", "sessions");
+  const sessionsDir = join(f.home, ".epi", "pi", "sessions");
   const files = allSessionFiles(sessionsDir);
   const aSession = files.find((file) => file.cwd === f.projectA);
   const subSession = files.find((file) => file.cwd === f.projectASub);
   const bSession = files.find((file) => file.cwd === f.projectB);
   assert.ok(aSession && subSession && bSession, JSON.stringify(files));
 
-  const identity = projectIdentityFromPrepared(prepareMmpRun(["--approve"], f.env, f.projectA), f.projectA);
+  const identity = projectIdentityFromPrepared(prepareEpiRun(["--approve"], f.env, f.projectA), f.projectA);
   assert.equal(identity.root, f.projectA);
 
   const refusal = crossProjectRefusal(bSession.path, identity);
   assert.match(refusal, /different project/);
-  assert.match(refusal, new RegExp(`cd .*mmp --session .*${bSession.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(refusal, new RegExp(`cd .*epi --session .*${bSession.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 
   assert.equal(crossProjectRefusal(subSession.path, identity), undefined);
   assert.equal(crossProjectRefusal(aSession.path, identity), undefined);
@@ -93,7 +93,7 @@ test("crossProjectRefusal blocks a different project's session and allows the sa
 function runHarness(t, cwd, env, args, steps, rows) {
   const result = spawnSync(process.execPath, [harnessPath], {
     cwd,
-    env: { ...env, MMP_TUI_HARNESS: JSON.stringify({ args, steps, ...(rows ? { rows } : {}) }) },
+    env: { ...env, EPI_TUI_HARNESS: JSON.stringify({ args, steps, ...(rows ? { rows } : {}) }) },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -108,11 +108,11 @@ test("the switchSession extension action (same one /resume uses) refuses a diffe
   seedSession(f.env, f.projectB);
   spawnSync(process.execPath, [runnerPath], {
     cwd: f.projectASub,
-    env: { ...f.env, MMP_SDK_RUNNER: JSON.stringify({ args: ["--approve"], prompt: "seed-sub" }) },
+    env: { ...f.env, EPI_SDK_RUNNER: JSON.stringify({ args: ["--approve"], prompt: "seed-sub" }) },
     encoding: "utf8",
     timeout: 60_000,
   });
-  const sessionsDir = join(f.home, ".mmp", "pi", "sessions");
+  const sessionsDir = join(f.home, ".epi", "pi", "sessions");
   const files = allSessionFiles(sessionsDir);
   const bSession = files.find((file) => file.cwd === f.projectB);
   const subSession = files.find((file) => file.cwd === f.projectASub);
@@ -145,16 +145,16 @@ test("the switchSession extension action (same one /resume uses) refuses a diffe
   assert.match(out, /EXIT=0/);
 });
 
-test("mmp --session <path> refuses a different project's session file at startup, even given as a literal path", (t) => {
+test("epi --session <path> refuses a different project's session file at startup, even given as a literal path", (t) => {
   const f = fixture(t);
   seedSession(f.env, f.projectB);
-  const sessionsDir = join(f.home, ".mmp", "pi", "sessions");
+  const sessionsDir = join(f.home, ".epi", "pi", "sessions");
   const bSession = allSessionFiles(sessionsDir).find((file) => file.cwd === f.projectB);
   assert.ok(bSession, "no B session seeded");
 
   const result = spawnSync(process.execPath, [runnerPath], {
     cwd: f.projectA,
-    env: { ...f.env, MMP_SDK_RUNNER: JSON.stringify({ args: ["--approve", "--session", bSession.path] }) },
+    env: { ...f.env, EPI_SDK_RUNNER: JSON.stringify({ args: ["--approve", "--session", bSession.path] }) },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -176,7 +176,7 @@ test("/resume itself refuses a session picked from another project, and leaves t
     ["type", "/resume"], ["key", "enter"], ["waitFor", "Resume Session (Current Folder)"],
     ["key", "tab"], ["waitFor", "Resume Session (All)"], ["waitFor", "projectB"],
     ["key", "down"], ["wait", 200],
-    ["key", "enter"], ["waitFor", { regex: "cd .*mmp --session" }], ["mark", "afterResumeAttempt"],
+    ["key", "enter"], ["waitFor", { regex: "cd .*epi --session" }], ["mark", "afterResumeAttempt"],
     ["type", "still A?"], ["key", "enter"], ["waitFor", "ECHO:still A?"], ["mark", "stillA"],
     ["key", "ctrl+d"],
   ]);
@@ -184,7 +184,7 @@ test("/resume itself refuses a session picked from another project, and leaves t
   assert.match(marks.aReply, /ECHO:hello A/);
   const afterResume = marks.afterResumeAttempt.slice(marks.aReply.length);
   assert.match(afterResume, /different project/);
-  assert.match(afterResume, /cd .*mmp --session/);
+  assert.match(afterResume, /cd .*epi --session/);
   assert.doesNotMatch(afterResume, /Resumed session\./);
   // The current session (A) is unaffected: it still answers, still as A's echo model.
   assert.match(marks.stillA.slice(marks.afterResumeAttempt.length), /ECHO:still A\?/);
@@ -194,18 +194,18 @@ test("/resume itself refuses a session picked from another project, and leaves t
 // Bug 5 (docs/tui-design.md §15): `identity.root` used to come from `assembly.projectManifest?.root`,
 // which is undefined whenever the project manifest isn't loaded -- not just when there really is no
 // project (discovery "none"), but also with `--no-project` (discovery "disabled") or an untrusted
-// project (discovery "ignored"), even though a `.mmp/mmp.json` genuinely exists there. A session
+// project (discovery "ignored"), even though a `.epi/epi.json` genuinely exists there. A session
 // created in that very folder then looked like it belonged to "a different project" (undefined vs.
 // its own real root). Fixed by computing `root` straight from `findNearestProjectManifest`,
 // independent of whether the manifest actually got loaded (src/tui/start.ts).
 test("--no-project still identifies the launch folder as its own project (a manifest exists, it's just not loaded)", (t) => {
   const f = fixture(t);
   seedSession(f.env, f.projectA);
-  const sessionsDir = join(f.home, ".mmp", "pi", "sessions");
+  const sessionsDir = join(f.home, ".epi", "pi", "sessions");
   const aSession = allSessionFiles(sessionsDir).find((file) => file.cwd === f.projectA);
   assert.ok(aSession, "no A session seeded");
 
-  const identity = projectIdentityFromPrepared(prepareMmpRun(["--no-project"], f.env, f.projectA), f.projectA);
+  const identity = projectIdentityFromPrepared(prepareEpiRun(["--no-project"], f.env, f.projectA), f.projectA);
   assert.equal(identity.root, f.projectA);
   assert.equal(crossProjectRefusal(aSession.path, identity), undefined);
 });
@@ -214,9 +214,9 @@ test("--no-project still allows resuming a session from the launch folder itself
   const f = fixture(t);
   // --no-project disables projectA's own manifest, so the model here comes from the global one
   // instead (never gated by --no-project or trust).
-  writeFileSync(join(f.home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [switchtoExtension] }));
+  writeFileSync(join(f.home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [switchtoExtension] }));
   seedSession(f.env, f.projectA);
-  const sessionsDir = join(f.home, ".mmp", "pi", "sessions");
+  const sessionsDir = join(f.home, ".epi", "pi", "sessions");
   const aSession = allSessionFiles(sessionsDir).find((file) => file.cwd === f.projectA);
   assert.ok(aSession, "no A session seeded");
 
@@ -236,17 +236,17 @@ test("--no-project still allows resuming a session from the launch folder itself
 test("rpc switch_session and startup --session in print/rpc refuse another project's session, allow its own (D67)", async (t) => {
   const server = await startMagpieServer();
   t.after(() => server.close());
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "mmp-rpc-guard-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "epi-rpc-guard-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const mmpHome = join(root, ".mmp");
-  mkdirSync(join(mmpHome, "pi"), { recursive: true });
-  writeFileSync(join(mmpHome, "pi", "models.json"), JSON.stringify({ providers: { other: { baseUrl: server.baseUrl + "/v1", api: "openai-completions", apiKey: "x", models: [{ id: "echo" }] } } }));
-  const env = { PATH: process.env.PATH, HOME: root, MMP_HOME: mmpHome, MMP_OFFLINE: "1" };
+  const epiHome = join(root, ".epi");
+  mkdirSync(join(epiHome, "pi"), { recursive: true });
+  writeFileSync(join(epiHome, "pi", "models.json"), JSON.stringify({ providers: { other: { baseUrl: server.baseUrl + "/v1", api: "openai-completions", apiKey: "x", models: [{ id: "echo" }] } } }));
+  const env = { PATH: process.env.PATH, HOME: root, EPI_HOME: epiHome, EPI_OFFLINE: "1" };
   const model = ["--no-project", "--provider", "other", "--model", "echo", "--no-tools", "--thinking", "off"];
-  const sessionsOf = () => readdirSync(join(mmpHome, "pi", "sessions"), { recursive: true }).filter((name) => name.endsWith(".jsonl")).map((name) => join(mmpHome, "pi", "sessions", name));
+  const sessionsOf = () => readdirSync(join(epiHome, "pi", "sessions"), { recursive: true }).filter((name) => name.endsWith(".jsonl")).map((name) => join(epiHome, "pi", "sessions", name));
   for (const project of ["a", "b"]) {
-    mkdirSync(join(root, project, ".mmp"), { recursive: true });
-    writeFileSync(join(root, project, ".mmp", "mmp.json"), '{"version":1}');
+    mkdirSync(join(root, project, ".epi"), { recursive: true });
+    writeFileSync(join(root, project, ".epi", "epi.json"), '{"version":1}');
     // Async: the fake server lives in this process, so spawnSync would block its replies.
     const printRun = spawn(process.execPath, [cliPath, ...model, "-p", "hi"], { cwd: join(root, project), env, stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";

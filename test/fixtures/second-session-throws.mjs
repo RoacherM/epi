@@ -8,12 +8,12 @@
 // missing error line.
 import { registerHooks } from "node:module";
 
-const TAG = "?mmp-second-session-throws";
+const TAG = "?epi-second-session-throws";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
     const result = nextResolve(specifier, context);
-    // Only MMP's runtime factory's import. The URL stays a file: URL (services.ts also passes Pi's
+    // Only Epi's runtime factory's import. The URL stays a file: URL (services.ts also passes Pi's
     // resolved entry to fileURLToPath); the load hook below swaps in the wrapper for it.
     if (!/\/dist\/tui\/services\.js$/.test(context.parentURL ?? "")) return result;
     if (!/\/pi-coding-agent\/dist\/index\.js$/.test(result.url)) return result;

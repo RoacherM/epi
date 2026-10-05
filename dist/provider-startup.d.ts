@@ -25,7 +25,7 @@ export declare function isConnectionRefused(error: unknown): boolean;
 export declare function notRunningWarnings(settled: SettledProviders, defaultProvider: string | undefined, choiceFailed: boolean): Warning[];
 /**
  * Every path that picks or lists models calls this between createAgentSessionServices and the
- * pick: the TUI and print/json/rpc through createMmpRuntime, the task worker and --list-models
+ * pick: the TUI and print/json/rpc through createEpiRuntime, the task worker and --list-models
  * directly. It treats every provider an extension registered the same way (decision MG2); when a
  * refresh fails, the saved model lists stay in use.
  *
@@ -43,7 +43,7 @@ export declare function notRunningWarnings(settled: SettledProviders, defaultPro
  *    - A catalog saved in step 1 leaves Pi's store without the file's revision, so the next read
  *      takes the store's lock again. Doing that read here, awaited, keeps it out of the refresh
  *      rpc starts in the background: a client that closes stdin right away would end the process
- *      inside it and leave models-store.json.lock behind, which the next mmp waits 30 s for.
+ *      inside it and leave models-store.json.lock behind, which the next epi waits 30 s for.
  */
 export declare function settleRegisteredProviders(modelRuntime: ModelRuntime): Promise<SettledProviders>;
 export {};

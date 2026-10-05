@@ -1,8 +1,8 @@
-// `mmp mcp add|remove|list|login|logout` (docs/mcp-design.md §6): usage aligned to Pi's own
-// `pi mcp` (extensions/mcp/cli.js), but MMP parses its own arguments and reads/writes its own
+// `epi mcp add|remove|list|login|logout` (docs/mcp-design.md §6): usage aligned to Pi's own
+// `pi mcp` (extensions/mcp/cli.js), but Epi parses its own arguments and reads/writes its own
 // files -- Pi's `runMcpCommand` can't be reused directly: its project config path is hardcoded to
 // `join(cwd, CONFIG_DIR_NAME, "mcp.json")` (`.pi/mcp.json`, cli.js:127) and its trust check uses
-// Pi's own `ProjectTrustStore` (cli.js:133), never MMP's Manifest-based trust. What MMP does reuse:
+// Pi's own `ProjectTrustStore` (cli.js:133), never Epi's Manifest-based trust. What Epi does reuse:
 // config.js's add/remove/load/getMcpToolExposure and runtime.js's connection/OAuth pieces (both
 // registered in docs/pi-internals.md, extending the same "mcp-native-config-loader" row and a new
 // "mcp-native-runtime" row) -- so the file format, validation, and connection behavior stay
@@ -10,24 +10,24 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { MmpArgumentError } from "../errors.js";
+import { EpiArgumentError } from "../errors.js";
 import { assertProjectTrustedFor, isHelpRequested } from "./manifest-cli.js";
 import { emptyStateMessage, loadNativeMcpConfig } from "../extensions/mcp.js";
 import { manifestDisables } from "../manifest.js";
-import { resolveMmpPaths } from "../paths.js";
+import { resolveEpiPaths } from "../paths.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "../project.js";
 const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
 const { addMcpServerConfig, removeMcpServerConfig, getMcpToolExposure } = (await import(pathToFileURL(join(piDist, "extensions", "mcp", "config.js")).href));
 const { validateMcpServerConfig } = (await import(pathToFileURL(join(piDist, "core", "mcp-servers.js")).href));
 const HELP = `Usage:
-  mmp mcp add <server> [options] (--url <url> | -- <command> [args...])
-  mmp mcp remove <server> [-l]
-  mmp mcp list [--json] [--approve|--no-approve]
-  mmp mcp login <server> [--timeout <seconds>] [--approve|--no-approve]
-  mmp mcp logout <server> [--approve|--no-approve]
+  epi mcp add <server> [options] (--url <url> | -- <command> [args...])
+  epi mcp remove <server> [-l]
+  epi mcp list [--json] [--approve|--no-approve]
+  epi mcp login <server> [--timeout <seconds>] [--approve|--no-approve]
+  epi mcp logout <server> [--approve|--no-approve]
 
 Configure and check MCP servers, and sign in to OAuth servers, without starting a session.
-Reads ~/.mmp/mcp.json and, in a trusted project, .mmp/mcp.json.
+Reads ~/.epi/mcp.json and, in a trusted project, .epi/mcp.json.
 
 Commands:
   add <server>            Add or replace a server in mcp.json
@@ -37,12 +37,12 @@ Commands:
   logout <server>         Delete the stored OAuth credentials
 
 Options for add and remove:
-  -l, --local             Use .mmp/mcp.json in the current project instead of the global file
+  -l, --local             Use .epi/mcp.json in the current project instead of the global file
 
 Trust (every command):
   -a, --approve           Trust the project Manifest for this run, even if the project isn't
-                          otherwise trusted: add/remove -l may write the project's .mmp/mcp.json,
-                          list/login/logout read it. Does not persist -- /trust in mmp does
+                          otherwise trusted: add/remove -l may write the project's .epi/mcp.json,
+                          list/login/logout read it. Does not persist -- /trust in epi does
   -na, --no-approve       Treat the project as untrusted for this run, even if it is trusted
 
 Options for add:
@@ -66,7 +66,7 @@ Other options:
   --json                  Print the list as JSON
   --timeout <seconds>     How long login waits for the browser (default: 300)
 `;
-const HELP_HINT = 'Use "mmp mcp --help" for usage.';
+const HELP_HINT = 'Use "epi mcp --help" for usage.';
 const DEFAULT_LOGIN_TIMEOUT_SECONDS = 300;
 const MAX_LOGIN_TIMEOUT_SECONDS = 2_147_483;
 function errorMessage(error) {
@@ -79,10 +79,10 @@ function describeTransport(entry) {
 const OPTION_ALIASES = new Map([["-l", "--local"], ["-a", "--approve"], ["-na", "--no-approve"]]);
 const APPROVE_OPTIONS = { approve: "flag", "no-approve": "flag" };
 /** `--approve`/`--no-approve` as a this-run-only override of the saved trust decision (decisions
- * U4, same as `mmp install -l`): true, false, or undefined for "use the saved decision". */
+ * U4, same as `epi install -l`): true, false, or undefined for "use the saved decision". */
 function approveOverrideOf(values) {
     if (values.has("approve") && values.has("no-approve")) {
-        throw new MmpArgumentError(`--approve and --no-approve can't be used together.\n${HELP_HINT}`);
+        throw new EpiArgumentError(`--approve and --no-approve can't be used together.\n${HELP_HINT}`);
     }
     return values.has("approve") ? true : values.has("no-approve") ? false : undefined;
 }
@@ -108,7 +108,7 @@ function parseOptions(args, known, maxPositionals = Number.POSITIVE_INFINITY) {
         const name = arg.slice(2);
         const kind = known[name];
         if (kind === undefined) {
-            throw new MmpArgumentError(`Unknown option ${arg}.\n${HELP_HINT}`);
+            throw new EpiArgumentError(`Unknown option ${arg}.\n${HELP_HINT}`);
         }
         if (kind === "flag") {
             values.set(name, true);
@@ -116,7 +116,7 @@ function parseOptions(args, known, maxPositionals = Number.POSITIVE_INFINITY) {
         }
         const value = args[index + 1];
         if (value === undefined) {
-            throw new MmpArgumentError(`${arg} needs a value.`);
+            throw new EpiArgumentError(`${arg} needs a value.`);
         }
         index += 1;
         if (kind === "list") {
@@ -133,62 +133,62 @@ function parsePairs(option, pairs) {
     for (const pair of pairs ?? []) {
         const separator = pair.indexOf("=");
         if (separator <= 0) {
-            throw new MmpArgumentError(`--${option} expects KEY=VALUE, got "${pair}".`);
+            throw new EpiArgumentError(`--${option} expects KEY=VALUE, got "${pair}".`);
         }
         record[pair.slice(0, separator)] = pair.slice(separator + 1);
     }
     return record;
 }
 function globalConfigPath(ctx) {
-    return join(ctx.mmpHome, "mcp.json");
+    return join(ctx.epiHome, "mcp.json");
 }
 function localConfigPath(ctx) {
-    return join(ctx.cwd, ".mmp", "mcp.json");
+    return join(ctx.cwd, ".epi", "mcp.json");
 }
-/** `-l` changes the `.mmp/mcp.json` right here (like `mmp install -l`), which only counts in a trusted
+/** `-l` changes the `.epi/mcp.json` right here (like `epi install -l`), which only counts in a trusted
  * project. Where there is no project Manifest and nothing overrides the trust check, the refusal
  * says there's no project rather than that it isn't trusted (dogfood D47). */
 function assertLocalAllowed(ctx, approveOverride) {
     if (approveOverride === undefined &&
-        !existsSync(join(ctx.cwd, ".mmp", "mmp.json")) &&
-        readProjectTrustDecision(resolveMmpPaths(process.env).agentDir, ctx.cwd) !== true) {
-        throw new MmpArgumentError(`${ctx.cwd} has no .mmp/mmp.json, so it is not an MMP project -- -l has nothing to change here. ` +
-            `Create the project with \`mmp config -l --approve\`, or leave out -l to use ${globalConfigPath(ctx)}.`);
+        !existsSync(join(ctx.cwd, ".epi", "epi.json")) &&
+        readProjectTrustDecision(resolveEpiPaths(process.env).agentDir, ctx.cwd) !== true) {
+        throw new EpiArgumentError(`${ctx.cwd} has no .epi/epi.json, so it is not an Epi project -- -l has nothing to change here. ` +
+            `Create the project with \`epi config -l --approve\`, or leave out -l to use ${globalConfigPath(ctx)}.`);
     }
     assertProjectTrustedFor(ctx.cwd, approveOverride);
 }
 /** The merged view a real session would see: global always, project only when trusted -- built the
  * same way src/extensions/mcp.ts does, but walking up to the nearest project Manifest (like
- * `mmp list`) rather than "only exactly cwd" (like `add -l`/`remove -l`, which always write "here",
- * matching `mmp install -l`). `approveOverride` replaces the saved decision for this run only, like
- * `mmp --approve`/`--no-approve` (src/project.ts's resolveProjectManifest); nothing is persisted. */
+ * `epi list`) rather than "only exactly cwd" (like `add -l`/`remove -l`, which always write "here",
+ * matching `epi install -l`). `approveOverride` replaces the saved decision for this run only, like
+ * `epi --approve`/`--no-approve` (src/project.ts's resolveProjectManifest); nothing is persisted. */
 function resolveListConfig(ctx, approveOverride, command) {
-    const paths = resolveMmpPaths(process.env);
+    const paths = resolveEpiPaths(process.env);
     const candidate = findNearestProjectManifest(ctx.cwd, paths.globalManifest);
     const trusted = candidate !== undefined && (approveOverride ?? readProjectTrustDecision(paths.agentDir, ctx.cwd) === true);
-    const ignoredPath = candidate === undefined ? undefined : join(candidate.root, ".mmp", "mcp.json");
+    const ignoredPath = candidate === undefined ? undefined : join(candidate.root, ".epi", "mcp.json");
     const untrustedNote = candidate === undefined || trusted
         ? undefined
         : approveOverride === false
             ? `${ignoredPath} is ignored because of --no-approve.`
-            : `${ignoredPath} is ignored because the project is not trusted. Add --approve to read it this once (mmp mcp ${command} --approve), or trust the project with /trust in mmp.`;
+            : `${ignoredPath} is ignored because the project is not trusted. Add --approve to read it this once (epi mcp ${command} --approve), or trust the project with /trust in epi.`;
     const loaded = loadNativeMcpConfig({
-        mmpHome: ctx.mmpHome,
+        epiHome: ctx.epiHome,
         resolveAssembly: () => trusted && candidate !== undefined
             ? { projectManifest: { loaded: true, root: candidate.root, path: candidate.manifestPath, trusted: true } }
             : { projectManifest: undefined },
     }, ctx.cwd);
     return { loaded, untrustedNote, trustedProjectManifest: trusted ? candidate?.manifestPath : undefined };
 }
-/** Why `mmp mcp list` connects to nothing: `"disable": ["mmp:mcp"]` in a Manifest a session started
+/** Why `epi mcp list` connects to nothing: `"disable": ["epi:mcp"]` in a Manifest a session started
  * here reads (global, and the project's when trusted) turns MCP off, and mcp.json is not read. */
 function mcpOffNote(trustedProjectManifest) {
-    const manifests = [resolveMmpPaths(process.env).globalManifest, ...(trustedProjectManifest === undefined ? [] : [trustedProjectManifest])];
-    const disabledIn = manifests.filter((manifestPath) => manifestDisables(manifestPath, "mmp:mcp"));
+    const manifests = [resolveEpiPaths(process.env).globalManifest, ...(trustedProjectManifest === undefined ? [] : [trustedProjectManifest])];
+    const disabledIn = manifests.filter((manifestPath) => manifestDisables(manifestPath, "epi:mcp"));
     return disabledIn.length === 0
         ? undefined
-        : `mmp:mcp is turned off by "disable" in ${disabledIn.join(" and ")}, so sessions do not load MCP servers. ` +
-            'Remove "mmp:mcp" from "disable" to use them.';
+        : `epi:mcp is turned off by "disable" in ${disabledIn.join(" and ")}, so sessions do not load MCP servers. ` +
+            'Remove "epi:mcp" from "disable" to use them.';
 }
 const ADD_OPTIONS = {
     local: "flag",
@@ -255,11 +255,11 @@ function buildServerConfig(parsed) {
     const [name, ...command] = positional;
     const url = stringOption(values, "url");
     if (!name || (url === undefined) === (command.length === 0)) {
-        throw new MmpArgumentError(`Usage: mmp mcp add <server> [options] (--url <url> | -- <command> [args...])\n${HELP_HINT}`);
+        throw new EpiArgumentError(`Usage: epi mcp add <server> [options] (--url <url> | -- <command> [args...])\n${HELP_HINT}`);
     }
     const misplaced = (url === undefined ? HTTP_ONLY_OPTIONS : STDIO_ONLY_OPTIONS).find((option) => values.has(option) || lists.has(option));
     if (misplaced) {
-        throw new MmpArgumentError(`--${misplaced} only applies to ${url === undefined ? "HTTP servers (--url)" : "stdio servers"}.`);
+        throw new EpiArgumentError(`--${misplaced} only applies to ${url === undefined ? "HTTP servers (--url)" : "stdio servers"}.`);
     }
     const config = url === undefined ? stdioServerConfig(command, parsed) : httpServerConfig(url, parsed);
     const exposure = stringOption(values, "exposure");
@@ -270,7 +270,7 @@ function buildServerConfig(parsed) {
         config.description = description;
     const validated = validateMcpServerConfig(name, config);
     if (typeof validated === "string") {
-        throw new MmpArgumentError(validated);
+        throw new EpiArgumentError(validated);
     }
     return { name, config: validated };
 }
@@ -279,21 +279,21 @@ function printAddFollowUp(ctx, path, local, name, config) {
     let approveHint = "";
     if (local) {
         // assertProjectTrustedFor only gates *this write* (an --approve override is this-run-only,
-        // never persisted) -- without one of these two hints, a plain future `mmp` or `mmp mcp list`
+        // never persisted) -- without one of these two hints, a plain future `epi` or `epi mcp list`
         // would silently ignore the file just written, which is exactly the "failure must be visible"
         // violation Pi's own cli.js:294-296 hint (a different case: it always creates the project
         // Manifest first, so only the trust half applies there) also exists to prevent.
-        if (!existsSync(join(ctx.cwd, ".mmp", "mmp.json"))) {
-            console.log(`${ctx.cwd} has no .mmp/mmp.json yet, so it is not an MMP project -- ${path} is ignored until you run \`mmp install -l\` (or \`mmp config -l\`) here.`);
+        if (!existsSync(join(ctx.cwd, ".epi", "epi.json"))) {
+            console.log(`${ctx.cwd} has no .epi/epi.json yet, so it is not an Epi project -- ${path} is ignored until you run \`epi install -l\` (or \`epi config -l\`) here.`);
         }
-        else if (readProjectTrustDecision(resolveMmpPaths(process.env).agentDir, ctx.cwd) !== true) {
-            console.log(`The project is not trusted, so ${path} is ignored until you start mmp in the project and trust it (mmp --approve or /trust).`);
+        else if (readProjectTrustDecision(resolveEpiPaths(process.env).agentDir, ctx.cwd) !== true) {
+            console.log(`The project is not trusted, so ${path} is ignored until you start epi in the project and trust it (epi --approve or /trust).`);
             // list and login read the file only with the same this-run override (dogfood D47).
             approveHint = " --approve";
         }
     }
     const mayNeedSignIn = "url" in config && !Object.keys(config.headers ?? {}).some((header) => header.toLowerCase() === "authorization");
-    console.log(`Check it with: mmp mcp list${approveHint}${mayNeedSignIn ? `. If it requires sign-in: mmp mcp login ${name}${approveHint}` : ""}`);
+    console.log(`Check it with: epi mcp list${approveHint}${mayNeedSignIn ? `. If it requires sign-in: epi mcp login ${name}${approveHint}` : ""}`);
 }
 function addCommand(args, ctx) {
     const parsed = parseOptions(args, ADD_OPTIONS, 2);
@@ -309,7 +309,7 @@ function addCommand(args, ctx) {
         replaced = addMcpServerConfig(path, name, config);
     }
     catch (addError) {
-        throw new MmpArgumentError(`Could not update ${path}: ${errorMessage(addError)}`);
+        throw new EpiArgumentError(`Could not update ${path}: ${errorMessage(addError)}`);
     }
     console.log(`${replaced ? "Replaced" : "Added"} ${local ? "project" : "global"} MCP server "${name}" in ${path}.`);
     printAddFollowUp(ctx, path, local, name, config);
@@ -319,7 +319,7 @@ function removeCommand(args, ctx) {
     const parsed = parseOptions(args, { local: "flag", ...APPROVE_OPTIONS });
     const [name, ...extra] = parsed.positional;
     if (!name || extra.length > 0) {
-        throw new MmpArgumentError(`Usage: mmp mcp remove <server> [-l]\n${HELP_HINT}`);
+        throw new EpiArgumentError(`Usage: epi mcp remove <server> [-l]\n${HELP_HINT}`);
     }
     const approveOverride = approveOverrideOf(parsed.values);
     const local = parsed.values.has("local");
@@ -332,7 +332,7 @@ function removeCommand(args, ctx) {
         removed = removeMcpServerConfig(path, name);
     }
     catch (removeError) {
-        throw new MmpArgumentError(`Could not update ${path}: ${errorMessage(removeError)}`);
+        throw new EpiArgumentError(`Could not update ${path}: ${errorMessage(removeError)}`);
     }
     if (removed) {
         console.log(`Removed ${local ? "project" : "global"} MCP server "${name}" from ${path}.`);
@@ -340,9 +340,9 @@ function removeCommand(args, ctx) {
     }
     const scope = local ? "project" : "global";
     // Mirrors cli.js's remove: not found in the requested scope doesn't mean not configured at all --
-    // check the other scope (within what MMP already trusts enough to read; unlike Pi's own CLI, this
+    // check the other scope (within what Epi already trusts enough to read; unlike Pi's own CLI, this
     // never reads an untrusted project's mcp.json just for a nicer error) and name where it actually
-    // lives, with MMP's own paths and flag (`-l`, not Pi's `--local`).
+    // lives, with Epi's own paths and flag (`-l`, not Pi's `--local`).
     const other = resolveListConfig(ctx, approveOverride, "remove").loaded.servers.find((server) => server.name === name && (server.scope ?? "global") !== scope);
     const otherHint = other === undefined ? "" : ` It is defined in ${other.source}${other.scope === "project" ? "; use -l" : "; omit -l"}.`;
     console.error(`No ${scope} MCP server named "${name}" in ${path}.${otherHint}`);
@@ -356,7 +356,7 @@ async function loadRuntimeModule() {
     return (await import(pathToFileURL(join(piDist, "extensions", "mcp", "runtime.js")).href));
 }
 const STATE_LABELS = { "needs-auth": "needs sign-in", "not-loaded": "not loaded" };
-/** `mmp mcp list`'s text form of each server, Pi's layout (extensions/mcp/cli.js). */
+/** `epi mcp list`'s text form of each server, Pi's layout (extensions/mcp/cli.js). */
 function printReports(reports) {
     for (const report of reports) {
         const state = report.state === "connected"
@@ -365,7 +365,7 @@ function printReports(reports) {
         console.log(`${report.name}: ${state} (${report.exposure}, ${report.scope})`);
         console.log(`  ${report.transport}`);
         if (report.state === "needs-auth")
-            console.log(`  sign in with: mmp mcp login ${report.name}`);
+            console.log(`  sign in with: epi mcp login ${report.name}`);
         if (report.tools.length > 0) {
             const tools = report.tools.map((tool) => {
                 const exposure = report.toolExposure?.[tool];
@@ -383,7 +383,7 @@ function printReports(reports) {
 async function listCommand(args, ctx) {
     const parsed = parseOptions(args, { json: "flag", ...APPROVE_OPTIONS });
     if (parsed.positional.length > 0) {
-        throw new MmpArgumentError(`Usage: mmp mcp list [--json] [--approve|--no-approve]\n${HELP_HINT}`);
+        throw new EpiArgumentError(`Usage: epi mcp list [--json] [--approve|--no-approve]\n${HELP_HINT}`);
     }
     const json = parsed.values.has("json");
     const { loaded, untrustedNote, trustedProjectManifest } = resolveListConfig(ctx, approveOverrideOf(parsed.values), "list");
@@ -410,7 +410,7 @@ async function listCommand(args, ctx) {
             cwd: ctx.cwd,
             createTransport: runtime.createDefaultTransport,
             credentials,
-            log: new runtime.McpServerLog(join(ctx.mmpHome, "pi", "mcp.log")),
+            log: new runtime.McpServerLog(join(ctx.epiHome, "pi", "mcp.log")),
             onTools: () => { },
         });
         try {
@@ -444,7 +444,7 @@ async function listCommand(args, ctx) {
         return failed ? 1 : 0;
     }
     if (reports.length === 0 && loaded.errors.length === 0) {
-        console.log(emptyStateMessage(ctx.mmpHome, ctx.cwd));
+        console.log(emptyStateMessage(ctx.epiHome, ctx.cwd));
     }
     printReports(reports);
     for (const configError of loaded.errors)
@@ -472,7 +472,7 @@ async function loginOrLogoutCommand(command, args, ctx) {
     const parsed = parseOptions(args, command === "login" ? { timeout: "value", ...APPROVE_OPTIONS } : APPROVE_OPTIONS);
     const [name, ...extra] = parsed.positional;
     if (!name || extra.length > 0) {
-        throw new MmpArgumentError(`Usage: mmp mcp ${command} <server> [--approve|--no-approve]\n${HELP_HINT}`);
+        throw new EpiArgumentError(`Usage: epi mcp ${command} <server> [--approve|--no-approve]\n${HELP_HINT}`);
     }
     const { loaded, untrustedNote } = resolveListConfig(ctx, approveOverrideOf(parsed.values), command);
     const entry = loaded.servers.find((server) => server.name === name);
@@ -487,7 +487,7 @@ async function loginOrLogoutCommand(command, args, ctx) {
         cwd: ctx.cwd,
         createTransport: runtime.createDefaultTransport,
         credentials,
-        log: new runtime.McpServerLog(join(ctx.mmpHome, "pi", "mcp.log")),
+        log: new runtime.McpServerLog(join(ctx.epiHome, "pi", "mcp.log")),
         onTools: () => { },
     });
     const url = connection.oauthUrl;
@@ -529,7 +529,7 @@ async function loginOrLogoutCommand(command, args, ctx) {
                     showAuthorizationUrl: (authorizationUrl) => {
                         console.log(`Sign in to MCP server "${name}" in your browser:\n${authorizationUrl.href}`);
                     },
-                    // Non-interactive-friendly default: mmp mcp login is meant to be run by an agent through
+                    // Non-interactive-friendly default: epi mcp login is meant to be run by an agent through
                     // bash (module comment), so it never blocks on stdin -- it waits out the timeout instead.
                     promptForRedirectUrl: (signal) => waitOutSignIn(signal, timeoutSeconds * 1000),
                 },
@@ -562,7 +562,7 @@ export async function runMcpCommand(argv) {
         return 0;
     }
     const [command, ...rest] = argv;
-    const ctx = { mmpHome: resolveMmpPaths(process.env).mmpHome, cwd: process.cwd() };
+    const ctx = { epiHome: resolveEpiPaths(process.env).epiHome, cwd: process.cwd() };
     switch (command) {
         case "add":
             return addCommand(rest, ctx);
@@ -575,7 +575,7 @@ export async function runMcpCommand(argv) {
         case "logout":
             return loginOrLogoutCommand("logout", rest, ctx);
         default:
-            throw new MmpArgumentError(`Unknown mcp command "${command}".\n${HELP_HINT}`);
+            throw new EpiArgumentError(`Unknown mcp command "${command}".\n${HELP_HINT}`);
     }
 }
 //# sourceMappingURL=mcp-cli.js.map

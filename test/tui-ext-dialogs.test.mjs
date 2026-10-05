@@ -12,17 +12,17 @@ const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 function runApp(t, steps, env = {}) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-ext-dialogs-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-ext-dialogs-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({
     version: 1,
     extensions: [fixture("ui-dialogs-extension.mjs"), fixture("faux-reasoning-model.mjs")],
   }));
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", ...env, MMP_TUI_HARNESS: JSON.stringify({ steps }) },
+    env: { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1", ...env, EPI_TUI_HARNESS: JSON.stringify({ steps }) },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -79,7 +79,7 @@ test("a dialog's timeout and abort signal close it with the fallback; an already
 });
 
 test("a dialog closed by its timeout gives the prompt its keys back (e2e K1: Shift+Tab, Ctrl+V)", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-ext-dialogs-clip-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-ext-dialogs-clip-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const clipboard = join(root, "clipboard.txt");
   writeFileSync(clipboard, "PASTED-AFTER-DIALOG");
@@ -89,7 +89,7 @@ test("a dialog closed by its timeout gives the prompt its keys back (e2e K1: Shi
     ["raw", "\x1b[Z"], ["waitFor", "thinker (high)"], ["mark", "cycled"],
     ["key", "ctrl+v"], ["waitFor", "PASTED-AFTER-DIALOG"], ["mark", "pasted"],
     ["key", "ctrl+c"], ["wait", 100], ["key", "ctrl+d"],
-  ], { MMP_TEST_CLIPBOARD_FILE: clipboard });
+  ], { EPI_TEST_CLIPBOARD_FILE: clipboard });
   assert.match(after(marks, "closed", "cycled"), /thinker \(high\)/);
   assert.match(after(marks, "cycled", "pasted"), /❯ PASTED-AFTER-DIALOG/);
 });

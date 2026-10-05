@@ -1,17 +1,17 @@
-import { MmpConfigError } from "./errors.js";
-import { resolveMmpPaths } from "./paths.js";
+import { EpiConfigError } from "./errors.js";
+import { resolveEpiPaths } from "./paths.js";
 export const PI_ENV_RULES = {
-    PI_OFFLINE: { kind: "bridged", mmp: "MMP_OFFLINE" },
-    PI_CODING_AGENT_SESSION_DIR: { kind: "bridged", mmp: "MMP_SESSION_DIR" },
-    PI_TELEMETRY: { kind: "bridged", mmp: "MMP_TELEMETRY" },
-    PI_CACHE_RETENTION: { kind: "bridged", mmp: "MMP_CACHE_RETENTION" },
-    PI_OAUTH_CALLBACK_HOST: { kind: "bridged", mmp: "MMP_OAUTH_CALLBACK_HOST" },
-    PI_HYPERLINKS: { kind: "bridged", mmp: "MMP_HYPERLINKS" },
-    PI_IMAGE_PROTOCOL: { kind: "bridged", mmp: "MMP_IMAGE_PROTOCOL" },
-    PI_TRUE_COLOR: { kind: "bridged", mmp: "MMP_TRUE_COLOR" },
-    PI_TUI_ESC_TIMEOUT: { kind: "bridged", mmp: "MMP_TUI_ESC_TIMEOUT" },
-    PI_CODING_AGENT_DIR: { kind: "mmp-owned" },
-    PI_SKIP_VERSION_CHECK: { kind: "mmp-owned" },
+    PI_OFFLINE: { kind: "bridged", epi: "EPI_OFFLINE" },
+    PI_CODING_AGENT_SESSION_DIR: { kind: "bridged", epi: "EPI_SESSION_DIR" },
+    PI_TELEMETRY: { kind: "bridged", epi: "EPI_TELEMETRY" },
+    PI_CACHE_RETENTION: { kind: "bridged", epi: "EPI_CACHE_RETENTION" },
+    PI_OAUTH_CALLBACK_HOST: { kind: "bridged", epi: "EPI_OAUTH_CALLBACK_HOST" },
+    PI_HYPERLINKS: { kind: "bridged", epi: "EPI_HYPERLINKS" },
+    PI_IMAGE_PROTOCOL: { kind: "bridged", epi: "EPI_IMAGE_PROTOCOL" },
+    PI_TRUE_COLOR: { kind: "bridged", epi: "EPI_TRUE_COLOR" },
+    PI_TUI_ESC_TIMEOUT: { kind: "bridged", epi: "EPI_TUI_ESC_TIMEOUT" },
+    PI_CODING_AGENT_DIR: { kind: "epi-owned" },
+    PI_SKIP_VERSION_CHECK: { kind: "epi-owned" },
     PI_PACKAGE_DIR: { kind: "cleared" },
     PI_SHARE_VIEWER_URL: { kind: "cleared" },
     PI_RADIUS_GATEWAY: { kind: "cleared" },
@@ -44,15 +44,15 @@ export const PI_ENV_NOT_READ = [
     "PI_BUNDLED_NODE",
 ];
 /**
- * Clears every `PI_*` variable in PI_ENV_RULES, then copies each bridged `MMP_*` variable that is
- * set (even to "") onto Pi's name, so Pi applies its own semantics to MMP's value. Must run before
+ * Clears every `PI_*` variable in PI_ENV_RULES, then copies each bridged `EPI_*` variable that is
+ * set (even to "") onto Pi's name, so Pi applies its own semantics to Epi's value. Must run before
  * any Pi module is evaluated: some read their variable at import time (`PI_PACKAGE_DIR` in
  * config.js, `PI_TIMING` in timings.js, `PI_OAUTH_CALLBACK_HOST` in two OAuth flows). Child
  * processes spawned with `process.env` (task workers, hooks, tools) inherit the result.
  *
- * `PI_CODING_AGENT_DIR` is set to MMP's own agent dir here too, not only later before each run:
+ * `PI_CODING_AGENT_DIR` is set to Epi's own agent dir here too, not only later before each run:
  * Pi's utils/tools-manager.js fixes its managed fd/rg directory (`getBinDir()`) at import time, so
- * without this it would be `~/.pi/agent/bin`. An invalid MMP_HOME leaves it unset; the run then
+ * without this it would be `~/.pi/agent/bin`. An invalid EPI_HOME leaves it unset; the run then
  * fails on that error before any tool runs, while --help/--version still work.
  */
 export function isolatePiEnvironment(env) {
@@ -60,16 +60,16 @@ export function isolatePiEnvironment(env) {
         delete env[name];
     }
     for (const [name, rule] of Object.entries(PI_ENV_RULES)) {
-        if (rule.kind === "bridged" && env[rule.mmp] !== undefined) {
-            env[name] = env[rule.mmp];
+        if (rule.kind === "bridged" && env[rule.epi] !== undefined) {
+            env[name] = env[rule.epi];
         }
     }
     let agentDir;
     try {
-        agentDir = resolveMmpPaths(env).agentDir;
+        agentDir = resolveEpiPaths(env).agentDir;
     }
     catch (error) {
-        if (!(error instanceof MmpConfigError))
+        if (!(error instanceof EpiConfigError))
             throw error;
     }
     if (agentDir !== undefined)

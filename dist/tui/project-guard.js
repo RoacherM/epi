@@ -1,5 +1,5 @@
-// Refuses to switch the running MMP process into a session from a different MMP project.
-// Manifest extensions (rules, skills, `mmp:*` extensions) are fixed for this process at launch and
+// Refuses to switch the running Epi process into a session from a different Epi project.
+// Manifest extensions (rules, skills, `epi:*` extensions) are fixed for this process at launch and
 // cannot be hot-loaded (DEVELOPMENT.md §8.2): switching into a session whose cwd belongs to another
 // project would run shell commands there while the model still saw the launch project's Rules, and
 // the target project's Rules/skills would never load. Same-project sessions (e.g. one started in a
@@ -31,6 +31,6 @@ export function crossProjectRefusal(sessionPath, identity) {
     if (refusalForCwd(targetCwd, identity) === undefined) {
         return undefined;
     }
-    return `This session belongs to a different project. Open it there instead:\n  cd ${JSON.stringify(targetCwd)} && mmp --session ${JSON.stringify(sessionPath)}`;
+    return `This session belongs to a different project. Open it there instead:\n  cd ${JSON.stringify(targetCwd)} && epi --session ${JSON.stringify(sessionPath)}`;
 }
 //# sourceMappingURL=project-guard.js.map

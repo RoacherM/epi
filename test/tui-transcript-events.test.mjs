@@ -6,11 +6,11 @@ import test from "node:test";
 
 import { initTheme } from "@earendil-works/pi-coding-agent";
 
-import { createMmpTheme } from "../dist/tui/theme.js";
+import { createEpiTheme } from "../dist/tui/theme.js";
 import { Transcript } from "../dist/tui/transcript.js";
 
 initTheme("dark");
-const theme = createMmpTheme("dark");
+const theme = createEpiTheme("dark");
 
 function transcriptWithTools() {
   return new Transcript({ requestRender() {} }, theme, {

@@ -1,4 +1,4 @@
-// Dogfood D38: MMP's HTTP setup is Pi's own core/http-dispatcher.js (pi-internals row
+// Dogfood D38: Epi's HTTP setup is Pi's own core/http-dispatcher.js (pi-internals row
 // `http-dispatcher`), called the way Pi calls it: the settings proxy only at startup, the dispatcher
 // on every rebind. Runs in its own process (node --test), so replacing the global dispatcher and
 // fetch here touches nothing else. Offline: no request is made.

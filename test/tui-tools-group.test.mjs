@@ -14,12 +14,12 @@ import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 
 import { piTui } from "../dist/tui/pi-tui.js";
-import { createMmpTheme } from "../dist/tui/theme.js";
+import { createEpiTheme } from "../dist/tui/theme.js";
 import { verbGroupLine } from "../dist/tui/tools/group.js";
 import { Transcript } from "../dist/tui/transcript.js";
 
 initTheme("dark");
-const theme = createMmpTheme("dark");
+const theme = createEpiTheme("dark");
 
 // Real end-to-end run (test/tui-app.test.mjs's own pattern): the actual app, a faux model, and a
 // real Ctrl+O keypress -- proves the wiring in transcript.ts, not just GroupedMessages in isolation.
@@ -27,19 +27,19 @@ const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 function runApp(t, extensions, steps) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-group-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-group-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ steps }),
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ steps }),
     },
     encoding: "utf8",
     timeout: 60_000,
@@ -50,19 +50,19 @@ function runApp(t, extensions, steps) {
 }
 
 function runAppMarks(t, extensions, steps) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-group-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-group-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ steps }),
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ steps }),
     },
     encoding: "utf8",
     timeout: 60_000,
@@ -562,8 +562,8 @@ test("verbGroupLine: find counts calls (paths searched), not results found", () 
 
 test("grep and find in one run name the shared verb once, even when a read sits between them", async () => {
   const { verbGroupLine } = await import("../dist/tui/tools/group.js");
-  const { createMmpTheme } = await import("../dist/tui/theme.js");
-  const theme = createMmpTheme("dark");
+  const { createEpiTheme } = await import("../dist/tui/theme.js");
+  const theme = createEpiTheme("dark");
   const member = (groupKind) => ({ groupKind, status: "done" });
   const line = verbGroupLine([member("grep"), member("read"), member("find"), member("find")], theme, 120)
     .replace(/\x1b\[[0-9;]*m/g, "");

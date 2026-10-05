@@ -1,6 +1,6 @@
 // Expanded thinking (assistant-block.ts's ThinkingBlock) must render exactly like Pi's own
 // AssistantMessageComponent renders a thinking run: same Markdown, default text style (thinkingText
-// colour, italic), transformers and padding. Its own file because it installs MMP's theme as Pi's
+// colour, italic), transformers and padding. Its own file because it installs Epi's theme as Pi's
 // process-wide one (Pi's component colours thinking from that global), which the other TUI unit
 // tests don't do. The test installs it (and turns on Pi's chalk) only while it runs and puts both
 // back afterwards, so it also holds when test files share a process (--test-isolation=none).
@@ -16,21 +16,21 @@ import { AssistantMessageComponent, getMarkdownTheme, initTheme } from "@earendi
 
 import { AssistantBlock } from "../dist/tui/assistant-block.js";
 import { piTui } from "../dist/tui/pi-tui.js";
-import { installMmpTheme } from "../dist/tui/theme.js";
+import { installEpiTheme } from "../dist/tui/theme.js";
 
 // Pi's Theme.italic/bold go through Pi's own chalk install (docs/pi-internals.md `pi-chalk`), whose
 // level comes from stdout at import: 0 under `npm test`, which would drop italic on both sides.
 const piEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
 const { default: piChalk } = await import(pathToFileURL(createRequire(piEntry).resolve("chalk")).href);
 
-// Only OSC sequences (the OSC 133 prompt-zone markers, which MMP places per block and Pi per
+// Only OSC sequences (the OSC 133 prompt-zone markers, which Epi places per block and Pi per
 // component); SGR colour and style codes are kept, since they are what this test compares.
 function stripOsc(text) {
   return text.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "");
 }
 
 test("expanded thinking renders byte-for-byte like Pi's AssistantMessageComponent at every width", (t) => {
-  const agentDir = mkdtempSync(join(tmpdir(), "mmp-thinking-parity-"));
+  const agentDir = mkdtempSync(join(tmpdir(), "epi-thinking-parity-"));
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   const previousLevel = piChalk.level;
   t.after(() => {
@@ -40,7 +40,7 @@ test("expanded thinking renders byte-for-byte like Pi's AssistantMessageComponen
     initTheme("dark");
     rmSync(agentDir, { recursive: true, force: true });
   });
-  const theme = installMmpTheme(agentDir, "dark");
+  const theme = installEpiTheme(agentDir, "dark");
   piChalk.level = 1;
   assert.equal(theme.italic("x"), "\x1b[3mx\x1b[23m", "Pi's Theme.italic no longer goes through the chalk resolved from Pi's install");
   const thinking = [

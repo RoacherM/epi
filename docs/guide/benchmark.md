@@ -2,12 +2,12 @@
 
 [← 文档索引](README.md)
 
-`scripts/benchmark-adapter.mjs` 是 MMP Core 外部的 trial adapter。它直接启动仓库内锁定的 Pi/MMP 入口，不读取 PATH 中的全局 `pi`；dataset、调度、计分规则仍由外部 runner 负责。
+`scripts/benchmark-adapter.mjs` 是 Epi Core 外部的 trial adapter。它直接启动仓库内锁定的 Pi/Epi 入口，不读取 PATH 中的全局 `pi`；dataset、调度、计分规则仍由外部 runner 负责。
 
 ```bash
 npm run benchmark -- \
-  --variant mmp-full \
-  --bundle /absolute/path/to/mmp-home-template \
+  --variant epi-full \
+  --bundle /absolute/path/to/epi-home-template \
   --output-dir /absolute/path/to/results/trial-001 \
   --cwd /absolute/path/to/clean-workspace \
   --model openai/gpt-4o-mini \
@@ -17,9 +17,9 @@ npm run benchmark -- \
   --timeout-ms 600000
 ```
 
-`--variant` 必须是 `pi-baseline`、`mmp-core-empty`、`mmp-rules-skills` 或 `mmp-full`。三个 MMP variant 的能力层级由传入的 bundle 内容决定；`pi-baseline` 直接运行同一依赖中锁定的 Pi（版本见 `package.json`），并关闭所有 ambient resource。
+`--variant` 必须是 `pi-baseline`、`epi-core-empty`、`epi-rules-skills` 或 `epi-full`。三个 Epi variant 的能力层级由传入的 bundle 内容决定；`pi-baseline` 直接运行同一依赖中锁定的 Pi（版本见 `package.json`），并关闭所有 ambient resource。
 
-每个 MMP trial 会把 bundle 复制到独立的 `<output-dir>/mmp-home`；Pi baseline 只复制其中的 `pi/` settings/models。复制时排除 `.env*`、Pi auth/trust/session、旧 runtime capsule 和 artifacts；模型凭证必须通过 runner 环境变量注入。adapter 连续执行两次 MMP `--dry-run`，校验输出完全一致，并用规范化装配快照和实际参与 trial 的 bundle 文件 SHA-256 生成 `assemblyDigest`。
+每个 Epi trial 会把 bundle 复制到独立的 `<output-dir>/epi-home`；Pi baseline 只复制其中的 `pi/` settings/models。复制时排除 `.env*`、Pi auth/trust/session、旧 runtime capsule 和 artifacts；模型凭证必须通过 runner 环境变量注入。adapter 连续执行两次 Epi `--dry-run`，校验输出完全一致，并用规范化装配快照和实际参与 trial 的 bundle 文件 SHA-256 生成 `assemblyDigest`。
 
 输出目录保留：
 

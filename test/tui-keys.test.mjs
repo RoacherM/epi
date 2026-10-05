@@ -18,18 +18,18 @@ const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 function runApp(t, extensions, steps, settings) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-keys-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-keys-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   if (settings !== undefined) {
-    mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
-    writeFileSync(join(home, ".mmp", "pi", "settings.json"), JSON.stringify(settings));
+    mkdirSync(join(home, ".epi", "pi"), { recursive: true });
+    writeFileSync(join(home, ".epi", "pi", "settings.json"), JSON.stringify(settings));
   }
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_TUI_HARNESS: JSON.stringify({ steps }) },
+    env: { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1", EPI_TUI_HARNESS: JSON.stringify({ steps }) },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -38,7 +38,7 @@ function runApp(t, extensions, steps, settings) {
 }
 
 test("Pi's key map loads from its package file and becomes pi-tui's global map", (t) => {
-  const agentDir = mkdtempSync(join(tmpdir(), "mmp-keys-"));
+  const agentDir = mkdtempSync(join(tmpdir(), "epi-keys-"));
   t.after(() => rmSync(agentDir, { recursive: true, force: true }));
   const keybindings = installKeybindings(agentDir);
   assert.equal(keybindings.matches(CTRL_L, "app.model.select"), true);
@@ -46,8 +46,8 @@ test("Pi's key map loads from its package file and becomes pi-tui's global map",
   assert.equal(piTui.getKeybindings(), keybindings);
 });
 
-test("keybindings.json is read from MMP's agent dir", (t) => {
-  const agentDir = mkdtempSync(join(tmpdir(), "mmp-keys-"));
+test("keybindings.json is read from Epi's agent dir", (t) => {
+  const agentDir = mkdtempSync(join(tmpdir(), "epi-keys-"));
   t.after(() => rmSync(agentDir, { recursive: true, force: true }));
   writeFileSync(join(agentDir, "keybindings.json"), JSON.stringify({ "app.model.select": "ctrl+q" }));
   const keybindings = installKeybindings(agentDir);
@@ -55,9 +55,9 @@ test("keybindings.json is read from MMP's agent dir", (t) => {
   assert.equal(keybindings.matches(CTRL_L, "app.model.select"), false);
 });
 
-// Decision K1 keeps Ctrl+P for the command palette, so MMP ships Pi's model-cycle ids unbound.
+// Decision K1 keeps Ctrl+P for the command palette, so Epi ships Pi's model-cycle ids unbound.
 test("model cycling is unbound by default, bindable in keybindings.json, and stays unbound after reload", (t) => {
-  const agentDir = mkdtempSync(join(tmpdir(), "mmp-keys-"));
+  const agentDir = mkdtempSync(join(tmpdir(), "epi-keys-"));
   t.after(() => rmSync(agentDir, { recursive: true, force: true }));
   const keybindings = installKeybindings(agentDir);
   assert.deepEqual(keybindings.getKeys("app.model.cycleForward"), []);
@@ -77,7 +77,7 @@ test("built-in lookup finds wired commands only", () => {
   for (const name of ["login", "resume", "tree", "share", "trust", "settings"]) {
     assert.equal(findBuiltin(name)?.name, name);
   }
-  assert.equal(findBuiltin("mmp"), undefined);
+  assert.equal(findBuiltin("epi"), undefined);
   // Own names only: Object.prototype's names are not commands.
   for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
     assert.equal(findBuiltin(name), undefined, name);
@@ -90,11 +90,11 @@ test("an unknown /command goes to the model as a plain prompt", (t) => {
     ["waitFor", { regex: "ECHO:/nosuchcmd hi[\\s\\S]*Worked for" }], ["key", "ctrl+d"],
   ]);
   assert.equal(exit, 0);
-  assert.doesNotMatch(output, /not available in MMP/);
+  assert.doesNotMatch(output, /not available in Epi/);
 });
 
 test("/constructor and /toString are unknown commands too: sent to the model as text, no notice", (t) => {
-  // They used to hit a "not available in MMP yet" notice because the lookup used `in`, which
+  // They used to hit a "not available in Epi yet" notice because the lookup used `in`, which
   // walks Object.prototype.
   const { exit, output } = runApp(t, [fixture("faux-echo.mjs")], [
     ["waitReady"], ["type", "/constructor hi"], ["key", "enter"],
@@ -103,7 +103,7 @@ test("/constructor and /toString are unknown commands too: sent to the model as 
     ["waitFor", { regex: "ECHO:/toString[\\s\\S]*Worked for" }], ["key", "ctrl+d"],
   ]);
   assert.equal(exit, 0);
-  assert.doesNotMatch(output, /not available in MMP/);
+  assert.doesNotMatch(output, /not available in Epi/);
 });
 
 test("a built-in wins over an extension command of the same name; other extension commands run", (t) => {
@@ -144,14 +144,14 @@ test("slash completions list built-ins, templates, extension commands and skills
   const session = {
     promptTemplates: [{ name: "review", description: "Review a diff" }],
     extensionRunner: { getRegisteredCommands: () => [
-      { name: "mmp", invocationName: "mmp", description: "MMP" },
+      { name: "epi", invocationName: "epi", description: "Epi" },
       { name: "resume", invocationName: "resume", description: "shadowed by the built-in" },
     ] },
     resourceLoader: { getSkills: () => ({ skills: [{ name: "pdf", description: "Read PDFs" }] }) },
     settingsManager: { getEnableSkillCommands: () => true },
   };
   const names = slashCompletions(session).map((command) => command.name);
-  for (const name of [...BUILTIN_COMMANDS.map((command) => command.name), "resume", "review", "mmp", "skill:pdf"]) {
+  for (const name of [...BUILTIN_COMMANDS.map((command) => command.name), "resume", "review", "epi", "skill:pdf"]) {
     assert.ok(names.includes(name), name);
   }
   assert.equal(names.filter((name) => name === "resume").length, 1);

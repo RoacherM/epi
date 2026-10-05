@@ -11,21 +11,21 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
-import { MmpConfigError } from "../dist/errors.js";
+import { EpiConfigError } from "../dist/errors.js";
 import { resolveManifest } from "../dist/manifest.js";
 
 const projectRoot = new URL("../", import.meta.url);
 const cliPath = new URL("../dist/cli.js", import.meta.url);
 
 function createFixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-manifest-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-manifest-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   return root;
 }
 
 test("missing global manifest resolves to an empty assembly", (t) => {
   const root = createFixture(t);
-  const manifestPath = join(root, "mmp.json");
+  const manifestPath = join(root, "epi.json");
   const resolved = resolveManifest(manifestPath, "global");
 
   assert.equal(resolved.path, manifestPath);
@@ -41,7 +41,7 @@ test("manifest paths are canonical, relative to their declaring file, and dedupl
   const skillsPath = join(root, "skills");
   const rulePath = join(root, "RULES.md");
   const extensionPath = join(root, "extension.js");
-  const manifestPath = join(root, "mmp.json");
+  const manifestPath = join(root, "epi.json");
   mkdirSync(skillsPath);
   writeFileSync(rulePath, "Always answer deterministically.\n");
   writeFileSync(extensionPath, "export default function () {}\n");
@@ -52,8 +52,8 @@ test("manifest paths are canonical, relative to their declaring file, and dedupl
       rules: ["./RULES.md", "./RULES.md"],
       skills: ["./skills", "./skills"],
       extensions: [
-        "mmp:task",
-        "mmp:task",
+        "epi:task",
+        "epi:task",
         "npm:@scope/example@1.2.3",
         "git:owner/repository",
         "./extension.js",
@@ -82,7 +82,7 @@ test("manifest paths are canonical, relative to their declaring file, and dedupl
     },
   ]);
   assert.deepEqual(resolved.inlineExtensions, [
-    { name: "mmp:task", source: "global", declaredIn: manifestPath },
+    { name: "epi:task", source: "global", declaredIn: manifestPath },
   ]);
   assert.deepEqual(
     resolved.externalExtensions.map((resource) => resource.value),
@@ -96,14 +96,14 @@ test("manifest paths are canonical, relative to their declaring file, and dedupl
 
 test("manifest schema rejects unsupported and ambiguous input", (t) => {
   const root = createFixture(t);
-  const manifestPath = join(root, "mmp.json");
+  const manifestPath = join(root, "epi.json");
   const invalidManifests = [
     [{ rules: [] }, /version must be exactly 1/],
     [{ version: 2 }, /version must be exactly 1/],
     [{ version: 1, rule: [] }, /unknown field "rule"/],
     [{ version: 1, rules: "RULES.md" }, /rules must be an array/],
     [{ version: 1, extensions: [""] }, /must be a non-empty string/],
-    [{ version: 1, extensions: ["mmp:unknown"] }, /unknown built-in extension/],
+    [{ version: 1, extensions: ["epi:unknown"] }, /unknown built-in extension/],
     [{ version: 1, extensions: ["npm:"] }, /package source is empty/],
   ];
 
@@ -112,7 +112,7 @@ test("manifest schema rejects unsupported and ambiguous input", (t) => {
     assert.throws(
       () => resolveManifest(manifestPath, "global"),
       (error) =>
-        error instanceof MmpConfigError && expectedError.test(error.message),
+        error instanceof EpiConfigError && expectedError.test(error.message),
     );
   }
 });
@@ -120,14 +120,14 @@ test("manifest schema rejects unsupported and ambiguous input", (t) => {
 test("declared paths fail before Pi starts", (t) => {
   const root = createFixture(t);
   writeFileSync(
-    join(root, "mmp.json"),
+    join(root, "epi.json"),
     JSON.stringify({ version: 1, rules: ["./missing.md"] }),
   );
 
   const result = spawnSync(process.execPath, [cliPath.pathname, "--dry-run"], {
     cwd: projectRoot,
     encoding: "utf8",
-    env: { ...process.env, MMP_HOME: root },
+    env: { ...process.env, EPI_HOME: root },
   });
 
   assert.equal(result.status, 2);
@@ -139,19 +139,19 @@ test("dry-run exposes provenance without rule contents", (t) => {
   const root = createFixture(t);
   // Isolated HOME: a real ~/.agents/skills (docs/decisions.md S1 auto-discovery) must not affect
   // this run's exit status or output.
-  const home = mkdtempSync(join(tmpdir(), "mmp-manifest-home-"));
+  const home = mkdtempSync(join(tmpdir(), "epi-manifest-home-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const secretRule = "PRIVATE_RULE_TEXT_MUST_NOT_APPEAR";
   writeFileSync(join(root, "RULES.md"), `${secretRule}\n`);
   writeFileSync(
-    join(root, "mmp.json"),
+    join(root, "epi.json"),
     JSON.stringify({ version: 1, rules: ["./RULES.md"] }),
   );
 
   const result = spawnSync(process.execPath, [cliPath.pathname, "--dry-run"], {
     cwd: projectRoot,
     encoding: "utf8",
-    env: { ...process.env, HOME: home, MMP_HOME: root },
+    env: { ...process.env, HOME: home, EPI_HOME: root },
   });
   const output = JSON.parse(result.stdout);
 

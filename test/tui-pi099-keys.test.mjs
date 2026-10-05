@@ -1,5 +1,5 @@
 // Pi 0.99 keybindings (dogfood D10) through the real app: model cycling (app.model.cycleForward/
-// Backward, unbound by default per decision K1, so bound here through ~/.mmp/pi/keybindings.json),
+// Backward, unbound by default per decision K1, so bound here through ~/.epi/pi/keybindings.json),
 // prompt jumps (tui.altScreen.previousPrompt/nextPrompt) and transcript search (tui.altScreen.search).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -13,20 +13,20 @@ const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 function runApp(t, extension, steps, { args = ["--no-project"], keybindings } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-pi099-keys-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-pi099-keys-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture(extension)] }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fixture(extension)] }));
   if (keybindings !== undefined) {
-    mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
-    writeFileSync(join(home, ".mmp", "pi", "keybindings.json"), JSON.stringify(keybindings));
+    mkdirSync(join(home, ".epi", "pi"), { recursive: true });
+    writeFileSync(join(home, ".epi", "pi", "keybindings.json"), JSON.stringify(keybindings));
   }
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
-      PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ args, steps }),
+      PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ args, steps }),
     },
     encoding: "utf8",
     timeout: 60_000,
@@ -45,7 +45,7 @@ const KITTY = {
   ctrlUp: "\x1b[1;5A", ctrlUpRelease: "\x1b[1;5:3A", ctrlShiftUp: "\x1b[1;6A", ctrlDown: "\x1b[1;5B",
   ctrlShiftF: "\x1b[102;6u",
 };
-const scoped = ["--no-project", "--models", "mmp-faux/model-a,mmp-faux/model-b"];
+const scoped = ["--no-project", "--models", "epi-faux/model-a,epi-faux/model-b"];
 const cycleKeys = { "app.model.cycleForward": "ctrl+p", "app.model.cycleBackward": "shift+ctrl+p" };
 
 test("bound model-cycle keys step through the scoped models both ways, as Pi's cycleModel does", (t) => {
@@ -67,7 +67,7 @@ test("model cycling with one model in scope says so (Pi's message)", (t) => {
   const { drawn } = runApp(t, "faux-two-models.mjs", [
     ["waitReady"], ["raw", KITTY.ctrlP], ["waitFor", "Only one model in scope"], ["mark", "after"],
     ["key", "ctrl+d"],
-  ], { args: ["--no-project", "--models", "mmp-faux/model-a"], keybindings: cycleKeys });
+  ], { args: ["--no-project", "--models", "epi-faux/model-a"], keybindings: cycleKeys });
   assert.doesNotMatch(drawn.after, /Switched to/);
 });
 

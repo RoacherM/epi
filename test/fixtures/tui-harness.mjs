@@ -1,5 +1,5 @@
-// Runs the real MMP TUI v2 app against an in-memory terminal, driven by a script of inputs.
-// Usage: MMP_TUI_HARNESS='{"args":[],"steps":[["wait",3000],["type","hi"],["key","enter"],...]}' node tui-harness.mjs
+// Runs the real Epi TUI v2 app against an in-memory terminal, driven by a script of inputs.
+// Usage: EPI_TUI_HARNESS='{"args":[],"steps":[["wait",3000],["type","hi"],["key","enter"],...]}' node tui-harness.mjs
 // ["mark", name] records what had been drawn at that moment, to assert timing without further input.
 // ["waitReady"] waits until the app finished startup (extension binding) and accepts submissions,
 // and until the frame drawn at the end of startup has landed.
@@ -24,7 +24,7 @@
 // `progress` is every setProgress call in order ("on"/"off").
 // `rawOsc133` counts the raw OSC 133 (`\x1b]133;`) sequences in what the app wrote: pi-tui strips
 // the prompt-zone markers before painting, and `output` has every OSC stripped, so a leak shows only here.
-// First, like dist/cli.js: MMP_* -> PI_* before any Pi module loads (src/pi-env.ts).
+// First, like dist/cli.js: EPI_* -> PI_* before any Pi module loads (src/pi-env.ts).
 import "../../dist/isolate-pi-env.js";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -32,10 +32,10 @@ import { dirname, join } from "node:path";
 
 import xterm from "@xterm/headless";
 
-import { prepareMmpRun } from "../../dist/host.js";
+import { prepareEpiRun } from "../../dist/host.js";
 import { runTuiApp } from "../../dist/tui/app.js";
 import { createRuntimeFromPrepared, projectIdentityFromPrepared, startupOptionsFromPiArgs } from "../../dist/tui/start.js";
-import { detectAppearance, installMmpTheme } from "../../dist/tui/theme.js";
+import { detectAppearance, installEpiTheme } from "../../dist/tui/theme.js";
 
 const KEYS = {
   enter: "\r", esc: "\x1b", "ctrl+c": "\x03", "ctrl+d": "\x04", "ctrl+x": "\x18", down: "\x1b[B", up: "\x1b[A",
@@ -46,7 +46,7 @@ const KEYS = {
 // `args` replaces the default `--no-project` entirely (not appended to it), so tests that need
 // real project discovery (e.g. a cross-project /resume) can pass their own, such as ["--approve"].
 // `columns`/`rows` default to 120x40; set them to check a layout at a narrower width.
-const { steps, args = ["--no-project"], columns = 120, rows = 40 } = JSON.parse(process.env.MMP_TUI_HARNESS);
+const { steps, args = ["--no-project"], columns = 120, rows = 40 } = JSON.parse(process.env.EPI_TUI_HARNESS);
 
 let output = "";
 let onInput = () => {};
@@ -68,8 +68,8 @@ const terminal = {
 };
 
 let appReady = false;
-const prepared = prepareMmpRun(args);
-const theme = installMmpTheme(prepared.agentDir, detectAppearance(process.env));
+const prepared = prepareEpiRun(args);
+const theme = installEpiTheme(prepared.agentDir, detectAppearance(process.env));
 const runtime = await createRuntimeFromPrepared(prepared, process.cwd());
 const { initialMessages, initialImages, resumeOnStart } = await startupOptionsFromPiArgs(prepared.args.passthrough, process.cwd());
 // The app's startup gate (`ready` in app.ts) opens right after bind(), whose last await is the

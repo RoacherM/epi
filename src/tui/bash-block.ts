@@ -1,7 +1,7 @@
 // User `!` / `!!` shell commands (docs/tui-design.md 4.2, 7). Behaviour mirrors Pi's
 // `handleBashCommand` (interactive-mode.js): emit `user_bash` so extensions can intercept, then
 // `session.executeBash`, which already records the result into session history and LLM context
-// (excluded when `excludeFromContext`). MMP draws its own grok-style frame instead of reusing Pi's
+// (excluded when `excludeFromContext`). Epi draws its own grok-style frame instead of reusing Pi's
 // exported `BashExecutionComponent` (rail `┃` + `◆`, matching tools/block.ts).
 import { keyText, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
@@ -115,7 +115,7 @@ export async function runUserBash(host: CommandHost, text: string): Promise<bool
     return true;
   }
 
-  // Let extensions intercept before MMP runs anything locally (docs 4.2, `user_bash`).
+  // Let extensions intercept before Epi runs anything locally (docs 4.2, `user_bash`).
   let eventResult;
   try {
     eventResult = await session.extensionRunner.emitUserBash({

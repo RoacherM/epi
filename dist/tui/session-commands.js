@@ -50,8 +50,8 @@ export async function runCompact(host, customInstructions) {
 }
 /** `/resume`: session selector for the current cwd (Tab switches to "all", like Pi's). Picking a
  * session hands off to `runtime.switchSession`, whose rebind callback (app.ts's `bind`) replays
- * the transcript. Sessions only ever come from the session manager's own directory, which MMP
- * points at `~/.mmp/pi/sessions` (never Pi's `~/.pi/agent`); see services.ts and paths.ts. */
+ * the transcript. Sessions only ever come from the session manager's own directory, which Epi
+ * points at `~/.epi/pi/sessions` (never Pi's `~/.pi/agent`); see services.ts and paths.ts. */
 export async function runResume(host) {
     const sessionManager = host.session().sessionManager;
     return new Promise((resolve) => {

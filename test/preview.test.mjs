@@ -1,6 +1,6 @@
 // /preview (src/extensions/preview.ts): the bundled file browser and viewer. Unit tests for what it
 // reads from disk, and runs of the real TUI app in the harness for the overlay itself. Temp HOME
-// and MMP_HOME, offline; the video case runs with an empty PATH so no real ffmpeg is used.
+// and EPI_HOME, offline; the video case runs with an empty PATH so no real ffmpeg is used.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -14,14 +14,14 @@ import { clock, humanSize, kindOf, loadDoc, printable, readListing } from "../di
 import { Player, StillCache, stillJob } from "../dist/extensions/preview/media.js";
 import { PlayerPane } from "../dist/extensions/preview/player-pane.js";
 import { Viewer } from "../dist/extensions/preview/view.js";
-import { createMmpTheme } from "../dist/tui/theme.js";
+import { createEpiTheme } from "../dist/tui/theme.js";
 import { piTui } from "../dist/tui/pi-tui.js";
 
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const ONE_PIXEL_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jq1kAAAAASUVORK5CYII=", "base64");
 
 function tempDir(t) {
-  const dir = mkdtempSync(join(tmpdir(), "mmp-preview-"));
+  const dir = mkdtempSync(join(tmpdir(), "epi-preview-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
@@ -82,8 +82,8 @@ test("a document is text, Markdown source, or a hex dump; escape bytes cannot re
 function runApp(t, steps, { env = {}, files = {}, setup, rows, extensions } = {}) {
   const root = tempDir(t);
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, ...(extensions === undefined ? {} : { extensions }) }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, ...(extensions === undefined ? {} : { extensions }) }));
   const project = join(root, "project");
   mkdirSync(join(project, "docs"), { recursive: true });
   writeFileSync(join(project, "alpha.txt"), "first line\nsecond line\n");
@@ -92,7 +92,7 @@ function runApp(t, steps, { env = {}, files = {}, setup, rows, extensions } = {}
   setup?.(project);
   const result = spawnSync(process.execPath, [harness], {
     cwd: project,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_TUI_HARNESS: JSON.stringify({ steps, ...(rows === undefined ? {} : { rows }) }), ...env },
+    env: { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1", EPI_TUI_HARNESS: JSON.stringify({ steps, ...(rows === undefined ? {} : { rows }) }), ...env },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -209,23 +209,23 @@ test("an image without terminal graphics shows a text placeholder, and a video w
 test("an extension that also registers /preview stops startup with an error naming both", (t) => {
   const root = tempDir(t);
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
   const other = join(root, "my-preview.mjs");
   writeFileSync(other, 'export default function (pi) { pi.registerCommand("preview", { description: "mine", handler: async () => {} }); }\n');
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [other] }));
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [other] }));
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_TUI_HARNESS: JSON.stringify({ steps: [["waitReady"]] }) },
+    env: { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1", EPI_TUI_HARNESS: JSON.stringify({ steps: [["waitReady"]] }) },
     encoding: "utf8",
     timeout: 60_000,
   });
   assert.notEqual(result.status, 0, result.stdout);
   // The path as the extension loader resolved it (on macOS /var is /private/var).
-  assert.match(result.stderr, /The command "\/preview" is registered by more than one extension: \S*my-preview\.mjs, <inline:mmp:preview>\./);
-  assert.doesNotMatch(result.stderr, /Or turn mmp:preview off/, "mmp:preview cannot be turned off; the error must not say it can");
+  assert.match(result.stderr, /The command "\/preview" is registered by more than one extension: \S*my-preview\.mjs, <inline:epi:preview>\./);
+  assert.doesNotMatch(result.stderr, /Or turn epi:preview off/, "epi:preview cannot be turned off; the error must not say it can");
 });
 
-test("the extension has its own version, apart from MMP's", () => {
+test("the extension has its own version, apart from Epi's", () => {
   assert.match(PREVIEW_VERSION, /^\d+\.\d+\.\d+$/);
 });
 
@@ -531,7 +531,7 @@ test("the video viewer's status line: state, time and duration, progress bar, an
   fakeProbe(process.env.PATH);
   const dir = tempDir(t);
   writeFileSync(join(dir, "clip.mp4"), "not really a video");
-  const theme = createMmpTheme("dark");
+  const theme = createEpiTheme("dark");
   const viewer = new Viewer({ requestRender() {}, terminal: { rows: 40 } }, theme, entryOf(dir, "clip.mp4"), new StillCache(() => {}));
   t.after(() => viewer.dispose());
   await until(() => viewer.render(68, 20).status !== ` ${theme.fg("dim", "q back")}`, "the probe to answer");
@@ -565,7 +565,7 @@ const argAfter = (args, flag) => args[args.indexOf(flag) + 1];
 const press = (type = "press") => ({ type, button: "left", x: 0, y: 0, screenX: 0, screenY: 0, width: 80, height: 24, shift: false, alt: false, ctrl: false });
 
 function newPane(t, source, hint) {
-  const pane = new PlayerPane(source, { tui: { requestRender() {} }, theme: createMmpTheme("dark"), ...(hint === undefined ? {} : { hint }) });
+  const pane = new PlayerPane(source, { tui: { requestRender() {} }, theme: createEpiTheme("dark"), ...(hint === undefined ? {} : { hint }) });
   t.after(() => pane.dispose());
   return pane;
 }
@@ -584,7 +584,7 @@ function loadPreview() {
 
 test("the bus handler fills the request before it returns, and leaves anything that is not an object alone", () => {
   const preview = loadPreview();
-  assert.equal(PREVIEW_PLAYER_CHANNEL, "mmp/preview/player/v1");
+  assert.equal(PREVIEW_PLAYER_CHANNEL, "epi/preview/player/v1");
   const request = {};
   const returned = preview.ask(request);
   assert.equal(returned, undefined, "the handler must not be async: Pi runs it synchronously only up to its first await");
@@ -599,7 +599,7 @@ test("createPane rejects an empty video and a line break in a header, naming the
   const preview = loadPreview();
   const request = {};
   preview.ask(request);
-  const host = { tui: { requestRender() {} }, theme: createMmpTheme("dark") };
+  const host = { tui: { requestRender() {} }, theme: createEpiTheme("dark") };
   await assert.rejects(request.player.createPane({ video: "" }, host), /video is empty/);
   await assert.rejects(request.player.createPane({}, host), /video is empty/);
   await assert.rejects(request.player.createPane({ video: "https://example.test/v.mp4", headers: { Referer: "a\r\nX-Evil: 1" } }, host), /header "Referer" has a line break/);
@@ -614,7 +614,7 @@ test("session_shutdown disposes every pane preview handed out: their processes e
   const preview = loadPreview();
   const request = {};
   preview.ask(request);
-  const host = { tui: { requestRender() {} }, theme: createMmpTheme("dark") };
+  const host = { tui: { requestRender() {} }, theme: createEpiTheme("dark") };
   const kept = await request.player.createPane({ video: "a.mp4", duration: 10 }, host);
   const returned = await request.player.createPane({ video: "b.mp4", duration: 10 }, host);
   t.after(() => { kept.dispose(); returned.dispose(); });
@@ -631,7 +631,7 @@ test("session_shutdown disposes every pane preview handed out: their processes e
   assert.equal(pidsOf().length, started, "a disposed pane started playing again");
 });
 
-const sessionEnded = "createPane: this player belongs to a session that has ended; ask on mmp/preview/player/v1 again";
+const sessionEnded = "createPane: this player belongs to a session that has ended; ask on epi/preview/player/v1 again";
 
 test("after session_shutdown an API kept from that session rejects createPane, and nothing plays", async (t) => {
   const pidsOf = fakeMediaTools(t);
@@ -639,7 +639,7 @@ test("after session_shutdown an API kept from that session rejects createPane, a
   const request = {};
   preview.ask(request);
   preview.shutdown();
-  const host = { tui: { requestRender() {} }, theme: createMmpTheme("dark") };
+  const host = { tui: { requestRender() {} }, theme: createEpiTheme("dark") };
   await assert.rejects(request.player.createPane({ video: "a.mp4", duration: 10 }, host), (error) => error.message === sessionEnded);
   await sleep(200);
   assert.deepEqual(pidsOf(), [], "a media process started for a session that has ended");
@@ -650,7 +650,7 @@ test("a session that ends while createPane is loading the pane rejects it too, a
   const preview = loadPreview();
   const request = {};
   preview.ask(request);
-  const host = { tui: { requestRender() {} }, theme: createMmpTheme("dark") };
+  const host = { tui: { requestRender() {} }, theme: createEpiTheme("dark") };
   // The import is cached by now (PlayerPane is imported above), but createPane still awaits it:
   // the shutdown fired right after the call lands before the check that follows the await.
   const pending = request.player.createPane({ video: "a.mp4", duration: 10 }, host);
@@ -809,7 +809,7 @@ test("another extension gets the player in the TUI when it asks, also after /rel
     ["type", "/reload"], ["key", "enter"], ["waitFor", "Reloaded", { screen: true }],
     ["type", "/askplayer"], ["key", "enter"], ["waitFor", "PLAYER:createPane:new", { screen: true }],
     ["key", "ctrl+d"],
-  ], { extensions: [playerExtension], env: { MMP_PLAYER_PROBE_OUT: out } });
+  ], { extensions: [playerExtension], env: { EPI_PLAYER_PROBE_OUT: out } });
   assert.match(shown(screens.first), /PLAYER:createPane:first/);
   // User extensions load before the built-in ones: asking in the factory gets nothing, every time.
   assert.deepEqual(reportsIn(out), ["PLAYER-AT-LOAD:none", "PLAYER:createPane:first", "PLAYER-AT-LOAD:none", "PLAYER:createPane:new"]);
@@ -822,19 +822,19 @@ test("an API kept across /reload rejects createPane, saying to ask again", (t) =
     ["type", "/reload"], ["key", "enter"], ["waitFor", "Reloaded", { screen: true }],
     ["type", "/stalepane clip.mp4"], ["key", "enter"], ["waitFor", "STALE-PANE:", { screen: true }],
     ["key", "ctrl+d"],
-  ], { extensions: [playerExtension], env: { MMP_PLAYER_PROBE_OUT: out }, files: { "clip.mp4": "not really a video" } });
+  ], { extensions: [playerExtension], env: { EPI_PLAYER_PROBE_OUT: out }, files: { "clip.mp4": "not really a video" } });
   assert.equal(reportsIn(out).find((line) => line.startsWith("STALE-PANE:")), `STALE-PANE:rejected: ${sessionEnded}`);
 });
 
 test("in -p preview is not loaded: an extension that asks gets no player", (t) => {
   const root = tempDir(t);
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [playerExtension] }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [playerExtension] }));
   const out = join(root, "reports.jsonl");
   const result = spawnSync(process.execPath, [fileURLToPath(new URL("../dist/cli.js", import.meta.url)), "--no-project", "-p", "/askplayer"], {
     cwd: root,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_PLAYER_PROBE_OUT: out },
+    env: { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1", EPI_PLAYER_PROBE_OUT: out },
     input: "",
     encoding: "utf8",
     timeout: 60_000,

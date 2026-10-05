@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { MmpConfigError } from "./errors.js";
+import { EpiConfigError } from "./errors.js";
 function parseTools(value, filePath) {
     if (value === undefined) {
         return undefined;
@@ -12,15 +12,15 @@ function parseTools(value, filePath) {
             ? value
             : undefined;
     if (rawTools === undefined) {
-        throw new MmpConfigError(`${filePath}: tools must be a string or string array`);
+        throw new EpiConfigError(`${filePath}: tools must be a string or string array`);
     }
     const tools = rawTools.map((tool, index) => {
         if (typeof tool !== "string" || tool.trim().length === 0) {
-            throw new MmpConfigError(`${filePath}: tools[${index}] must be a non-empty string`);
+            throw new EpiConfigError(`${filePath}: tools[${index}] must be a non-empty string`);
         }
         const normalized = tool.trim();
         if (!/^[a-z][a-z0-9_-]*$/.test(normalized)) {
-            throw new MmpConfigError(`${filePath}: invalid tool name ${JSON.stringify(normalized)}`);
+            throw new EpiConfigError(`${filePath}: invalid tool name ${JSON.stringify(normalized)}`);
         }
         return normalized;
     });
@@ -41,20 +41,20 @@ function loadAgentDirectory(directory, source) {
         const parsed = parseFrontmatter(readFileSync(filePath, "utf8"));
         const { name, description, model, timeoutSeconds } = parsed.frontmatter;
         if (typeof name !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(name)) {
-            throw new MmpConfigError(`${filePath}: name must match ^[a-z][a-z0-9-]{0,63}$`);
+            throw new EpiConfigError(`${filePath}: name must match ^[a-z][a-z0-9-]{0,63}$`);
         }
         if (names.has(name)) {
-            throw new MmpConfigError(`${canonicalDirectory}: duplicate agent name ${name}`);
+            throw new EpiConfigError(`${canonicalDirectory}: duplicate agent name ${name}`);
         }
         if (typeof description !== "string" || description.trim().length === 0) {
-            throw new MmpConfigError(`${filePath}: description must be a non-empty string`);
+            throw new EpiConfigError(`${filePath}: description must be a non-empty string`);
         }
         if (model !== undefined && (typeof model !== "string" || model.trim().length === 0)) {
-            throw new MmpConfigError(`${filePath}: model must be a non-empty string`);
+            throw new EpiConfigError(`${filePath}: model must be a non-empty string`);
         }
         if (timeoutSeconds !== undefined &&
             (!Number.isInteger(timeoutSeconds) || Number(timeoutSeconds) <= 0)) {
-            throw new MmpConfigError(`${filePath}: timeoutSeconds must be a positive integer`);
+            throw new EpiConfigError(`${filePath}: timeoutSeconds must be a positive integer`);
         }
         names.add(name);
         agents.push({

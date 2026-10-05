@@ -1,4 +1,4 @@
-import { MmpArgumentError } from "./errors.js";
+import { EpiArgumentError } from "./errors.js";
 
 // ── Resource flags: only the Manifest may declare Rules/Skills/Extensions (docs/cli-design.md §2) ──
 const RESERVED_RESOURCE_FLAGS: Readonly<Record<string, true>> = {
@@ -36,10 +36,10 @@ function findReservedResourceFlag(argument: string): string | undefined {
   return RESERVED_RESOURCE_VALUE_FLAGS.find((flag) => argument.startsWith(`${flag}=`));
 }
 
-// ── Flags MMP has decided not to expose, with the reason (docs/cli-design.md §2) ──
+// ── Flags Epi has decided not to expose, with the reason (docs/cli-design.md §2) ──
 const UNSUPPORTED_FLAGS: Readonly<Record<string, string>> = {
-  "--use-theme": "MMP's interface is grok-styled, full-screen only, with a single theme MMP manages",
-  "--tui-mode": "MMP's TUI is full-screen only",
+  "--use-theme": "Epi's interface is grok-styled, full-screen only, with a single theme Epi manages",
+  "--tui-mode": "Epi's TUI is full-screen only",
 };
 
 /** Matches `--flag` and, since neither of these takes a bare boolean form in Pi, `--flag=value`
@@ -58,9 +58,9 @@ type FlagArity = "none" | "value";
 /**
  * "forward": validated for arity/unknown-flag purposes only, then pushed verbatim into
  * `passthrough` for Pi's own parser (`parseArgs`, called by src/tui/services.ts on every path) to interpret and
- * validate the value of -- MMP does not duplicate Pi's own value validation (enum checks, etc.),
+ * validate the value of -- Epi does not duplicate Pi's own value validation (enum checks, etc.),
  * so error text for a bad value stays exactly what Pi would say.
- * "mmp": consumed here, never forwarded (dry-run, no-project, approve/no-approve, version, help).
+ * "epi": consumed here, never forwarded (dry-run, no-project, approve/no-approve, version, help).
  */
 type FlagHandler = "forward" | "dry-run" | "no-project" | "approve" | "no-approve" | "version" | "help";
 
@@ -72,8 +72,8 @@ interface FlagTableEntry {
 }
 
 /**
- * The one table of every flag `mmp` accepts (docs/cli-design.md §2): drives parsing (this file),
- * validation, and `mmp --help` (renderHelp, below). A short flag (`-x`) not in this table, not a
+ * The one table of every flag `epi` accepts (docs/cli-design.md §2): drives parsing (this file),
+ * validation, and `epi --help` (renderHelp, below). A short flag (`-x`) not in this table, not a
  * reserved resource flag, and not in UNSUPPORTED_FLAGS is rejected outright. A long flag (`--foo`)
  * in none of those is held back instead (Pi's own `parseArgs` `unknownFlags`, cli/args.js) and
  * forwarded on both paths -- it may be one an extension registers with `pi.registerFlag`, which
@@ -81,7 +81,7 @@ interface FlagTableEntry {
  * applyExtensionFlagValues, run for the TUI and for print/json/rpc alike) errors by name if nothing claims
  * it.
  */
-export const MMP_FLAG_TABLE: readonly FlagTableEntry[] = [
+export const EPI_FLAG_TABLE: readonly FlagTableEntry[] = [
   { flags: ["--provider"], arity: "value", handler: "forward", help: "--provider <name>              Provider to search for --model (requires --model)" },
   { flags: ["--model"], arity: "value", handler: "forward", help: "--model <pattern>               Model pattern or ID (\"provider/id\", optional \":<thinking>\")" },
   { flags: ["--thinking"], arity: "value", handler: "forward", help: "--thinking <level>              Thinking level: off, minimal, low, medium, high, xhigh, max" },
@@ -107,17 +107,17 @@ export const MMP_FLAG_TABLE: readonly FlagTableEntry[] = [
   { flags: ["--verbose"], arity: "none", handler: "forward", help: "--verbose                       Show startup details (resources, model, session)" },
   { flags: ["-a", "--approve"], arity: "none", handler: "approve", help: "-a, --approve                   Trust the discovered project configuration for this run" },
   { flags: ["-na", "--no-approve"], arity: "none", handler: "no-approve", help: "-na, --no-approve               Ignore the discovered project configuration for this run" },
-  { flags: ["--no-project"], arity: "none", handler: "no-project", help: "--no-project                    Disable project .mmp discovery" },
+  { flags: ["--no-project"], arity: "none", handler: "no-project", help: "--no-project                    Disable project .epi discovery" },
   { flags: ["--dry-run"], arity: "none", handler: "dry-run", help: "--dry-run                       Resolve and validate configuration, print JSON, do not start" },
   { flags: ["-h", "--help"], arity: "none", handler: "help", help: "-h, --help                      Show this help" },
   { flags: ["-v", "--version"], arity: "none", handler: "version", help: "-v, --version                   Show version number" },
 ];
 
 const FLAG_LOOKUP = new Map<string, FlagTableEntry>(
-  MMP_FLAG_TABLE.flatMap((entry) => entry.flags.map((flag) => [flag, entry] as const)),
+  EPI_FLAG_TABLE.flatMap((entry) => entry.flags.map((flag) => [flag, entry] as const)),
 );
 
-export interface MmpArgs {
+export interface EpiArgs {
   dryRun: boolean;
   noProject: boolean;
   version: boolean;
@@ -125,7 +125,7 @@ export interface MmpArgs {
   passthrough: string[];
 }
 
-export function parseMmpArgs(argv: readonly string[]): MmpArgs {
+export function parseEpiArgs(argv: readonly string[]): EpiArgs {
   const passthrough: string[] = [];
   let dryRun = false;
   let noProject = false;
@@ -149,8 +149,8 @@ export function parseMmpArgs(argv: readonly string[]): MmpArgs {
 
     const reservedFlag = findReservedResourceFlag(argument);
     if (reservedFlag !== undefined) {
-      throw new MmpArgumentError(
-        `${reservedFlag} is managed by the MMP manifest and cannot be passed directly`,
+      throw new EpiArgumentError(
+        `${reservedFlag} is managed by the Epi manifest and cannot be passed directly`,
       );
     }
 
@@ -162,19 +162,19 @@ export function parseMmpArgs(argv: readonly string[]): MmpArgs {
 
     const unsupportedReason = findUnsupportedFlagReason(argument);
     if (unsupportedReason !== undefined) {
-      throw new MmpArgumentError(`${argument} is not supported by MMP: ${unsupportedReason}.`);
+      throw new EpiArgumentError(`${argument} is not supported by Epi: ${unsupportedReason}.`);
     }
 
     const entry = FLAG_LOOKUP.get(argument);
     if (entry === undefined) {
       if (!argument.startsWith("--")) {
-        throw new MmpArgumentError(`Unknown option: ${argument}`);
+        throw new EpiArgumentError(`Unknown option: ${argument}`);
       }
       // Extension-registered flag candidate (Pi's parseArgs `unknownFlags`, cli/args.js): held back
       // here, not rejected -- Pi's own parser re-parses `passthrough` (services.ts's `parseArgs`, for
       // every mode) and matches it against what loaded extensions
       // actually registered (agent-session-services.js's applyExtensionFlagValues), erroring by name
-      // if nobody did. MMP never guesses this flag's arity itself: the next token (its value, or the
+      // if nobody did. Epi never guesses this flag's arity itself: the next token (its value, or the
       // start of the next flag/message) simply falls through this same loop unchanged.
       passthrough.push(argument);
       continue;
@@ -189,13 +189,13 @@ export function parseMmpArgs(argv: readonly string[]): MmpArgs {
         break;
       case "approve":
         if (projectTrustOverride === false) {
-          throw new MmpArgumentError("--approve and --no-approve cannot be used together");
+          throw new EpiArgumentError("--approve and --no-approve cannot be used together");
         }
         projectTrustOverride = true;
         break;
       case "no-approve":
         if (projectTrustOverride === true) {
-          throw new MmpArgumentError("--approve and --no-approve cannot be used together");
+          throw new EpiArgumentError("--approve and --no-approve cannot be used together");
         }
         projectTrustOverride = false;
         break;
@@ -211,7 +211,7 @@ export function parseMmpArgs(argv: readonly string[]): MmpArgs {
         passthrough.push(argument);
         if (entry.arity === "value") {
           if (index + 1 >= argv.length) {
-            throw new MmpArgumentError(`${argument} requires a value`);
+            throw new EpiArgumentError(`${argument} requires a value`);
           }
           index += 1;
           passthrough.push(argv[index]!);
@@ -232,8 +232,8 @@ export function parseMmpArgs(argv: readonly string[]): MmpArgs {
 /**
  * Whether `flag` appears in `passthrough` before a `--` separator, not after it. Pi's own parseArgs
  * (cli/args.js) stops interpreting flags entirely at `--`, treating everything after it as positional
- * messages/`@file` arguments -- `mmp -- --help` sends the literal text "--help" as a message, it
- * doesn't print help (bug 9). `passthrough` always contains the `--` token itself (parseMmpArgs,
+ * messages/`@file` arguments -- `epi -- --help` sends the literal text "--help" as a message, it
+ * doesn't print help (bug 9). `passthrough` always contains the `--` token itself (parseEpiArgs,
  * above, pushes it through unchanged), so this only has to find that one marker.
  */
 export function passthroughHasFlag(passthrough: readonly string[], flag: string): boolean {
@@ -269,47 +269,47 @@ function renderExtensionOptions(extensionFlags: readonly ExtensionFlagLike[]): s
   return `\nExtension options:\n${lines}\n`;
 }
 
-/** `mmp --help`: MMP's own help text, generated from MMP_FLAG_TABLE plus its subcommands. Covers
+/** `epi --help`: Epi's own help text, generated from EPI_FLAG_TABLE plus its subcommands. Covers
  * every table flag; never mentions Pi's own CLI or appends Pi's own help (docs/cli-design.md §2).
  * `extensionFlags` (Pi's `resourceLoader.getExtensions().extensions[].flags`, gathered by host.ts
  * before calling this, since collecting them means loading extensions) adds an "Extension options"
  * section the same way Pi's own `--help` does -- omitted when no loaded extension registered one. */
 export function renderHelp(extensionFlags: readonly ExtensionFlagLike[] = []): string {
-  const flagLines = MMP_FLAG_TABLE.map((entry) => `  ${entry.help}`).join("\n");
-  return `mmp - AI coding assistant with read, bash, edit, write tools
+  const flagLines = EPI_FLAG_TABLE.map((entry) => `  ${entry.help}`).join("\n");
+  return `epi - AI coding assistant with read, bash, edit, write tools
 
 Usage:
-  mmp [options] [--] [@files...] [messages...]
-  mmp <subcommand> [options]
+  epi [options] [--] [@files...] [messages...]
+  epi <subcommand> [options]
 
 Subcommands:
-  mmp update [--self|--extensions|--models|--all] [<source>]     Update mmp, extensions, or the model catalog
-  mmp install <source> [-l] [--approve|--no-approve]             Add an extension source to the Manifest
-  mmp remove <source> [-l] [--approve|--no-approve]              Remove an extension source from the Manifest
-  mmp uninstall <source> [-l] [--approve|--no-approve]           Alias for remove
-  mmp list                                                       List Manifest-declared rules, skills, extensions
-  mmp config [-l] [--approve|--no-approve]                       Edit the Manifest in $VISUAL/$EDITOR
-  mmp auth print-api-key|print-bearer-token|check                Print or check provider credentials
-  mmp mcp add|remove|list|login|logout                           Configure and check MCP servers
-  mmp <subcommand> --help                                        Show help for that subcommand
+  epi update [--self|--extensions|--models|--all] [<source>]     Update epi, extensions, or the model catalog
+  epi install <source> [-l] [--approve|--no-approve]             Add an extension source to the Manifest
+  epi remove <source> [-l] [--approve|--no-approve]              Remove an extension source from the Manifest
+  epi uninstall <source> [-l] [--approve|--no-approve]           Alias for remove
+  epi list                                                       List Manifest-declared rules, skills, extensions
+  epi config [-l] [--approve|--no-approve]                       Edit the Manifest in $VISUAL/$EDITOR
+  epi auth print-api-key|print-bearer-token|check                Print or check provider credentials
+  epi mcp add|remove|list|login|logout                           Configure and check MCP servers
+  epi <subcommand> --help                                        Show help for that subcommand
 
 Options:
 ${flagLines}
 ${renderExtensionOptions(extensionFlags)}
-Rules, Skills, and Extensions are declared by the Manifest only (mmp install/remove/list/config).
+Rules, Skills, and Extensions are declared by the Manifest only (epi install/remove/list/config).
 Ambient themes, prompt templates, context files, and resource CLI flags (--extension, --skill,
 --theme, --system-prompt, ...) are rejected; edit the Manifest instead. A --long flag not in this
 list is held for extensions the Manifest declares (Pi's own pi.registerFlag); one nothing
 registers fails by name before startup.
 
 Environment:
-  MMP_HOME                   Absolute MMP configuration root (default: ~/.mmp)
-  MMP_DISABLE_UPDATE_CHECK   Do not check for new MMP releases
-  MMP_OFFLINE                Disable startup network operations; any value turns network
-                             use off (MMP_OFFLINE=0 too), so use 1
-  MMP_SESSION_DIR            Session storage directory (overridden by --session-dir)
-  MMP_TELEMETRY, MMP_CACHE_RETENTION, MMP_OAUTH_CALLBACK_HOST, MMP_HYPERLINKS,
-  MMP_IMAGE_PROTOCOL, MMP_TRUE_COLOR, MMP_TUI_ESC_TIMEOUT
+  EPI_HOME                   Absolute Epi configuration root (default: ~/.epi)
+  EPI_DISABLE_UPDATE_CHECK   Do not check for new Epi releases
+  EPI_OFFLINE                Disable startup network operations; any value turns network
+                             use off (EPI_OFFLINE=0 too), so use 1
+  EPI_SESSION_DIR            Session storage directory (overridden by --session-dir)
+  EPI_TELEMETRY, EPI_CACHE_RETENTION, EPI_OAUTH_CALLBACK_HOST, EPI_HYPERLINKS,
+  EPI_IMAGE_PROTOCOL, EPI_TRUE_COLOR, EPI_TUI_ESC_TIMEOUT
                              Same as Pi's PI_* variable of that name; Pi's own PI_*
                              variables are ignored
 `;

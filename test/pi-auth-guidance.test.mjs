@@ -1,6 +1,6 @@
 // Dogfood D55: with no usable model, a prompt failed with Pi's core/auth-guidance.js text, which
 // ends in links into Pi's own docs ("Use /login ... See: .../pi-coding-agent/docs/providers.md").
-// MMP swaps that for its own guidance (src/pi-output.ts) wherever it reaches the user: TUI notices,
+// Epi swaps that for its own guidance (src/pi-output.ts) wherever it reaches the user: TUI notices,
 // `-p`/json stderr, and rpc's JSON lines. The error line before it stays.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -15,25 +15,25 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 
 import { PROVIDER_LOGIN_HELP, piProviderLoginHelp, rewritePiText } from "../dist/pi-output.js";
 import { AssistantBlock } from "../dist/tui/assistant-block.js";
-import { createMmpTheme } from "../dist/tui/theme.js";
+import { createEpiTheme } from "../dist/tui/theme.js";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const piEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
 
-// MMP's guidance as a user sees it, and the two things that must never show: a path into Pi's docs,
+// Epi's guidance as a user sees it, and the two things that must never show: a path into Pi's docs,
 // or a `pi` command.
 const EXPECTED = "No API key found for the selected model.\n\n" + PROVIDER_LOGIN_HELP;
 const PI_DOCS = /pi-coding-agent[\\/]+docs/;
 const PI_COMMAND = /(?:^|[\s"'`(])pi\s+-?[a-z]/m;
 
 function homeWithoutProviders(t) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-auth-guidance-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-auth-guidance-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [] }));
-  return { root, env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" } };
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [] }));
+  return { root, env: { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1" } };
 }
 
 function assertNoPiGuidance(output, context) {
@@ -44,7 +44,7 @@ function assertNoPiGuidance(output, context) {
 
 test("rewritePiText replaces Pi's guidance in each of Pi's own messages, raw and JSON-escaped (D55)", async () => {
   const guidance = await import(pathToFileURL(join(piEntry, "..", "core", "auth-guidance.js")).href);
-  // The text MMP detects is exactly what Pi builds (docs/pi-internals.md, `pi-auth-guidance`).
+  // The text Epi detects is exactly what Pi builds (docs/pi-internals.md, `pi-auth-guidance`).
   assert.equal(piProviderLoginHelp(), guidance.getProviderLoginHelp());
   const cases = [
     [guidance.formatNoModelsAvailableMessage(), `No models available. ${PROVIDER_LOGIN_HELP}`],
@@ -52,11 +52,11 @@ test("rewritePiText replaces Pi's guidance in each of Pi's own messages, raw and
     [guidance.formatNoApiKeyFoundMessage("unknown"), EXPECTED],
     [guidance.formatNoApiKeyFoundMessage("anthropic"), `No API key found for anthropic.\n\n${PROVIDER_LOGIN_HELP}`],
   ];
-  for (const [pi, mmp] of cases) {
-    assert.equal(rewritePiText(pi), mmp);
-    assert.equal(rewritePiText(`Error: ${pi}\n`), `Error: ${mmp}\n`);
+  for (const [pi, epi] of cases) {
+    assert.equal(rewritePiText(pi), epi);
+    assert.equal(rewritePiText(`Error: ${pi}\n`), `Error: ${epi}\n`);
     const line = `${JSON.stringify({ type: "response", success: false, error: pi })}\n`;
-    assert.equal(rewritePiText(line), `${JSON.stringify({ type: "response", success: false, error: mmp })}\n`);
+    assert.equal(rewritePiText(line), `${JSON.stringify({ type: "response", success: false, error: epi })}\n`);
   }
   assert.equal(rewritePiText("unrelated text"), "unrelated text");
 });
@@ -73,7 +73,7 @@ test("rewritePiText replaces Pi's guidance colored line by line by chalk, as mai
   assert.equal(rewritePiText(selected), red(`No model selected.\n\n${PROVIDER_LOGIN_HELP}\n\nThen use /model to select a model.`));
 });
 
-test("a failed reply's error line in the TUI shows MMP's guidance, not Pi's docs (D57)", async () => {
+test("a failed reply's error line in the TUI shows Epi's guidance, not Pi's docs (D57)", async () => {
   const guidance = await import(pathToFileURL(join(piEntry, "..", "core", "auth-guidance.js")).href);
   initTheme("dark");
   const message = {
@@ -81,7 +81,7 @@ test("a failed reply's error line in the TUI shows MMP's guidance, not Pi's docs
     stopReason: "error", errorMessage: guidance.formatNoApiKeyFoundMessage("anthropic"),
   };
   // Wide enough that neither guidance wraps.
-  const lines = new AssistantBlock(createMmpTheme("dark"), message, [], false).render(400)
+  const lines = new AssistantBlock(createEpiTheme("dark"), message, [], false).render(400)
     .map((line) => line.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "").replace(/\x1b\[[0-9;]*m/g, "").trim());
   const context = lines.join("\n");
   assert.ok(lines.some((line) => line.startsWith("Error: No API key found for anthropic.")), context);
@@ -90,7 +90,7 @@ test("a failed reply's error line in the TUI shows MMP's guidance, not Pi's docs
 });
 
 for (const args of [["-p", "hi"], ["--mode", "json", "hi"]]) {
-  test(`${args.slice(0, -1).join(" ")} with no provider shows MMP's guidance on stderr, not Pi's docs (D55)`, (t) => {
+  test(`${args.slice(0, -1).join(" ")} with no provider shows Epi's guidance on stderr, not Pi's docs (D55)`, (t) => {
     const { root, env } = homeWithoutProviders(t);
     const result = spawnSync(process.execPath, [cliPath, "--no-project", ...args], { cwd: root, env, encoding: "utf8", timeout: 30_000 });
     const context = `status=${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
@@ -100,7 +100,7 @@ for (const args of [["-p", "hi"], ["--mode", "json", "hi"]]) {
   });
 }
 
-test("rpc with no provider answers the prompt with MMP's guidance, not Pi's docs (D55)", async (t) => {
+test("rpc with no provider answers the prompt with Epi's guidance, not Pi's docs (D55)", async (t) => {
   const { root, env } = homeWithoutProviders(t);
   const child = spawn(process.execPath, [cliPath, "--no-project", "--mode", "rpc"], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
   const killTimer = setTimeout(() => child.kill(), 30_000);
@@ -120,13 +120,13 @@ test("rpc with no provider answers the prompt with MMP's guidance, not Pi's docs
   assertNoPiGuidance(stdout + stderr, context);
 });
 
-test("TUI with no provider: sending a prompt shows MMP's guidance, not Pi's docs (D55)", (t) => {
+test("TUI with no provider: sending a prompt shows Epi's guidance, not Pi's docs (D55)", (t) => {
   const { root, env } = homeWithoutProviders(t);
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
       ...env,
-      MMP_TUI_HARNESS: JSON.stringify({
+      EPI_TUI_HARNESS: JSON.stringify({
         steps: [
           ["waitReady"], ["type", "hi"], ["key", "enter"],
           ["waitFor", "No API key found"], ["wait", 300], ["screen", "after"], ["key", "ctrl+d"],

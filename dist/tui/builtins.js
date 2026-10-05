@@ -10,13 +10,13 @@ export const BUILTIN_COMMANDS = [
     { name: "logout", description: "Remove stored credentials", run: (host) => runLogout(host) },
     { name: "model", description: "Select a model", argumentHint: "<provider/model>", run: (host, args) => runModel(host, args) },
     { name: "new", description: "Start a new session", run: async (host) => void (await host.runtime.newSession()) },
-    { name: "quit", description: "Quit MMP", run: (host) => host.exit(0) },
+    { name: "quit", description: "Quit Epi", run: (host) => host.exit(0) },
     { name: "compact", description: "Compact the session context", argumentHint: "[instructions]", run: (host, args) => runCompact(host, args) },
     { name: "resume", description: "Resume a different session", run: async (host) => { await runResume(host); } },
     { name: "thinking", description: "Set thinking level", argumentHint: "[level]", run: (host, args) => runThinking(host, args) },
     { name: "copy", description: "Copy the last assistant message", run: (host) => runCopy(host) },
     { name: "reload", description: "Reload extensions, skills, prompts and context files", run: (host) => runReload(host) },
-    { name: "trust", description: "Trust or distrust the current project's .mmp/mmp.json", run: (host) => runTrust(host) },
+    { name: "trust", description: "Trust or distrust the current project's .epi/epi.json", run: (host) => runTrust(host) },
     { name: "tree", description: "Navigate the session tree", run: (host) => runTree(host) },
     { name: "fork", description: "Fork from a previous user message", run: (host) => runFork(host) },
     { name: "clone", description: "Duplicate the current session", run: (host) => runClone(host) },
@@ -28,8 +28,8 @@ export const BUILTIN_COMMANDS = [
     { name: "hotkeys", description: "Show keyboard shortcuts", run: (host) => runHotkeys(host) },
     { name: "scoped-models", description: "Choose models for Ctrl+P cycling", run: (host) => runScopedModels(host) },
     { name: "share", description: "Share the session as a private gist", run: (host) => runShare(host) },
-    { name: "changelog", description: "Show MMP's release notes", run: (host) => runChangelog(host) },
-    { name: "bug", description: "Report an MMP bug on GitHub", argumentHint: "[description]", run: (host, args) => runBug(host, args) },
+    { name: "changelog", description: "Show Epi's release notes", run: (host) => runChangelog(host) },
+    { name: "bug", description: "Report an Epi bug on GitHub", argumentHint: "[description]", run: (host, args) => runBug(host, args) },
 ];
 export function findBuiltin(name) {
     return BUILTIN_COMMANDS.find((candidate) => candidate.name === name);

@@ -19,23 +19,23 @@ const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 function runApp(t, extensions, steps, { settings, env: extraEnv } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-compaction-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-compaction-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   if (settings !== undefined) {
-    mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
-    writeFileSync(join(home, ".mmp", "pi", "settings.json"), JSON.stringify(settings));
+    mkdirSync(join(home, ".epi", "pi"), { recursive: true });
+    writeFileSync(join(home, ".epi", "pi", "settings.json"), JSON.stringify(settings));
   }
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ steps }),
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ steps }),
       ...extraEnv,
     },
     encoding: "utf8",
@@ -145,7 +145,7 @@ const ONE_PIXEL_PNG = Buffer.from(
 );
 
 test("Alt+Up restores an image queued during compaction, not just the text", (t) => {
-  const clipboardDir = mkdtempSync(join(tmpdir(), "mmp-compact-image-"));
+  const clipboardDir = mkdtempSync(join(tmpdir(), "epi-compact-image-"));
   t.after(() => rmSync(clipboardDir, { recursive: true, force: true }));
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
@@ -155,7 +155,7 @@ test("Alt+Up restores an image queued during compaction, not just the text", (t)
     ["key", "enter"], ["waitFor", "Queued message for after compaction."], ["mark", "queuedDuringCompaction"], // queued into compactionQueue
     ["key", "alt+up"], ["waitFor", { regex: "❯ .*\\[Image #\\d+\\]" }], ["mark", "afterAltUp"],
     ["detach"],
-  ], { ...KEEP_NO_RECENT, env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { ...KEEP_NO_RECENT, env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.queuedDuringCompaction, /Queued message for after compaction\./);
   const afterAltUp = marks.afterAltUp.slice(marks.queuedDuringCompaction.length);
   // A fresh id, not #1: registerImage() always allocates a new one (the pre-existing "ids aren't
@@ -195,7 +195,7 @@ test("Esc during compaction cancels it and still sends the message queued during
 // entirely while a session-replacing call is in flight (app.ts's sessionReplacementInFlight guard,
 // same one bug 7 uses for its fatal-error handling).
 test("/new during compaction drops the queued message instead of flushing it into the disposed session", (t) => {
-  const logDir = mkdtempSync(join(tmpdir(), "mmp-compact-log-"));
+  const logDir = mkdtempSync(join(tmpdir(), "epi-compact-log-"));
   const logPath = join(logDir, "log.txt");
   t.after(() => rmSync(logDir, { recursive: true, force: true }));
   const { marks, text: out } = runApp(t, [fixture("faux-compact-marker.mjs")], [
@@ -206,7 +206,7 @@ test("/new during compaction drops the queued message instead of flushing it int
     ["waitFor", "Welcome back"], ["mark", "afterNew"],
     ["type", "still alive"], ["key", "enter"], ["waitFor", "BEFORE-COMPACT"], ["mark", "afterStillAlive"],
     ["key", "ctrl+d"],
-  ], { ...KEEP_NO_RECENT, env: { MMP_TEST_COMPACT_LOG: logPath } });
+  ], { ...KEEP_NO_RECENT, env: { EPI_TEST_COMPACT_LOG: logPath } });
   assert.match(marks.queuedDuringCompaction, /Follow-up: queued-msg/);
   assert.doesNotMatch(out, /Failed to send queued message/);
   // /new succeeded: a fresh welcome page came up (not a crash, and not a stall waiting on the old
@@ -234,16 +234,16 @@ test("/new during compaction drops the queued message instead of flushing it int
 // during teardown. That turn is cut off before its model request goes out, so only the turn-start
 // entry faux-compact-marker.mjs logs shows it.
 test("/import during compaction does not send the queued message into the outgoing session", (t) => {
-  const logDir = mkdtempSync(join(tmpdir(), "mmp-compact-log-"));
+  const logDir = mkdtempSync(join(tmpdir(), "epi-compact-log-"));
   const logPath = join(logDir, "log.txt");
   t.after(() => rmSync(logDir, { recursive: true, force: true }));
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "mmp-tui-compaction-import-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "epi-tui-compaction-import-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("faux-compact-marker.mjs")] }));
-  mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "pi", "settings.json"), JSON.stringify(KEEP_NO_RECENT.settings));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fixture("faux-compact-marker.mjs")] }));
+  mkdirSync(join(home, ".epi", "pi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "pi", "settings.json"), JSON.stringify(KEEP_NO_RECENT.settings));
   const sessionFile = join(root, "imported.jsonl");
   const header = { type: "session", version: CURRENT_SESSION_VERSION, id: randomUUID(), timestamp: new Date().toISOString(), cwd: root };
   writeFileSync(sessionFile, `${JSON.stringify(header)}\n`);
@@ -252,10 +252,10 @@ test("/import during compaction does not send the queued message into the outgoi
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TEST_COMPACT_LOG: logPath,
-      MMP_TUI_HARNESS: JSON.stringify({
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TEST_COMPACT_LOG: logPath,
+      EPI_TUI_HARNESS: JSON.stringify({
         args: ["--no-project"],
         steps: [
           ["waitReady"], ...firstTurn, ...startCompact,
@@ -312,7 +312,7 @@ test("a failed overflow recovery leaves no Compacting… status once the run set
     ["waitFor", "Ctrl+t:thinking", { timeoutMs: 3000 }],
     ["wait", 300], ["mark", "settled"],
     ["key", "ctrl+d"],
-  ], { ...KEEP_NO_RECENT, env: { MMP_FAUX_OVERFLOW_RECOVERY: "fail" } });
+  ], { ...KEEP_NO_RECENT, env: { EPI_FAUX_OVERFLOW_RECOVERY: "fail" } });
   // The error lines stay; only the status row goes.
   assert.match(out, /prompt is too long/);
   assert.match(out, /Context overflow recovery failed: .*summary request rejected/);
@@ -367,7 +367,7 @@ test("a threshold compaction after the run's last reply leaves no Compacting… 
     ["waitFor", "Ctrl+t:thinking", { timeoutMs: 3000 }],
     ["wait", 300], ["mark", "settled"],
     ["key", "ctrl+d"],
-  ], { settings, env: { MMP_FAUX_THRESHOLD_AFTER_RUN: "1" } });
+  ], { settings, env: { EPI_FAUX_THRESHOLD_AFTER_RUN: "1" } });
   assert.match(out, /AFTER-COMPACT-REPLY/);
   const lastFrame = lastFrameOf(marks.settled);
   assert.doesNotMatch(lastFrame, /Compacting…/);

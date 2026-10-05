@@ -6,7 +6,7 @@ export interface TuiAppOptions {
     runtime: AgentSessionRuntime;
     theme: Theme;
     cwd: string;
-    /** MMP's Pi state directory (~/.mmp/pi): keybindings.json is read from here. */
+    /** Epi's Pi state directory (~/.epi/pi): keybindings.json is read from here. */
     agentDir: string;
     logDirectory: string;
     /** The project this process assembled its manifest from; used to refuse a cross-project switch. */

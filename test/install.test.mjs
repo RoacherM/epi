@@ -21,14 +21,14 @@ const projectRoot = new URL("../", import.meta.url);
 const projectRootPath = projectRoot.pathname;
 const installTemplate = readFileSync(new URL("../install.sh", import.meta.url), "utf8");
 
-const mmpVersion = JSON.parse(readFileSync(join(projectRootPath, "package.json"), "utf8")).version;
+const epiVersion = JSON.parse(readFileSync(join(projectRootPath, "package.json"), "utf8")).version;
 const piVersion = JSON.parse(readFileSync(join(projectRootPath, "package.json"), "utf8"))
   .dependencies["@earendil-works/pi-coding-agent"];
 
 /** The release-rendered installer (what actually ships) -- see scripts/release.mjs and
  * docs/pi-upgrade-design.md §5. The repo's own install.sh is only a template. */
 function renderedInstallerPath(fixtureRoot, sha256) {
-  const rendered = renderInstallScript(installTemplate, { version: mmpVersion, sha256 });
+  const rendered = renderInstallScript(installTemplate, { version: epiVersion, sha256 });
   const path = join(fixtureRoot, "install.sh");
   writeFileSync(path, rendered);
   chmodSync(path, 0o755);
@@ -36,12 +36,12 @@ function renderedInstallerPath(fixtureRoot, sha256) {
 }
 
 function createFixture() {
-  const root = mkdtempSync(join(tmpdir(), "mmp-installer-test-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-installer-test-"));
   const fakeBin = join(root, "bin");
   const installPrefix = join(root, "prefix");
-  const packagePath = join(root, `mmp-${mmpVersion}.tgz`);
+  const packagePath = join(root, `epi-${epiVersion}.tgz`);
   const npmLog = join(root, "npm.log");
-  const packageContent = Buffer.from("fixture mmp package\n");
+  const packageContent = Buffer.from("fixture epi package\n");
 
   mkdirSync(fakeBin);
   writeFileSync(packagePath, packageContent);
@@ -52,12 +52,12 @@ function createFixture() {
     `#!/bin/sh
 set -eu
 printf '%s\\n' "$*" > "$NPM_LOG"
-mkdir -p "$MMP_PREFIX/bin"
-cat > "$MMP_PREFIX/bin/mmp" <<EOF
+mkdir -p "$EPI_PREFIX/bin"
+cat > "$EPI_PREFIX/bin/epi" <<EOF
 #!/bin/sh
-printf 'mmp ${mmpVersion}\\npi ${piVersion}\\n'
+printf 'epi ${epiVersion}\\npi ${piVersion}\\n'
 EOF
-chmod +x "$MMP_PREFIX/bin/mmp"
+chmod +x "$EPI_PREFIX/bin/epi"
 `,
   );
   chmodSync(fakeNpm, 0o755);
@@ -80,9 +80,9 @@ function runInstaller(fixture, packageSha256) {
     env: {
       ...process.env,
       PATH: `${join(fixture.root, "bin")}${delimiter}${process.env.PATH}`,
-      MMP_DOWNLOAD_URL: fixture.packageUrl,
-      MMP_PACKAGE_SHA256: packageSha256,
-      MMP_PREFIX: fixture.installPrefix,
+      EPI_DOWNLOAD_URL: fixture.packageUrl,
+      EPI_PACKAGE_SHA256: packageSha256,
+      EPI_PREFIX: fixture.installPrefix,
       NPM_LOG: fixture.npmLog,
     },
   });
@@ -95,16 +95,16 @@ test("curl installer verifies and installs the requested package", () => {
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stderr, "");
-    assert.match(result.stdout, new RegExp(`Downloading MMP ${mmpVersion}`));
-    assert.match(result.stdout, /Installed MMP at .*\/bin\/mmp/);
-    assert.match(result.stdout, new RegExp(`mmp ${mmpVersion}\\npi ${piVersion}`));
+    assert.match(result.stdout, new RegExp(`Downloading Epi ${epiVersion}`));
+    assert.match(result.stdout, /Installed Epi at .*\/bin\/epi/);
+    assert.match(result.stdout, new RegExp(`epi ${epiVersion}\\npi ${piVersion}`));
     assert.match(
       readFileSync(fixture.npmLog, "utf8"),
       new RegExp(
-        `^install --global --prefix ${fixture.installPrefix} --no-audit --no-fund .*mmp-${mmpVersion}\\.tgz\\n$`,
+        `^install --global --prefix ${fixture.installPrefix} --no-audit --no-fund .*epi-${epiVersion}\\.tgz\\n$`,
       ),
     );
-    assert.equal(existsSync(join(fixture.installPrefix, "bin", "mmp")), true);
+    assert.equal(existsSync(join(fixture.installPrefix, "bin", "epi")), true);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -116,17 +116,17 @@ test("curl installer rejects a package with the wrong checksum", () => {
     const result = runInstaller(fixture, "0".repeat(64));
 
     assert.equal(result.status, 1);
-    assert.equal(result.stdout, `Downloading MMP ${mmpVersion}...\n`);
+    assert.equal(result.stdout, `Downloading Epi ${epiVersion}...\n`);
     assert.match(result.stderr, /package checksum mismatch/);
     assert.equal(existsSync(fixture.npmLog), false);
-    assert.equal(existsSync(join(fixture.installPrefix, "bin", "mmp")), false);
+    assert.equal(existsSync(join(fixture.installPrefix, "bin", "epi")), false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
 
 test("an unrendered install.sh (placeholders left in) fails with a clear error", () => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-installer-template-test-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-installer-template-test-"));
   try {
     const result = spawnSync("/bin/sh", [new URL("../install.sh", import.meta.url).pathname], {
       cwd: projectRoot,

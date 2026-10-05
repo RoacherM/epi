@@ -19,7 +19,7 @@
 | 版本号只有一个来源 | `package.json`；代码、测试、文档不写死版本号 |
 | 不加没用的导出 | 只在本文件用的东西不导出；测试要用的除外（测试里动态 import 的名字也算有人用） |
 | 复杂度上限（新代码） | 单个函数认知复杂度 ≤ 15、不超过 80 行、嵌套不超过 4 层、参数不超过 5 个。超出的要么拆，要么在审查里说明理由（例如和 Pi 的函数一一对应） |
-| 测试 | 测会真实出错的地方，不测写法；修复前失败、修复后通过；不碰真实环境（临时 `HOME`/`MMP_HOME`、不联网、不碰剪贴板和 `~/.mmp`） |
+| 测试 | 测会真实出错的地方，不测写法；修复前失败、修复后通过；不碰真实环境（临时 `HOME`/`EPI_HOME`、不联网、不碰剪贴板和 `~/.epi`） |
 
 ## 3. 每个任务合并前必须过的检查
 
@@ -97,4 +97,4 @@ export default [{
 
 ## 6. 记录
 
-每次合并后记什么、汇报时附哪三个指标，见 [dev-workflow-herdr.md](dev-workflow-herdr.md) 第 3.4 节。用 mmp 干活时发现的 mmp 自身问题记进 [dogfood-issues.md](dogfood-issues.md)，按 P0–P3 排。
+每次合并后记什么、汇报时附哪三个指标，见 [dev-workflow-herdr.md](dev-workflow-herdr.md) 第 3.4 节。用 epi 干活时发现的 epi 自身问题记进 [dogfood-issues.md](dogfood-issues.md)，按 P0–P3 排。

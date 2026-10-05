@@ -23,15 +23,15 @@ function decodedSessionData(htmlPath) {
 }
 
 function runApp(t, extensions, steps, { cwd, home: providedHome, args } = {}) {
-  const root = cwd === undefined ? mkdtempSync(join(tmpdir(), "mmp-tui-export-")) : undefined;
+  const root = cwd === undefined ? mkdtempSync(join(tmpdir(), "epi-tui-export-")) : undefined;
   if (root !== undefined) t.after(() => rmSync(root, { recursive: true, force: true }));
   const launchCwd = cwd ?? root;
   const home = providedHome ?? join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   const result = spawnSync(process.execPath, [harness], {
     cwd: launchCwd,
-    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_TUI_HARNESS: JSON.stringify({ ...(args === undefined ? {} : { args }), steps }) },
+    env: { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1", EPI_TUI_HARNESS: JSON.stringify({ ...(args === undefined ? {} : { args }), steps }) },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -97,15 +97,15 @@ test("/import with no path shows usage instead of throwing", (t) => {
 });
 
 test("/import refuses a session file whose cwd belongs to a different project", (t) => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "mmp-tui-import-guard-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "epi-tui-import-guard-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const projectA = join(root, "projectA");
   const projectB = join(root, "projectB");
-  mkdirSync(join(projectA, ".mmp"), { recursive: true });
-  mkdirSync(join(projectB, ".mmp"), { recursive: true });
-  writeFileSync(join(projectA, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("switchto-extension.mjs")] }));
-  writeFileSync(join(projectB, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [] }));
+  mkdirSync(join(projectA, ".epi"), { recursive: true });
+  mkdirSync(join(projectB, ".epi"), { recursive: true });
+  writeFileSync(join(projectA, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fixture("switchto-extension.mjs")] }));
+  writeFileSync(join(projectB, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [] }));
 
   // A minimal valid session file (just a header naming its cwd) that belongs to project B.
   const foreignSession = join(root, "foreign-session.jsonl");

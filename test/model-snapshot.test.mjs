@@ -30,7 +30,7 @@ test("two runs of the model-visible snapshot are byte-identical", () => {
   const parsed = JSON.parse(first.stdout);
   assert.equal(typeof parsed.piVersion, "string");
   assert.equal(typeof parsed.systemPrompt, "string");
-  assert.ok(parsed.systemPrompt.includes("MMP Runtime Contract"), "captured too early: mmp:runtime's before_agent_start text is missing");
+  assert.ok(parsed.systemPrompt.includes("Epi Runtime Contract"), "captured too early: epi:runtime's before_agent_start text is missing");
   assert.ok(Array.isArray(parsed.tools) && parsed.tools.length > 0);
   const names = parsed.tools.map((tool) => tool.name);
   assert.deepEqual(names, [...names].sort(), "tools are not sorted by name");
@@ -42,7 +42,7 @@ test("two runs of the model-visible snapshot are byte-identical", () => {
 });
 
 test("--out writes exactly what stdout would print", () => {
-  const dir = mkdtempSync(join(tmpdir(), "mmp-model-snapshot-out-"));
+  const dir = mkdtempSync(join(tmpdir(), "epi-model-snapshot-out-"));
   try {
     const outPath = join(dir, "snapshot.json");
     const toFile = runSnapshot(["--out", outPath]);
@@ -56,7 +56,7 @@ test("--out writes exactly what stdout would print", () => {
 });
 
 test("--diff against a snapshot of itself prints NO MODEL-VISIBLE CHANGES and exits 0", () => {
-  const dir = mkdtempSync(join(tmpdir(), "mmp-model-snapshot-diff-"));
+  const dir = mkdtempSync(join(tmpdir(), "epi-model-snapshot-diff-"));
   try {
     const selfPath = join(dir, "self.json");
     const captured = runSnapshot(["--out", selfPath]);
@@ -70,7 +70,7 @@ test("--diff against a snapshot of itself prints NO MODEL-VISIBLE CHANGES and ex
 });
 
 test("--diff against a changed baseline reports a diff and still exits 0 (report-only)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "mmp-model-snapshot-diff-changed-"));
+  const dir = mkdtempSync(join(tmpdir(), "epi-model-snapshot-diff-changed-"));
   try {
     const changedPath = join(dir, "changed.json");
     const current = JSON.parse(runSnapshot([]).stdout);
@@ -87,7 +87,7 @@ test("--diff against a changed baseline reports a diff and still exits 0 (report
 });
 
 test("--diff names an unchanged section instead of printing an empty patch for it", () => {
-  const dir = mkdtempSync(join(tmpdir(), "mmp-model-snapshot-diff-one-section-"));
+  const dir = mkdtempSync(join(tmpdir(), "epi-model-snapshot-diff-one-section-"));
   try {
     const current = JSON.parse(runSnapshot([]).stdout);
 

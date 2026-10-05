@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Model-visible snapshot (docs/pi-upgrade-design.md 3, "模型可见内容快照"): builds MMP's standard
-// offline assembly -- rules, skills, and the mmp:task/mmp:mcp/mmp:hooks built-in extensions, all
+// Model-visible snapshot (docs/pi-upgrade-design.md 3, "模型可见内容快照"): builds Epi's standard
+// offline assembly -- rules, skills, and the epi:task/epi:mcp/epi:hooks built-in extensions, all
 // loading fully offline -- points it at a faux model, and captures exactly what a real provider
 // would receive: the leading system message's text and tool declarations. Report-only: this never
 // judges pass/fail on its own (a real model-visible change needs a human decision on whether to
@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 
-import { MMP_VERSION } from "../dist/host.js";
+import { EPI_VERSION } from "../dist/host.js";
 import { canonicalize } from "./normalize-snapshot.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -52,17 +52,17 @@ function parseArgs(argv) {
 }
 
 /** Builds the fixed offline manifest (test/fixtures/full-runtime, plus this script's faux driver)
- * under a fresh temp MMP_HOME, runs one prompt through the SDK path, and returns the raw
+ * under a fresh temp EPI_HOME, runs one prompt through the SDK path, and returns the raw
  * `{ systemPrompt, tools }` the faux model received -- before any path/date normalization. */
 function captureModelVisibleContent() {
-  const work = mkdtempSync(join(tmpdir(), "mmp-model-snapshot-"));
+  const work = mkdtempSync(join(tmpdir(), "epi-model-snapshot-"));
   try {
     const home = join(work, "home");
-    const mmpHome = join(home, ".mmp");
+    const epiHome = join(home, ".epi");
     const captureFile = join(work, "capture.json");
-    cpSync(bundleTemplate, mmpHome, { recursive: true });
+    cpSync(bundleTemplate, epiHome, { recursive: true });
 
-    const manifestPath = join(mmpHome, "mmp.json");
+    const manifestPath = join(epiHome, "epi.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     manifest.extensions = [...manifest.extensions, driver];
     writeFileSync(manifestPath, JSON.stringify(manifest));
@@ -74,7 +74,7 @@ function captureModelVisibleContent() {
     // handler's own `command`, if it starts with "/", resolves against hooks.json's directory --
     // src/hooks-config.ts's resolveCommandPath -- args do not). --no-project still disables all
     // project-level manifest/resource discovery at this cwd, so this stays fully offline and fixed.
-    // full-runtime declares "mmp:mcp" but has no mcp.json of its own, so this always sees zero
+    // full-runtime declares "epi:mcp" but has no mcp.json of its own, so this always sees zero
     // configured servers -- the point is a clean "adapter tools go away" diff (docs/mcp-design.md
     // §5), not exercising native MCP itself (test/mcp.test.mjs does that).
     const result = spawnSync(process.execPath, [runner], {
@@ -84,11 +84,11 @@ function captureModelVisibleContent() {
       env: {
         PATH: process.env.PATH,
         HOME: home,
-        MMP_HOME: mmpHome,
-        MMP_OFFLINE: "1",
+        EPI_HOME: epiHome,
+        EPI_OFFLINE: "1",
         HOOK_ACCEPTANCE_LOG: hookLog,
-        MMP_MODEL_SNAPSHOT_OUT: captureFile,
-        MMP_SDK_RUNNER: JSON.stringify(options),
+        EPI_MODEL_SNAPSHOT_OUT: captureFile,
+        EPI_SDK_RUNNER: JSON.stringify(options),
       },
     });
     if (result.status !== 0) {
@@ -104,15 +104,15 @@ function captureModelVisibleContent() {
       [piPackageDir, "$PI_PACKAGE_DIR"],
       [root, "$CWD"],
     ];
-    // mmp:runtime's inventory embeds both versions verbatim (engineVersion, runtime.version): left
-    // unnormalized, --diff would report a change on every MMP release and every Pi bump even when
+    // epi:runtime's inventory embeds both versions verbatim (engineVersion, runtime.version): left
+    // unnormalized, --diff would report a change on every Epi release and every Pi bump even when
     // nothing else about the prompt or tools moved -- exactly the false positive this snapshot
     // exists to avoid (docs/pi-upgrade-design.md 2). The top-level piVersion field still records the
     // real value. Boundary-checked (unlike the plain paths above): a bare substring replace of a
     // short version string like "0.1.4" could also match inside an unrelated longer number.
     const versionRoots = [
       [PI_VERSION, "$PI_VERSION"],
-      [MMP_VERSION, "$MMP_VERSION"],
+      [EPI_VERSION, "$EPI_VERSION"],
     ];
     return { ...captured, roots, versionRoots };
   } finally {
@@ -169,7 +169,7 @@ function buildSnapshot() {
   return { piVersion: PI_VERSION, systemPrompt: normalizedPrompt, tools: normalizedTools };
 }
 
-/** Pi's own `diff` install (dependency of pi-coding-agent, not a direct MMP dependency); registered
+/** Pi's own `diff` install (dependency of pi-coding-agent, not a direct Epi dependency); registered
  * as a Pi-internals row like the other nested-dep reaches (docs/pi-internals.md). */
 async function loadDiff() {
   const piEntry = import.meta.resolve("@earendil-works/pi-coding-agent");

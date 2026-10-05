@@ -1,5 +1,5 @@
 // print (`-p`, or no terminal), `--mode json` and `--mode rpc` on the SDK (decision N1,
-// docs/noninteractive-sdk-design.md): the same createMmpRuntime the TUI uses, handed to Pi's own
+// docs/noninteractive-sdk-design.md): the same createEpiRuntime the TUI uses, handed to Pi's own
 // runPrintMode / runRpcMode. What Pi's main() does around them for these modes is done here, in
 // main.js's order, so the output stays what piMain printed.
 import { dirname, join } from "node:path";
@@ -15,12 +15,12 @@ import {
   runRpcMode,
 } from "@earendil-works/pi-coding-agent";
 
-import { MmpPreflightError } from "./errors.js";
+import { EpiPreflightError } from "./errors.js";
 import { processFileArguments } from "./file-arguments.js";
-import type { PreparedMmpRun } from "./host.js";
+import type { PreparedEpiRun } from "./host.js";
 import { PROVIDER_LOGIN_HELP } from "./pi-output.js";
 import { findNearestProjectManifest } from "./project.js";
-import { type Diagnostic, createMmpRuntime, settingsDiagnostics, StartupDiagnosticsError } from "./tui/services.js";
+import { type Diagnostic, createEpiRuntime, settingsDiagnostics, StartupDiagnosticsError } from "./tui/services.js";
 
 // pi-internals row `output-guard-stdout-write`: Pi's core/output-guard.js is not exported. The
 // mode runners write through it, so the takeover has to be this same module instance.
@@ -80,12 +80,12 @@ async function prepareMessages(parsed: ParsedPiArgs, cwd: string): Promise<{
 }
 
 async function createRuntime(
-  prepared: PreparedMmpRun,
+  prepared: PreparedEpiRun,
   extensionFactories: InlineExtension[],
   cwd: string,
 ): Promise<AgentSessionRuntime> {
   try {
-    return await createMmpRuntime({
+    return await createEpiRuntime({
       cwd,
       agentDir: prepared.agentDir,
       piArgs: prepared.args.passthrough,
@@ -105,7 +105,7 @@ async function createRuntime(
       process.exit(1);
     }
     // Argument and session-selection errors: `Error: ...`, exit 1, as Pi's CLI reports them.
-    if (error instanceof MmpPreflightError) exitWithError(`Error: ${error.message}`);
+    if (error instanceof EpiPreflightError) exitWithError(`Error: ${error.message}`);
     throw error;
   }
 }
@@ -122,7 +122,7 @@ function refreshCatalogsInBackground(runtime: AgentSessionRuntime): void {
 }
 
 /** What main.js checks before a session exists. `--resume` opens Pi's session picker there, which
- * only MMP's TUI has; dropping the flag would quietly start a new session instead. */
+ * only Epi's TUI has; dropping the flag would quietly start a new session instead. */
 function refuseUnsupportedArgs(parsed: ParsedPiArgs, mode: "rpc" | "json" | "text"): void {
   if (mode === "rpc" && parsed.fileArgs.length > 0) {
     exitWithError("Error: @file arguments are not supported in RPC mode");
@@ -134,7 +134,7 @@ function refuseUnsupportedArgs(parsed: ParsedPiArgs, mode: "rpc" | "json" | "tex
 
 async function runPrint(runtime: AgentSessionRuntime, parsed: ParsedPiArgs, mode: "json" | "text", cwd: string): Promise<void> {
   const prompts = await prepareMessages(parsed, cwd).catch((error: unknown) => {
-    if (error instanceof MmpPreflightError) exitWithError(`Error: ${error.message}`);
+    if (error instanceof EpiPreflightError) exitWithError(`Error: ${error.message}`);
     throw error;
   });
   reportStartup(runtime);
@@ -160,7 +160,7 @@ function reportStartup(runtime: AgentSessionRuntime): void {
 }
 
 export async function runNonInteractive(
-  prepared: PreparedMmpRun,
+  prepared: PreparedEpiRun,
   extensionFactories: InlineExtension[],
 ): Promise<void> {
   const cwd = process.cwd();

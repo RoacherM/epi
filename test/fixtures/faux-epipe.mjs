@@ -1,7 +1,7 @@
 // Faux model whose first reply is far bigger than a pipe buffer, so a reader that closes after the
-// first byte leaves MMP writing into a closed pipe (dogfood D54). Every model request after the first
-// appends its last user text to MMP_FAUX_LATER_LOG (one JSON string per line), and the
-// session_shutdown handler takes a while and then writes MMP_FAUX_SHUTDOWN_MARK, so a test can tell
+// first byte leaves Epi writing into a closed pipe (dogfood D54). Every model request after the first
+// appends its last user text to EPI_FAUX_LATER_LOG (one JSON string per line), and the
+// session_shutdown handler takes a while and then writes EPI_FAUX_SHUTDOWN_MARK, so a test can tell
 // whether the run went on and whether shutdown finished.
 //
 // The long reply overflows the faux context window, so Pi auto-compacts after the first turn and the
@@ -23,7 +23,7 @@ function lastUserText(context) {
 
 const later = (context) => {
   const text = lastUserText(context);
-  if (process.env.MMP_FAUX_LATER_LOG) appendFileSync(process.env.MMP_FAUX_LATER_LOG, `${JSON.stringify(text)}\n`);
+  if (process.env.EPI_FAUX_LATER_LOG) appendFileSync(process.env.EPI_FAUX_LATER_LOG, `${JSON.stringify(text)}\n`);
   return fauxAssistantMessage(text === "second" ? "second reply" : "summary");
 };
 
@@ -31,6 +31,6 @@ export default function (pi) {
   registerFaux(pi, { models: ["long"], responses: [long, later, later, later] });
   pi.on("session_shutdown", async () => {
     await pause(300);
-    if (process.env.MMP_FAUX_SHUTDOWN_MARK) writeFileSync(process.env.MMP_FAUX_SHUTDOWN_MARK, "done");
+    if (process.env.EPI_FAUX_SHUTDOWN_MARK) writeFileSync(process.env.EPI_FAUX_SHUTDOWN_MARK, "done");
   });
 }

@@ -1,5 +1,5 @@
-// App-level key actions of MMP TUI v2 (docs/tui-design.md 4.7). Keys are Pi's keybinding ids, so
-// Pi's defaults and the user's ~/.mmp/pi/keybindings.json both apply. The first matching action
+// App-level key actions of Epi TUI v2 (docs/tui-design.md 4.7). Keys are Pi's keybinding ids, so
+// Pi's defaults and the user's ~/.epi/pi/keybindings.json both apply. The first matching action
 // whose `when` holds consumes the key; otherwise it goes to the focused component (editor, dialog).
 import type { CommandHost } from "./command-host.js";
 import { runModel } from "./commands.js";
@@ -83,7 +83,7 @@ export function createKeyActions(): KeyAction[] {
       },
     },
     {
-      // Pi: clear the editor. MMP also aborts a running turn and quits on a second press (4.7).
+      // Pi: clear the editor. Epi also aborts a running turn and quits on a second press (4.7).
       id: "app.clear",
       run: (host) => {
         if (host.getEditorText() !== "") {
@@ -123,7 +123,7 @@ export function createKeyActions(): KeyAction[] {
       run: (host) => runModel(host, ""),
     },
     {
-      // Unbound by default in MMP (keybindings.ts MMP_DEFAULT_KEYS, decision K1).
+      // Unbound by default in Epi (keybindings.ts EPI_DEFAULT_KEYS, decision K1).
       id: "app.model.cycleForward",
       run: (host) => cycleModel(host, "forward"),
     },
@@ -132,7 +132,7 @@ export function createKeyActions(): KeyAction[] {
       run: (host) => cycleModel(host, "backward"),
     },
     {
-      // K1: MMP swaps Pi's Enter/Alt+Enter semantics while a turn runs. Enter already queues a
+      // K1: Epi swaps Pi's Enter/Alt+Enter semantics while a turn runs. Enter already queues a
       // follow-up (submit() in app.ts); Alt+Enter steers it into the current turn instead.
       id: "app.message.followUp",
       when: (host) => host.session().isStreaming,

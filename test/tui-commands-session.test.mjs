@@ -11,23 +11,23 @@ const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
 function runApp(t, extensions, steps, { settings, inspect, env: extraEnv = {} } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-session-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-session-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   if (settings !== undefined) {
-    mkdirSync(join(home, ".mmp", "pi"), { recursive: true });
-    writeFileSync(join(home, ".mmp", "pi", "settings.json"), JSON.stringify(settings));
+    mkdirSync(join(home, ".epi", "pi"), { recursive: true });
+    writeFileSync(join(home, ".epi", "pi", "settings.json"), JSON.stringify(settings));
   }
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: {
       PATH: process.env.PATH,
       HOME: home,
-      MMP_HOME: join(home, ".mmp"),
-      MMP_OFFLINE: "1",
-      MMP_TUI_HARNESS: JSON.stringify({ steps }),
+      EPI_HOME: join(home, ".epi"),
+      EPI_OFFLINE: "1",
+      EPI_TUI_HARNESS: JSON.stringify({ steps }),
       ...extraEnv,
     },
     encoding: "utf8",
@@ -62,9 +62,9 @@ test("/thinking sets the level directly, rejects an unknown level, and offers a 
 });
 
 test("/copy and Ctrl+X copy the last assistant reply, and refuse when there is none", (t) => {
-  // MMP_TEST_CLIPBOARD_FILE (src/tui/clipboard.ts) swaps the real system clipboard for a plain
+  // EPI_TEST_CLIPBOARD_FILE (src/tui/clipboard.ts) swaps the real system clipboard for a plain
   // file, so this test never touches the developer's actual clipboard.
-  const clipboardFile = join(mkdtempSync(join(tmpdir(), "mmp-clipboard-test-")), "clipboard.txt");
+  const clipboardFile = join(mkdtempSync(join(tmpdir(), "epi-clipboard-test-")), "clipboard.txt");
   t.after(() => rmSync(clipboardFile, { force: true }));
   const { text: out, marks } = runApp(t, [fixture("faux-two-replies.mjs")], [
     ["waitReady"],
@@ -73,7 +73,7 @@ test("/copy and Ctrl+X copy the last assistant reply, and refuse when there is n
     ["type", "/copy"], ["key", "enter"], ["wait", 300], ["mark", "afterCopy"],
     ["key", "ctrl+x"], ["wait", 300], ["mark", "afterCtrlX"],
     ["key", "ctrl+d"],
-  ], { env: { MMP_TEST_CLIPBOARD_FILE: clipboardFile } });
+  ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.beforeAnyReply, /No agent messages to copy yet\./);
   assert.match(marks.afterReply, /FIRST-REPLY/);
   // Pi's own status, with no closing period (interactive-mode.js handleCopyCommand).
@@ -88,13 +88,13 @@ test("/copy and Ctrl+X copy the last assistant reply, and refuse when there is n
 test("/copy and Ctrl+X refuse an empty last reply, as Pi's `!text` check does, at Pi's error level", async (t) => {
   const { runCopy } = await import("../dist/tui/session-commands.js");
   // Should a regression reach the clipboard, it writes this file, never the real clipboard.
-  const dir = mkdtempSync(join(tmpdir(), "mmp-clipboard-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "epi-clipboard-test-"));
   const clipboardFile = join(dir, "clipboard.txt");
-  const previous = process.env.MMP_TEST_CLIPBOARD_FILE;
-  process.env.MMP_TEST_CLIPBOARD_FILE = clipboardFile;
+  const previous = process.env.EPI_TEST_CLIPBOARD_FILE;
+  process.env.EPI_TEST_CLIPBOARD_FILE = clipboardFile;
   t.after(() => {
-    if (previous === undefined) delete process.env.MMP_TEST_CLIPBOARD_FILE;
-    else process.env.MMP_TEST_CLIPBOARD_FILE = previous;
+    if (previous === undefined) delete process.env.EPI_TEST_CLIPBOARD_FILE;
+    else process.env.EPI_TEST_CLIPBOARD_FILE = previous;
     rmSync(dir, { recursive: true, force: true });
   });
   const shown = [];
@@ -111,7 +111,7 @@ test("/copy and Ctrl+X refuse an empty last reply, as Pi's `!text` check does, a
   assert.equal(existsSync(clipboardFile), false);
 });
 
-test("/resume lists sessions from MMP's own agent dir and replays a previous one", (t) => {
+test("/resume lists sessions from Epi's own agent dir and replays a previous one", (t) => {
   let sessionsDir;
   // `/new` rebuilds AgentSessionServices from scratch, re-invoking the extension factory and
   // resetting the faux provider's response queue; the echo model keeps replies distinguishable.
@@ -125,7 +125,7 @@ test("/resume lists sessions from MMP's own agent dir and replays a previous one
     ["key", "ctrl+d"],
   ], {
     inspect: (home) => {
-      sessionsDir = join(home, ".mmp", "pi", "sessions");
+      sessionsDir = join(home, ".epi", "pi", "sessions");
     },
   });
   assert.match(marks.firstReply, /ECHO:first message/);
@@ -135,7 +135,7 @@ test("/resume lists sessions from MMP's own agent dir and replays a previous one
   // The replayed transcript is the first session's, not the one /resume was opened from.
   assert.match(marks.afterResume.slice(marks.selectorOpen.length), /ECHO:first message/);
   assert.match(out, /EXIT=0/);
-  // Hard constraint: sessions only ever come from MMP's own Pi state dir, never ~/.pi/agent.
+  // Hard constraint: sessions only ever come from Epi's own Pi state dir, never ~/.pi/agent.
   assert.ok(existsSync(sessionsDir), sessionsDir);
   const cwdDirs = readdirSync(sessionsDir);
   assert.equal(cwdDirs.length, 1);
@@ -143,18 +143,18 @@ test("/resume lists sessions from MMP's own agent dir and replays a previous one
   assert.equal(files.length, 2);
 });
 
-test("mmp --resume opens the same selector at startup, without typing /resume, and replays the picked session", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-resume-flag-"));
+test("epi --resume opens the same selector at startup, without typing /resume, and replays the picked session", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-resume-flag-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("faux-echo.mjs")] }));
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fixture("faux-echo.mjs")] }));
+  const env = { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1" };
 
   function run(steps, args) {
     const result = spawnSync(process.execPath, [harness], {
       cwd: root,
-      env: { ...env, MMP_TUI_HARNESS: JSON.stringify({ ...(args === undefined ? {} : { args }), steps }) },
+      env: { ...env, EPI_TUI_HARNESS: JSON.stringify({ ...(args === undefined ? {} : { args }), steps }) },
       encoding: "utf8",
       timeout: 60_000,
     });
@@ -186,21 +186,21 @@ test("mmp --resume opens the same selector at startup, without typing /resume, a
 
 // Bug 8: Pi's own `--resume`, given Esc at the selector (nothing picked), prints "No session
 // selected" and exits (main.js ~327-336's selectSession/process.exit(0)) instead of silently
-// carrying on in a fresh session -- which is what MMP used to do, since bind() above already sets
+// carrying on in a fresh session -- which is what Epi used to do, since bind() above already sets
 // one up before the selector even opens. Fixed by exiting the same way when the selector reports
 // "cancelled" (session-commands.ts's ResumeOutcome).
-test("mmp --resume, given Esc at the selector, prints \"No session selected\" and exits, like Pi", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "mmp-tui-resume-flag-esc-"));
+test("epi --resume, given Esc at the selector, prints \"No session selected\" and exits, like Pi", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "epi-tui-resume-flag-esc-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [fixture("faux-echo.mjs")] }));
-  const env = { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1" };
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fixture("faux-echo.mjs")] }));
+  const env = { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1" };
 
   function run(steps, args) {
     const result = spawnSync(process.execPath, [harness], {
       cwd: root,
-      env: { ...env, MMP_TUI_HARNESS: JSON.stringify({ ...(args === undefined ? {} : { args }), steps }) },
+      env: { ...env, EPI_TUI_HARNESS: JSON.stringify({ ...(args === undefined ? {} : { args }), steps }) },
       encoding: "utf8",
       timeout: 60_000,
     });

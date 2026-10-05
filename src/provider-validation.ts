@@ -7,7 +7,7 @@ import { ModelRuntime, type ProviderConfig } from "@earendil-works/pi-coding-age
 // `pi.registerProvider` without it registers fine and then fails on the first reply, inside
 // pi-ai's `calculateCost`, with only "Cannot read properties of undefined (reading 'tiers')".
 //
-// pi-internals row `model-runtime-register-provider`: MMP checks the costs first by wrapping
+// pi-internals row `model-runtime-register-provider`: Epi checks the costs first by wrapping
 // `ModelRuntime.prototype.registerProvider` (every Pi entry point -- main.js, the SDK,
 // agent-session-services.js -- imports the one core/model-runtime.js module). A throw there is
 // what Pi already does for a missing `api`/`baseUrl`, so Pi reports it the same way: when
@@ -54,7 +54,7 @@ export function installProviderCostValidation(): void {
   };
   const registerProvider = prototype.registerProvider;
   if (typeof registerProvider !== "function") {
-    throw new Error("mmp: Pi's ModelRuntime.prototype.registerProvider is gone (docs/pi-internals.md model-runtime-register-provider)");
+    throw new Error("epi: Pi's ModelRuntime.prototype.registerProvider is gone (docs/pi-internals.md model-runtime-register-provider)");
   }
   prototype.registerProvider = function (providerId, config) {
     const problem = providerCostProblem(providerId, config);

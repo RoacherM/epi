@@ -7,11 +7,11 @@ export type ResourceSource = "global" | "project";
  * default; it has no `declaredIn`. */
 export type InlineExtensionSource = ResourceSource | "default";
 export type ResourceKind = "rule" | "skill" | "extension";
-export type BuiltInExtensionName = "mmp:task" | "mmp:mcp" | "mmp:hooks";
+export type BuiltInExtensionName = "epi:task" | "epi:mcp" | "epi:hooks";
 /** Which fixed auto-discovery directory a skill root came from (docs/decisions.md S1); undefined
  * for a skill declared explicitly in a Manifest. */
-export type DiscoveredSkillProvenance = "agents" | "mmp" | "project";
-export interface MmpManifestV1 {
+export type DiscoveredSkillProvenance = "agents" | "epi" | "project";
+export interface EpiManifestV1 {
     version: 1;
     rules?: string[];
     skills?: string[];
@@ -48,7 +48,7 @@ export interface ResolvedManifest {
     disabledExtensions: ResolvedDisabledExtension[];
 }
 /** Whether this Manifest's `"disable"` lists `name`. Reads the file only: a command that asks just
- * this (`mmp mcp list`) is not stopped by a declared path that does not exist. */
+ * this (`epi mcp list`) is not stopped by a declared path that does not exist. */
 export declare function manifestDisables(manifestPath: string, name: BuiltInExtensionName): boolean;
 export declare function resolveManifest(manifestPath: string, source: ResourceSource): ResolvedManifest;
 //# sourceMappingURL=manifest.d.ts.map

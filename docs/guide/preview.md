@@ -1,15 +1,15 @@
-# Preview：在 MMP 里看 agent 改了什么
+# Preview：在 Epi 里看 agent 改了什么
 
 [← 使用文档](README.md)
 
-`/preview` 打开一个整页的视图，不用离开 MMP 去开编辑器：
+`/preview` 打开一个整页的视图，不用离开 Epi 去开编辑器：
 
 - **改动**：这次会话里 agent 改过的文件，每个文件的 diff。
 - **文件**：三栏文件浏览，查看代码、渲染后的 Markdown、图片和视频。
 
-它是内置扩展 `mmp:preview`，只在交互界面里加载，模型看不到它。设计见 [preview-design.md](../preview-design.md)。
+它是内置扩展 `epi:preview`，只在交互界面里加载，模型看不到它。设计见 [preview-design.md](../preview-design.md)。
 
-当前版本：**0.3.0**（扩展有自己的版本号，和 MMP 的版本分开，见文末的更新记录）。
+当前版本：**0.3.0**（扩展有自己的版本号，和 Epi 的版本分开，见文末的更新记录）。
 
 ## 打开
 
@@ -55,7 +55,7 @@
 ### 看不到的改动
 
 - agent 用 bash 改的文件、外部程序改的文件不在列表里（只记写入和编辑工具）。
-- 记录只在这次 MMP 运行的内存里：`/new`、`/resume`、`/reload` 之后清空，恢复旧会话时也看不到之前的改动。
+- 记录只在这次 Epi 运行的内存里：`/new`、`/resume`、`/reload` 之后清空，恢复旧会话时也看不到之前的改动。
 - 改之前超过 4 MB 的文件只记"太大"，不显示 diff；一次改动太多（如整个文件重写）时也不显示 diff，用 `d` 看完整文件。很长的行（合起来超过 2000 个字符）不反显改了的词，只按整行显示增删。
 - agent 改了又改回去、或编辑没成功的文件，和原来一样，不列出。
 - 只改了换行符（CRLF/LF）、制表符或文件末尾换行的文件照样列出，打开时说明只改了这些（diff 按显示的样子比较，这些差别画不出来）。
@@ -110,11 +110,11 @@
 ## 要求
 
 - **图片和视频画面**需要终端支持图形协议（kitty 协议或 iTerm2 协议，例如 Ghostty、kitty、iTerm2、WezTerm）。不支持时显示文字占位。
-- **视频**需要本机装有 `ffmpeg`（出画面）、`ffprobe`（读时长和尺寸）和 `ffplay`（出声音）。没有时查看器会显示 `ffmpeg not found: install ffmpeg to view video`，其他功能不受影响。MMP 不自带也不安装它们。
+- **视频**需要本机装有 `ffmpeg`（出画面）、`ffprobe`（读时长和尺寸）和 `ffplay`（出声音）。没有时查看器会显示 `ffmpeg not found: install ffmpeg to view video`，其他功能不受影响。Epi 不自带也不安装它们。
 - **Quick Look 缩略图**只在 macOS 上有。
-- 设 `MMP_PREVIEW_NERD=1` 用 Nerd Font 图标显示文件类型。
+- 设 `EPI_PREVIEW_NERD=1` 用 Nerd Font 图标显示文件类型。
 - 文件名和文件内容里的控制字符不会被终端执行：ESC 显示成 `␛`，其他控制字符被去掉。命名管道、设备这类不是普通文件的条目不会被打开，显示 `not a regular file`。
-- 如果你自己的扩展也注册了 `/preview`，MMP 启动时就报错并说明是哪个扩展，请把那个命令改名。两个扩展不能注册同名命令（内置的也一样）。
+- 如果你自己的扩展也注册了 `/preview`，Epi 启动时就报错并说明是哪个扩展，请把那个命令改名。两个扩展不能注册同名命令（内置的也一样）。
 - 正在看的文件或目录被删了，会显示 `xxx not found`；没有权限读的目录显示 `cannot read: permission denied`，不会显示成空目录。
 
 ## 给其他扩展用：播放器
@@ -138,10 +138,10 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       // 用到时再拿，不要在扩展加载时拿
       const request: { player?: PreviewPlayerApi } = {};
-      pi.events.emit("mmp/preview/player/v1", request);
+      pi.events.emit("epi/preview/player/v1", request);
       const player = request.player;
       if (!player) {
-        ctx.ui.notify("没有 /preview 的播放器：需要 MMP 的交互界面", "error");
+        ctx.ui.notify("没有 /preview 的播放器：需要 Epi 的交互界面", "error");
         return;
       }
       const error = await ctx.ui.custom<string | undefined>(async (tui, theme, _keybindings, done) => {
@@ -189,7 +189,7 @@ export default function (pi: ExtensionAPI) {
 
 ### 接口
 
-MMP 不导出这些类型，复制到你的扩展里：
+Epi 不导出这些类型，复制到你的扩展里：
 
 ```ts
 interface PaneSource {
@@ -227,23 +227,23 @@ interface PreviewPlayerApi {
 
 | 情况 | 结果 |
 |---|---|
-| 非交互模式（`-p`、json、rpc）、没有 preview 的 MMP、纯 Pi | `request.player` 还是 `undefined`，你自己提示 |
+| 非交互模式（`-p`、json、rpc）、没有 preview 的 Epi、纯 Pi | `request.player` 还是 `undefined`，你自己提示 |
 | 在扩展加载时（factory 里）发请求 | 同上：preview 还没加载 |
 | `video` 为空 | `createPane` reject：`createPane: video is empty` |
 | `headers` 的名字或值里有换行 | `createPane` reject，错误里写明是哪个头（换行会把 ffmpeg 的 `-headers` 拆成别的头） |
 | 没装 ffmpeg、地址打不开 | 不 reject，错误显示在面板的画面里，和 `/preview` 一样 |
 | `/new`、`/resume`、`/fork`、`/reload`、退出 | preview 回收它发出、还没回收的面板；之后 `render` 只显示 `stopped`，不会重新开始播放 |
-| 留着上一个会话拿到的 API 对象（`/new`、`/resume`、`/fork`、`/reload` 之前的）再调 `createPane` | reject：`createPane: this player belongs to a session that has ended; ask on mmp/preview/player/v1 again`。用的时候重新发请求 |
+| 留着上一个会话拿到的 API 对象（`/new`、`/resume`、`/fork`、`/reload` 之前的）再调 `createPane` | reject：`createPane: this player belongs to a session that has ended; ask on epi/preview/player/v1 again`。用的时候重新发请求 |
 
 频道名里的 `v1` 是接口的版本：有不兼容的改动时换新频道，旧的可以同时保留。
 
 ## 更新记录
 
-扩展的版本和 MMP 的版本分开：tag 是 `preview-v*`，只在这个扩展有改动时才变。
+扩展的版本和 Epi 的版本分开：tag 是 `preview-v*`，只在这个扩展有改动时才变。
 
-| 版本 | 随 MMP | 内容 |
+| 版本 | 随 Epi（formerly MMP） | 内容 |
 |---|---|---|
-| 0.3.0 | 未发布 | 通过 `pi.events` 给其他扩展提供视频播放面板（`mmp/preview/player/v1`）；`/preview` 自己的视频查看器也改用这个面板，看起来和以前一样 |
+| 0.3.0 | 未发布 | 通过 `pi.events` 给其他扩展提供视频播放面板（`epi/preview/player/v1`）；`/preview` 自己的视频查看器也改用这个面板，看起来和以前一样 |
 | 0.2.0 | 0.1.12 | "改动"：agent 改过的文件和 diff（本次会话 / 上一轮）；整页形态和 agent 状态行；diff 和完整文件里的搜索、跳到行号；记住每个文件看到的位置 |
 | 0.1.1 | 0.1.11 | 文件或目录被删后显示 `not found`，读不了的目录说明原因，不再显示成空目录；另一个扩展也注册 `/preview` 时启动报错；名字里有换行的文件不插入并提示 |
 | 0.1.0 | 0.1.10 | 首个版本。三栏浏览器；文本、Markdown、二进制、图片、视频、Quick Look 查看器；鼠标；`i` 插入 `@路径`；`/preview <文件>` 直接打开文件 |

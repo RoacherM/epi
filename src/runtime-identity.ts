@@ -6,7 +6,7 @@ import type {
   ResolvedResource,
 } from "./manifest.js";
 
-export interface MmpRuntimeResource {
+export interface EpiRuntimeResource {
   kind: ResolvedResource["kind"];
   value: string;
   source: ResolvedResource["source"];
@@ -15,35 +15,35 @@ export interface MmpRuntimeResource {
   discovered?: DiscoveredSkillProvenance;
 }
 
-export interface MmpRuntimeExtension {
+export interface EpiRuntimeExtension {
   name: string;
   source: ResolvedInlineExtension["source"];
   /** Absent for a built-in that is on by default (`source: "default"`). */
   declaredIn?: string;
 }
 
-export interface MmpRuntimeDisabledExtension {
+export interface EpiRuntimeDisabledExtension {
   name: string;
   source: ResolvedDisabledExtension["source"];
   declaredIn: string;
 }
 
-export interface MmpLoadedSkill {
+export interface EpiLoadedSkill {
   name: string;
   description: string;
   filePath: string;
   modelInvocable: boolean;
 }
 
-export interface MmpRuntimeIdentity {
+export interface EpiRuntimeIdentity {
   runtime: {
-    name: "MMP";
+    name: "Epi";
     version: string;
     engine: "Pi";
     engineVersion: string;
   };
   paths: {
-    mmpHome: string;
+    epiHome: string;
     agentDir: string;
   };
   manifests: {
@@ -65,21 +65,21 @@ export interface MmpRuntimeIdentity {
      * (docs/decisions.md S1); entries actually loaded from them are tagged `discovered` in
      * `skillRoots` below. Never Pi's own discovery paths (~/.pi/agent/skills, project .pi/skills)
      * or a project's .agents/skills, and never a root inside or containing Pi's state dir
-     * (`<mmpHome>/pi`: auth, sessions, model catalog, settings). */
+     * (`<epiHome>/pi`: auth, sessions, model catalog, settings). */
     fixedSkillRoots: readonly [string, string, string];
     /** Whether Pi's own ambient discovery paths (~/.pi/agent/skills, cwd .pi/skills, cwd
-     * .agents/skills, ...) were loaded -- always false; MMP always passes noSkills etc. and feeds
+     * .agents/skills, ...) were loaded -- always false; Epi always passes noSkills etc. and feeds
      * Pi only the paths in `skillRoots` via resources_discover. */
     piDiscoveryPathsLoaded: false;
   };
   declaredResources: {
-    rules: MmpRuntimeResource[];
-    skillRoots: MmpRuntimeResource[];
-    inlineExtensions: MmpRuntimeExtension[];
-    externalExtensions: MmpRuntimeResource[];
+    rules: EpiRuntimeResource[];
+    skillRoots: EpiRuntimeResource[];
+    inlineExtensions: EpiRuntimeExtension[];
+    externalExtensions: EpiRuntimeResource[];
     /** Built-ins turned off by a Manifest's `"disable"`; omitted when none are, so a run that
      * disables nothing shows the model the same inventory as before the field existed. */
-    disabledExtensions?: MmpRuntimeDisabledExtension[];
+    disabledExtensions?: EpiRuntimeDisabledExtension[];
   };
 }
 
@@ -90,7 +90,7 @@ interface LoadedSkillLike {
   disableModelInvocation: boolean;
 }
 
-function copyResource(resource: ResolvedResource): MmpRuntimeResource {
+function copyResource(resource: ResolvedResource): EpiRuntimeResource {
   return {
     kind: resource.kind,
     value: resource.value,
@@ -100,22 +100,22 @@ function copyResource(resource: ResolvedResource): MmpRuntimeResource {
   };
 }
 
-export function createMmpRuntimeIdentity(options: {
-  mmpVersion: string;
+export function createEpiRuntimeIdentity(options: {
+  epiVersion: string;
   piVersion: string;
-  mmpHome: string;
+  epiHome: string;
   assembly: ResolvedAssembly;
-}): MmpRuntimeIdentity {
+}): EpiRuntimeIdentity {
   const project = options.assembly.projectManifest;
   return {
     runtime: {
-      name: "MMP",
-      version: options.mmpVersion,
+      name: "Epi",
+      version: options.epiVersion,
       engine: "Pi",
       engineVersion: options.piVersion,
     },
     paths: {
-      mmpHome: options.mmpHome,
+      epiHome: options.epiHome,
       agentDir: options.assembly.agentDir,
     },
     manifests: {
@@ -133,7 +133,7 @@ export function createMmpRuntimeIdentity(options: {
     resourcePolicy: {
       discovery: "manifest-and-fixed-skill-roots",
       relativePaths: "declaring-manifest-directory",
-      fixedSkillRoots: ["~/.agents/skills", "<mmpHome>/skills", "<trusted project>/.mmp/skills"],
+      fixedSkillRoots: ["~/.agents/skills", "<epiHome>/skills", "<trusted project>/.epi/skills"],
       piDiscoveryPathsLoaded: false,
     },
     declaredResources: {
@@ -160,7 +160,7 @@ export function createMmpRuntimeIdentity(options: {
 
 export function normalizeLoadedSkills(
   skills: readonly LoadedSkillLike[] | undefined,
-): MmpLoadedSkill[] {
+): EpiLoadedSkill[] {
   return (skills ?? []).map((skill) => ({
     name: skill.name,
     description: skill.description,
@@ -169,33 +169,33 @@ export function normalizeLoadedSkills(
   }));
 }
 
-export function createMmpRuntimeReport(
-  identity: MmpRuntimeIdentity,
-  loadedSkills: readonly MmpLoadedSkill[],
-): MmpRuntimeIdentity & { loadedSkills: MmpLoadedSkill[] } {
+export function createEpiRuntimeReport(
+  identity: EpiRuntimeIdentity,
+  loadedSkills: readonly EpiLoadedSkill[],
+): EpiRuntimeIdentity & { loadedSkills: EpiLoadedSkill[] } {
   return {
     ...identity,
     loadedSkills: loadedSkills.map((skill) => ({ ...skill })),
   };
 }
 
-export function renderMmpRuntimePrompt(
-  identity: MmpRuntimeIdentity,
-  loadedSkills: readonly MmpLoadedSkill[],
+export function renderEpiRuntimePrompt(
+  identity: EpiRuntimeIdentity,
+  loadedSkills: readonly EpiLoadedSkill[],
 ): string {
-  const report = createMmpRuntimeReport(identity, loadedSkills);
+  const report = createEpiRuntimeReport(identity, loadedSkills);
   return [
-    "# MMP Runtime Contract",
-    "You are hosted by MMP (Make My Pi), an SDK harness embedding Pi. When asked which runtime or harness you are using, identify it as MMP on Pi, not as stock Pi alone.",
-    "Upstream Pi documentation describes engine features and stock discovery paths. MMP overrides resource discovery: the inventory below is authoritative for this run.",
-    "Only `loadedSkills` are loaded skills. A file or skill found elsewhere on disk is not an MMP-loaded capability unless it appears in this inventory.",
-    "When asked which skills, rules, or extensions are available, answer from this inventory. MMP loads skills only from the Manifest and three fixed roots (tagged `discovered` in `skillRoots`). Do not scan ~/.pi, ~/.claude, ~/.codex, project .pi, or project .agents directories to infer loaded resources; ~/.agents/skills contents are loaded only if they appear in `loadedSkills`.",
-    "If the user explicitly asks to inspect an arbitrary directory, you may inspect it, but describe discovered files as files—not as loaded MMP resources.",
-    "Manifest-relative resource paths resolve from the directory containing the declaring mmp.json. The MMP agentDir stores Pi auth, settings, sessions, and model catalog state; it is not an ambient skills root.",
-    "The Manifest input schema is exactly `{ \"version\": 1, \"rules\": [], \"skills\": [], \"extensions\": [], \"disable\": [] }`; the built-ins mmp:task, mmp:mcp and mmp:hooks are on unless listed in `disable`. Inventory fields such as `skillRoots` and `declaredResources` are report-only and must not be written to mmp.json.",
-    "After Manifest edits, `/reload` re-resolves Rules and Skills. Extension selection or configuration changes require restarting MMP.",
-    "<mmp_runtime_inventory>",
+    "# Epi Runtime Contract",
+    "You are hosted by Epi, an SDK harness built on Pi. When asked which runtime or harness you are using, identify it as Epi on Pi, not as stock Pi alone.",
+    "Upstream Pi documentation describes engine features and stock discovery paths. Epi overrides resource discovery: the inventory below is authoritative for this run.",
+    "Only `loadedSkills` are loaded skills. A file or skill found elsewhere on disk is not an Epi-loaded capability unless it appears in this inventory.",
+    "When asked which skills, rules, or extensions are available, answer from this inventory. Epi loads skills only from the Manifest and three fixed roots (tagged `discovered` in `skillRoots`). Do not scan ~/.pi, ~/.claude, ~/.codex, project .pi, or project .agents directories to infer loaded resources; ~/.agents/skills contents are loaded only if they appear in `loadedSkills`.",
+    "If the user explicitly asks to inspect an arbitrary directory, you may inspect it, but describe discovered files as files—not as loaded Epi resources.",
+    "Manifest-relative resource paths resolve from the directory containing the declaring epi.json. The Epi agentDir stores Pi auth, settings, sessions, and model catalog state; it is not an ambient skills root.",
+    "The Manifest input schema is exactly `{ \"version\": 1, \"rules\": [], \"skills\": [], \"extensions\": [], \"disable\": [] }`; the built-ins epi:task, epi:mcp and epi:hooks are on unless listed in `disable`. Inventory fields such as `skillRoots` and `declaredResources` are report-only and must not be written to epi.json.",
+    "After Manifest edits, `/reload` re-resolves Rules and Skills. Extension selection or configuration changes require restarting Epi.",
+    "<epi_runtime_inventory>",
     JSON.stringify(report, null, 2),
-    "</mmp_runtime_inventory>",
+    "</epi_runtime_inventory>",
   ].join("\n\n");
 }

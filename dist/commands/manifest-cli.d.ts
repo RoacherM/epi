@@ -1,5 +1,5 @@
 /**
- * The rule (DEVELOPMENT.md §8.2 rule 1, `mmp list`'s own check below): a project's `.mmp/mmp.json`
+ * The rule (DEVELOPMENT.md §8.2 rule 1, `epi list`'s own check below): a project's `.epi/epi.json`
  * is only read when the project is trusted -- `resolveManifest` itself just resolves declared paths,
  * it doesn't execute any Rule/Skill/Extension, but reading an untrusted project's file at all (its
  * declared paths, its JSON) is exactly what an untrusted project must not get to influence. This
@@ -7,7 +7,7 @@
  * project-scope package/config commands need `--approve` (package-manager-cli.js's
  * `writesProjectPackageConfig`/`isProjectTrusted` checks): an explicit `--approve`/`--no-approve`
  * overrides the saved decision for this run only (never persisted, same as `resolveProjectManifest`
- * in project.ts); otherwise the last decision from `mmp --approve`/`/trust` applies.
+ * in project.ts); otherwise the last decision from `epi --approve`/`/trust` applies.
  */
 export declare function assertProjectTrustedFor(cwd: string, approveOverride: boolean | undefined): void;
 /** A parsed `npm:`/`git:` source, ready for a real existence check. */
@@ -30,7 +30,7 @@ export type ParsedInstallSource = {
 export type SourceExistenceChecker = (source: ParsedInstallSource) => Promise<void>;
 /** `-h`/`--help` anywhere in argv, matching Pi's own subcommand help check (dist/main.js's
  * `isAuthCommandHelp`, dist/package-manager-cli.js's `rest.includes("-h") || rest.includes("--help")`)
- * -- MMP's own `mmp auth --help` (auth-cli.ts) already works this way. */
+ * -- Epi's own `epi auth --help` (auth-cli.ts) already works this way. */
 export declare function isHelpRequested(argv: readonly string[]): boolean;
 export declare function runInstallCommand(argv: readonly string[], options?: {
     checkSourceExists?: SourceExistenceChecker;

@@ -1,6 +1,6 @@
 // Faux model for /compact, like faux-slow-compact.mjs, but also logs every prompt it actually
 // receives (tagged with which session generation -- 0 for the first session, 1 after /new, ...) to
-// MMP_TEST_COMPACT_LOG. /new (and /resume) rebuild AgentSessionServices from scratch, re-invoking
+// EPI_TEST_COMPACT_LOG. /new (and /resume) rebuild AgentSessionServices from scratch, re-invoking
 // this factory, so the generation counter increments once per session. Used to prove a message
 // queued during compaction never reaches the model at all -- not the outgoing session's, not the
 // incoming one's -- rather than relying on whether a stray reply happens to surface in the
@@ -17,7 +17,7 @@ function lastUserText(context) {
 }
 
 export default function (pi) {
-  const logPath = process.env.MMP_TEST_COMPACT_LOG;
+  const logPath = process.env.EPI_TEST_COMPACT_LOG;
   // A separate counter file: logPath itself is append-only across generations (/new re-invokes this
   // factory, and must not truncate what an earlier generation already logged).
   const genPath = `${logPath}.gen`;

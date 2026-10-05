@@ -1,6 +1,6 @@
 // print/json/rpc run on the SDK (src/noninteractive.ts, decision N1) instead of Pi's main(). These
 // are the behaviours that path owns itself; what a prompt prints is covered by the other suites.
-// Every run spawns the real dist/cli.js with a temp HOME/MMP_HOME, offline.
+// Every run spawns the real dist/cli.js with a temp HOME/EPI_HOME, offline.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -12,16 +12,16 @@ import test from "node:test";
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const fauxEcho = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
 const noisy = fileURLToPath(new URL("./fixtures/noisy-stdout-extension.mjs", import.meta.url));
-const MODEL = ["--no-project", "--model", "mmp-faux/echo"];
+const MODEL = ["--no-project", "--model", "epi-faux/echo"];
 
 function fixture(t, extensions = [fauxEcho]) {
-  const root = mkdtempSync(join(tmpdir(), "mmp-noninteractive-"));
+  const root = mkdtempSync(join(tmpdir(), "epi-noninteractive-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   const project = join(root, "project");
-  mkdirSync(join(home, ".mmp"), { recursive: true });
+  mkdirSync(join(home, ".epi"), { recursive: true });
   mkdirSync(project, { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions }));
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions }));
   return { root, home, project };
 }
 
@@ -30,7 +30,7 @@ function run(f, args, input = "") {
     cwd: f.project,
     input,
     encoding: "utf8",
-    env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: join(f.home, ".mmp"), MMP_OFFLINE: "1" },
+    env: { PATH: process.env.PATH, HOME: f.home, EPI_HOME: join(f.home, ".epi"), EPI_OFFLINE: "1" },
     timeout: 30_000,
   });
   return { ...result, context: `status=${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}` };
@@ -40,7 +40,7 @@ const sessionFiles = (dir) =>
   existsSync(dir) ? readdirSync(dir, { recursive: true }).filter((file) => String(file).endsWith(".jsonl")) : [];
 
 // Dogfood D62: Pi's main() built its startup SettingsManager as if the project were trusted, so a
-// project's .pi/settings.json could move MMP's sessions. .pi/ is Pi's config, never MMP's.
+// project's .pi/settings.json could move Epi's sessions. .pi/ is Pi's config, never Epi's.
 test("-p ignores the project's .pi/settings.json: its sessionDir does not move the session (D62)", (t) => {
   const f = fixture(t);
   const redirected = join(f.root, "redirected");
@@ -50,7 +50,7 @@ test("-p ignores the project's .pi/settings.json: its sessionDir does not move t
   assert.equal(result.status, 0, result.context);
   assert.equal(result.stdout, "ECHO:hi\n", result.context);
   assert.deepEqual(sessionFiles(redirected), [], "the session was written where the project's .pi/settings.json pointed");
-  assert.equal(sessionFiles(join(f.home, ".mmp", "pi", "sessions")).length, 1, result.context);
+  assert.equal(sessionFiles(join(f.home, ".epi", "pi", "sessions")).length, 1, result.context);
 });
 
 test("piped stdin, @file text and the first message become one prompt; later messages follow", (t) => {
@@ -89,11 +89,11 @@ test("argument and session errors are `Error: ...` on stderr with exit 1 and not
 
 test("a run with no model at all stops before the prompt, in print and json", (t) => {
   const f = fixture(t);
-  writeFileSync(join(f.home, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
+  writeFileSync(join(f.home, ".epi", "epi.json"), JSON.stringify({ version: 1 }));
   for (const mode of [["-p", "hi"], ["--mode", "json", "hi"]]) {
     const result = run(f, ["--no-project", ...mode]);
     assert.equal(result.status, 1, result.context);
-    assert.match(result.stderr, /Log in to a provider with \/login inside mmp/, result.context);
+    assert.match(result.stderr, /Log in to a provider with \/login inside epi/, result.context);
     assert.doesNotMatch(result.stdout + result.stderr, /pi-coding-agent|Use \/login to log into a provider/, result.context);
   }
 });
@@ -126,8 +126,8 @@ test("an extension's own stdout writes go to stderr, in print and in json", (t) 
 // main.js prints every startup diagnostic in these modes, warnings of a run that goes on included.
 test("a startup warning is printed on stderr and the run goes on", (t) => {
   const f = fixture(t);
-  mkdirSync(join(f.home, ".mmp", "pi"), { recursive: true });
-  writeFileSync(join(f.home, ".mmp", "pi", "settings.json"), "{ not json");
+  mkdirSync(join(f.home, ".epi", "pi"), { recursive: true });
+  writeFileSync(join(f.home, ".epi", "pi", "settings.json"), "{ not json");
   const result = run(f, [...MODEL, "--models", "no-such-model-*", "--no-session", "-p", "hi"]);
   assert.equal(result.status, 0, result.context);
   assert.equal(result.stdout, "ECHO:hi\n", result.context);
@@ -139,7 +139,7 @@ function rpc(f, args, commands) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [cli, ...args, "--mode", "rpc"], {
       cwd: f.project,
-      env: { PATH: process.env.PATH, HOME: f.home, MMP_HOME: join(f.home, ".mmp"), MMP_OFFLINE: "1" },
+      env: { PATH: process.env.PATH, HOME: f.home, EPI_HOME: join(f.home, ".epi"), EPI_OFFLINE: "1" },
     });
     const killTimer = setTimeout(() => child.kill("SIGKILL"), 30_000);
     let stdout = "";
@@ -176,7 +176,7 @@ test("rpc answers commands, runs a prompt, replaces the session, and exits 0 whe
   const lines = result.stdout.trimEnd().split("\n").map((line) => JSON.parse(line));
   const state = lines.find((line) => line.id === "1");
   assert.equal(state.success, true, result.context);
-  assert.equal(state.data.model.provider, "mmp-faux");
+  assert.equal(state.data.model.provider, "epi-faux");
   assert.equal(lines.find((line) => line.id === "3").success, true, result.context);
   assert.match(result.stdout, /ECHO:hi/);
   assert.match(result.stdout, /ECHO:again/);

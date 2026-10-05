@@ -11,15 +11,15 @@ import { getLanguageFromPath, highlightCode, keyText } from "@earendil-works/pi-
 
 import { UserBashBlock } from "../dist/tui/bash-block.js";
 import { piTui } from "../dist/tui/pi-tui.js";
-import { installMmpTheme } from "../dist/tui/theme.js";
+import { installEpiTheme } from "../dist/tui/theme.js";
 import { toolBlock } from "../dist/tui/tools/block.js";
 import { bashRenderers, editRenderers, writeRenderers } from "../dist/tui/tools/mutating.js";
 import { findRenderers, grepRenderers, lsRenderers, readRenderers } from "../dist/tui/tools/read-only.js";
 
-// read highlights through Pi's global theme; install MMP's into a throwaway agent dir so both agree.
-const agentDir = mkdtempSync(join(tmpdir(), "mmp-render-snapshot-"));
+// read highlights through Pi's global theme; install Epi's into a throwaway agent dir so both agree.
+const agentDir = mkdtempSync(join(tmpdir(), "epi-render-snapshot-"));
 process.on("exit", () => rmSync(agentDir, { recursive: true, force: true }));
-const theme = installMmpTheme(agentDir, "dark");
+const theme = installEpiTheme(agentDir, "dark");
 
 const fg = (color, text) => theme.fg(color, text);
 const b = (text) => theme.bold(text);

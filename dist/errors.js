@@ -1,22 +1,22 @@
-export class MmpPreflightError extends Error {
+export class EpiPreflightError extends Error {
     exitCode = 2;
 }
-export class MmpArgumentError extends MmpPreflightError {
+export class EpiArgumentError extends EpiPreflightError {
     constructor(message) {
         super(message);
-        this.name = "MmpArgumentError";
+        this.name = "EpiArgumentError";
     }
 }
-export class MmpConfigError extends MmpPreflightError {
+export class EpiConfigError extends EpiPreflightError {
     constructor(message) {
         super(message);
-        this.name = "MmpConfigError";
+        this.name = "EpiConfigError";
     }
 }
-/** Writes a failure that ended the run to stderr, as `mmp: <message>`, and returns its exit code. */
+/** Writes a failure that ended the run to stderr, as `epi: <message>`, and returns its exit code. */
 export function reportRunFailure(error) {
     const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`mmp: ${message}\n`);
-    return error instanceof MmpPreflightError ? error.exitCode : 1;
+    process.stderr.write(`epi: ${message}\n`);
+    return error instanceof EpiPreflightError ? error.exitCode : 1;
 }
 //# sourceMappingURL=errors.js.map

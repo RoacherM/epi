@@ -109,7 +109,7 @@ test("projectTrustOptions: no parent-folder option at the filesystem root", () =
 });
 
 function tempAgentDir(t) {
-  const dir = mkdtempSync(join(tmpdir(), "mmp-trust-store-"));
+  const dir = mkdtempSync(join(tmpdir(), "epi-trust-store-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

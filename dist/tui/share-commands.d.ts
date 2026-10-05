@@ -10,7 +10,7 @@ export declare const MAX_ISSUE_URL_LENGTH = 8000;
  * usageBreakdown. */
 export declare function fitIssueBody(title: string, body: string): string;
 /** `/bug [description]`: consent, optional description, optional model-written summary, then a
- * prefilled "new issue" URL on MMP's own GitHub repo -- never Pi's upload. The URL is always
+ * prefilled "new issue" URL on Epi's own GitHub repo -- never Pi's upload. The URL is always
  * printed (it's the actual deliverable in a headless run); opening a browser is best-effort. */
 export declare function runBug(host: CommandHost, args: string): Promise<void>;
 export interface ReleaseNote {
@@ -20,6 +20,6 @@ export interface ReleaseNote {
 /** Pure and unit-testable without a subprocess, like src/update.ts's own fetch functions
  * (test/update.test.mjs): takes an injectable `fetch` instead of adding a new env-var seam. */
 export declare function fetchReleaseNotes(fetchImpl?: typeof fetch): Promise<ReleaseNote[]>;
-/** `/changelog`: MMP's own GitHub releases (not Pi's bundled changelog file). */
+/** `/changelog`: Epi's own GitHub releases (not Pi's bundled changelog file). */
 export declare function runChangelog(host: CommandHost): Promise<void>;
 //# sourceMappingURL=share-commands.d.ts.map

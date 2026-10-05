@@ -1,6 +1,6 @@
 import type { EventBus, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TaskJobSnapshot } from "./task-runtime.js";
-export declare const MMP_TASK_HOOK_CHANNEL = "mmp/hooks/task/v1";
+export declare const EPI_TASK_HOOK_CHANNEL = "epi/hooks/task/v1";
 export interface TaskStartHookEvent {
     type: "task_start";
     agent: string;

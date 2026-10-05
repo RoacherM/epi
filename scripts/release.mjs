@@ -22,19 +22,19 @@ export function computeSha256(filePath) {
 
 /** Replaces the two placeholder tokens install.sh ships with. Throws if a token is missing, so a
  * typo in the template (or in a future edit to it) fails loudly instead of shipping a broken asset.
- * Also validates `version`/`sha256` themselves (pre-merge review must-fix #8): MMP's own version is
+ * Also validates `version`/`sha256` themselves (pre-merge review must-fix #8): Epi's own version is
  * always a plain release version (no "v" prefix, no prerelease), and a malformed hash here would
  * mean the sha256 computation above is broken, not a value worth shipping either way. */
 export function renderInstallScript(template, { version, sha256 }) {
   if (!/^\d+\.\d+\.\d+$/.test(version)) {
-    throw new Error(`refusing to render install.sh with an invalid MMP version: ${JSON.stringify(version)}`);
+    throw new Error(`refusing to render install.sh with an invalid Epi version: ${JSON.stringify(version)}`);
   }
   if (!/^[0-9a-f]{64}$/.test(sha256)) {
     throw new Error(`refusing to render install.sh with an invalid sha256: ${JSON.stringify(sha256)}`);
   }
   for (const [token, value] of [
-    ["__MMP_VERSION__", version],
-    ["__MMP_PACKAGE_SHA256__", sha256],
+    ["__EPI_VERSION__", version],
+    ["__EPI_PACKAGE_SHA256__", sha256],
   ]) {
     if (!template.includes(token)) {
       throw new Error(`install.sh template is missing the ${token} placeholder`);
@@ -60,7 +60,7 @@ export function tagExists({ cwd, tag, exec = defaultExec }) {
 }
 
 /** `npm pack --json` builds the tarball without publishing anything; its JSON output names the
- * file it wrote so we don't have to guess mmp's package name/version formatting. */
+ * file it wrote so we don't have to guess epi's package name/version formatting. */
 export function packPackage({ cwd, exec = defaultExec }) {
   const result = exec("npm", ["pack", "--json"], { cwd });
   if (result.status !== 0) {
@@ -94,7 +94,7 @@ export function runRelease({
   exec = defaultExec,
   targetSha = process.env.GITHUB_SHA,
   writeFile = writeFileSync,
-  tempDir = () => mkdtempSync(join(tmpdir(), "mmp-release-")),
+  tempDir = () => mkdtempSync(join(tmpdir(), "epi-release-")),
   log = () => {},
 }) {
   const version = readPackageVersion(cwd);

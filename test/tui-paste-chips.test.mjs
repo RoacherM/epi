@@ -14,9 +14,9 @@ import { PROMPT_COLUMNS, PromptFrame } from "../dist/tui/chrome.js";
 import { ChipEditor, decidePasteChip, resolveImagePath, sniffImageFile } from "../dist/tui/paste-chips.js";
 import { pastePreview } from "../dist/tui/paste-preview.js";
 import { piTui } from "../dist/tui/pi-tui.js";
-import { createMmpTheme } from "../dist/tui/theme.js";
+import { createEpiTheme } from "../dist/tui/theme.js";
 
-const theme = createMmpTheme("dark");
+const theme = createEpiTheme("dark");
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
@@ -38,7 +38,7 @@ const BACKSPACE = "\x7f";
 const ENTER = "\r";
 
 function tempDir(t) {
-  const dir = mkdtempSync(join(tmpdir(), "mmp-paste-chips-"));
+  const dir = mkdtempSync(join(tmpdir(), "epi-paste-chips-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

@@ -14,7 +14,7 @@ const { Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } 
 /** Rows the page itself takes around a view's body: the top border, the title row, the key row,
  * the bottom border, and the agent status line under it (page.ts). */
 export const PAGE_CHROME_ROWS = 5;
-/** Where each file's view was scrolled to, kept for this MMP process (docs/preview-design.md §3.3). */
+/** Where each file's view was scrolled to, kept for this Epi process (docs/preview-design.md §3.3). */
 export const lastScroll = new Map();
 export class Viewer {
     tui;
