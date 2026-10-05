@@ -9,9 +9,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { PREVIEW_VERSION } from "../dist/extensions/preview.js";
+import { createPreviewInlineExtension, PREVIEW_PLAYER_CHANNEL, PREVIEW_VERSION } from "../dist/extensions/preview.js";
 import { clock, humanSize, kindOf, loadDoc, printable, readListing } from "../dist/extensions/preview/files.js";
 import { Player, StillCache, stillJob } from "../dist/extensions/preview/media.js";
+import { PlayerPane } from "../dist/extensions/preview/player-pane.js";
 import { Viewer } from "../dist/extensions/preview/view.js";
 import { createMmpTheme } from "../dist/tui/theme.js";
 import { piTui } from "../dist/tui/pi-tui.js";
@@ -78,11 +79,11 @@ test("a document is text, Markdown source, or a hex dump; escape bytes cannot re
   assert.deepEqual(loadDoc(changed).lines, ["changed"]);
 });
 
-function runApp(t, steps, { env = {}, files = {}, setup, rows } = {}) {
+function runApp(t, steps, { env = {}, files = {}, setup, rows, extensions } = {}) {
   const root = tempDir(t);
   const home = join(root, "home");
   mkdirSync(join(home, ".mmp"), { recursive: true });
-  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1 }));
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, ...(extensions === undefined ? {} : { extensions }) }));
   const project = join(root, "project");
   mkdirSync(join(project, "docs"), { recursive: true });
   writeFileSync(join(project, "alpha.txt"), "first line\nsecond line\n");
@@ -384,6 +385,7 @@ function fakeMediaTools(t, { ffplay = true, stats = true } = {}) {
 if (process.argv.includes("--warm-up")) process.exit(0);
 const fs = require("node:fs");
 fs.appendFileSync(${JSON.stringify(pids)}, process.pid + "\\n");
+fs.appendFileSync(${JSON.stringify(join(bin, "calls"))}, JSON.stringify([require("node:path").basename(process.argv[1]), ...process.argv.slice(2)]) + "\\n");
 // A frame the size of a real one (PNG signature, one 150 KB chunk, IEND), so that pipe chunks cut
 // frames in the middle the way they do with real video.
 const chunk = (type, size) => Buffer.concat([Buffer.from([size >>> 24, (size >>> 16) & 255, (size >>> 8) & 255, size & 255]), Buffer.from(type), Buffer.alloc(size + 4)]);
@@ -548,4 +550,277 @@ test("the video viewer's status line: state, time and duration, progress bar, an
   const narrow = viewer.render(40, 20);
   assert.equal(piTui.visibleWidth(narrow.status) <= 40, true);
   assert.match(narrow.status.replace(/\x1b\[[0-9;]*m/g, ""), /^ ⏸ 0:05 \/ 0:10    space play\/pause/);
+});
+
+// ── the player pane other extensions get over pi.events (docs/preview-design.md §5) ──────────
+
+const plain = (text) => text.replace(/\x1b\[[0-9;]*m/g, "");
+/** What the fake ffmpeg/ffplay were started with, in order: [name, ...args]. */
+const callsOf = () => {
+  const file = join(process.env.PATH, "calls");
+  return existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
+};
+const videoCalls = () => callsOf().filter(([name, ...args]) => name === "ffmpeg" && !args.includes("-vn"));
+const argAfter = (args, flag) => args[args.indexOf(flag) + 1];
+const press = (type = "press") => ({ type, button: "left", x: 0, y: 0, screenX: 0, screenY: 0, width: 80, height: 24, shift: false, alt: false, ctrl: false });
+
+function newPane(t, source, hint) {
+  const pane = new PlayerPane(source, { tui: { requestRender() {} }, theme: createMmpTheme("dark"), ...(hint === undefined ? {} : { hint }) });
+  t.after(() => pane.dispose());
+  return pane;
+}
+
+/** Preview's factory against a stand-in `pi`: the bus handler, the shutdown handler. */
+function loadPreview() {
+  const handlers = {};
+  let onRequest;
+  createPreviewInlineExtension().factory({
+    on(event, handler) { (handlers[event] ??= []).push(handler); },
+    registerCommand() {},
+    events: { on(channel, handler) { assert.equal(channel, PREVIEW_PLAYER_CHANNEL); onRequest = handler; return () => {}; } },
+  });
+  return { ask: (request) => onRequest(request), shutdown: () => handlers.session_shutdown.forEach((handler) => handler({}, {})) };
+}
+
+test("the bus handler fills the request before it returns, and leaves anything that is not an object alone", () => {
+  const preview = loadPreview();
+  assert.equal(PREVIEW_PLAYER_CHANNEL, "mmp/preview/player/v1");
+  const request = {};
+  const returned = preview.ask(request);
+  assert.equal(returned, undefined, "the handler must not be async: Pi runs it synchronously only up to its first await");
+  assert.equal(typeof request.player.createPane, "function");
+  for (const odd of [undefined, null, 42, "text", true]) assert.doesNotThrow(() => preview.ask(odd));
+  const frozen = Object.freeze({});
+  assert.doesNotThrow(() => preview.ask(frozen));
+  assert.equal(frozen.player, undefined);
+});
+
+test("createPane rejects an empty video and a line break in a header, naming the header", async (t) => {
+  const preview = loadPreview();
+  const request = {};
+  preview.ask(request);
+  const host = { tui: { requestRender() {} }, theme: createMmpTheme("dark") };
+  await assert.rejects(request.player.createPane({ video: "" }, host), /video is empty/);
+  await assert.rejects(request.player.createPane({}, host), /video is empty/);
+  await assert.rejects(request.player.createPane({ video: "https://example.test/v.mp4", headers: { Referer: "a\r\nX-Evil: 1" } }, host), /header "Referer" has a line break/);
+  await assert.rejects(request.player.createPane({ video: "v.mp4", headers: { "X-Bad\n": "1" } }, host), /header "X-Bad\\n" has a line break/);
+  const pane = await request.player.createPane({ video: "v.mp4", headers: { Referer: "https://example.test/" } }, host);
+  t.after(() => pane.dispose());
+  assert.equal(typeof pane.render, "function");
+});
+
+test("session_shutdown disposes every pane preview handed out: their processes end and they draw stopped", async (t) => {
+  const pidsOf = fakeMediaTools(t);
+  const preview = loadPreview();
+  const request = {};
+  preview.ask(request);
+  const host = { tui: { requestRender() {} }, theme: createMmpTheme("dark") };
+  const kept = await request.player.createPane({ video: "a.mp4", duration: 10 }, host);
+  const returned = await request.player.createPane({ video: "b.mp4", duration: 10 }, host);
+  t.after(() => { kept.dispose(); returned.dispose(); });
+  kept.render(80, 24);
+  returned.render(80, 24);
+  await until(() => pidsOf().length >= 6, "both panes' processes to start");
+  returned.dispose(); // the caller gave this one back already
+  preview.shutdown();
+  await sleep(300);
+  assert.deepEqual(pidsOf().filter(alive), [], "a pane's process outlived session_shutdown");
+  const started = pidsOf().length;
+  assert.match(plain(kept.render(80, 24).body.join("\n")), /stopped/);
+  await sleep(200);
+  assert.equal(pidsOf().length, started, "a disposed pane started playing again");
+});
+
+test("a pane sends headers as one -headers argument before -i, to the video ffmpeg and to ffplay", async (t) => {
+  fakeMediaTools(t);
+  const pane = newPane(t, { video: "https://example.test/v.mp4", headers: { Referer: "https://example.test/", "User-Agent": "test" }, duration: 10 });
+  pane.render(80, 24);
+  await until(() => callsOf().length >= 3, "the media processes to start");
+  const headers = "Referer: https://example.test/\r\nUser-Agent: test\r\n";
+  for (const name of ["ffmpeg", "ffplay"]) {
+    const args = callsOf().find(([called, ...rest]) => called === name && !rest.includes("-vn")).slice(1);
+    assert.equal(argAfter(args, "-headers"), headers, `${name} did not get the headers`);
+    assert.ok(args.indexOf("-headers") < args.indexOf("-i"), `${name}: -headers must come before -i`);
+    assert.equal(argAfter(args, "-i"), "https://example.test/v.mp4");
+  }
+});
+
+test("a pane plays a separate audio stream through ffplay, the video through ffmpeg", async (t) => {
+  fakeMediaTools(t);
+  const pane = newPane(t, { video: "video.mp4", audio: "audio.m4a" });
+  pane.render(80, 24);
+  await until(() => callsOf().some(([name]) => name === "ffplay"), "ffplay to start");
+  assert.equal(argAfter(callsOf().find(([name]) => name === "ffplay"), "-i"), "audio.m4a");
+  assert.equal(argAfter(videoCalls()[0], "-i"), "video.mp4");
+  assert.equal(callsOf().some(([name, ...args]) => name === "ffplay" && args.includes("video.mp4")), false);
+});
+
+test("pane keys: space pauses, l/→ and h/← seek 5 s, g goes to the start, other keys are not taken", (t) => {
+  fakeMediaTools(t);
+  const pane = newPane(t, { video: "clip.mp4", duration: 20 });
+  const time = () => plain(pane.render(80, 24).status).slice(1, 14);
+  assert.equal(pane.handleInput(" "), false, "nothing to pause before the first render");
+  time();
+  assert.equal(pane.handleInput(" "), true);
+  assert.equal(time(), "⏸ 0:00 / 0:20");
+  assert.equal(pane.handleInput("l"), true);
+  assert.equal(time(), "⏸ 0:05 / 0:20");
+  assert.equal(pane.handleInput("\x1b[C"), true);
+  assert.equal(time(), "⏸ 0:10 / 0:20");
+  assert.equal(pane.handleInput("h"), true);
+  assert.equal(time(), "⏸ 0:05 / 0:20");
+  assert.equal(pane.handleInput("\x1b[D"), true);
+  assert.equal(time(), "⏸ 0:00 / 0:20");
+  pane.handleInput("l");
+  assert.equal(pane.handleInput("g"), true);
+  assert.equal(time(), "⏸ 0:00 / 0:20");
+  assert.equal(pane.handleInput("p"), true);
+  assert.equal(time().slice(0, 1), "▶");
+  for (const key of ["q", "i", "\x1b", "x"]) assert.equal(pane.handleInput(key), false, `took ${JSON.stringify(key)}`);
+});
+
+test("pane mouse: a click on the picture pauses, a click on the bar seeks by the duration, without a duration it does nothing", (t) => {
+  fakeMediaTools(t);
+  const pane = newPane(t, { video: "clip.mp4", duration: 20 });
+  pane.render(80, 24);
+  assert.equal(pane.handleMouse(press(), 10, 5), true);
+  // "⏸ 0:00 / 0:20" is 13 wide and the hint 25: the bar starts at column 16 and is 36 wide.
+  assert.equal(plain(pane.render(80, 24).status).slice(1, 14), "⏸ 0:00 / 0:20");
+  assert.equal(pane.handleMouse(press(), 16 + 7, 24), true);
+  assert.equal(plain(pane.render(80, 24).status).slice(1, 14), "⏸ 0:04 / 0:20");
+  assert.equal(pane.handleMouse(press("drag"), 16 + 35, 24), true);
+  assert.equal(plain(pane.render(80, 24).status).slice(1, 14), "⏸ 0:20 / 0:20");
+  assert.equal(pane.handleMouse(press("release"), 10, 5), false);
+  assert.equal(pane.handleMouse(press("drag"), 10, 5), false, "a drag over the picture does not toggle");
+
+  const open = newPane(t, { video: "live.mp4" });
+  open.render(80, 24);
+  open.handleInput(" ");
+  const before = plain(open.render(80, 24).status);
+  assert.doesNotMatch(before, / \/ /, "no duration: only the time played");
+  assert.equal(open.handleMouse(press(), 40, 24), false);
+  assert.equal(plain(open.render(80, 24).status), before);
+});
+
+test("dispose stops every process, can be called twice, and a disposed pane draws stopped without playing again", async (t) => {
+  const pidsOf = fakeMediaTools(t);
+  const pane = newPane(t, { video: "clip.mp4", duration: 10 }, "q back");
+  pane.render(80, 24);
+  await until(() => pidsOf().length >= 3, "the media processes to start");
+  const pids = pidsOf();
+  pane.dispose();
+  pane.dispose();
+  await sleep(300);
+  assert.deepEqual(pids.filter(alive), [], "a media process outlived dispose()");
+  const frame = pane.render(80, 24);
+  assert.match(plain(frame.body.join("\n")), /stopped/);
+  assert.equal(frame.body.length, 24);
+  assert.equal(plain(frame.status), " q back");
+  assert.equal(pane.handleInput(" "), false);
+  await sleep(200);
+  assert.equal(pidsOf().length, pids.length, "render after dispose started a process");
+
+  const never = newPane(t, { video: "clip.mp4" });
+  never.dispose();
+  assert.match(plain(never.render(80, 24).body.join("\n")), /stopped/);
+  await sleep(200);
+  assert.equal(pidsOf().length, pids.length, "a pane disposed before its first render started a process");
+});
+
+test("a pane's body is exactly height rows and nothing is wider than the pane, at 40, 80 and 120 columns", (t) => {
+  fakeMediaTools(t);
+  for (const width of [40, 80, 120]) {
+    for (const source of [{ video: "clip.mp4", duration: 3725 }, { video: "clip.mp4" }]) {
+      for (const hint of [undefined, "i insert · q back"]) {
+        const pane = newPane(t, source, hint);
+        const frame = pane.render(width, 20);
+        assert.equal(frame.body.length, 20, `${width} columns`);
+        for (const line of frame.body) assert.ok(piTui.visibleWidth(line) <= width, `a body row is ${piTui.visibleWidth(line)} wide at ${width}`);
+        assert.ok(piTui.visibleWidth(frame.status) <= width, `the status is ${piTui.visibleWidth(frame.status)} wide at ${width}`);
+        pane.dispose();
+      }
+    }
+  }
+});
+
+test("a resized pane goes on from the same position, paused or playing", async (t) => {
+  fakeMediaTools(t);
+  // The frame source started for the new size: its scale filter is as high as 29 rows of picture.
+  const rowsPx = `min(${Math.min(640, 29 * piTui.getCellDimensions().heightPx)},ih)`;
+  const resized = async (video) => {
+    const call = () => videoCalls().find((args) => argAfter(args, "-i") === video && argAfter(args, "-vf").includes(rowsPx));
+    await until(() => call() !== undefined, "the resized frame source");
+    return call();
+  };
+  const paused = newPane(t, { video: "paused.mp4", duration: 20 });
+  paused.render(80, 24);
+  paused.handleInput(" ");
+  paused.handleInput("l");
+  assert.equal(plain(paused.render(120, 30).status).slice(1, 14), "⏸ 0:05 / 0:20");
+  assert.equal(argAfter(await resized("paused.mp4"), "-ss"), "5", "the resized player did not start at the old position");
+
+  const playing = newPane(t, { video: "playing.mp4", duration: 20 });
+  playing.render(80, 24);
+  await until(() => callsOf().some(([name, ...args]) => name === "ffplay" && args.includes("playing.mp4")), "playback to start");
+  await sleep(600);
+  playing.render(120, 30);
+  const from = Number(argAfter(await resized("playing.mp4"), "-ss"));
+  assert.ok(from > 0, `the resized player started at ${from}`);
+  assert.equal(plain(playing.render(120, 30).status).slice(1, 2), "▶");
+});
+
+const playerExtension = fileURLToPath(new URL("./fixtures/preview-player-extension.mjs", import.meta.url));
+const reportsIn = (file) => (existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []);
+
+test("another extension gets the player in the TUI when it asks, also after /reload, and not while it is loading", (t) => {
+  const out = join(tempDir(t), "reports.jsonl");
+  const { screens } = runApp(t, [
+    ["waitReady"], ["type", "/askplayer"], ["key", "enter"], ["waitFor", "PLAYER:", { screen: true }], ["screen", "first"],
+    ["type", "/reload"], ["key", "enter"], ["waitFor", "Reloaded", { screen: true }],
+    ["type", "/askplayer"], ["key", "enter"], ["waitFor", "PLAYER:createPane:new", { screen: true }],
+    ["key", "ctrl+d"],
+  ], { extensions: [playerExtension], env: { MMP_PLAYER_PROBE_OUT: out } });
+  assert.match(shown(screens.first), /PLAYER:createPane:first/);
+  // User extensions load before the built-in ones: asking in the factory gets nothing, every time.
+  assert.deepEqual(reportsIn(out), ["PLAYER-AT-LOAD:none", "PLAYER:createPane:first", "PLAYER-AT-LOAD:none", "PLAYER:createPane:new"]);
+});
+
+test("in -p preview is not loaded: an extension that asks gets no player", (t) => {
+  const root = tempDir(t);
+  const home = join(root, "home");
+  mkdirSync(join(home, ".mmp"), { recursive: true });
+  writeFileSync(join(home, ".mmp", "mmp.json"), JSON.stringify({ version: 1, extensions: [playerExtension] }));
+  const out = join(root, "reports.jsonl");
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../dist/cli.js", import.meta.url)), "--no-project", "-p", "/askplayer"], {
+    cwd: root,
+    env: { PATH: process.env.PATH, HOME: home, MMP_HOME: join(home, ".mmp"), MMP_OFFLINE: "1", MMP_PLAYER_PROBE_OUT: out },
+    input: "",
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(reportsIn(out), ["PLAYER-AT-LOAD:none", "PLAYER:none:first"]);
+});
+
+test("a pane another extension still holds is disposed by /reload and /new: no process is left and it draws stopped", (t) => {
+  fakeMediaTools(t);
+  const bin = process.env.PATH;
+  const media = { pattern: `${bin}/ff` };
+  const { marks, screens } = runApp(t, [
+    ["waitReady"], ["type", "/holdpane clip.mp4"], ["key", "enter"], ["waitFor", "PANE-HELD", { screen: true }],
+    ["pgrep", { ...media, mark: "held", expectCount: 3, timeoutMs: 10_000 }],
+    ["type", "/reload"], ["key", "enter"], ["waitFor", "Reloaded", { screen: true }],
+    ["pgrep", { ...media, mark: "afterReload", expectCount: 0 }],
+    ["type", "/panestate"], ["key", "enter"], ["waitFor", "PANE-STATE:", { screen: true }], ["screen", "state"],
+    ["type", "/holdpane clip.mp4"], ["key", "enter"], ["waitFor", "PANE-HELD", { screen: true }],
+    ["pgrep", { ...media, mark: "heldAgain", expectCount: 3, timeoutMs: 10_000 }],
+    ["type", "/new"], ["key", "enter"], ["wait", 500],
+    ["pgrep", { ...media, mark: "afterNew", expectCount: 0 }],
+    ["key", "ctrl+d"],
+  ], { extensions: [playerExtension], env: { PATH: `${bin}:/usr/bin:/bin` }, files: { "clip.mp4": "not really a video" } });
+  assert.equal(marks.held.split("\n").length, 3, "the held pane was not playing (video, sound, meter)");
+  assert.equal(marks.afterReload, "", "a held pane's process outlived /reload");
+  assert.match(shown(screens.state), /PANE-STATE:stopped/);
+  assert.equal(marks.heldAgain.split("\n").length, 3);
+  assert.equal(marks.afterNew, "", "a held pane's process outlived /new");
 });

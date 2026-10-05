@@ -6,10 +6,30 @@ import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 
 import { ChangeLedger } from "./preview/ledger.js";
 import type { PageStart } from "./preview/page.js";
+import type { PaneSource, PlayerHost, PlayerPane } from "./preview/player-pane.js";
 
 /** The extension's own version, apart from MMP's (docs/architecture.md: built-in extensions are
  * versioned on their own; the change log is in docs/guide/preview.md, the tags are preview-v*). */
-export const PREVIEW_VERSION = "0.2.0";
+export const PREVIEW_VERSION = "0.3.0";
+
+/** The pi.events channel other extensions ask for the video player on (docs/preview-design.md §5.2):
+ * they emit `{}` and find `player` filled in when emit returns. */
+export const PREVIEW_PLAYER_CHANNEL = "mmp/preview/player/v1";
+
+export interface PreviewPlayerApi {
+  createPane(source: PaneSource, host: PlayerHost): Promise<PlayerPane>;
+}
+
+/** What createPane rejects: an empty video, or a line break in a header, which would split ffmpeg's
+ * `-headers` value into other headers. */
+function checkPaneSource(source: PaneSource): void {
+  if (typeof source?.video !== "string" || source.video === "") throw new Error("createPane: video is empty");
+  for (const [name, value] of Object.entries(source.headers ?? {})) {
+    if (/[\r\n]/.test(name) || /[\r\n]/.test(String(value))) {
+      throw new Error(`createPane: header ${JSON.stringify(name)} has a line break in its name or value`);
+    }
+  }
+}
 
 /**
  * `/preview [path]`: the page for seeing what the agent changed, and any other file, without
@@ -36,9 +56,28 @@ export function createPreviewInlineExtension(): InlineExtension {
       pi.on("agent_end", () => ledger.onAgentEnd());
       // The overlay that is open, so a session that ends under it stops its video and sound.
       let open: { dispose(): void } | undefined;
+      // Panes handed to other extensions and not disposed yet: /new, /resume, /fork and /reload do not
+      // end the process, so stopMediaProcesses would not stop a forgotten ffplay.
+      const panes = new Set<PlayerPane>();
       pi.on("session_shutdown", () => {
         open?.dispose();
         open = undefined;
+        for (const pane of [...panes]) pane.dispose();
+      });
+      const player: PreviewPlayerApi = {
+        async createPane(source, host) {
+          const { PlayerPane } = await import("./preview/player-pane.js");
+          checkPaneSource(source);
+          const pane: PlayerPane = new PlayerPane(source, host, () => panes.delete(pane));
+          panes.add(pane);
+          return pane;
+        },
+      };
+      // Pi runs a handler synchronously only up to its first await, and an error thrown in it goes to
+      // console.error over the TUI: so no await, nothing that throws, and a request that is not an
+      // object is left alone. Reflect.set does not throw on a frozen request; the caller sees no player.
+      pi.events.on(PREVIEW_PLAYER_CHANNEL, (request) => {
+        if (typeof request === "object" && request !== null) Reflect.set(request, "player", player);
       });
       pi.registerCommand("preview", {
         description: "See what the agent changed (diffs) and browse files (text, Markdown, images, video); i inserts @path",
