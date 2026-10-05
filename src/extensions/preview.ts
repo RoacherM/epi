@@ -59,14 +59,24 @@ export function createPreviewInlineExtension(): InlineExtension {
       // Panes handed to other extensions and not disposed yet: /new, /resume, /fork and /reload do not
       // end the process, so stopMediaProcesses would not stop a forgotten ffplay.
       const panes = new Set<PlayerPane>();
+      // After this session ends nobody would dispose a new pane: createPane rejects, like Pi with a
+      // stale pi/ctx, and the caller asks again to reach the new preview.
+      let ended = false;
+      const checkSession = (): void => {
+        if (ended) throw new Error(`createPane: this player belongs to a session that has ended; ask on ${PREVIEW_PLAYER_CHANNEL} again`);
+      };
       pi.on("session_shutdown", () => {
+        ended = true;
         open?.dispose();
         open = undefined;
         for (const pane of [...panes]) pane.dispose();
       });
       const player: PreviewPlayerApi = {
         async createPane(source, host) {
+          checkSession();
           const { PlayerPane } = await import("./preview/player-pane.js");
+          // The session can end while the import is pending.
+          checkSession();
           checkPaneSource(source);
           const pane: PlayerPane = new PlayerPane(source, host, () => panes.delete(pane));
           panes.add(pane);

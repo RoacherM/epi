@@ -6,6 +6,8 @@
 //                  the previous load got (a /reload must be answered by the new preview)
 //   /holdpane <f>: creates a pane for <f>, draws it once (which starts playing) and keeps it
 //   /panestate:    draws the kept pane again and says whether it shows "stopped"
+//   /stalepane <f>: calls createPane for <f> on the API the last /askplayer got, without asking again,
+//                  and reports the rejection (or that it got a pane)
 import { appendFileSync } from "node:fs";
 
 const CHANNEL = "mmp/preview/player/v1";
@@ -48,6 +50,25 @@ export default function (pi) {
         return { render: () => [], invalidate() {} };
       });
       report(ctx, "PANE-HELD");
+    },
+  });
+
+  pi.registerCommand("stalepane", {
+    description: "creates a pane with the API kept from an earlier /askplayer",
+    handler: async (args, ctx) => {
+      let outcome;
+      await ctx.ui.custom(async (tui, theme, _keybindings, done) => {
+        try {
+          const pane = await previousApi.createPane({ video: args.trim(), duration: 10 }, { tui, theme });
+          pane.dispose();
+          outcome = "created";
+        } catch (error) {
+          outcome = `rejected: ${error.message}`;
+        }
+        done(undefined);
+        return { render: () => [], invalidate() {} };
+      });
+      report(ctx, `STALE-PANE:${outcome}`);
     },
   });
 

@@ -631,6 +631,35 @@ test("session_shutdown disposes every pane preview handed out: their processes e
   assert.equal(pidsOf().length, started, "a disposed pane started playing again");
 });
 
+const sessionEnded = "createPane: this player belongs to a session that has ended; ask on mmp/preview/player/v1 again";
+
+test("after session_shutdown an API kept from that session rejects createPane, and nothing plays", async (t) => {
+  const pidsOf = fakeMediaTools(t);
+  const preview = loadPreview();
+  const request = {};
+  preview.ask(request);
+  preview.shutdown();
+  const host = { tui: { requestRender() {} }, theme: createMmpTheme("dark") };
+  await assert.rejects(request.player.createPane({ video: "a.mp4", duration: 10 }, host), (error) => error.message === sessionEnded);
+  await sleep(200);
+  assert.deepEqual(pidsOf(), [], "a media process started for a session that has ended");
+});
+
+test("a session that ends while createPane is loading the pane rejects it too, and nothing is left playing", async (t) => {
+  const pidsOf = fakeMediaTools(t);
+  const preview = loadPreview();
+  const request = {};
+  preview.ask(request);
+  const host = { tui: { requestRender() {} }, theme: createMmpTheme("dark") };
+  // The import is cached by now (PlayerPane is imported above), but createPane still awaits it:
+  // the shutdown fired right after the call lands before the check that follows the await.
+  const pending = request.player.createPane({ video: "a.mp4", duration: 10 }, host);
+  preview.shutdown();
+  await assert.rejects(pending.then((pane) => { t.after(() => pane.dispose()); return pane; }), (error) => error.message === sessionEnded);
+  await sleep(200);
+  assert.deepEqual(pidsOf().filter(alive), [], "a media process outlived the session");
+});
+
 test("a pane sends headers as one -headers argument before -i, to the video ffmpeg and to ffplay", async (t) => {
   fakeMediaTools(t);
   const pane = newPane(t, { video: "https://example.test/v.mp4", headers: { Referer: "https://example.test/", "User-Agent": "test" }, duration: 10 });
@@ -649,7 +678,8 @@ test("a pane plays a separate audio stream through ffplay, the video through ffm
   fakeMediaTools(t);
   const pane = newPane(t, { video: "video.mp4", audio: "audio.m4a" });
   pane.render(80, 24);
-  await until(() => callsOf().some(([name]) => name === "ffplay"), "ffplay to start");
+  // Each process logs its own call as it starts: wait for both, not just the first one to log.
+  await until(() => callsOf().some(([name]) => name === "ffplay") && videoCalls().length > 0, "ffplay and the video ffmpeg to start");
   assert.equal(argAfter(callsOf().find(([name]) => name === "ffplay"), "-i"), "audio.m4a");
   assert.equal(argAfter(videoCalls()[0], "-i"), "video.mp4");
   assert.equal(callsOf().some(([name, ...args]) => name === "ffplay" && args.includes("video.mp4")), false);
@@ -783,6 +813,17 @@ test("another extension gets the player in the TUI when it asks, also after /rel
   assert.match(shown(screens.first), /PLAYER:createPane:first/);
   // User extensions load before the built-in ones: asking in the factory gets nothing, every time.
   assert.deepEqual(reportsIn(out), ["PLAYER-AT-LOAD:none", "PLAYER:createPane:first", "PLAYER-AT-LOAD:none", "PLAYER:createPane:new"]);
+});
+
+test("an API kept across /reload rejects createPane, saying to ask again", (t) => {
+  const out = join(tempDir(t), "reports.jsonl");
+  runApp(t, [
+    ["waitReady"], ["type", "/askplayer"], ["key", "enter"], ["waitFor", "PLAYER:", { screen: true }],
+    ["type", "/reload"], ["key", "enter"], ["waitFor", "Reloaded", { screen: true }],
+    ["type", "/stalepane clip.mp4"], ["key", "enter"], ["waitFor", "STALE-PANE:", { screen: true }],
+    ["key", "ctrl+d"],
+  ], { extensions: [playerExtension], env: { MMP_PLAYER_PROBE_OUT: out }, files: { "clip.mp4": "not really a video" } });
+  assert.equal(reportsIn(out).find((line) => line.startsWith("STALE-PANE:")), `STALE-PANE:rejected: ${sessionEnded}`);
 });
 
 test("in -p preview is not loaded: an extension that asks gets no player", (t) => {

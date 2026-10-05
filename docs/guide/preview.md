@@ -233,6 +233,7 @@ interface PreviewPlayerApi {
 | `headers` 的名字或值里有换行 | `createPane` reject，错误里写明是哪个头（换行会把 ffmpeg 的 `-headers` 拆成别的头） |
 | 没装 ffmpeg、地址打不开 | 不 reject，错误显示在面板的画面里，和 `/preview` 一样 |
 | `/new`、`/resume`、`/fork`、`/reload`、退出 | preview 回收它发出、还没回收的面板；之后 `render` 只显示 `stopped`，不会重新开始播放 |
+| 留着上一个会话拿到的 API 对象（`/new`、`/resume`、`/fork`、`/reload` 之前的）再调 `createPane` | reject：`createPane: this player belongs to a session that has ended; ask on mmp/preview/player/v1 again`。用的时候重新发请求 |
 
 频道名里的 `v1` 是接口的版本：有不兼容的改动时换新频道，旧的可以同时保留。
 
