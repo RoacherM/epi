@@ -51,7 +51,18 @@ function textPopup(theme, chip, width) {
     const inner = Math.max(1, boxWidth - 4);
     return box(theme, boxWidth, body.map((line) => fit(line, inner)), undefined, hint);
 }
-function imagePopup(theme, chip, width) {
+function pictureFor(theme, image, cache) {
+    let picture = cache.get(image);
+    if (picture === undefined) {
+        // No width cap here: render(inner) already limits the picture to the box.
+        picture = new piTui.Image(image.base64, image.mimeType, { fallbackColor: (text) => theme.fg("muted", text) }, {
+            maxWidthCells: Number.POSITIVE_INFINITY,
+        });
+        cache.set(image, picture);
+    }
+    return picture;
+}
+function imagePopup(theme, chip, width, cache) {
     const { image } = chip;
     const format = image.mimeType.split("/")[1]?.toUpperCase() ?? "IMAGE";
     const dimensions = image.width !== undefined && image.height !== undefined ? `${image.width}x${image.height} · ` : "";
@@ -63,19 +74,17 @@ function imagePopup(theme, chip, width) {
     const capabilities = piTui.getCapabilities();
     if (!capabilities.images)
         return box(theme, boxWidth, [], fittedTitle, undefined);
-    const picture = new piTui.Image(image.base64, image.mimeType, { fallbackColor: (text) => theme.fg("muted", text) }, {
-        maxWidthCells: inner,
-    });
-    return box(theme, boxWidth, picture.render(inner), fittedTitle, undefined);
+    return box(theme, boxWidth, pictureFor(theme, image, cache).render(inner), fittedTitle, undefined);
 }
 /** Empty when nothing is being previewed, so it costs zero rows in the layout otherwise. */
 export function pastePreview(theme, getChip) {
+    const pictures = new WeakMap();
     return {
         render(width) {
             const chip = getChip();
             if (chip === undefined)
                 return [];
-            return chip.kind === "text" ? textPopup(theme, chip, width) : imagePopup(theme, chip, width);
+            return chip.kind === "text" ? textPopup(theme, chip, width) : imagePopup(theme, chip, width, pictures);
         },
         invalidate() { },
     };
