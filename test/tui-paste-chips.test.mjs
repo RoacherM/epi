@@ -894,3 +894,31 @@ test("a real trigger before the chip behaves like Pi's plain Editor: Backspace r
   assert.equal(await plainAfter("\x17"), false);
   assert.equal(await chipAfter("\x17"), false);
 });
+
+// Issue #7: the popup used to build a new pi-tui Image on every render. On Kitty-protocol terminals
+// that sends the whole picture again under a new random id each frame and never frees the old one,
+// so after the first screenshot the terminal ran out of image storage and later chips drew nothing.
+test("on a Kitty terminal the popup sends one stable image id per chip, and a different id for each chip", () => {
+  piTui.setCapabilities({ images: "kitty", trueColor: true, hyperlinks: false });
+  try {
+    const editor = makeEditor();
+    editor.insertImageChip(ONE_PIXEL_PNG, "image/png");
+    editor.insertImageChip(ONE_PIXEL_PNG, "image/png");
+    const popup = pastePreview(theme, () => editor.chipForPopup());
+    const kittyIds = (width) => popup.render(width).join("").match(/\x1b_G[^;]*;/g).map((control) => /,i=(\d+)/.exec(control)[1]);
+
+    const second = kittyIds(80);
+    assert.equal(second.length, 1, "one picture is sent per render");
+    assert.deepEqual(kittyIds(80), second, "same chip, same width: same id");
+    assert.deepEqual(kittyIds(100), second, "same chip, another width: still the same id, so the terminal replaces the picture");
+
+    editor.handleInput("\x1b[D"); // caret leaves the end of "[Image #2]" ...
+    editor.handleInput("\x1b[1;5D"); // ... and ctrl+left lands on "[Image #1]"
+    assert.equal(editor.chipForPopup().image.id, 1);
+    const first = kittyIds(80);
+    assert.notDeepEqual(first, second, "another chip gets its own id");
+    assert.deepEqual(kittyIds(80), first);
+  } finally {
+    piTui.resetCapabilitiesCache();
+  }
+});

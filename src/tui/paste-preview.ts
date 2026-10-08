@@ -3,7 +3,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 
-import { type ChipInfo, dropTrailingNewline } from "./paste-chips.js";
+import { type ChipInfo, type ImageChipMeta, dropTrailingNewline } from "./paste-chips.js";
 import { piTui } from "./pi-tui.js";
 
 const { truncateToWidth, visibleWidth } = piTui;
@@ -63,7 +63,24 @@ function textPopup(theme: Theme, chip: Extract<ChipInfo, { kind: "text" }>, widt
   return box(theme, boxWidth, body.map((line) => fit(line, inner)), undefined, hint);
 }
 
-function imagePopup(theme: Theme, chip: Extract<ChipInfo, { kind: "image" }>, width: number): string[] {
+/** One pi-tui `Image` per chip image. The Image owns the Kitty image id and its rendered lines, so
+ * keeping it means every redraw sends the same id and the same lines. A new Image per render would
+ * upload the picture again under a new id on every frame and never free the old ones. */
+type PictureCache = WeakMap<ImageChipMeta, InstanceType<typeof piTui.Image>>;
+
+function pictureFor(theme: Theme, image: ImageChipMeta, cache: PictureCache) {
+  let picture = cache.get(image);
+  if (picture === undefined) {
+    // No width cap here: render(inner) already limits the picture to the box.
+    picture = new piTui.Image(image.base64, image.mimeType, { fallbackColor: (text) => theme.fg("muted", text) }, {
+      maxWidthCells: Number.POSITIVE_INFINITY,
+    });
+    cache.set(image, picture);
+  }
+  return picture;
+}
+
+function imagePopup(theme: Theme, chip: Extract<ChipInfo, { kind: "image" }>, width: number, cache: PictureCache): string[] {
   const { image } = chip;
   const format = image.mimeType.split("/")[1]?.toUpperCase() ?? "IMAGE";
   const dimensions = image.width !== undefined && image.height !== undefined ? `${image.width}x${image.height} · ` : "";
@@ -74,19 +91,17 @@ function imagePopup(theme: Theme, chip: Extract<ChipInfo, { kind: "image" }>, wi
   const fittedTitle = fit(title, Math.max(1, boxWidth - 6));
   const capabilities = piTui.getCapabilities();
   if (!capabilities.images) return box(theme, boxWidth, [], fittedTitle, undefined);
-  const picture = new piTui.Image(image.base64, image.mimeType, { fallbackColor: (text) => theme.fg("muted", text) }, {
-    maxWidthCells: inner,
-  });
-  return box(theme, boxWidth, picture.render(inner), fittedTitle, undefined);
+  return box(theme, boxWidth, pictureFor(theme, image, cache).render(inner), fittedTitle, undefined);
 }
 
 /** Empty when nothing is being previewed, so it costs zero rows in the layout otherwise. */
 export function pastePreview(theme: Theme, getChip: () => ChipInfo | undefined): Component {
+  const pictures: PictureCache = new WeakMap();
   return {
     render(width: number): string[] {
       const chip = getChip();
       if (chip === undefined) return [];
-      return chip.kind === "text" ? textPopup(theme, chip, width) : imagePopup(theme, chip, width);
+      return chip.kind === "text" ? textPopup(theme, chip, width) : imagePopup(theme, chip, width, pictures);
     },
     invalidate() {},
   };
