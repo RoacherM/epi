@@ -36,7 +36,7 @@ function responsesEvents(model) {
 }
 
 export async function startMagpieServer() {
-  const state = { catalog: structuredClone(magpieCatalog), requests: [], catalogStatus: 200, catalogBody: undefined, catalogHandler: undefined, hang: false, toolCall: false, hangInference: false, malformedStream: false, inferenceStatus: 200 };
+  const state = { catalog: structuredClone(magpieCatalog), requests: [], catalogStatus: 200, catalogBody: undefined, catalogHandler: undefined, hang: false, toolCall: false, hangInference: false, malformedStream: false, inferenceStatus: 200, inferenceError: "prompt is too long: context_length_exceeded" };
   const server = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -54,7 +54,7 @@ export async function startMagpieServer() {
     if (state.hangInference) return;
     if (state.inferenceStatus !== 200) {
       response.writeHead(state.inferenceStatus, { "content-type": "application/json" });
-      response.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "prompt is too long: context_length_exceeded" } }));
+      response.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: state.inferenceError } }));
       return;
     }
     response.writeHead(200, { "content-type": "text/event-stream" });

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { randomUUID } from "node:crypto";
 import { EpiConfigError } from "./errors.js";
+import { rewritePiText } from "./pi-output.js";
 class BoundedOutput {
     limit;
     artifactRoot;
@@ -284,13 +285,15 @@ export class TaskRuntime {
             }
             else if (exit.code !== 0) {
                 job.status = "failed";
+                // Pi's errors in the worker ("No API key found ...") end with Pi's login guidance, a path
+                // into Pi's docs; the model gets Epi's (D84).
                 job.error =
-                    (job.workerResult?.error ?? stderr.text().trim()) ||
+                    rewritePiText(job.workerResult?.error ?? stderr.text().trim()) ||
                         `task worker exited with code ${exit.code}`;
             }
             else if (job.workerResult?.ok !== true) {
                 job.status = "failed";
-                job.error = job.workerResult?.error ?? "task worker returned no successful result";
+                job.error = rewritePiText(job.workerResult?.error ?? "task worker returned no successful result");
             }
             else {
                 job.status = "completed";
