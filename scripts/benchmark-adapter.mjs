@@ -518,6 +518,8 @@ function createMetricsCollector() {
     eventCount: 0,
     agentSettled: false,
     modelErrors: [],
+    /** Whether the LAST assistant message_end carried stopReason "error" (see classifyRun). */
+    lastAssistantErrored: false,
     extensionErrors: [],
     resolvedModels: new Set(),
   };
@@ -556,6 +558,7 @@ function createMetricsCollector() {
         if (event.message.stopReason === "error") {
           state.modelErrors.push(String(event.message.errorMessage ?? "model error"));
         }
+        state.lastAssistantErrored = event.message.stopReason === "error";
       }
       if (event.type === "compaction_end" && event.aborted !== true) {
         metrics.compactions += 1;
@@ -615,19 +618,30 @@ function scanOrphans(trialHome) {
   return { status: "checked", pids };
 }
 
+/** Pi's json/print-mode extension error line (`Extension error (<path>): ...`, print-mode.js onError);
+ * test/benchmark-adapter.test.mjs pins the text against Pi. */
+const EXTENSION_ERROR_LINE = /^Extension error \(/m;
+
 function classifyRun(run, collector) {
   if (run.spawnError !== undefined || run.timedOut || run.interrupted || run.signal !== null) {
     return "infra";
   }
+  // `epi --mode json` exits 1 when the final request failed (docs/cli-design.md); Pi exits 0. Any
+  // other non-zero exit is the harness's. In json mode Pi reports extension errors only on stderr
+  // (print-mode.js onError), whatever the exit code; other stderr lines are warnings and count for
+  // nothing, so Pi and Epi are classified alike.
+  const modelFailed = collector.modelErrors.length > 0;
+  const modelExit = run.code === 1 && collector.lastAssistantErrored;
   if (
-    run.code !== 0 ||
+    (run.code !== 0 && !modelExit) ||
     run.invalidJsonLine !== undefined ||
     collector.extensionErrors.length > 0 ||
+    EXTENSION_ERROR_LINE.test(run.stderr) ||
     !collector.agentSettled
   ) {
     return "harness";
   }
-  if (collector.modelErrors.length > 0) {
+  if (modelFailed) {
     return "model";
   }
   return null;

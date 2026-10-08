@@ -15,13 +15,14 @@ import { endOnClosedPipe } from "../dist/closed-stdout.js";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const fauxEpipe = fileURLToPath(new URL("./fixtures/faux-epipe.mjs", import.meta.url));
+const fauxEpipeShort = fileURLToPath(new URL("./fixtures/faux-epipe-short.mjs", import.meta.url));
 
-function makeHome(t) {
+function makeHome(t, extension = fauxEpipe) {
   const root = mkdtempSync(join(tmpdir(), "epi-closed-stdout-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
   mkdirSync(join(home, ".epi", "pi"), { recursive: true });
-  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fauxEpipe] }));
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [extension] }));
   const marks = { shutdown: join(root, "shutdown"), later: join(root, "later.jsonl") };
   const env = {
     PATH: process.env.PATH,
@@ -130,6 +131,18 @@ for (const reader of ["head -c1", "true"]) {
     assert.ok(existsSync(marks.shutdown), "the session_shutdown handler did not finish");
   });
 }
+
+// Dogfood D82: a reply that fits in the pipe is written whole, so the closed reader is only found by
+// Pi's last (empty) flush after the session is disposed, when the extension ctx is stale; aborting on it
+// printed a stack. A real shell pipe, unlike spawn's socketpair; stderr apart, so the stack is not cut.
+test("-p with a short reply into a real pipe closed after the first byte (| head -c1) ends quietly, exit 0, shutdown finishes", (t) => {
+  const { root, env, marks } = makeHome(t, fauxEpipeShort);
+  const command = `"${process.execPath}" "${cli}" --no-project --no-session --provider epi-faux --model short -p hi </dev/null | head -c1 >/dev/null; exit \${PIPESTATUS[0]}`;
+  const result = spawnSync("bash", ["-c", command], { cwd: root, env, encoding: "utf8", timeout: 30_000 });
+  assert.equal(result.stderr, "");
+  assert.equal(result.status, 0);
+  assert.ok(existsSync(marks.shutdown), "the session_shutdown handler did not finish");
+});
 
 // Dogfood D60: Node's spawn stdio are socketpairs; a write racing the reader's close can fail with
 // ENOTCONN (or ECONNRESET) instead of EPIPE, and Epi crashed with a stack. These drive the guard on a

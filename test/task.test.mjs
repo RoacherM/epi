@@ -16,6 +16,7 @@ import test from "node:test";
 
 import { createTaskInlineExtension } from "../dist/extensions/task.js";
 import { loadTaskAgents } from "../dist/task-agents.js";
+import { PROVIDER_LOGIN_HELP } from "../dist/pi-output.js";
 import { TaskRuntime } from "../dist/task-runtime.js";
 
 const fakeWorker = fileURLToPath(
@@ -89,6 +90,19 @@ test("foreground jobs complete through the package worker entry", async (t) => {
   assert.equal(completed.status, "completed");
   assert.equal(completed.result, "fake:complete:WORKER_PROMPT");
   assert.equal(readdirSync(join(root, "runtime", "task")).length, 0);
+  await runtime.shutdown();
+});
+
+// D84: a worker's error goes to the model as the task's result, so Pi's login guidance (a path into
+// Pi's docs) is swapped for Epi's whichever way the worker failed: exit 1, or exit 0 without ok.
+test("Pi's login guidance in a worker's error reaches the model as Epi's", async (t) => {
+  const root = createFixture(t);
+  const runtime = createRuntime(root);
+  for (const task of ["pi-guidance-exit-1", "pi-guidance-exit-0"]) {
+    const failed = await runtime.wait(runtime.start({ agent: "worker", task, cwd: root }).id);
+    assert.equal(failed.status, "failed", task);
+    assert.equal(failed.error, `No API key found for other.\n\n${PROVIDER_LOGIN_HELP}`, task);
+  }
   await runtime.shutdown();
 });
 

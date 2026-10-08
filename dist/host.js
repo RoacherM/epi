@@ -277,7 +277,8 @@ export async function runEpi(argv) {
     // Print/json only: an rpc client that stops reading is left to Pi as before, since the guard
     // would keep the process running with its prompts dropped and nothing on stderr.
     const { runNonInteractive } = await import("./noninteractive.js");
-    await runNonInteractive(prepared, parsedPiArgs.mode === "rpc" ? extensionFactories : [...extensionFactories, guardClosedStdout()]);
+    const closedStdout = parsedPiArgs.mode === "rpc" ? undefined : guardClosedStdout();
+    await runNonInteractive(prepared, closedStdout === undefined ? extensionFactories : [...extensionFactories, closedStdout.extension], closedStdout?.isStdoutClosed);
     // Deviation from Pi (dogfood D50): after print/json mode, Pi's main.js only sets process.exitCode
     // and returns, so a loaded extension holding a timer or handle keeps the process alive, on success
     // and on failure. rpc and every error exit call process.exit themselves and never get here.

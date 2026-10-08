@@ -11,6 +11,7 @@ import test from "node:test";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const fauxEcho = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
+const fauxFail = fileURLToPath(new URL("./fixtures/faux-fail.mjs", import.meta.url));
 const noisy = fileURLToPath(new URL("./fixtures/noisy-stdout-extension.mjs", import.meta.url));
 const MODEL = ["--no-project", "--model", "epi-faux/echo"];
 
@@ -133,6 +134,38 @@ test("a startup warning is printed on stderr and the run goes on", (t) => {
   assert.equal(result.stdout, "ECHO:hi\n", result.context);
   assert.match(result.stderr, /^Warning: Invalid settings file .*settings\.json: /m, result.context);
   assert.match(result.stderr, /^Warning: No models match pattern "no-such-model-\*"$/m, result.context);
+});
+
+// Dogfood D84: Pi's json mode exits 0 after a failed request; Epi exits 1 (docs/cli-design.md), with
+// the same JSON lines and nothing on stderr. As in Pi's text mode, only the final message counts.
+test("--mode json exits 1 when the final request failed, with the JSON lines unchanged and stderr empty", (t) => {
+  const f = fixture(t, [fauxFail]);
+  const failed = run(f, [...MODEL, "--no-session", "--mode", "json", "fail"]);
+  assert.equal(failed.status, 1, failed.context);
+  assert.equal(failed.stderr, "", failed.context);
+  const events = failed.stdout.trimEnd().split("\n").map((line) => JSON.parse(line));
+  const last = events.findLast((event) => event.type === "message_end").message;
+  assert.equal(last.stopReason, "error", failed.context);
+  assert.equal(last.errorMessage, "400 invalid request: faux failure", failed.context);
+  assert.equal(events.at(-1).type, "agent_settled", failed.context);
+
+  for (const [prompts, status] of [[["ok"], 0], [["fail", "ok"], 0], [["ok", "fail"], 1]]) {
+    const result = run(f, [...MODEL, "--no-session", "--mode", "json", ...prompts]);
+    assert.equal(result.status, status, `${prompts.join(" ")}\n${result.context}`);
+    assert.equal(result.stderr, "", result.context);
+  }
+});
+
+test("-p after a failed request is Pi's: the error on stderr, exit 1; and rpc still exits 0", async (t) => {
+  const f = fixture(t, [fauxFail]);
+  const print = run(f, [...MODEL, "--no-session", "-p", "fail"]);
+  assert.equal(print.status, 1, print.context);
+  assert.equal(print.stdout, "", print.context);
+  assert.equal(print.stderr, "400 invalid request: faux failure\n", print.context);
+  assert.equal(run(f, [...MODEL, "--no-session", "-p", "fail", "ok"]).status, 0);
+  const result = await rpc(f, [...MODEL, "--no-session"], [{ send: { id: "1", type: "prompt", message: "fail" }, until: '"type":"agent_end"' }]);
+  assert.equal(result.status, 0, result.context);
+  assert.match(result.stdout, /faux failure/, result.context);
 });
 
 function rpc(f, args, commands) {

@@ -35,7 +35,7 @@ Manifest 里的扩展启动时加载失败，两条路径都和 Pi 一样报错�
 | `--provider`、`--model`、`--thinking`、`--api-key`、`--models` | 是 | |
 | `-c/--continue`、`-r/--resume`、`--session`、`--session-id`、`--fork`、`--session-dir`、`--no-session`、`-n/--name` | 是 | `--session-dir` 和 Pi 一样展开 `~`；没给时依次看 `EPI_SESSION_DIR`（Epi 自己的变量，语义和 Pi 的 `PI_CODING_AGENT_SESSION_DIR` 一样，但从不读取后者——Pi 装置设置的这个变量不会泄漏进 Epi）、设置里的 `sessionDir`。所有模式都由 `src/tui/services.ts` 解析，读的是 `EPI_SESSION_DIR` |
 | `-t/--tools`、`-xt/--exclude-tools`、`-nt/--no-tools`、`-nbt/--no-builtin-tools` | 是 | |
-| `-p/--print`、`--mode text/json/rpc` | 是 | benchmark 的标准入口 `epi --mode json --no-session --no-approve -p "…"`（docs/development.md 第 20 节）保持不变。print/json 跑完后 Epi 等 stdout、stderr 写完就 `process.exit`（退出码不变）：Pi 这里只设 `process.exitCode` 再返回，扩展占着定时器/句柄时进程不退出（dogfood D50，和 Pi 不同）；rpc 和其他已经自己退出的路径不受影响 |
+| `-p/--print`、`--mode text/json/rpc` | 是 | benchmark 的标准入口 `epi --mode json --no-session --no-approve -p "…"`（docs/development.md 第 20 节）保持不变。print/json 跑完后 Epi 等 stdout、stderr 写完就 `process.exit`（退出码不变）：Pi 这里只设 `process.exitCode` 再返回，扩展占着定时器/句柄时进程不退出（dogfood D50，和 Pi 不同）；rpc 和其他已经自己退出的路径不受影响。`--mode json` 的请求失败时退出码为 1（dogfood D84，和 Pi 不同：Pi 的 `runPrintMode` 只在 text 模式设退出码，json 模式请求失败也退出 0，脚本和 benchmark 看不出失败；失败要可见）：判定和 Pi 的 text 模式一样，所有 prompt 跑完后看最后一条消息是不是 `stopReason` 为 `error`/`aborted` 的助手消息（`-p a b` 只看最后一个）；stdout 的 JSON 一字不改，stderr 不加输出；stdout 读端提前关闭时 Epi 自己中止了运行（D54），不算失败，仍是 0 |
 | `--list-models [search]` | 是 | 输出表格和 Pi 一样。扩展诊断（注册 provider 失败、扩展加载失败）和 `-p` 一样打到 stderr，有错误就退出 1；没有模型时打印 Epi 自己的提示（`/login` 或在 Manifest 里声明 provider 扩展）。不加载 Pi 内置的 llama.cpp 扩展（和交互界面一样）。表格总是写到 stdout，和 `-p`/`--mode` 同用时也是（Pi 那时写到 stderr）；多余或缺值的扩展参数现在和 `-p` 一样报错退出 1 |
 | `--export <file>` | 是 | |
 | `--offline`、`--verbose` | 是 | `--verbose` 让启动信息显示在消息区 |
