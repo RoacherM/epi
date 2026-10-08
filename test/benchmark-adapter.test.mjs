@@ -146,6 +146,23 @@ test("benchmark adapter maps Harness, model, infra, and grader failures", () => 
     assert.equal(modelExit1.metadata.result.failureCategory, "model");
     assert.deepEqual(modelExit1.metadata.result.modelErrors, ["fixture model failure"]);
 
+    // Each case isolates one condition of classifyRun: a warning on stderr changes nothing; exit 1
+    // after a failed request that the run then got past is not the model's; Pi's extension error line
+    // is the harness's whatever the exit code.
+    for (const [prompt, category, status] of [
+      ["MODEL_ERROR_WARN_EXIT_1", "model", 4],
+      ["MODEL_ERROR_THEN_EXIT_1", "harness", 2],
+      ["MODEL_ERROR_EXT_ERROR_EXIT_1", "harness", 2],
+      ["EXT_ERROR", "harness", 2],
+    ]) {
+      const run = runAdapter(fixture, `case-${prompt}`, prompt);
+      assert.equal(run.metadata.result.failureCategory, category, prompt);
+      assert.equal(run.result.status, status, `${prompt}\n${run.result.stderr}`);
+    }
+    // The line classifyRun looks for is the one Pi writes (modes/print-mode.js onError).
+    const printMode = readFileSync(join(root, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "modes", "print-mode.js"), "utf8");
+    assert.match(printMode, /console\.error\(`Extension error \(\$\{err\.extensionPath\}\): \$\{err\.error\}`\)/, "Pi's extension error line changed: update EXTENSION_ERROR_LINE in scripts/benchmark-adapter.mjs");
+
     const infra = runAdapter(
       fixture,
       "infra-failure",
