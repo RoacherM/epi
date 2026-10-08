@@ -174,6 +174,8 @@ Pi 加载文件形式的扩展时，会把扩展里的 `@earendil-works/pi-tui` 
 
 **做法**：新界面的代码不直接写 `import ... from "@earendil-works/pi-tui"`，统一经过一个 `src/tui/pi-tui.ts`。它从 pi-coding-agent 的安装位置解析 pi-tui（`createRequire` 指向 pi-coding-agent 的 `package.json`），和 Pi 的解析方式一致。类型仍从顶层的 pi-tui 取，两份版本号相同。加一条测试：`src/tui/pi-tui.ts` 拿到的模块和 Pi 组件用的是同一个实例。
 
+**Pi 1.0.1 起只有一份（Pi 1.0.2 升级，2026-10-05）**：Pi 发布包不再带 `npm-shrinkwrap.json`，npm 把 pi-tui、pi-ai、pi-agent-core 提升到顶层，Pi 和 Epi 解析到的是同一份；Epi 自己的 `npm-shrinkwrap.json` 锁定这个布局（docs/pi-upgrade-design.md 第 5 节）。`src/tui/pi-tui.ts` 仍从 Pi 的位置解析，但现在要求两边解析到同一个文件，否则启动就报错（docs/pi-internals.md `pi-tui-single-copy`）：再出现第二份，说明布局变了，要重新看这一节。
+
 **遗留问题已解决（Pi 0.99 升级，2026-09-30）**：这条原本记的是 `epi:mcp` 用 `tsImport` 从 Epi 的位置加载 pi-mcp-adapter，adapter 里的 `pi-tui`、`pi-ai` 解析到的是顶层那份、和 Pi 不一致，sampling 功能是否受影响没验证过。Pi 0.99 升级把 pi-mcp-adapter 整个去掉，改用 Pi 自己的原生 MCP 扩展（`createMcpExtension`，见 [mcp-design.md](mcp-design.md)），它和 Pi 其余部分一样从 pi-coding-agent 的安装位置解析 pi-tui/pi-ai，不再有这个不一致。
 
 ### 3.3 配置隔离：Epi 和 Pi 不共享配置

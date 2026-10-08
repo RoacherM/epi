@@ -10,13 +10,14 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, initTheme } from "@earendil-works/pi-coding-agent";
+import { getKeybindings } from "@earendil-works/pi-tui";
 
 import { createEpiMcpExtension, loadNativeMcpConfig } from "../dist/extensions/mcp.js";
 import { startOAuthMcpServer } from "./fixtures/mcp-oauth-server.mjs";
@@ -145,25 +146,183 @@ test("--dry-run reports a native mcp.json validation error before Pi starts", (t
   assert.match(result.stderr, /needs either "command" \(stdio\) or "url" \(streamable HTTP\)/);
 });
 
+// ── Pi 1.0.1 project overrides never reach a project's .pi/ (hard rule 1) ──────────────────────
+// Pi 1.0.1 reads `<project>/.pi/mcp.json` entries without command/url as overrides of a global
+// server (extensions/mcp/config.js loadMcpConfig/readConfigFile), and `/mcp` offers "Enable/Disable in
+// this project", saved to that file (index.js serverMenu/saveConfig, through loaded.projectConfig).
+// Both hang on loadMcpConfig's `projectTrusted`, which Epi always passes as false.
+
+test("a project's .pi/mcp.json, including a Pi 1.0.1 override entry, never reaches Epi's MCP config", (t) => {
+  const root = createFixture(t);
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
+  writeJson(join(epiHome, "mcp.json"), { mcpServers: { shared: { command: "node" } } });
+  const projectRoot = join(root, "project");
+  mkdirSync(join(projectRoot, ".pi"), { recursive: true });
+  writeJson(join(projectRoot, ".pi", "mcp.json"), {
+    autoEnableCodemode: false,
+    mcpServers: { shared: { enabled: false, exposure: "direct" }, piOnly: { command: "node" } },
+  });
+
+  const result = loadNativeMcpConfig({ epiHome, resolveAssembly: () => trustedAssembly(projectRoot) }, projectRoot);
+  assert.deepEqual(result, {
+    servers: [{ name: "shared", config: { command: "node" }, source: join(epiHome, "mcp.json"), scope: "global" }],
+    errors: [],
+  });
+});
+
+test("an enabled-only entry in a project's .epi/mcp.json is an error, not a Pi-style override", (t) => {
+  // Epi reads <project>/.epi/mcp.json as a second agentDir's mcp.json, so Pi's override rule (project
+  // scope only) never applies to it: the entry is validated as a full server and fails, visibly.
+  const root = createFixture(t);
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
+  writeJson(join(epiHome, "mcp.json"), { mcpServers: { shared: { command: "node" } } });
+  const projectRoot = join(root, "project");
+  mkdirSync(join(projectRoot, ".epi"), { recursive: true });
+  writeJson(join(projectRoot, ".epi", "mcp.json"), { mcpServers: { shared: { enabled: false } } });
+
+  const result = loadNativeMcpConfig({ epiHome, resolveAssembly: () => trustedAssembly(projectRoot) }, projectRoot);
+  assert.deepEqual(result.servers.map((server) => [server.name, server.config.enabled]), [["shared", undefined]]);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /\.epi[\\/]mcp\.json: .*needs either "command" \(stdio\) or "url"/);
+});
+
+/** An ExtensionAPI stand-in that keeps `pi.on` handlers so a test can fire session events; every
+ * other member Pi's MCP extension calls is a no-op (getAllTools/getActiveTools: none). */
+function eventPi() {
+  const handlers = new Map();
+  const commands = new Map();
+  const base = {
+    commands,
+    on(event, handler) {
+      handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+      return () => {};
+    },
+    async emit(event, ctx) {
+      for (const handler of handlers.get(event) ?? []) await handler({ type: event }, ctx);
+    },
+    registerCommand(name, options) {
+      commands.set(name, options);
+    },
+    getMcpServers: () => [],
+    getAllTools: () => [],
+    getActiveTools: () => [],
+  };
+  return new Proxy(base, { get: (target, prop) => (prop in target ? target[prop] : () => undefined) });
+}
+
+test("/mcp enable and disable save to Epi's mcp.json, offer nothing \"in this project\", and never touch .pi/", async (t) => {
+  initTheme("dark");
+  const root = createFixture(t);
+  const epiHome = join(root, "home");
+  mkdirSync(epiHome, { recursive: true });
+  const configPath = join(epiHome, "mcp.json");
+  // A server that fails at once, so enabling it needs no real connection.
+  const server = { command: process.execPath, args: ["-e", "process.exit(1)"] };
+  writeJson(configPath, { mcpServers: { srv: { ...server, enabled: false } } });
+  const projectRoot = join(root, "project");
+  mkdirSync(join(projectRoot, ".pi"), { recursive: true });
+  const planted = `${JSON.stringify({ mcpServers: { srv: { enabled: true } } })}\n`;
+  writeFileSync(join(projectRoot, ".pi", "mcp.json"), planted);
+
+  const extension = createEpiMcpExtension({ epiHome, resolveAssembly: () => trustedAssembly(projectRoot) });
+  const pi = eventPi();
+  await extension.factory(pi);
+  let view;
+  let closed;
+  const ctx = {
+    cwd: projectRoot,
+    mode: "tui",
+    hasUI: true,
+    // What Pi's own default loader would ask; Epi's loadConfig never does.
+    isProjectTrusted: () => true,
+    ui: {
+      notify: () => {},
+      custom: (factory) => new Promise((resolve) => {
+        closed = resolve;
+        view = factory({ requestRender: () => {} }, { fg: (_color, text) => text, bold: (text) => text }, getKeybindings(), () => resolve());
+      }),
+    },
+  };
+  await pi.emit("session_start", ctx);
+  t.after(() => pi.emit("session_shutdown", ctx));
+  const shown = () => (view?.render(120).join("\n") ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+  const until = async (pattern) => {
+    for (let i = 0; i < 500 && !pattern.test(shown()); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.match(shown(), pattern);
+  };
+  const choose = async (label) => {
+    // The selected row starts with "→ "; move down to the wanted label, then Enter.
+    for (let i = 0; i < 10 && !new RegExp(`→ ${label}\\b`).test(shown()); i++) view.handleInput("\x1b[B");
+    assert.match(shown(), new RegExp(`→ ${label}\\b`));
+    view.handleInput("\r");
+  };
+  const done = pi.commands.get("mcp").handler("", ctx);
+  await until(/MCP servers/);
+  await choose("srv");
+  await until(/MCP server srv/);
+  assert.match(shown(), /Enable\s+saved to the global mcp\.json/);
+  assert.doesNotMatch(shown(), /in this project/);
+  await choose("Enable");
+  await until(/Disable\s+saved to the global mcp\.json/);
+  assert.doesNotMatch(shown(), /in this project/);
+  assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), { mcpServers: { srv: server } });
+  await choose("Disable");
+  await until(/Enable\s+saved to the global mcp\.json/);
+  assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), { mcpServers: { srv: { ...server, enabled: false } } });
+  view.handleInput("\x1b");
+  await until(/MCP servers/);
+  view.handleInput("\x1b");
+  await done;
+  await closed;
+
+  assert.deepEqual(readdirSync(join(projectRoot, ".pi")), ["mcp.json"]);
+  assert.equal(readFileSync(join(projectRoot, ".pi", "mcp.json"), "utf8"), planted);
+  assert.equal(existsSync(join(projectRoot, ".epi")), false, "the project's own .epi/ was not asked for either");
+});
+
 // ── /mcp empty-state override (docs/mcp-design.md §7) ──────────────────────────────────────────
 
-/** A minimal ExtensionAPI: only `on`, `registerCommand`, and (F2) `getMcpServers` are called
- * synchronously by Pi's own createMcpExtension factory body or by epi:mcp's own wrapper (verified
- * against extensions/mcp/index.js -- every other pi.X call it makes happens inside an event
- * handler, none of which fire here). Enough to drive epi:mcp's own Proxy-wrapping logic around the
- * real "/mcp" registration without spawning a session or a real MCP connection.
- * `registeredServers` fakes servers another extension added with `pi.registerMcpServer()`. */
+/** A minimal ExtensionAPI: only `on`, `registerCommand`, `registerToolRenderer` (Pi 1.0.1) and
+ * (F2) `getMcpServers` are called synchronously by Pi's own createMcpExtension factory body or by
+ * epi:mcp's own wrapper (verified against extensions/mcp/index.js -- every other pi.X call it makes
+ * happens inside an event handler, none of which fire here). Enough to drive epi:mcp's own
+ * Proxy-wrapping logic around the real "/mcp" registration without spawning a session or a real MCP
+ * connection. `registeredServers` fakes servers another extension added with
+ * `pi.registerMcpServer()`. */
 function fakePi(registeredServers = []) {
   const commands = new Map();
+  const toolRenderers = [];
   return {
     commands,
+    toolRenderers,
     on: () => () => {},
     registerCommand(name, options) {
       commands.set(name, options);
     },
+    registerToolRenderer(resolver) {
+      toolRenderers.push(resolver);
+    },
     getMcpServers: () => registeredServers,
   };
 }
+
+// Pi 1.0.1 (#10285): Pi's MCP extension draws calls to MCP tools whose server has not connected (a
+// resumed session) with a resolver it registers through pi.registerToolRenderer(). epi:mcp's Proxy
+// passes every API member it does not wrap straight through, so the resolver reaches Pi's own API.
+test("epi:mcp passes Pi's MCP tool renderer resolver through to pi.registerToolRenderer", async (t) => {
+  const root = createFixture(t);
+  const extension = createEpiMcpExtension({ epiHome: root, resolveAssembly: untrustedAssembly });
+  const pi = fakePi();
+  await extension.factory(pi);
+  assert.equal(pi.toolRenderers.length, 1);
+  const [resolve] = pi.toolRenderers;
+  const own = { renderCall() {} };
+  assert.equal(resolve("mcp__docs__search", () => own), own, "a registered definition's own renderers win");
+  assert.equal(typeof resolve("mcp__docs__search", () => undefined)?.renderCall, "function", "no renderer for an MCP tool whose server has not connected");
+  assert.equal(resolve("read", () => undefined), undefined);
+});
 
 test("/mcp with zero configured servers shows Epi's own message, not Pi's", async (t) => {
   const root = createFixture(t);

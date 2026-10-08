@@ -137,7 +137,7 @@ function stubSession(cwd = "/tmp", { extensionTools = [] } = {}) {
       sourceInfo: { source: extensionTools.includes(name) ? "extension" : "builtin" },
     })),
     getToolDefinition: () => undefined,
-    extensionRunner: { getMarkdownTransformers: () => [] },
+    extensionRunner: { getMarkdownTransformers: () => [], resolveToolRenderers: (_name, base) => base() },
   };
 }
 
@@ -462,7 +462,7 @@ test("replay after /resume (Transcript.reset) groups identically to a live run",
     sessionManager: { getCwd: () => cwd },
     getAllTools: () => BUILTIN_NAMES.map((name) => ({ name, sourceInfo: { source: "builtin" } })),
     getToolDefinition: () => undefined,
-    extensionRunner: { getMarkdownTransformers: () => [] },
+    extensionRunner: { getMarkdownTransformers: () => [], resolveToolRenderers: (_name, base) => base() },
   };
   const transcript = new Transcript(stubTui(), theme, stubSession());
   transcript.reset(session);
@@ -479,7 +479,7 @@ test("replay never flashes: reset()'d entries settle straight into their final c
     sessionManager: { getCwd: () => cwd },
     getAllTools: () => BUILTIN_NAMES.map((name) => ({ name, sourceInfo: { source: "builtin" } })),
     getToolDefinition: () => undefined,
-    extensionRunner: { getMarkdownTransformers: () => [] },
+    extensionRunner: { getMarkdownTransformers: () => [], resolveToolRenderers: (_name, base) => base() },
   };
   const transcript = new Transcript(stubTui(), theme, stubSession());
   transcript.reset(session);

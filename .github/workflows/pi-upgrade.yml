@@ -120,7 +120,7 @@ jobs:
           fi
 
           git checkout -B "$BRANCH"
-          git add package.json package-lock.json dist
+          git add package.json npm-shrinkwrap.json dist
           git commit -m "chore: upgrade Pi to $NEW_PI_VERSION"
           git push --force origin "$BRANCH"
 

@@ -7,7 +7,7 @@
 //   2. the doc table and this registry never drift apart (same ids, both directions);
 //   3. a *new* deep reach added to src/ without a matching row fails here, not silently.
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -116,10 +116,16 @@ const registry = [
     },
   },
   {
-    id: "pi-tui-nested-copy",
+    id: "pi-tui-single-copy",
     async check() {
       const text = readFileSync(join(root, "src", "tui", "pi-tui.ts"), "utf8");
       assert.match(text, /createRequire\(piEntry\)\.resolve\("@earendil-works\/pi-tui"\)/, "pi-tui.ts no longer resolves pi-tui from Pi's own install");
+      assert.match(text, /if \(piTuiEntry !== topLevelEntry\) \{\s*throw/, "pi-tui.ts no longer refuses a second pi-tui copy");
+      // One copy, the one Pi's own components import (the guard itself: the test below).
+      const { createRequire } = await import("node:module");
+      const fromPi = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent")).resolve("@earendil-works/pi-tui");
+      const fromEpi = createRequire(import.meta.url).resolve("@earendil-works/pi-tui");
+      assert.equal(fromPi, fromEpi, "Pi and Epi resolve different pi-tui copies");
       const { piTui } = await import(pathToFileURL(join(root, "dist", "tui", "pi-tui.js")).href);
       for (const name of ["Editor", "setKeybindings", "getKeybindings", "truncateToWidth", "getImageDimensions"]) {
         assert.ok(name in piTui, `pi-tui no longer exports ${name}`);
@@ -173,11 +179,11 @@ const registry = [
   {
     id: "pi-agent-core-agent",
     async check() {
-      // pi-agent-core's package.json "exports" only offers an "import" condition (no "require"),
-      // so createRequire(piEntry).resolve(...) -- which pi-tui.ts uses for pi-tui -- can't resolve
-      // it; it's only ever nested under pi-coding-agent's own node_modules, never hoisted to
-      // Epi's, so a manual path join is how app.ts's dependency actually gets loaded too.
-      const entry = join(piDist, "..", "node_modules", "@earendil-works", "pi-agent-core", "dist", "index.js");
+      // The copy Pi itself imports (AgentSession.agent is one of its instances). pi-agent-core's
+      // "exports" offer only an "import" condition, so createRequire(piEntry).resolve(...) can't find
+      // it; walk node_modules up from Pi's dist the way Node resolves Pi's own import. Hoisted to the
+      // top level since Pi 1.0.1 dropped its shrinkwrap; nested under pi-coding-agent before.
+      const entry = join(resolvePackageFromPi("@earendil-works/pi-agent-core"), "dist", "index.js");
       const { Agent } = await import(pathToFileURL(entry).href);
       assert.ok(typeof Agent === "function", "pi-agent-core no longer exports Agent");
       const proto = Agent.prototype;
@@ -602,7 +608,7 @@ const registry = [
       assert.equal(loadFailures.length, 2, `${indexPath} no longer reports its startup and mcp_servers_change failures as ctx.ui.notify(\`MCP failed to load: ...\`, "error") -- ${why}`);
       assert.match(
         indexText,
-        /pending = Promise\.all\(enabled\.map\(\(server\) => startConnection\(server, isCurrent, runtime\)\)\)[\s\S]{0,200}\.catch\(\(error\) => \{[\s\S]{0,200}MCP failed to load/,
+        /pending = Promise\.all\(enabled\.map\(\(server\) => startConnection\(server, runtime\)\)\)[\s\S]{0,200}\.catch\(\(error\) => \{[\s\S]{0,200}MCP failed to load/,
         `${indexPath}'s startup chain (session_start) no longer ends in a catch that notifies "MCP failed to load" -- ${why}`,
       );
       // Pi reports MCP problems only through ctx.ui.notify, and Epi sees only the notifies made with
@@ -836,6 +842,45 @@ const registry = [
   },
 ];
 
+/** The directory of the package `name` as Pi's own modules resolve it: Node's node_modules lookup,
+ * from pi-coding-agent's dist/ upwards. */
+function resolvePackageFromPi(name) {
+  for (let dir = piDist; ; dir = dirname(dir)) {
+    const candidate = join(dir, "node_modules", name);
+    if (statSync(join(candidate, "package.json"), { throwIfNoEntry: false })?.isFile()) return candidate;
+    if (dirname(dir) === dir) throw new Error(`${name} is not installed where Pi can import it`);
+  }
+}
+
+// The pi-tui-single-copy row's guard (src/tui/pi-tui.ts): a second pi-tui copy, one for Pi and one
+// for Epi, stops startup instead of splitting pi-tui's module state. Built from Epi's compiled
+// module over two stand-in layouts: one copy loads, two copies throw.
+test("pi-tui.ts refuses to start when Pi and Epi resolve different pi-tui copies", async (t) => {
+  const fixture = mkdtempSync(join(tmpdir(), "epi-pi-tui-copies-"));
+  t.after(() => rmSync(fixture, { recursive: true, force: true }));
+  const writePackage = (dir, name, body) => {
+    mkdirSync(join(dir, "dist"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name, type: "module", main: "dist/index.js" }));
+    writeFileSync(join(dir, "dist", "index.js"), body);
+  };
+  const layout = (name, nested) => {
+    const dir = join(fixture, name);
+    const scope = join(dir, "node_modules", "@earendil-works");
+    writePackage(join(scope, "pi-coding-agent"), "@earendil-works/pi-coding-agent", "export {};\n");
+    writePackage(join(scope, "pi-tui"), "@earendil-works/pi-tui", "export const copy = \"top-level\";\n");
+    if (nested) {
+      writePackage(join(scope, "pi-coding-agent", "node_modules", "@earendil-works", "pi-tui"), "@earendil-works/pi-tui", "export const copy = \"nested\";\n");
+    }
+    mkdirSync(join(dir, "dist", "tui"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "epi", type: "module" }));
+    writeFileSync(join(dir, "dist", "tui", "pi-tui.js"), readFileSync(join(root, "dist", "tui", "pi-tui.js")));
+    return pathToFileURL(join(dir, "dist", "tui", "pi-tui.js")).href;
+  };
+  const { piTui } = await import(layout("one-copy", false));
+  assert.equal(piTui.copy, "top-level");
+  await assert.rejects(import(layout("two-copies", true)), /Two copies of pi-tui are installed: Pi uses .*pi-coding-agent[\\/]node_modules[\\/]@earendil-works[\\/]pi-tui/);
+});
+
 /** Every `PI_*` name in the Pi runtime code epi loads: each @earendil-works package's dist/, at the
  * top level and nested under pi-coding-agent, except pi-coding-agent's single-file `bundle/` and
  * Bun-binary `bun/` builds, which epi never imports. Comments count too: cheaper than parsing,
@@ -897,14 +942,14 @@ function checkMcpOwnReportsInRpc(indexText, indexPath) {
   );
   assert.match(
     indexText,
-    /pending = Promise\.all\(enabled\.map\(\(server\) => startConnection\(server, isCurrent, runtime\)\)\)\s*\.then\(\(\) => \{\s*if \(isCurrent\(\)\)\s*reportProblems\(ctx\);\s*\}\)/,
+    /pending = Promise\.all\(enabled\.map\(\(server\) => startConnection\(server, runtime\)\)\)\s*\.then\(\(\) => \{\s*if \(!signal\.aborted\)\s*reportProblems\(ctx\);\s*\}\)/,
     `${indexPath}'s startup chain no longer ends in reportProblems() -- a failed server would reach an rpc client only when the session ends; ${why}`,
   );
   const change = mcpHandlerSource(indexText, "mcp_servers_change");
   assert.ok(change !== undefined, `${indexPath} no longer has an mcp_servers_change handler -- ${why}`);
   assert.match(
     change,
-    /if \(current !== generation\)\s*return;\s*reportProblems\(ctx, connecting\);/,
+    /if \(signal\.aborted\)\s*return;\s*reportProblems\(ctx, connecting\);/,
     `${indexPath}'s mcp_servers_change handler no longer ends in reportProblems(ctx, connecting) -- a server registered later that fails would reach an rpc client only when the session ends; ${why}`,
   );
 }
@@ -926,7 +971,7 @@ test("the mcp-own-reports-in-rpc check catches mutations of Pi's MCP extension E
     "reportProblems lists servers in another shape": [replaced("lines.push(`${server.entry.name}: ${describeState(server)}`)", "lines.push(`- ${server.entry.name} (${describeState(server)})`)"), /no longer lists failed/],
     "reportProblems stops indenting its lines": [replaced("lines.map((line) => `  ${line}`)", "lines.map((line) => `- ${line}`)"), /no longer notifies "MCP servers need attention:"/],
     "reportProblems renames its header": [replaced("`MCP servers need attention:\\n", "`MCP servers have problems:\\n"), /no longer notifies "MCP servers need attention:"/],
-    "no reportProblems at the end of the startup chain": [replaced("if (isCurrent())\n                    reportProblems(ctx);", "if (isCurrent())\n                    emitChange();"), /startup chain no longer ends/],
+    "no reportProblems at the end of the startup chain": [replaced("if (!signal.aborted)\n                    reportProblems(ctx);", "if (!signal.aborted)\n                    emitChange();"), /startup chain no longer ends/],
     "N2: no reportProblems(ctx, connecting) after mcp_servers_change": [inHandler("mcp_servers_change", "reportProblems(ctx, connecting);", ""), /mcp_servers_change handler no longer ends/],
   };
   for (const [name, [mutated, expected]] of Object.entries(mutations)) {
@@ -966,9 +1011,7 @@ test("docs/pi-internals.md's table and the test registry have exactly the same r
  * mentioning `import.meta.resolve("@earendil-works/...")` -- not hardcoded to the "piDist" name
  * every current file happens to use, so a future file naming its own base dir differently still
  * gets caught. (A per-file identifier match, not full data-flow: a base dir threaded through a
- * function parameter under a different local name, as `pi-tui.ts`'s `packageVersion(entry)` does
- * for its own already-registered `pi-tui-nested-copy` check, isn't traced -- acceptable since that
- * case only reads a package's public `package.json`, not an unexported module.) Also flags
+ * function parameter under a different local name isn't traced.) Also flags
  * `importFromPi<T>("spec")`, `createRequire(piEntry).resolve("spec")`, and any
  * `import.meta.resolve("@earendil-works/pkg/subpath")` with a subpath. Any of these anywhere in
  * src/, test/fixtures/ or scripts/ must resolve to a path/spec some registry row's check() actually
@@ -1020,7 +1063,7 @@ const KNOWN_DEEP_PATHS = new Map([
   ["core/resource-loader.js", "context-file-candidates"],
   ["core/http-dispatcher.js", "http-dispatcher"],
   ["core/output-guard.js", "output-guard-stdout-write"],
-  ["@earendil-works/pi-tui", "pi-tui-nested-copy"],
+  ["@earendil-works/pi-tui", "pi-tui-single-copy"],
   ["diff", "pi-diff-package"],
   ["extensions/mcp/config.js", "mcp-native-config-loader"],
   ["core/mcp-servers.js", "mcp-native-validate-config"],

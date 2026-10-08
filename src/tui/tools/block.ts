@@ -1,6 +1,6 @@
 // grok tool block frame (docs/tui-design.md 4.2): `┃` rail in `accent` while the tool runs, `◆` before
 // the call line, and result rows indented under it. Replaces Pi's background box (`renderShell: "self"`).
-import type { AgentToolResult, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ToolRenderers as PiToolRenderers, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 
 import { piTui } from "../pi-tui.js";
@@ -69,7 +69,7 @@ function fallbackResult(result: AgentToolResult<unknown>, expanded: boolean, the
  * Frames any tool's renderers in a grok block. A definition that draws its own frame
  * (`renderShell: "self"`) is left alone.
  */
-export function toolBlock(toolName: string, renderers: ToolRenderers | ToolDefinition | undefined): ToolRenderers {
+export function toolBlock(toolName: string, renderers: ToolRenderers | PiToolRenderers | ToolDefinition | undefined): ToolRenderers {
   if (renderers !== undefined && "renderShell" in renderers && renderers.renderShell === "self") return renderers as ToolRenderers;
   const { renderCall, renderResult } = (renderers ?? {}) as ToolRenderers;
   const framed: ToolRenderers = {

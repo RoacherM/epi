@@ -40,7 +40,7 @@ function makeCwd({ piVersion = "0.87.1", epiVersion = "0.1.4" } = {}) {
     ),
   );
   writeFileSync(
-    join(cwd, "package-lock.json"),
+    join(cwd, "npm-shrinkwrap.json"),
     JSON.stringify(
       { name: "epi", version: epiVersion, lockfileVersion: 3, packages: { "": { name: "epi", version: epiVersion } } },
       null,
@@ -237,7 +237,7 @@ test("runPiUpgrade: newer version, gate passes -> bumps Epi patch version", () =
     assert.equal(pkg.dependencies["@earendil-works/pi-ai"], "0.88.0");
     assert.equal(pkg.version, "0.1.5");
 
-    const lock = JSON.parse(readFileSync(join(cwd, "package-lock.json"), "utf8"));
+    const lock = JSON.parse(readFileSync(join(cwd, "npm-shrinkwrap.json"), "utf8"));
     assert.equal(lock.version, "0.1.5");
     assert.equal(lock.packages[""].version, "0.1.5");
 

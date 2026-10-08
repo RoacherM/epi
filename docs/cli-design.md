@@ -68,11 +68,12 @@ Manifest 里的扩展启动时加载失败，两条路径都和 Pi 一样报错�
 | `PI_RADIUS_GATEWAY` | 只清掉 | 只用于 Pi 自己 `/bug` 的上传；Epi 的 `/bug` 是开 GitHub issue |
 | `PI_HARDWARE_CURSOR` | 只清掉 | Epi 用自己的 `show-hardware-cursor` 设置（D21），不调 Pi 读这个变量的 getter |
 | `PI_CLEAR_ON_SHRINK`、`PI_EXPERIMENTAL` | 只清掉 | 只在 Pi 自己的交互界面里起作用（底栏的 `xp` 标记、首次运行引导），Epi 的界面不用 |
+| `PI_PROGRAM_STATUS` | 只清掉 | pi-tui 的 `ProcessTerminal` 读它（`1`/`0` 跳过 OSC 7501 程序状态的终端探测）；Epi 不认用户 Pi 环境里的 `PI_*` 变量，探测由 pi-tui 自己决定 |
 | `PI_STARTUP_BENCHMARK` | 只清掉 | Pi 交互界面的启动计时；设了它 `-p` 会直接报错退出 |
 | `PI_TIMING`、`PI_TUI_DEBUG`、`PI_TUI_DEBUG_REDRAW`、`PI_TUI_WRITE_LOG` | 只清掉 | Pi 自己的调试输出（计时、渲染日志、终端写入日志），不作为 Epi 的选项 |
 | `PI_MANAGED_INSTALL_ROOT`、`PI_INSTALLER_API_BASE` | 只清掉 | Pi 自更新和包命令用的；`epi install/update` 是 Epi 自己的，走不到 |
 
-Pi 代码里出现但不是 Pi 读取的输入，不处理：`PI_CODING_AGENT`（Pi 的 CLI/RPC 入口给子进程设的标记）、`PI_SESSION_ID`/`PI_SESSION_FILE`/`PI_PROVIDER`/`PI_MODEL`/`PI_REASONING_LEVEL`（bash 工具给它跑的命令设的，自己会先删掉继承来的值）、`PI_BUNDLED_NODE`（Pi 编译版的构建期常量，不是环境变量）。另外 pi-ai 在 Bun 下 `process.env` 为空时会去读 `/proc/self/environ`，Epi 跑在 Node 上，走不到。
+Pi 代码里出现但不是 Pi 读取的输入，不处理：`PI_CODING_AGENT`（Pi 的 CLI/RPC 入口给子进程设的标记）、`PI_SESSION_ID`/`PI_SESSION_FILE`/`PI_PROVIDER`/`PI_MODEL`/`PI_REASONING_LEVEL`（bash 工具给它跑的命令设的，自己会先删掉继承来的值）、`PI_BUNDLED_NODE`（Pi 编译版的构建期常量，不是环境变量）、`PI_LOGO_COLORS`/`PI_LOGO_PIXELS`（Pi 1.0.1 起 `modes/interactive/components/easter-egg-3d.js` 里 3D 彩蛋 logo 的像素图和配色常量，不是环境变量；只在 Pi 自己的交互界面里用，Epi 不跑它）。另外 pi-ai 在 Bun 下 `process.env` 为空时会去读 `/proc/self/environ`，Epi 跑在 Node 上，走不到。
 
 ## 3. 子命令
 

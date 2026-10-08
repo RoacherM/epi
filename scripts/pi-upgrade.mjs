@@ -182,7 +182,7 @@ export function bumpPatch(version) {
   return semver.inc(version, "patch");
 }
 
-/** Bumps package.json's version and package-lock.json's matching root version (so the lockfile
+/** Bumps package.json's version and npm-shrinkwrap.json's matching root version (so the lockfile
  * isn't visibly stale in the PR -- `npm ci` doesn't require this, but a release-ready PR shouldn't
  * ship an inconsistent lockfile), so a passing-gate PR is release-ready (docs/pi-upgrade-design.md
  * §5). `src/version.ts`'s `EPI_VERSION` now reads package.json at runtime (single source of truth --
@@ -193,15 +193,15 @@ export function bumpEpiVersion({ cwd, readFile = readFileSync, writeFile = write
   pkg.version = nextVersion;
   writePackageJson(cwd, pkg, writeFile);
 
-  const lockPath = join(cwd, "package-lock.json");
-  if (existsSync(lockPath)) {
-    const lock = JSON.parse(readFile(lockPath, "utf8"));
-    lock.version = nextVersion;
-    if (lock.packages?.[""] !== undefined) {
-      lock.packages[""].version = nextVersion;
-    }
-    writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+  // Epi's only lock file, published with the package (docs/pi-upgrade-design.md §5); the gate's
+  // `npm install` already updated its dependencies. Missing is an error, not a skip.
+  const lockPath = join(cwd, "npm-shrinkwrap.json");
+  const lock = JSON.parse(readFile(lockPath, "utf8"));
+  lock.version = nextVersion;
+  if (lock.packages?.[""] !== undefined) {
+    lock.packages[""].version = nextVersion;
   }
+  writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
 
   return nextVersion;
 }
@@ -241,7 +241,7 @@ function buildReport({
   }
   lines.push(`- Gate: ${formatGateResult(gate)}`);
   if (epiVersion !== undefined) {
-    lines.push(`- Epi version bumped to ${epiVersion} (package.json + package-lock.json)`);
+    lines.push(`- Epi version bumped to ${epiVersion} (package.json + npm-shrinkwrap.json)`);
   }
   lines.push("", "## Model-visible changes", "");
   if (modelSnapshot === undefined) {

@@ -19,7 +19,7 @@ const ALLOWED = [
     line: /reports\/benchmark-adapter\/[m]mp-full-smoke-2026-08-02\//,
     reason: "dated local benchmark output, the directory really has this name",
   },
-  { file: /^package-lock\.json$/, line: /^\s*"integrity": "sha512-/, reason: "a dependency hash that happens to contain the letters" },
+  { file: /^npm-shrinkwrap\.json$/, line: /^\s*"integrity": "sha512-/, reason: "a dependency hash that happens to contain the letters" },
 ];
 
 const root = fileURLToPath(new URL("..", import.meta.url));

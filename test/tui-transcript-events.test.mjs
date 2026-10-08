@@ -16,7 +16,7 @@ function transcriptWithTools() {
   return new Transcript({ requestRender() {} }, theme, {
     messages: [],
     sessionManager: { getCwd: () => "/tmp" },
-    extensionRunner: { getMarkdownTransformers: () => [], getMessageRenderer: () => undefined },
+    extensionRunner: { getMarkdownTransformers: () => [], getMessageRenderer: () => undefined, resolveToolRenderers: (_name, base) => base() },
     getToolDefinition: () => undefined,
     getAllTools: () => [],
   });

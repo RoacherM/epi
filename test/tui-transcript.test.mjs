@@ -8,6 +8,7 @@ import { createEpiTheme } from "../dist/tui/theme.js";
 import { Transcript } from "../dist/tui/transcript.js";
 import { AssistantBlock } from "../dist/tui/assistant-block.js";
 import { UserMessageBlock } from "../dist/tui/chrome.js";
+import { createEpiMcpExtension } from "../dist/extensions/mcp.js";
 
 initTheme("dark");
 const theme = createEpiTheme("dark");
@@ -23,7 +24,7 @@ function stubSession(cwd = "/tmp") {
   return {
     messages: [],
     sessionManager: { getCwd: () => cwd },
-    extensionRunner: { getMarkdownTransformers: () => [] },
+    extensionRunner: { getMarkdownTransformers: () => [], resolveToolRenderers: (_name, base) => base() },
   };
 }
 
@@ -729,4 +730,27 @@ test("a follow-up delivered through agent.continue() (a second agent_start) gets
   const rendered = stripAnsi(transcript.root.render(80).join("\n"));
   assert.deepEqual(rendered.match(/Worked for|Stopped after/g), ["Worked for", "Worked for"], rendered);
   assert.match(rendered, /REPLY-ONE[\s\S]*Worked for[\s\S]*FOLLOW-UP[\s\S]*REPLY-TWO[\s\S]*Worked for/);
+});
+
+// Pi 1.0.1 (#10285): calls to an MCP tool whose server has not connected (yet, or ever) in a resumed
+// session have no tool definition. Pi's MCP extension registers a renderer for them through
+// pi.registerToolRenderer(); the transcript asks extensions first, as Pi's own interactive mode does.
+test("a resumed MCP tool call with no connected server is drawn by the renderer Pi's MCP extension registers", async () => {
+  const resolvers = [];
+  const extension = createEpiMcpExtension({ epiHome: "/nonexistent-epi-home", resolveAssembly: () => ({ projectManifest: undefined }) });
+  await extension.factory({ on: () => () => {}, registerCommand() {}, registerToolRenderer: (resolver) => resolvers.push(resolver), getMcpServers: () => [] });
+  assert.equal(resolvers.length, 1);
+  const session = {
+    ...stubSession(),
+    getToolDefinition: () => undefined,
+    getAllTools: () => [],
+    extensionRunner: { getMarkdownTransformers: () => [], resolveToolRenderers: (name, base) => resolvers[0](name, base) },
+  };
+  const transcript = new Transcript(stubTui(), theme, session);
+  const call = assistantMessage([{ type: "toolCall", id: "c1", name: "mcp__docs__search", arguments: { query: "QUERY-TEXT" } }], { stopReason: "toolUse" });
+  transcript.reset({ ...session, messages: [call] });
+  const rendered = stripAnsi(transcript.root.render(80).join("\n"));
+  assert.match(rendered, /docs\/search/, rendered);
+  assert.match(rendered, /QUERY-TEXT/, rendered);
+  assert.doesNotMatch(rendered, /mcp__docs__search/, rendered);
 });
