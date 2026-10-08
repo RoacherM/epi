@@ -619,15 +619,17 @@ function classifyRun(run, collector) {
   if (run.spawnError !== undefined || run.timedOut || run.interrupted || run.signal !== null) {
     return "infra";
   }
+  // `epi --mode json` exits 1 after a failed request (docs/cli-design.md); Pi exits 0.
+  const modelFailed = collector.modelErrors.length > 0;
   if (
-    run.code !== 0 ||
+    (run.code !== 0 && !(run.code === 1 && modelFailed)) ||
     run.invalidJsonLine !== undefined ||
     collector.extensionErrors.length > 0 ||
     !collector.agentSettled
   ) {
     return "harness";
   }
-  if (collector.modelErrors.length > 0) {
+  if (modelFailed) {
     return "model";
   }
   return null;

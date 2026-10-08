@@ -48,7 +48,8 @@ if (prompt === "INVALID_JSON") {
 if (prompt === "SLEEP") {
   await delay(30_000);
 }
-const modelError = prompt === "MODEL_ERROR";
+// MODEL_ERROR exits 0 as Pi does; MODEL_ERROR_EXIT_1 as `epi --mode json` does.
+const modelError = prompt === "MODEL_ERROR" || prompt === "MODEL_ERROR_EXIT_1";
 const events = [
   { type: "session", version: 3, id: "fixture-session", cwd: process.cwd() },
   { type: "agent_start" },
@@ -80,3 +81,4 @@ const events = [
 for (const event of events) {
   process.stdout.write(`${JSON.stringify(event)}\n`);
 }
+if (prompt === "MODEL_ERROR_EXIT_1") process.exitCode = 1;

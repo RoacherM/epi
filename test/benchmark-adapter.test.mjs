@@ -140,6 +140,12 @@ test("benchmark adapter maps Harness, model, infra, and grader failures", () => 
     assert.equal(model.metadata.result.failureCategory, "model");
     assert.deepEqual(model.metadata.result.modelErrors, ["fixture model failure"]);
 
+    // Epi exits 1 after a failed request in json mode; that is still the model's failure.
+    const modelExit1 = runAdapter(fixture, "model-failure-exit-1", "MODEL_ERROR_EXIT_1");
+    assert.equal(modelExit1.result.status, 4, modelExit1.result.stderr);
+    assert.equal(modelExit1.metadata.result.failureCategory, "model");
+    assert.deepEqual(modelExit1.metadata.result.modelErrors, ["fixture model failure"]);
+
     const infra = runAdapter(
       fixture,
       "infra-failure",

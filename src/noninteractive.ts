@@ -132,7 +132,22 @@ function refuseUnsupportedArgs(parsed: ParsedPiArgs, mode: "rpc" | "json" | "tex
   }
 }
 
-async function runPrint(runtime: AgentSessionRuntime, parsed: ParsedPiArgs, mode: "json" | "text", cwd: string): Promise<void> {
+/** print-mode.js's text-mode check once every prompt has run: the final message is a request that
+ * failed or was aborted. */
+function lastRequestFailed(runtime: AgentSessionRuntime): boolean {
+  const messages = runtime.session.state.messages;
+  const lastMessage = messages[messages.length - 1];
+  return lastMessage?.role === "assistant" &&
+    (lastMessage.stopReason === "error" || lastMessage.stopReason === "aborted");
+}
+
+async function runPrint(
+  runtime: AgentSessionRuntime,
+  parsed: ParsedPiArgs,
+  mode: "json" | "text",
+  cwd: string,
+  isStdoutClosed: (() => boolean) | undefined,
+): Promise<void> {
   const prompts = await prepareMessages(parsed, cwd).catch((error: unknown) => {
     if (error instanceof EpiPreflightError) exitWithError(`Error: ${error.message}`);
     throw error;
@@ -146,6 +161,9 @@ async function runPrint(runtime: AgentSessionRuntime, parsed: ParsedPiArgs, mode
   });
   restoreStdout();
   if (exitCode !== 0) process.exitCode = exitCode;
+  // Deviation from Pi (docs/cli-design.md): Pi's json mode exits 0 after a failed request, so a
+  // script cannot see the failure. Not when the reader has gone: the guard aborted the run itself.
+  else if (mode === "json" && isStdoutClosed?.() !== true && lastRequestFailed(runtime)) process.exitCode = 1;
 }
 
 /** main.js after the runtime exists: the theme, every startup diagnostic, and no run without a model. */
@@ -159,9 +177,11 @@ function reportStartup(runtime: AgentSessionRuntime): void {
   }
 }
 
+/** `isStdoutClosed`: closed-stdout.ts's guard, which host.ts installs for print/json only. */
 export async function runNonInteractive(
   prepared: PreparedEpiRun,
   extensionFactories: InlineExtension[],
+  isStdoutClosed?: () => boolean,
 ): Promise<void> {
   const cwd = process.cwd();
   const parsed = parseArgs([...prepared.args.passthrough]);
@@ -171,7 +191,7 @@ export async function runNonInteractive(
   refuseUnsupportedArgs(parsed, mode);
   const runtime = await createRuntime(prepared, extensionFactories, cwd);
   if (mode !== "rpc") {
-    await runPrint(runtime, parsed, mode, cwd);
+    await runPrint(runtime, parsed, mode, cwd, isStdoutClosed);
     return;
   }
   reportStartup(runtime);
