@@ -74,11 +74,12 @@ export function endOnClosedPipe(stream: NodeJS.WriteStream, onClosed: () => void
 
 /**
  * Guards stdout and stderr (before the takeover, so Pi's output guard binds the wrappers) and returns an
- * inline extension that aborts the run and skips further prompts once stdout's reader has gone. A
- * closed stderr (`2>&1 | head`) only stops Epi writing there: nothing could show an error anyway.
+ * inline extension that aborts the run and skips further prompts once stdout's reader has gone, and
+ * whether it has gone (an aborted run is then not a failure, noninteractive.ts). A closed stderr
+ * (`2>&1 | head`) only stops Epi writing there: nothing could show an error anyway.
  * Print/json runs only: host.ts leaves `--mode rpc` to Pi.
  */
-export function guardClosedStdout(): InlineExtension {
+export function guardClosedStdout(): { extension: InlineExtension; isStdoutClosed: () => boolean } {
   let stdoutClosed = false;
   const onStdoutClosed: Array<() => void> = [];
   endOnClosedPipe(process.stdout, () => {
@@ -87,7 +88,7 @@ export function guardClosedStdout(): InlineExtension {
   });
   endOnClosedPipe(process.stderr, () => {});
 
-  return {
+  const extension: InlineExtension = {
     name: "epi:closed-stdout",
     factory(pi) {
       let abort: (() => void) | undefined;
@@ -95,8 +96,15 @@ export function guardClosedStdout(): InlineExtension {
       pi.on("session_start", (_event, ctx) => {
         abort = () => ctx.abort();
       });
+      // Dogfood D82: Pi makes the ctx stale after session_shutdown (dispose, or a replaced session
+      // whose factory registers anew), and its last flush can still find the reader gone; aborting
+      // then threw from the write callback.
+      pi.on("session_shutdown", () => {
+        abort = undefined;
+      });
       // `-p a b` prompts once per message; after the reader has gone the rest are skipped.
       pi.on("input", () => (stdoutClosed ? { action: "handled" as const } : { action: "continue" as const }));
     },
   };
+  return { extension, isStdoutClosed: () => stdoutClosed };
 }

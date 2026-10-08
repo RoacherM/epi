@@ -176,6 +176,12 @@ async function main(): Promise<void> {
     if (interrupted) {
       throw new Error("task worker was interrupted");
     }
+    // As runPrintMode's text mode (print-mode.js): a failed request does not throw from prompt();
+    // it leaves its error on the final message, after any retry or overflow compaction.
+    const lastMessage = session.messages[session.messages.length - 1];
+    if (lastMessage?.role === "assistant" && (lastMessage.stopReason === "error" || lastMessage.stopReason === "aborted")) {
+      throw new Error(lastMessage.errorMessage || `Request ${lastMessage.stopReason}`);
+    }
     emit({
       type: "result",
       ok: true,
