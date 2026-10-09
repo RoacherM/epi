@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createAgentSession, createAgentSessionServices, resolveCliModel, SessionManager, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { readFileSync, unlinkSync } from "node:fs";
+import { trackRequestOutcome } from "./request-outcome.js";
 import { notRunningWarnings, settleRegisteredProviders } from "./provider-startup.js";
 import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
 let activeSession;
@@ -78,6 +79,7 @@ async function main() {
     const capsule = readCapsule(capsulePath);
     process.env.PI_CODING_AGENT_DIR = capsule.agentDir;
     const settingsManager = SettingsManager.create(capsule.cwd, capsule.agentDir, { projectTrusted: false });
+    const outcome = trackRequestOutcome();
     const { modelRuntime, resourceLoader, diagnostics } = await createAgentSessionServices({
         cwd: capsule.cwd,
         agentDir: capsule.agentDir,
@@ -92,7 +94,7 @@ async function main() {
             appendSystemPrompt: [],
             systemPromptOverride: () => undefined,
             appendSystemPromptOverride: () => capsule.systemPrompt.length === 0 ? [] : [capsule.systemPrompt],
-            extensionFactories: [createMagpieInlineExtension()],
+            extensionFactories: [createMagpieInlineExtension(), outcome.extension],
         },
     });
     const errors = diagnostics.filter((diagnostic) => diagnostic.type === "error");
@@ -138,12 +140,9 @@ async function main() {
         if (interrupted) {
             throw new Error("task worker was interrupted");
         }
-        // As runPrintMode's text mode (print-mode.js): a failed request does not throw from prompt();
-        // it leaves its error on the final message, after any retry or overflow compaction.
-        const lastMessage = session.messages[session.messages.length - 1];
-        if (lastMessage?.role === "assistant" && (lastMessage.stopReason === "error" || lastMessage.stopReason === "aborted")) {
-            throw new Error(lastMessage.errorMessage || `Request ${lastMessage.stopReason}`);
-        }
+        const requestError = outcome.error(session.messages);
+        if (requestError !== undefined)
+            throw new Error(requestError);
         emit({
             type: "result",
             ok: true,

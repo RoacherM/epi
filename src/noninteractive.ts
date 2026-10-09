@@ -19,6 +19,7 @@ import { EpiPreflightError } from "./errors.js";
 import { processFileArguments } from "./file-arguments.js";
 import type { PreparedEpiRun } from "./host.js";
 import { PROVIDER_LOGIN_HELP } from "./pi-output.js";
+import { trackRequestOutcome } from "./request-outcome.js";
 import { findNearestProjectManifest } from "./project.js";
 import { type Diagnostic, createEpiRuntime, settingsDiagnostics, StartupDiagnosticsError } from "./tui/services.js";
 
@@ -132,21 +133,12 @@ function refuseUnsupportedArgs(parsed: ParsedPiArgs, mode: "rpc" | "json" | "tex
   }
 }
 
-/** print-mode.js's text-mode check once every prompt has run: the final message is a request that
- * failed or was aborted. */
-function lastRequestFailed(runtime: AgentSessionRuntime): boolean {
-  const messages = runtime.session.state.messages;
-  const lastMessage = messages[messages.length - 1];
-  return lastMessage?.role === "assistant" &&
-    (lastMessage.stopReason === "error" || lastMessage.stopReason === "aborted");
-}
-
 async function runPrint(
   runtime: AgentSessionRuntime,
   parsed: ParsedPiArgs,
   mode: "json" | "text",
   cwd: string,
-  isStdoutClosed: (() => boolean) | undefined,
+  result: { outcome: ReturnType<typeof trackRequestOutcome>; isStdoutClosed: (() => boolean) | undefined },
 ): Promise<void> {
   const prompts = await prepareMessages(parsed, cwd).catch((error: unknown) => {
     if (error instanceof EpiPreflightError) exitWithError(`Error: ${error.message}`);
@@ -161,9 +153,14 @@ async function runPrint(
   });
   restoreStdout();
   if (exitCode !== 0) process.exitCode = exitCode;
-  // Deviation from Pi (docs/cli-design.md): Pi's json mode exits 0 after a failed request, so a
-  // script cannot see the failure. Not when the reader has gone: the guard aborted the run itself.
-  else if (mode === "json" && isStdoutClosed?.() !== true && lastRequestFailed(runtime)) process.exitCode = 1;
+  else if (result.isStdoutClosed?.() !== true) {
+    // D84/D85: report requests lost from effective context during failed overflow recovery too.
+    const error = result.outcome.error(runtime.session.messages);
+    if (error !== undefined) {
+      process.exitCode = 1;
+      if (mode === "text") process.stderr.write(`${error}\n`);
+    }
+  }
 }
 
 /** main.js after the runtime exists: the theme, every startup diagnostic, and no run without a model. */
@@ -189,9 +186,11 @@ export async function runNonInteractive(
   // From here stdout belongs to the mode runner; anything else written to it goes to stderr.
   takeOverStdout();
   refuseUnsupportedArgs(parsed, mode);
-  const runtime = await createRuntime(prepared, extensionFactories, cwd);
+  const outcome = trackRequestOutcome();
+  const runtime = await createRuntime(prepared,
+    mode === "rpc" ? extensionFactories : [...extensionFactories, outcome.extension], cwd);
   if (mode !== "rpc") {
-    await runPrint(runtime, parsed, mode, cwd, isStdoutClosed);
+    await runPrint(runtime, parsed, mode, cwd, { outcome, isStdoutClosed });
     return;
   }
   reportStartup(runtime);

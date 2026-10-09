@@ -13,9 +13,12 @@ function lastUserText(context) {
 
 const reply = (context) => {
   const text = lastUserText(context);
+  if (text === "overflow") {
+    return fauxAssistantMessage("", { stopReason: "error", errorMessage: "400 context_length_exceeded" });
+  }
   return text === "fail"
     ? fauxAssistantMessage("", { stopReason: "error", errorMessage: "400 invalid request: faux failure" })
-    : fauxAssistantMessage(fauxText(`ECHO:${text}`));
+    : fauxAssistantMessage(fauxText(text === "empty" ? "" : `ECHO:${text}`));
 };
 
 export default function (pi) {

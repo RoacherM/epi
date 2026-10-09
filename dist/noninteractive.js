@@ -8,6 +8,7 @@ import { initTheme, parseArgs, runPrintMode, runRpcMode, } from "@earendil-works
 import { EpiPreflightError } from "./errors.js";
 import { processFileArguments } from "./file-arguments.js";
 import { PROVIDER_LOGIN_HELP } from "./pi-output.js";
+import { trackRequestOutcome } from "./request-outcome.js";
 import { findNearestProjectManifest } from "./project.js";
 import { createEpiRuntime, settingsDiagnostics, StartupDiagnosticsError } from "./tui/services.js";
 // pi-internals row `output-guard-stdout-write`: Pi's core/output-guard.js is not exported. The
@@ -106,15 +107,7 @@ function refuseUnsupportedArgs(parsed, mode) {
         exitWithError("Error: --resume opens the session selector, which needs a terminal. Use --continue, or --session <id>.");
     }
 }
-/** print-mode.js's text-mode check once every prompt has run: the final message is a request that
- * failed or was aborted. */
-function lastRequestFailed(runtime) {
-    const messages = runtime.session.state.messages;
-    const lastMessage = messages[messages.length - 1];
-    return lastMessage?.role === "assistant" &&
-        (lastMessage.stopReason === "error" || lastMessage.stopReason === "aborted");
-}
-async function runPrint(runtime, parsed, mode, cwd, isStdoutClosed) {
+async function runPrint(runtime, parsed, mode, cwd, result) {
     const prompts = await prepareMessages(parsed, cwd).catch((error) => {
         if (error instanceof EpiPreflightError)
             exitWithError(`Error: ${error.message}`);
@@ -130,10 +123,15 @@ async function runPrint(runtime, parsed, mode, cwd, isStdoutClosed) {
     restoreStdout();
     if (exitCode !== 0)
         process.exitCode = exitCode;
-    // Deviation from Pi (docs/cli-design.md): Pi's json mode exits 0 after a failed request, so a
-    // script cannot see the failure. Not when the reader has gone: the guard aborted the run itself.
-    else if (mode === "json" && isStdoutClosed?.() !== true && lastRequestFailed(runtime))
-        process.exitCode = 1;
+    else if (result.isStdoutClosed?.() !== true) {
+        // D84/D85: report requests lost from effective context during failed overflow recovery too.
+        const error = result.outcome.error(runtime.session.messages);
+        if (error !== undefined) {
+            process.exitCode = 1;
+            if (mode === "text")
+                process.stderr.write(`${error}\n`);
+        }
+    }
 }
 /** main.js after the runtime exists: the theme, every startup diagnostic, and no run without a model. */
 function reportStartup(runtime) {
@@ -153,9 +151,10 @@ export async function runNonInteractive(prepared, extensionFactories, isStdoutCl
     // From here stdout belongs to the mode runner; anything else written to it goes to stderr.
     takeOverStdout();
     refuseUnsupportedArgs(parsed, mode);
-    const runtime = await createRuntime(prepared, extensionFactories, cwd);
+    const outcome = trackRequestOutcome();
+    const runtime = await createRuntime(prepared, mode === "rpc" ? extensionFactories : [...extensionFactories, outcome.extension], cwd);
     if (mode !== "rpc") {
-        await runPrint(runtime, parsed, mode, cwd, isStdoutClosed);
+        await runPrint(runtime, parsed, mode, cwd, { outcome, isStdoutClosed });
         return;
     }
     reportStartup(runtime);
