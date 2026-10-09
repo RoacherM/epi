@@ -12,7 +12,7 @@
 |---|---|---|
 | A. 放宽版本范围 | `package.json` 写 `^0.87` 之类，用户安装时拿到当时最新的 Pi | 不采用。用户从 tarball 安装时才解析版本，两个人会装到两个不同的 Pi。Pi 还在 0.x 阶段，minor 版本就会有破坏性变更：这次 0.84 起 pi-ai 删掉了 `complete`，MCP adapter 2.17.0 就加载不了了 |
 | B. 版本仍然锁死，升级过程自动化 | 定时任务发现新版本后，自动把全部 Pi 包一起升级，跑一遍兼容性门禁，通过就开 PR，不通过就开 issue | **推荐** |
-| C. 运行时用本机装的 Pi | Epi 不带 Pi，运行时去找已安装的版本 | 不采用。可复现性问题和 A 一样；而且 pi-coding-agent 自带 shrinkwrap，无论如何都会带上自己的 pi-tui（见 tui-design 3.2 节） |
+| C. 运行时用本机装的 Pi | Epi 不带 Pi，运行时去找已安装的版本 | 不采用。可复现性问题和 A 一样；而且 Epi 的界面必须和 Pi 的组件用同一份 pi-tui（`src/tui/pi-tui.ts`，docs/pi-internals.md `pi-tui-single-copy`），只有和 Pi 一起锁定安装才能保证 |
 
 B 的直接后果：用户只能通过 Epi 的新发布拿到新 Pi，所以 Epi 的发布频率会跟着上升，**发布自动化也是这个需求的一部分**（第 5 节）。
 
@@ -73,7 +73,7 @@ B 的直接后果：用户只能通过 Epi 的新发布拿到新 Pi，所以 Epi
 
 ## 5. 发布自动化
 
-**版本号谁来加。** Epi 的 patch 版本号在升级 PR 里就已经加好了：`scripts/pi-upgrade.mjs` 门禁通过后顺手把 `package.json`（和 `package-lock.json` 里对应的根版本号）加一个 patch 版本，这样这条 PR 本身就是"可发布"的（见第 8 节步 3）。`src/version.ts` 的 `EPI_VERSION` 在运行时直接读 `package.json`（单一来源，另一处并行改动），升级脚本不需要再改它。`scripts/release.mjs` 只读 `package.json` 里已经写好的版本号，自己不改版本号，也不提交任何东西。
+**版本号谁来加。** Epi 的 patch 版本号在升级 PR 里就已经加好了：`scripts/pi-upgrade.mjs` 门禁通过后顺手把 `package.json`（和 `npm-shrinkwrap.json` 里对应的根版本号）加一个 patch 版本，这样这条 PR 本身就是"可发布"的（见第 8 节步 3）。`src/version.ts` 的 `EPI_VERSION` 在运行时直接读 `package.json`（单一来源，另一处并行改动），升级脚本不需要再改它。`scripts/release.mjs` 只读 `package.json` 里已经写好的版本号，自己不改版本号，也不提交任何东西。
 
 **SHA-256 只算一次，仓库里不存哈希。** `install.sh` 在仓库里是一份模板，`EPI_VERSION` 和 `DEFAULT_PACKAGE_SHA256` 两处都是占位符（`__EPI_VERSION__` / `__EPI_PACKAGE_SHA256__`），从来不是真的版本号或哈希——直接跑这份模板会在 SHA-256 格式校验那一步就报错退出，不需要额外代码。真正的哈希只在发布时算一次：
 
@@ -96,6 +96,7 @@ B 的直接后果：用户只能通过 Epi 的新发布拿到新 Pi，所以 Epi
 
 - `npm install` 固定加 `--ignore-scripts`（本地验证过：从零装依赖、`--ignore-scripts`、`npm run build`、跑满全部测试，全部通过——这个仓库的构建和测试不依赖任何包的 postinstall/install 脚本，包括 esbuild、fsevents、protobufjs 这几个真正带脚本的包）。
 - `pi-upgrade.yml` 的 `actions/checkout` 用 `persist-credentials: false`：token 不写进 `.git/config`，只在真正要 push / 调 `gh` 的那一步里临时塞进远程 URL——这一步在 `npm install` 已经跑完之后才执行，缩小了"万一 `--ignore-scripts` 没挡住"时 token 暴露的窗口。
+- 锁文件是 `npm-shrinkwrap.json`，不是 `package-lock.json`（Pi 1.0.2 升级时改，主控和顾问定的）。Pi 1.0.1 起发布包里不再带自己的 `npm-shrinkwrap.json`（它的 CHANGELOG "Removed"，#5653），而 Pi 的依赖写的是 `^` 范围，`package-lock.json` 又不会随包发布：不改的话，用户全局安装发布的 tarball 时，Pi 的传递依赖在安装那一刻才解析，和测过的不是同一套。`npm-shrinkwrap.json` 会随包发布（`package.json` 的 `files` 里显式列出：npm 11 打包时不再自动带上它），安装时每个传递依赖都按它锁定，和以前 Pi 自己的 shrinkwrap 一样；只留这一份，两份并存时 npm 只用 shrinkwrap，另一份会悄悄过时。只给开发用的条目带 `dev: true`，全局安装时跳过；`@esbuild/*` 这类平台包带 os/cpu，按平台跳过。`npm run pi:upgrade` 的 `npm install` 直接更新这份文件，`bumpEpiVersion` 再改它的根版本号，所以它一直跟着升级走。`test/lockfile.test.mjs` 检查 `npm pack --dry-run` 带上了它、它锁定的 Pi 三个包和 `package.json` 一致，而且每个 `resolved` 都指向 `registry.npmjs.org`（在配了镜像源的机器上 `npm install` 会写入镜像地址，发布出去所有用户都会去镜像下载；改回官方地址即可，`integrity` 不变，npm 默认的 `replace-registry-host=npmjs` 让配了镜像的机器照样走镜像）。
 - 新版本发布不到 3 天（`MIN_PUBLISH_AGE_MS`，读 `npm view <pkg> time --json`）不会自动采用，除非显式传 `--version`——给生态一点时间发现被入侵或有问题的发布。这个数字是我定的。
 
 **（已废弃，2026-09-30 随 0.99 升级一起做）：`pi-mcp-adapter` 的版本选择、`overrides` 写回、peer 范围校验。** 早期设计里，升级脚本要检查 `pi-mcp-adapter` 的声明 peer 范围是否覆盖新 Pi 版本，不覆盖时自动换版本、往 `package.json` 写 npm 原生的 `overrides` 条目、并对"猜的"adapter 版本单独套用发布时间窗口。这套逻辑（`selectAdapterVersion`、`applyAdapterOverride`、相关的 peer-range 校验）曾经修过一个真实的降级 bug（新→旧排序选第一个满足声明范围的版本，会把已锁定的 `2.38.0` 降级成 `2.21.0`，因为 `2.12.0-2.21.0` 全声明 `*`）。Pi 0.99 升级把 MCP 整个换成 Pi 原生实现（`createMcpExtension`），`pi-mcp-adapter` 作为依赖被整体移除，升级脚本里这一整套 adapter 管理逻辑随之删掉——不是"处理 adapter 缺失"，而是"再也不需要管理 adapter"。见 [mcp-design.md](mcp-design.md)。

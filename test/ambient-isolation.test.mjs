@@ -10,6 +10,7 @@ import { AMBIENT_MARKER, plantAmbientWorld, plantSkill } from "./fixtures/ambien
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const probeExtension = fileURLToPath(new URL("./fixtures/ambient-probe-extension.mjs", import.meta.url));
+const fauxDriver = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
 
 function runProbe(t, extraArgs, { withMcp = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "epi-ambient-"));
@@ -63,6 +64,51 @@ for (const [name, extraArgs] of [
     const seen = `${probe.systemPrompt}\n${probe.commands.join("\n")}`;
     assert.deepEqual(loadedExtensions, [], "ambient extensions ran");
     assert.deepEqual(seen.match(AMBIENT_MARKER) ?? [], []);
+  });
+}
+
+// Pi 1.0.1 project overrides (extensions/mcp/config.js): a `.pi/mcp.json` entry without command/url
+// changes `enabled`/`exposure`/`toolExposure` of a global server of the same name. Here it would
+// enable a server Epi's own mcp.json disables, whose command leaves a mark when it starts. The
+// control run enables it in Epi's own file, so a missing mark means the override was ignored, not
+// that the server never got the chance to start.
+for (const [name, extraArgs] of [
+  ["without trust", []],
+  ["with --approve", ["--approve"]],
+]) {
+  test(`a project .pi/mcp.json override does not enable an Epi MCP server ${name}`, (t) => {
+    const run = (enabledByEpi) => {
+      const root = mkdtempSync(join(tmpdir(), "epi-mcp-override-"));
+      t.after(() => rmSync(root, { recursive: true, force: true }));
+      const home = join(root, "home");
+      const project = join(root, "project");
+      const mark = join(root, "started");
+      for (const dir of [join(home, ".epi"), join(project, ".pi")]) mkdirSync(dir, { recursive: true });
+      writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: ["epi:mcp", fauxDriver] }));
+      // "direct": the prompt waits for the server to start, so the run cannot end first.
+      const server = {
+        command: process.execPath,
+        args: ["-e", `require("fs").writeFileSync(${JSON.stringify(mark)}, "started")`],
+        exposure: "direct",
+      };
+      writeFileSync(join(home, ".epi", "mcp.json"), JSON.stringify({ mcpServers: { "epi-own": { ...server, enabled: enabledByEpi } } }));
+      writeFileSync(join(project, ".pi", "mcp.json"), JSON.stringify({ mcpServers: { "epi-own": { enabled: true } } }));
+      const before = readFileSync(join(project, ".pi", "mcp.json"), "utf8");
+      const result = spawnSync(process.execPath, [cliPath, ...extraArgs, "--model", "epi-faux/model-a", "-p", "hi"], {
+        cwd: project,
+        env: { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1" },
+        input: "",
+        encoding: "utf8",
+        timeout: 60_000,
+      });
+      assert.deepEqual(readdirSync(join(project, ".pi")), ["mcp.json"]);
+      assert.equal(readFileSync(join(project, ".pi", "mcp.json"), "utf8"), before);
+      return { started: existsSync(mark), output: `${result.stdout}${result.stderr}` };
+    };
+    const control = run(true);
+    assert.ok(control.started, `control: the server Epi's own mcp.json enables did not start:\n${control.output}`);
+    const overridden = run(false);
+    assert.equal(overridden.started, false, `the .pi/mcp.json override enabled Epi's disabled server:\n${overridden.output}`);
   });
 }
 

@@ -25,6 +25,7 @@ export const PI_ENV_RULES = {
     PI_TUI_WRITE_LOG: { kind: "cleared" },
     PI_MANAGED_INSTALL_ROOT: { kind: "cleared" },
     PI_INSTALLER_API_BASE: { kind: "cleared" },
+    PI_PROGRAM_STATUS: { kind: "cleared" },
 };
 /**
  * `PI_*` names that appear in Pi's code but are not inputs Pi reads: Pi writes them for child
@@ -42,6 +43,10 @@ export const PI_ENV_NOT_READ = [
     "PI_REASONING_LEVEL",
     // A build-time global of Pi's compiled binary (`typeof PI_BUNDLED_NODE`), not process.env.
     "PI_BUNDLED_NODE",
+    // Module constants of Pi's 3D logo easter egg (modes/interactive/components/easter-egg-3d.js), not
+    // process.env; Pi's own interactive mode only, which Epi does not run.
+    "PI_LOGO_COLORS",
+    "PI_LOGO_PIXELS",
 ];
 /**
  * Clears every `PI_*` variable in PI_ENV_RULES, then copies each bridged `EPI_*` variable that is
