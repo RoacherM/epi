@@ -1,6 +1,6 @@
 {
   "name": "epi",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "private": true,
   "description": "A customizable terminal coding agent built on Pi, with a focused TUI, skills, MCP, hooks, and isolated subagents.",
   "type": "module",
