@@ -12,6 +12,7 @@ import test from "node:test";
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const fauxEcho = fileURLToPath(new URL("./fixtures/faux-echo.mjs", import.meta.url));
 const fauxFail = fileURLToPath(new URL("./fixtures/faux-fail.mjs", import.meta.url));
+const fauxOverflow = fileURLToPath(new URL("./fixtures/faux-overflow-outcome.mjs", import.meta.url));
 const noisy = fileURLToPath(new URL("./fixtures/noisy-stdout-extension.mjs", import.meta.url));
 const MODEL = ["--no-project", "--model", "epi-faux/echo"];
 
@@ -137,7 +138,7 @@ test("a startup warning is printed on stderr and the run goes on", (t) => {
 });
 
 // Dogfood D84: Pi's json mode exits 0 after a failed request; Epi exits 1 (docs/cli-design.md), with
-// the same JSON lines and nothing on stderr. As in Pi's text mode, only the final message counts.
+// the same JSON lines and nothing on stderr. Only the final request counts, including after recovery.
 test("--mode json exits 1 when the final request failed, with the JSON lines unchanged and stderr empty", (t) => {
   const f = fixture(t, [fauxFail]);
   const failed = run(f, [...MODEL, "--no-session", "--mode", "json", "fail"]);
@@ -166,6 +167,75 @@ test("-p after a failed request is Pi's: the error on stderr, exit 1; and rpc st
   const result = await rpc(f, [...MODEL, "--no-session"], [{ send: { id: "1", type: "prompt", message: "fail" }, until: '"type":"agent_end"' }]);
   assert.equal(result.status, 0, result.context);
   assert.match(result.stdout, /faux failure/, result.context);
+});
+
+test("D85: an omitted overflow is still a failed request in text and JSON", (t) => {
+  const f = fixture(t, [fauxFail]);
+  for (const mode of ["text", "json"]) {
+    for (const [prompts, status] of [
+      [["overflow"], 1], [["ok", "overflow"], 1], [["overflow", "ok"], 0], [["empty"], 0],
+    ]) {
+      const result = run(f, [...MODEL, "--no-session", "--mode", mode, ...prompts]);
+      assert.equal(result.status, status, result.context);
+      if (mode === "text" && status === 1) {
+        assert.equal(result.stdout, "", result.context);
+        assert.equal(result.stderr, "400 context_length_exceeded\n", result.context);
+      } else {
+        assert.equal(result.stderr, "", result.context);
+      }
+      if (mode === "json") {
+        const events = result.stdout.trim().split("\n").map(line => JSON.parse(line));
+        assert.equal(events.at(-1).type, "agent_settled", result.context);
+        if (prompts.length === 1 && status === 1) {
+          assert.ok(events.some(e => e.type === "message_end" && e.message.stopReason === "error"));
+          assert.ok(!events.some(e => e.type === "compaction_start"), "the no-preparation path must be covered");
+        }
+      }
+    }
+  }
+});
+
+test("D85: recovery failure stays failed, but a successful retry and optional compaction stay successful", (t) => {
+  const f = fixture(t, [fauxOverflow]);
+  mkdirSync(join(f.home, ".epi", "pi"), { recursive: true });
+  for (const [scenario, status] of [["cancel", 1], ["summary-fail", 1], ["retry-fail", 1], ["recover", 0], ["threshold-fail", 0]]) {
+    writeFileSync(join(f.home, ".epi", "pi", "settings.json"), JSON.stringify({
+      compaction: { keepRecentTokens: 1, ...(scenario === "threshold-fail" ? { reserveTokens: 128_000 } : {}) },
+    }));
+    const prompt = `${scenario} ${"history ".repeat(100)}`;
+    for (const mode of ["text", "json"]) {
+      const result = run(f, [...MODEL, "--no-session", "--mode", mode, prompt]);
+      assert.equal(result.status, status, `${scenario}: ${result.context}`);
+      if (mode === "text") {
+        assert.equal(result.stderr, status === 1 ? "400 context_length_exceeded\n" : "", result.context);
+      } else {
+        const events = result.stdout.trim().split("\n").map(line => JSON.parse(line));
+        const compaction = events.find(e => e.type === "compaction_end");
+        assert.ok(compaction, `${scenario}: must actually enter compaction`);
+        assert.equal(Boolean(compaction.result), ["recover", "retry-fail"].includes(scenario), result.context);
+        const replies = events.filter(e => e.type === "message_end" && e.message.role === "assistant");
+        assert.equal(replies.length, ["recover", "retry-fail"].includes(scenario) ? 2 : 1, result.context);
+        assert.equal(replies.at(-1).message.stopReason, status === 0 ? "stop" : "error", result.context);
+        if (scenario === "cancel") assert.equal(compaction.aborted, true);
+        if (scenario.endsWith("fail") && scenario !== "retry-fail") assert.match(compaction.errorMessage, /summary failed/);
+        assert.equal(events.at(-1).type, "agent_settled");
+        assert.equal(result.stderr, "", result.context);
+      }
+    }
+  }
+});
+
+test("D85: intercepted input, terminating tools and replaced/reloaded sessions do not inherit a failure", (t) => {
+  const f = fixture(t, [fauxOverflow]);
+  for (const mode of ["text", "json"]) {
+    for (const prompts of [["handled"], ["tools"], ["replace"], ["overflow", "/fresh"], ["overflow", "/refresh", "ok"], ["overflow", "/fresh", "ok"]]) {
+      const result = run(f, [...MODEL, "--no-session", "--mode", mode, ...prompts]);
+      assert.equal(result.status, 0, `${prompts}: ${result.context}`);
+      assert.equal(result.stderr, "", result.context);
+    }
+    const result = run(f, [...MODEL, "--no-session", "--mode", mode, "ok", "/fresh", "overflow"]);
+    assert.equal(result.status, 1, result.context);
+  }
 });
 
 function rpc(f, args, commands) {

@@ -93,6 +93,19 @@ test("a failed model request is a failed task: ok:false with the request's error
   assert.match(task.error, /invalid x-api-key/);
 });
 
+test("D85: overflow omitted by recovery is a failed worker and task, not empty success", async (t) => {
+  const fixture = await setup(t);
+  fixture.server.state.inferenceStatus = 400;
+  fixture.server.state.inferenceError = "prompt is too long: context_length_exceeded";
+  const failed = await runWorker(fixture);
+  assert.equal(failed.code, 1, failed.context);
+  assert.equal(failed.result.ok, false, failed.context);
+  assert.match(failed.result.error, /context_length_exceeded/, failed.context);
+  const task = await runTask(t, fixture);
+  assert.equal(task.status, "failed", JSON.stringify(task));
+  assert.match(task.error, /context_length_exceeded/);
+});
+
 test("an interrupted task still reports the interruption with exit 143, not the aborted request", async (t) => {
   const fixture = await setup(t);
   fixture.server.state.hangInference = true;
