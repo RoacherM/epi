@@ -231,7 +231,7 @@ Epi 新写的文件也都在 `~/.epi/pi` 下：`themes/epi-grok-*.json`，键位
 | 扩展 widget | `setWidget` 放在输入框上方或下方 | 有扩展设置时 | — |
 | 排队区 | 运行中排队的消息，一条一行 | 有排队时，最多 3 行 | 第 6 项 |
 | 状态行 | spinner、活动、耗时、输出 token；重试和压缩也显示在这里 | 只在运行时 | 第 7 项 |
-| 输入框 | 圆角框，底边是模型和思考档位。对话框和 `custom()` 面板出现时替换这块区域（4.3 节） | 总是，最高半屏 | 第 13 项 |
+| 输入框 | 圆角框，底边右侧是模型、思考档位和会话 token 统计（statusline，见 4.4 节末）。对话框和 `custom()` 面板出现时替换这块区域（4.3 节） | 总是，最高半屏 | 第 13 项 |
 | 快捷键栏 | 2 到 4 个当前可用的键，由动作表生成 | 总是 | 第 15 项 |
 
 屏幕很矮时：≤16 行去掉顶栏和快捷键栏，≤12 行把输入框降为 1 行。16 行取自 grok（`agent.rs:86-99`），12 行是我定的。
@@ -275,7 +275,7 @@ Epi 新写的文件也都在 `~/.epi/pi` 下：`themes/epi-grok-*.json`，键位
 
 ### 4.3 输入框和阻塞卡片
 
-- 编辑器用 pi-tui 的 `Editor`（导出），包括多行、历史、kill ring、撤销和大段粘贴折叠。外面包一层圆角框，底边写上 `模型 · 档位`。边框颜色随思考档位变化，保留 Pi 的这个提示。
+- 编辑器用 pi-tui 的 `Editor`（导出），包括多行、历史、kill ring、撤销和大段粘贴折叠。外面包一层圆角框，底边右侧写 `模型 (档位) · ⇡输入 ⇣输出 · cache 命中率`（statusline，规格见 [statusbar-design.md](statusbar-design.md)：会话级聚合，窄屏从右往左逐段降级，扩展可用 `setStatusLine` 整体替换格式，`setStatusLine(undefined)` 恢复内置默认）。context 占用不在这里，在顶栏右上角。边框颜色随思考档位变化，保留 Pi 的这个提示。
 - 前缀：普通 `❯ `，bash 模式 `! `；bash 模式下边框变成 `bashMode` 色。
 - 补全：`/` 补全命令，包括内置命令、扩展命令、prompt 模板、`skill:*`；`@` 补全文件。都用 pi-tui 的 `CombinedAutocompleteProvider`，下拉框画在输入框上方。
 - **阻塞卡片**：扩展调用 `select`、`confirm`、`input`、`editor` 时，对话框占用输入框的位置。
@@ -297,8 +297,9 @@ Epi 新写的文件也都在 `~/.epi/pi` 下：`themes/epi-grok-*.json`，键位
 
 ### 4.4 状态行
 
-- 格式：`⠧ Responding… 15s · ⇣9.4k`。活动文字依次是 `Thinking…`、`Responding…`、`Running <工具名>…`。
+- 格式：`⠧ Responding… 15s · ⇣9.4k · 87 tok/s`。活动文字依次是 `Thinking…`、`Responding…`、`Running <工具名>…`。
 - token 数：provider 流式输出时不回报 usage 的，用估算值，前面加 `~`。
+- tok/s：整轮平均（输出 token 数 ÷ 从 `agent_start` 起的耗时），80 列以上、流式满 1 秒才显示；token 数是估算时速度同样带 `~`。工具执行阶段会拉低它，口径就是整轮平均（[statusbar-design.md](statusbar-design.md) 3.1 节）。
 - 自动重试、压缩、分支摘要重试也显示在这一行，比如 `⟳ Retrying (2/3) in 4s`；这时 Esc 中止的是对应的那个操作。
 - 扩展调 `setWorkingMessage`、`setWorkingIndicator` 时，替换的是这一行的文字和帧。
 - 终端 tab 标题同步显示 spinner 和活动（grok 的做法），每 264ms 更新一帧。扩展调用 `setTitle` 设置标题时，以扩展的为准，直到它清掉为止。
@@ -479,6 +480,7 @@ Epi 新写的文件也都在 `~/.epi/pi` 下：`themes/epi-grok-*.json`，键位
 | `addAutocompleteProvider` | 同 Pi：记进包装列表，每次重建补全（bind、`/reload`、`/settings` 的 skill-commands）都重新套上；切换会话前和 `/reload` 时随其余扩展界面状态一起清空，由 `session_start` 重新添加 |
 | `theme` / `getAllThemes` / `getTheme` / `setTheme` | Epi 构造的 `Theme` 实例（4.9 节）；v1 的 `setTheme` 只接受 Epi 的两套主题 |
 | `getToolsExpanded` / `setToolsExpanded` | 对应 `Ctrl+O` 的全局状态 |
+| `setStatusLine`（Epi 新增，Pi 的接口里没有） | 输入框底边右侧的统计 label：传 formatter 整体替换内置格式，传 `undefined` 恢复默认；不随换会话清空（6.3 节），数据每次渲染现读当前会话 |
 
 ### 6.2 绑定扩展时必须传的东西
 
@@ -498,6 +500,7 @@ Epi 新写的文件也都在 `~/.epi/pi` 下：`themes/epi-grok-*.json`，键位
 | 消息区 | 清空，按新会话回放历史 |
 | 补全 provider、扩展快捷键、扩展命令列表 | 重新读取 |
 | widget、header、footer、编辑器替换、working 设置、状态 | 在 `setBeforeSessionInvalidate` 里清掉，等扩展在 `session_start` 里重新设置 |
+| statusline formatter | **不清**：它格式化的是"当前会话"的数字，换会话后每次渲染现读新会话的统计，扩展无需重设（[statusbar-design.md](statusbar-design.md) 第 3 节） |
 | 排队区、状态行计时 | 清空 |
 
 ## 7. 错误处理与生命周期

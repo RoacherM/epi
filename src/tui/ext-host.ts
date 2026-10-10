@@ -4,6 +4,7 @@ import { ExtensionInputComponent, type ExtensionUIContext, type Theme } from "@e
 import type { AutocompleteProvider, Component, TUI } from "@earendil-works/pi-tui";
 
 import { confirmInEditorSlot, dialog, editInEditorSlot, selectInEditorSlot } from "./dialogs.js";
+import type { StatusLineFormatter } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
 
 /** What the extension host may do to the screen; implemented by the app. */
@@ -17,6 +18,8 @@ export interface HostSurface {
   setFooter(component: Component | undefined): void;
   setWidget(key: string, component: Component | undefined, placement: "aboveEditor" | "belowEditor"): void;
   setStatus(key: string, text: string | undefined): void;
+  /** Replace the prompt frame's bottom-right label formatter; undefined restores the built-in. */
+  setStatusLine(formatter: StatusLineFormatter | undefined): void;
   setWorking(options: { message?: string | undefined; visible?: boolean | undefined }): void;
   setTitle(title: string): void;
   getEditorText(): string;
@@ -28,12 +31,19 @@ export interface HostSurface {
   notify(message: string, tone: "info" | "warning" | "error"): void;
 }
 
+/** Epi's addition on top of Pi's ExtensionUIContext (docs/statusbar-design.md §3): the prompt
+ * frame's bottom-right label is a slot any extension can reformat; `setStatusLine(undefined)`
+ * restores the built-in default. */
+export interface EpiExtensionUIContext extends ExtensionUIContext {
+  setStatusLine(format: StatusLineFormatter | undefined): void;
+}
+
 function unsupported(surface: HostSurface, member: string): void {
   surface.notify(`An extension called ui.${member}, which Epi TUI v2 does not support yet.`, "warning");
 }
 
-export function createExtensionUIContext(surface: HostSurface): ExtensionUIContext {
-  const ui: ExtensionUIContext = {
+export function createExtensionUIContext(surface: HostSurface): EpiExtensionUIContext {
+  const ui: EpiExtensionUIContext = {
     select: (title, options, opts) => selectInEditorSlot(surface, title, options, opts),
     confirm: (title, message, opts) => confirmInEditorSlot(surface, title, message, opts),
     input: (title, placeholder, opts) =>
@@ -42,6 +52,7 @@ export function createExtensionUIContext(surface: HostSurface): ExtensionUIConte
     notify: (message, type) => surface.notify(message, type ?? "info"),
     onTerminalInput: (handler) => surface.tui.addInputListener(handler),
     setStatus: (key, text) => surface.setStatus(key, text),
+    setStatusLine: (format) => surface.setStatusLine(format),
     setWorkingMessage: (message) => surface.setWorking({ message }),
     setWorkingVisible: (visible) => surface.setWorking({ visible }),
     setWorkingIndicator: () => unsupported(surface, "setWorkingIndicator"),

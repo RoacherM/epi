@@ -52,6 +52,9 @@ export interface TurnState {
     phaseStartedAt: number;
     activity: string;
     outputTokens: number;
+    /** Output of this turn's finished messages, already counted in the session stats (folded at
+     * message_end); `outputTokens` is only the in-flight message, so the two never double-count. */
+    committedOutput: number;
     estimated: boolean;
 }
 /** `⠧ Waiting for response… 2.4s ····· 2.4s ⇣2.3k [stop]`; zero rows when idle. */
@@ -65,6 +68,54 @@ export declare class TurnStatus implements Component {
     stop(): void;
     invalidate(): void;
 }
+export interface StatusLineStats {
+    /** Model name or id (not pre-composed with the level); undefined when no model is available. */
+    model: string | undefined;
+    thinkingLevel: string | undefined;
+    /** All prompt tokens sent this session: input + cacheRead + cacheWrite. */
+    input: number;
+    /** Completed output tokens this session plus the running turn's live count, if any. */
+    output: number;
+    /** The running turn's not-yet-committed output (the live part of `output`); undefined when idle. */
+    liveOutputTokens: number | undefined;
+    /** Part of `output` is a chars/4 estimate because the provider hasn't reported usage yet. */
+    outputEstimated: boolean;
+    cacheRead: number;
+    cacheWrite: number;
+    /** cacheRead / input in [0, 1]; undefined when no message reported cache counters. */
+    cacheHitRate: number | undefined;
+    /** Context occupancy. The built-in formatter leaves this to the header's top-right corner;
+     * extension formatters get it anyway. */
+    contextTokens: number | undefined;
+    contextWindow: number | undefined;
+    /** Session cost at catalog prices, in USD. */
+    cost: number;
+}
+/** Session/token aggregation behind the status line, pure for tests. `liveOutputTokens` is the
+ * running turn's un-committed output (app.ts folds each finished message at message_end, so it
+ * is never double-counted). */
+export declare function aggregateStatusLineStats(parts: {
+    tokens: {
+        input: number;
+        output: number;
+        cacheRead: number;
+        cacheWrite: number;
+    };
+    cost: number;
+    model: string | undefined;
+    thinkingLevel: string | undefined;
+    contextTokens: number | undefined;
+    contextWindow: number | undefined;
+    liveOutputTokens: number | undefined;
+    liveOutputEstimated: boolean;
+}): StatusLineStats;
+/** Formats the prompt frame's bottom-right label. `width` is the space the frame has for the
+ * label (row width minus any scroll hint); returning an empty string or undefined draws no
+ * label at all. */
+export type StatusLineFormatter = (stats: StatusLineStats, width: number) => string | undefined;
+/** The built-in formatter. Context usage is left to the header's top-right corner by design;
+ * the `+ 6` is the frame's border and padding around the label. */
+export declare function defaultStatusLine(stats: StatusLineStats, width: number): string;
 /**
  * Wraps pi-tui's Editor in a rounded frame with `model (level)` on the bottom border. The editor
  * draws its own top and bottom rules (possibly with a `↑ N more` label); those rows are replaced,
@@ -77,10 +128,17 @@ export declare const PROMPT_COLUMNS = 4;
 export declare class PromptFrame implements Component {
     private readonly theme;
     readonly editor: EditorComponent;
+    /** Bottom-right label (model + status line). Receives the label budget: row width minus
+     * any scroll hint and joiner (still including the frame's own border allowance), so the
+     * formatter degrades before the frame's whole-label cutoff would. */
     private readonly label;
     private readonly borderColor;
     private readonly maxContentRows;
-    constructor(theme: Theme, editor: EditorComponent, label: () => string, borderColor: () => (text: string) => string, maxContentRows?: () => number | undefined);
+    constructor(theme: Theme, editor: EditorComponent, 
+    /** Bottom-right label (model + status line). Receives the label budget: row width minus
+     * any scroll hint and joiner (still including the frame's own border allowance), so the
+     * formatter degrades before the frame's whole-label cutoff would. */
+    label: (width: number) => string, borderColor: () => (text: string) => string, maxContentRows?: () => number | undefined);
     get focused(): boolean;
     set focused(value: boolean);
     /** Finds the editor's own top/bottom border rows within its rendered output at `inner` width,

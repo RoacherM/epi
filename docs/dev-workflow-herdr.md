@@ -1,6 +1,6 @@
 # 用 epi 开发 epi（Herdr 自举流程）
 
-状态：2026-09-30 用户确认，2026-10-01 起启用，是 [dev-workflow.md](dev-workflow.md) 第 1–2 节摘要的完整版；那里的第 5 节（不可违反的约定）不变。2026-10-03 用户确认调整：去掉 epi 初审，主控自己审查和验证；Fable 作为主控的顾问，在固定时点给意见；读代码和查资料只交给 Sonnet 子代理，不再用 agy；流程按通用的[工作流图](https://github.com/RoacherM/Wayne-Skills/blob/main/skills/workflow-graph/SKILL.md)（wayne-skills 的 `workflow-graph` skill）写成节点、交接和闸门。
+状态：2026-09-30 用户确认，2026-10-01 起启用，是 [dev-workflow.md](dev-workflow.md) 第 1–2 节摘要的完整版；那里的第 5 节（不可违反的约定）不变。2026-10-03 用户确认调整：去掉 epi 初审，主控自己审查和验证；读代码和查资料只交给子代理，不再用 agy。2026-10-06 用户确认：流程全 epi 化——主控、审查、终审、阅读都是 epi 会话、用 epi 内部已配置的模型，不再依赖 Claude Code（主控、阅读子代理）和 Fable（顾问、终审），见 decisions.md WF1。流程按通用的[工作流图](https://github.com/RoacherM/Wayne-Skills/blob/main/skills/workflow-graph/SKILL.md)（wayne-skills 的 `workflow-graph` skill）写成节点、交接和闸门。
 
 目标：编码由 Herdr 里运行的 epi 完成，epi 在给自己干活的过程中暴露问题，再按优先级修掉。主控管进度、文档，并负责每个任务的审查和验证。
 
@@ -10,10 +10,10 @@
 
 | 术语 | 意思 |
 |---|---|
-| 主控 | 用户会话里的 Claude Code 主会话，运行本流程：派活、审查、合并、汇报 |
-| 顾问 | Fable，主控会话里的 `advisor` 工具，调用时自动读到主控的整个会话。只在第 2 节的三个时点调用，不写代码、不做决定 |
+| 主控 | 用户会话里的 epi 主会话，运行本流程：派活、审查、合并、汇报 |
+| 顾问 | epi 内部模型的独立只读会话（主控用 `epi -p` 派一个）。它看不到主控的会话，主控把背景材料写成文件交给它。只在第 2 节的三个时点调用，不写代码、不做决定 |
 | worker | 在 Herdr pane 里运行的 epi，负责写代码。Herdr 是终端多路复用器，pane 是其中一个终端窗格 |
-| magpie | 一个模型服务商（provider）。worker 通过它使用 Opus；主控自己不调用 magpie |
+| magpie | 一个模型服务商（provider）。worker 和主控都通过 epi 内部已配置的模型干活 |
 | worktree | 每个任务一个 git worktree（独立的工作目录和分支，分支名 `dev/<任务编号>`），worker 只在自己的 worktree 里改 |
 | 基准提交 | 任务开始时 worktree 所基于的 `main` 上的提交，写在 `brief.md` 里；审查时 diff 就是对它比 |
 | 节点 | 流程里的一步，内部是一个循环：触发 → 动作 → 检查 → 不过就重试，到停止条件就移交 |
@@ -33,11 +33,11 @@
 
 | 执行者 | 用什么 | 负责的节点 |
 |---|---|---|
-| 主控 | Claude Code 主会话，Opus 5.5，effort high | 计划、审查验证、合并、验收和升级、汇报 |
+| 主控 | epi 主会话 | 计划、审查验证、合并、验收和升级、汇报 |
 | worker | epi + magpie `claude/claude-opus-5-5`，thinking high（用户 2026-10-01 定，2026-10-03 确认不改），每个任务、每轮修改都开新会话 | 实现 |
-| 阅读子代理 | Claude Code 的 Agent 工具，`model: "sonnet"`，只读。读代码用 `Explore` 类型，查外部资料用 `general-purpose` 类型 | 被计划、审查验证节点调用。结论必须带文件行号或来源链接，主控打开原文核对后才用 |
-| 审查子代理 | Claude Code 的 Agent 工具，`model: "fable"`，只读 | 大节点终审；审查主控自己写的代码（闸门 G5） |
-| 顾问 | Fable（`advisor` 工具） | 下表三个时点 |
+| 阅读子代理 | `epi -p` 派出的只读会话，epi 内部模型，新开会话 | 被计划、审查验证节点调用。结论必须带文件行号或来源链接，主控打开原文核对后才用 |
+| 审查子代理 | `epi -p` 派出的只读会话，epi 内部模型，新开会话 | 大节点终审；审查主控自己写的代码（闸门 G5） |
+| 顾问 | `epi -p` 派出的独立会话（背景材料由主控写成文件交给它） | 下表三个时点 |
 | 用户 | — | 需求有歧义时拍板；对外动作的人工闸门 |
 
 顾问的三个时点，日常步骤不调用：
@@ -48,7 +48,7 @@
 | 同一个问题第二次出现 | 同一条审查发现第二次退回；worker 或主控第二次撞上同一个错误；方案迟迟收不拢 |
 | 宣布完成之前 | 合并一个任务之前（审查验证做完以后）；向用户汇报之前。先把成果落盘（提交、写文件），再问 |
 
-主控会话里没有 `advisor` 工具时，先告诉用户，不跳过这些时点。顾问的意见和主控查到的证据冲突时，带着证据再问一次，再决定。
+顾问会话是 `epi -p` 派出来的独立会话：主控把要顾问看的问题和相关文件路径写成一份材料，它只读、给意见。顾问的意见和主控查到的证据冲突时，带着证据再问一次，再决定。
 
 ## 3. 流程
 
@@ -207,9 +207,9 @@ cd <worktree> && node ~/Projects/sides/epi-tool/dist/cli.js --approve \
 | check | 主控的 Herdr 验收、跑命令。用户可能随时关掉它，用之前先确认还在（`herdr.sh` 找不到 pane 会直接报错），不在就重新 split 一个 |
 | grok | 对比 grok（需要时开） |
 
-主控的 Claude Code 可以加载 workflow-graph skill 自带的看板，实时看第 3.2 节的记录：在仓库根目录启动 `claude --plugin-dir ~/.agents/skills/workflow-graph/pane`，输入 `/workflow-pane` 打开。每个任务一行（节点、状态、退回轮数、周期），输入框下方常驻一行计数；有任务交付、提问、卡住、闸门没过或移交时弹出提醒。看板只读记录，不读 `.dev/tasks/`。
-
 epi 不是 Herdr 认识的 agent 类型，所以用 pane 命令（`pane run` / `send-text` / `wait-output` / `read`）操作，pane 编号记在 `.dev/panes.json`。现在放在 scratchpad 的辅助脚本 `h.sh`（`startepi` / `quitepi` / `say` / `scr`）移进仓库 `scripts/dev/herdr.sh`，因为 scratchpad 只在当前会话有效。
+
+主控可以用 workflow-graph skill 自带的看板实时看第 3.2 节的记录，但看板是 Claude Code 插件（`claude --plugin-dir ~/.agents/skills/workflow-graph/pane`，`/workflow-pane`），epi 会话加载不了；epi 主控直接读 `.workflow/log.jsonl`。每个任务一行（节点、状态、退回轮数、周期），输入框下方常驻一行计数；有任务交付、提问、卡住、闸门没过或移交时弹出提醒。看板只读记录，不读 `.dev/tasks/`。
 
 ## 8. 启用前要做的准备
 

@@ -15,6 +15,7 @@ export function createExtensionUIContext(surface) {
         notify: (message, type) => surface.notify(message, type ?? "info"),
         onTerminalInput: (handler) => surface.tui.addInputListener(handler),
         setStatus: (key, text) => surface.setStatus(key, text),
+        setStatusLine: (format) => surface.setStatusLine(format),
         setWorkingMessage: (message) => surface.setWorking({ message }),
         setWorkingVisible: (visible) => surface.setWorking({ visible }),
         setWorkingIndicator: () => unsupported(surface, "setWorkingIndicator"),

@@ -197,8 +197,14 @@ export class TurnStatus {
         const frame = SPINNER[Math.floor(now / SPINNER_MS) % SPINNER.length] ?? SPINNER[0];
         const phase = width >= 60 ? ` ${this.theme.fg("muted", formatDuration(now - turn.phaseStartedAt))}` : "";
         const left = `${this.theme.fg("accent", frame ?? "")} ${this.theme.fg("text", turn.activity)}${phase}`;
-        const tokens = turn.outputTokens > 0 ? ` ${turn.estimated ? "~" : ""}⇣${formatTokens(turn.outputTokens).toLowerCase()}` : "";
-        const right = `${this.theme.fg("muted", `${formatDuration(now - turn.startedAt)}${tokens}`)} ${this.theme.fg("muted", "[stop]")}`;
+        const totalOutput = turn.committedOutput + turn.outputTokens;
+        const tokens = totalOutput > 0 ? ` ${turn.estimated ? "~" : ""}⇣${formatTokens(totalOutput).toLowerCase()}` : "";
+        const elapsedMs = now - turn.startedAt;
+        // Whole-turn average: tool runs drag it down, and under 1s of streaming the quotient is noise.
+        const speed = width >= 80 && totalOutput > 0 && elapsedMs >= 1000
+            ? ` · ${turn.estimated ? "~" : ""}${Math.round(totalOutput / (elapsedMs / 1000))} tok/s`
+            : "";
+        const right = `${this.theme.fg("muted", `${formatDuration(elapsedMs)}${tokens}${speed}`)} ${this.theme.fg("muted", "[stop]")}`;
         return [spread(left, right, width)];
     }
     stop() {
@@ -207,6 +213,49 @@ export class TurnStatus {
         this.timer = undefined;
     }
     invalidate() { }
+}
+/** Session/token aggregation behind the status line, pure for tests. `liveOutputTokens` is the
+ * running turn's un-committed output (app.ts folds each finished message at message_end, so it
+ * is never double-counted). */
+export function aggregateStatusLineStats(parts) {
+    const input = parts.tokens.input + parts.tokens.cacheRead + parts.tokens.cacheWrite;
+    return {
+        model: parts.model,
+        thinkingLevel: parts.thinkingLevel,
+        input,
+        output: parts.tokens.output + (parts.liveOutputTokens ?? 0),
+        liveOutputTokens: parts.liveOutputTokens,
+        outputEstimated: parts.liveOutputEstimated,
+        cacheRead: parts.tokens.cacheRead,
+        cacheWrite: parts.tokens.cacheWrite,
+        // "0% because nothing was ever cached" reads the same as "provider doesn't report
+        // caching" -- stay hidden until something was actually written or read.
+        cacheHitRate: input === 0 || (parts.tokens.cacheRead === 0 && parts.tokens.cacheWrite === 0) ? undefined : parts.tokens.cacheRead / input,
+        contextTokens: parts.contextTokens,
+        contextWindow: parts.contextWindow,
+        cost: parts.cost,
+    };
+}
+const fmt = (count) => formatTokens(count).toLowerCase();
+/** The built-in formatter. Context usage is left to the header's top-right corner by design;
+ * the `+ 6` is the frame's border and padding around the label. */
+export function defaultStatusLine(stats, width) {
+    if (stats.model === undefined)
+        return "no model · /login";
+    const model = stats.thinkingLevel === undefined ? stats.model : `${stats.model} (${stats.thinkingLevel})`;
+    const inOut = `⇡${fmt(stats.input)} ⇣${stats.outputEstimated ? "~" : ""}${fmt(stats.output)}`;
+    const cache = stats.cacheHitRate === undefined ? "" : `cache ${Math.round(stats.cacheHitRate * 100)}%`;
+    const candidates = [
+        [model, inOut, cache],
+        [model, inOut],
+        [model],
+    ];
+    for (const parts of candidates) {
+        const label = parts.filter((part) => part !== "").join(" · ");
+        if (visibleWidth(label) + 6 <= width)
+            return label;
+    }
+    return model;
 }
 // ── framed prompt ─────────────────────────────────────────────────────────────
 /**
@@ -249,7 +298,11 @@ export class PromptFrame {
     label;
     borderColor;
     maxContentRows;
-    constructor(theme, editor, label, borderColor, maxContentRows = () => undefined) {
+    constructor(theme, editor, 
+    /** Bottom-right label (model + status line). Receives the label budget: row width minus
+     * any scroll hint and joiner (still including the frame's own border allowance), so the
+     * formatter degrades before the frame's whole-label cutoff would. */
+    label, borderColor, maxContentRows = () => undefined) {
         this.theme = theme;
         this.editor = editor;
         this.label = label;
@@ -292,7 +345,11 @@ export class PromptFrame {
                 ? `${color(`${left}─`)}${this.theme.fg("muted", label)}${color(`${"─".repeat(fill - 0)}${right}`)}`
                 : color(`${left}${"─".repeat(Math.max(0, width - 2))}${right}`);
         };
-        const bottomLabel = [hint(lines[bottom] ?? ""), this.label()].filter((part) => part !== "").join(" · ");
+        const bottomHint = hint(lines[bottom] ?? "");
+        // The hint and the " · " joiner share the row with the label: budget them out before asking
+        // the formatter to degrade, or a long hint makes the whole label vanish at once.
+        const labelWidth = bottomHint === "" ? width : width - visibleWidth(bottomHint) - 3;
+        const bottomLabel = [bottomHint, this.label(labelWidth)].filter((part) => part !== "").join(" · ");
         const out = [border("╭", "╮", hint(lines[top] ?? ""))];
         const maxRows = this.maxContentRows();
         const content = maxRows === undefined ? lines.slice(top + 1, bottom) : cropToCursor(lines.slice(top + 1, bottom), maxRows);

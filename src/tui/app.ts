@@ -15,6 +15,8 @@ import type { AutocompleteProvider, Component, Container, Terminal } from "@eare
 
 import { runUserBash } from "./bash-block.js";
 import {
+  aggregateStatusLineStats,
+  defaultStatusLine,
   headerBar,
   PromptFrame,
   type QueuedMessagesState,
@@ -22,6 +24,8 @@ import {
   type Shortcut,
   shortcutsBar,
   splitPromptZone,
+  type StatusLineFormatter,
+  type StatusLineStats,
   type TurnState,
   TurnStatus,
 } from "./chrome.js";
@@ -154,10 +158,46 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     borderColor: (text) => theme.fg("border", text),
     selectList: getSelectListTheme(),
   }, { getCwd: () => session.sessionManager.getCwd(), getHighestImageNumber: () => transcript.highestImageNumber });
-  const prompt = new PromptFrame(theme, editor, () => {
+  // The prompt frame's bottom-right label (docs/statusbar-design.md): the default formats session
+  // token stats; an extension replaces it wholesale via ui.setStatusLine. The slot is app-level,
+  // not per-session -- a replacement survives /new, /resume and /reload (unlike widgets/footers,
+  // which an extension sets up again on session_start), and every render reads the freshly bound
+  // session's numbers.
+  let statusLineFormatter: StatusLineFormatter = defaultStatusLine;
+  function statusLineStats(): StatusLineStats {
+    const stats = session.getSessionStats();
+    const context = session.getContextUsage();
     const model = session.model;
     const hasModel = model !== undefined && runtime.services.modelRuntime.getAvailableSnapshot().length > 0;
-    return hasModel ? `${model.name ?? model.id} (${session.thinkingLevel})` : "no model · /login";
+    return aggregateStatusLineStats({
+      tokens: stats.tokens,
+      cost: stats.cost,
+      model: hasModel ? (model.name ?? model.id) : undefined,
+      thinkingLevel: hasModel ? session.thinkingLevel : undefined,
+      contextTokens: context?.tokens ?? undefined,
+      contextWindow: context?.contextWindow,
+      // The in-flight message is not in the session stats yet; adding it keeps the label moving
+      // while streaming. Finished messages are folded out of `turn` at message_end (below), so
+      // nothing double-counts.
+      liveOutputTokens: turn === undefined ? undefined : turn.outputTokens,
+      liveOutputEstimated: turn?.estimated ?? false,
+    });
+  }
+  const prompt = new PromptFrame(theme, editor, (width) => {
+    try {
+      return statusLineFormatter(statusLineStats(), width) ?? "";
+    } catch (error) {
+      // An extension's formatter runs inside render(); it must not take the screen down with it.
+      // Swap back to the built-in and say so -- render() itself stays read-only, the notice lands
+      // on the next tick. A failing *default* is our own bug and stays loud (it throws).
+      if (statusLineFormatter === defaultStatusLine) throw error;
+      statusLineFormatter = defaultStatusLine;
+      setImmediate(() => {
+        transcript.notice(`Status line formatter failed and was reset to the default: ${errorText(error)}`, "error");
+        tui.requestRender();
+      });
+      return defaultStatusLine(statusLineStats(), width) ?? "";
+    }
   }, () => (text) => theme.fg(turn === undefined ? "border" : "borderAccent", text),
   // Item 4 (docs/tui-design.md 4.1/4.2): ≤12 rows caps the editor to 1 content row, freeing the rest
   // of a very short terminal for the transcript. Above that there's no cap (PromptFrame passes the
@@ -335,6 +375,10 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     setStatus(key, text) {
       if (text === undefined) statuses.delete(key);
       else statuses.set(key, text);
+      tui.requestRender();
+    },
+    setStatusLine(formatter) {
+      statusLineFormatter = formatter ?? defaultStatusLine;
       tui.requestRender();
     },
     setWorking(change) {
@@ -611,7 +655,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     const now = Date.now();
     switch (event.type) {
       case "agent_start":
-        turn = { startedAt: now, phaseStartedAt: now, activity: "Waiting for response…", outputTokens: 0, estimated: false };
+        turn = { startedAt: now, phaseStartedAt: now, activity: "Waiting for response…", outputTokens: 0, committedOutput: 0, estimated: false };
         inAgentLoop = true;
         break;
       case "turn_start":
@@ -640,6 +684,23 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
         }
         break;
       }
+      case "message_end":
+        // The session stats pick this message up right after this event returns (agent-session.js
+        // persists on message_end, after notifying listeners); fold its tokens into the committed
+        // count so the status line's stats.tokens.output + turn.outputTokens never counts a
+        // finished message twice while the turn is still running (a tool call can take minutes).
+        // Fold the *final* usage, not the last streamed estimate -- most providers only report
+        // usage here, so the estimate and the real count usually differ.
+        if (turn !== undefined && event.message.role === "assistant") {
+          const finalOutput = event.message.usage?.output;
+          turn = {
+            ...turn,
+            committedOutput: turn.committedOutput + (finalOutput ?? turn.outputTokens),
+            outputTokens: 0,
+            estimated: finalOutput === undefined ? turn.estimated : false,
+          };
+        }
+        break;
       case "tool_execution_start":
         setActivity(`Running ${event.toolName}…`);
         break;
@@ -652,7 +713,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       case "compaction_start":
         showTerminalProgress();
         turn = turn === undefined
-          ? { startedAt: now, phaseStartedAt: now, activity: "Compacting…", outputTokens: 0, estimated: false }
+          ? { startedAt: now, phaseStartedAt: now, activity: "Compacting…", outputTokens: 0, committedOutput: 0, estimated: false }
           : { ...turn, activity: "Compacting…", phaseStartedAt: now };
         break;
       case "compaction_end":
@@ -673,7 +734,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
         break;
       case "auto_retry_start":
         turn = turn === undefined
-          ? { startedAt: now, phaseStartedAt: now, activity: `Retrying (${event.attempt}/${event.maxAttempts})…`, outputTokens: 0, estimated: false }
+          ? { startedAt: now, phaseStartedAt: now, activity: `Retrying (${event.attempt}/${event.maxAttempts})…`, outputTokens: 0, committedOutput: 0, estimated: false }
           : { ...turn, activity: `Retrying (${event.attempt}/${event.maxAttempts})…`, phaseStartedAt: now };
         break;
       case "auto_retry_end":
