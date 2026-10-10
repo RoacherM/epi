@@ -214,6 +214,9 @@ export interface TurnState {
   phaseStartedAt: number;
   activity: string;
   outputTokens: number;
+  /** Output of this turn's finished messages, already counted in the session stats (folded at
+   * message_end); `outputTokens` is only the in-flight message, so the two never double-count. */
+  committedOutput: number;
   estimated: boolean;
 }
 
@@ -238,8 +241,14 @@ export class TurnStatus implements Component {
     const frame = SPINNER[Math.floor(now / SPINNER_MS) % SPINNER.length] ?? SPINNER[0];
     const phase = width >= 60 ? ` ${this.theme.fg("muted", formatDuration(now - turn.phaseStartedAt))}` : "";
     const left = `${this.theme.fg("accent", frame ?? "")} ${this.theme.fg("text", turn.activity)}${phase}`;
-    const tokens = turn.outputTokens > 0 ? ` ${turn.estimated ? "~" : ""}⇣${formatTokens(turn.outputTokens).toLowerCase()}` : "";
-    const right = `${this.theme.fg("muted", `${formatDuration(now - turn.startedAt)}${tokens}`)} ${this.theme.fg("muted", "[stop]")}`;
+    const totalOutput = turn.committedOutput + turn.outputTokens;
+    const tokens = totalOutput > 0 ? ` ${turn.estimated ? "~" : ""}⇣${formatTokens(totalOutput).toLowerCase()}` : "";
+    const elapsedMs = now - turn.startedAt;
+    // Whole-turn average: tool runs drag it down, and under 1s of streaming the quotient is noise.
+    const speed = width >= 80 && totalOutput > 0 && elapsedMs >= 1000
+      ? ` · ${turn.estimated ? "~" : ""}${Math.round(totalOutput / (elapsedMs / 1000))} tok/s`
+      : "";
+    const right = `${this.theme.fg("muted", `${formatDuration(elapsedMs)}${tokens}${speed}`)} ${this.theme.fg("muted", "[stop]")}`;
     return [spread(left, right, width)];
   }
 
@@ -249,6 +258,93 @@ export class TurnStatus implements Component {
   }
 
   invalidate(): void {}
+}
+
+// ── status line (prompt frame's bottom-right label) ─────────────────────────
+// docs/statusbar-design.md: session token stats next to the model label. The formatter is a slot
+// (app.ts): defaultStatusLine is what ships, but an extension can replace it wholesale through
+// ui.setStatusLine -- the built-in is one formatter among equals, not privileged code.
+
+export interface StatusLineStats {
+  /** Model name or id (not pre-composed with the level); undefined when no model is available. */
+  model: string | undefined;
+  thinkingLevel: string | undefined;
+  /** All prompt tokens sent this session: input + cacheRead + cacheWrite. */
+  input: number;
+  /** Completed output tokens this session plus the running turn's live count, if any. */
+  output: number;
+  /** The running turn's not-yet-committed output (the live part of `output`); undefined when idle. */
+  liveOutputTokens: number | undefined;
+  /** Part of `output` is a chars/4 estimate because the provider hasn't reported usage yet. */
+  outputEstimated: boolean;
+  cacheRead: number;
+  cacheWrite: number;
+  /** cacheRead / input in [0, 1]; undefined when no message reported cache counters. */
+  cacheHitRate: number | undefined;
+  /** Context occupancy. The built-in formatter leaves this to the header's top-right corner;
+   * extension formatters get it anyway. */
+  contextTokens: number | undefined;
+  contextWindow: number | undefined;
+  /** Session cost at catalog prices, in USD. */
+  cost: number;
+}
+
+/** Session/token aggregation behind the status line, pure for tests. `liveOutputTokens` is the
+ * running turn's un-committed output (app.ts folds each finished message at message_end, so it
+ * is never double-counted). */
+export function aggregateStatusLineStats(parts: {
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  cost: number;
+  model: string | undefined;
+  thinkingLevel: string | undefined;
+  contextTokens: number | undefined;
+  contextWindow: number | undefined;
+  liveOutputTokens: number | undefined;
+  liveOutputEstimated: boolean;
+}): StatusLineStats {
+  const input = parts.tokens.input + parts.tokens.cacheRead + parts.tokens.cacheWrite;
+  return {
+    model: parts.model,
+    thinkingLevel: parts.thinkingLevel,
+    input,
+    output: parts.tokens.output + (parts.liveOutputTokens ?? 0),
+    liveOutputTokens: parts.liveOutputTokens,
+    outputEstimated: parts.liveOutputEstimated,
+    cacheRead: parts.tokens.cacheRead,
+    cacheWrite: parts.tokens.cacheWrite,
+    // "0% because nothing was ever cached" reads the same as "provider doesn't report
+    // caching" -- stay hidden until something was actually written or read.
+    cacheHitRate: input === 0 || (parts.tokens.cacheRead === 0 && parts.tokens.cacheWrite === 0) ? undefined : parts.tokens.cacheRead / input,
+    contextTokens: parts.contextTokens,
+    contextWindow: parts.contextWindow,
+    cost: parts.cost,
+  };
+}
+
+/** Formats the prompt frame's bottom-right label. `width` is the space the frame has for the
+ * label (row width minus any scroll hint); returning an empty string or undefined draws no
+ * label at all. */
+export type StatusLineFormatter = (stats: StatusLineStats, width: number) => string | undefined;
+
+const fmt = (count: number): string => formatTokens(count).toLowerCase();
+
+/** The built-in formatter. Context usage is left to the header's top-right corner by design;
+ * the `+ 6` is the frame's border and padding around the label. */
+export function defaultStatusLine(stats: StatusLineStats, width: number): string {
+  if (stats.model === undefined) return "no model · /login";
+  const model = stats.thinkingLevel === undefined ? stats.model : `${stats.model} (${stats.thinkingLevel})`;
+  const inOut = `⇡${fmt(stats.input)} ⇣${stats.outputEstimated ? "~" : ""}${fmt(stats.output)}`;
+  const cache = stats.cacheHitRate === undefined ? "" : `cache ${Math.round(stats.cacheHitRate * 100)}%`;
+  const candidates = [
+    [model, inOut, cache],
+    [model, inOut],
+    [model],
+  ];
+  for (const parts of candidates) {
+    const label = parts.filter((part) => part !== "").join(" · ");
+    if (visibleWidth(label) + 6 <= width) return label;
+  }
+  return model;
 }
 
 // ── framed prompt ─────────────────────────────────────────────────────────────
@@ -295,7 +391,10 @@ export class PromptFrame implements Component {
   constructor(
     private readonly theme: Theme,
     readonly editor: EditorComponent,
-    private readonly label: () => string,
+    /** Bottom-right label (model + status line). Receives the label budget: row width minus
+     * any scroll hint and joiner (still including the frame's own border allowance), so the
+     * formatter degrades before the frame's whole-label cutoff would. */
+    private readonly label: (width: number) => string,
     private readonly borderColor: () => (text: string) => string,
     private readonly maxContentRows: () => number | undefined = () => undefined,
   ) {}
@@ -339,7 +438,11 @@ export class PromptFrame implements Component {
         ? `${color(`${left}─`)}${this.theme.fg("muted", label)}${color(`${"─".repeat(fill - 0)}${right}`)}`
         : color(`${left}${"─".repeat(Math.max(0, width - 2))}${right}`);
     };
-    const bottomLabel = [hint(lines[bottom] ?? ""), this.label()].filter((part) => part !== "").join(" · ");
+    const bottomHint = hint(lines[bottom] ?? "");
+    // The hint and the " · " joiner share the row with the label: budget them out before asking
+    // the formatter to degrade, or a long hint makes the whole label vanish at once.
+    const labelWidth = bottomHint === "" ? width : width - visibleWidth(bottomHint) - 3;
+    const bottomLabel = [bottomHint, this.label(labelWidth)].filter((part) => part !== "").join(" · ");
     const out = [border("╭", "╮", hint(lines[top] ?? ""))];
     const maxRows = this.maxContentRows();
     const content = maxRows === undefined ? lines.slice(top + 1, bottom) : cropToCursor(lines.slice(top + 1, bottom), maxRows);

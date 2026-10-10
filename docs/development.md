@@ -111,7 +111,7 @@ epi <参数>
 | 对话区 | `transcript.ts`、`assistant-block.ts`、`bash-block.ts`、`tools/` | 用户消息、回答、思考块、每种工具的卡片 |
 | 输入 | `paste-chips.ts`、`key-handlers.ts`、`keybindings.ts`、`queued-messages.ts` | 编辑器、图片和粘贴标签、快捷键、排队的消息 |
 | 命令 | `commands.ts`、`session-commands.ts`、`settings-command.ts`、`info-commands.ts` 等 | `/login`、`/model`、`/resume`、`/settings`、`/compact` 等内置命令 |
-| 扩展宿主 | `ext-host.ts`、`dialogs.ts` | 实现 Pi 扩展界面接口的 28 个方法，扩展的对话框和面板在这里显示（决策 D4） |
+| 扩展宿主 | `ext-host.ts`、`dialogs.ts` | 实现 Pi 扩展界面接口的 28 个方法，外加 Epi 自己的 `setStatusLine`（输入框底边统计，[statusbar-design.md](statusbar-design.md)），扩展的对话框和面板在这里显示（决策 D4） |
 | 会话构造 | `services.ts` | `createEpiRuntime`；不依赖终端，非交互模式也用它 |
 
 ## 3. 不可违反的边界
