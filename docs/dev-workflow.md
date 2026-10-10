@@ -1,16 +1,16 @@
 # Epi 开发流程
 
-2026-09-30 起执行；2026-10-01 起改由 epi 在 Herdr 里自己开发自己，流程见 [dev-workflow-herdr.md](dev-workflow-herdr.md)，代码规范、合并前检查和审查清单见 [code-quality.md](code-quality.md)。本文第 1–2 节是当前流程的摘要（完整版以 dev-workflow-herdr.md 第 1–3 节为准）；第 3 节是任务说明的写法，第 4 节是 Herdr 实测的操作，第 5–6 节是不可违反的约定和仓库文件约定。记录的是开发 Epi 时实际在用、并和用户确认过的做法。产品层面的约定见 [development.md](development.md)，关键决策见 [decisions.md](decisions.md)。
+2026-09-30 起执行；2026-10-01 起改由 epi 在 Herdr 里自己开发自己；2026-10-06 起流程全 epi 化：主控、审查、终审、阅读都是 epi 会话、用 epi 内部已配置的模型，不再依赖 Claude Code / Fable（decisions.md WF1）。流程见 [dev-workflow-herdr.md](dev-workflow-herdr.md)，代码规范、合并前检查和审查清单见 [code-quality.md](code-quality.md)。本文第 1–2 节是当前流程的摘要（完整版以 dev-workflow-herdr.md 第 1–3 节为准）；第 3 节是任务说明的写法，第 4 节是 Herdr 实测的操作，第 5–6 节是不可违反的约定和仓库文件约定。记录的是开发 Epi 时实际在用、并和用户确认过的做法。产品层面的约定见 [development.md](development.md)，关键决策见 [decisions.md](decisions.md)。
 
 ## 1. 角色分工
 
 | 角色 | 谁 | 做什么 |
 |---|---|---|
-| 主控 | 主会话（Opus 5.5，high） | 和用户讨论需求、写设计文档、拆任务、审查和验证每个任务（2026-10-03 起不再有单独的初审）、合并、在 Herdr 里实测、向用户汇报 |
-| 顾问 | Fable（主会话的 `advisor` 工具） | 定计划之前、同样的问题第二次出现、宣布完成或合并之前给意见，见 [dev-workflow-herdr.md](dev-workflow-herdr.md) 第 2 节 |
+| 主控 | epi 主会话 | 和用户讨论需求、写设计文档、拆任务、审查和验证每个任务、合并、在 Herdr 里实测、向用户汇报 |
+| 顾问 | `epi -p` 派出的独立只读会话（epi 内部模型；主控把背景材料写成文件交给它，它看不到主控会话） | 定计划之前、同样的问题第二次出现、宣布完成或合并之前给意见，见 [dev-workflow-herdr.md](dev-workflow-herdr.md) 第 2 节 |
 | 编码 | Herdr 里的 epi（magpie opus-5.5，high），见 [code-quality.md](code-quality.md) 第 1 节 | 在独立 git worktree 里实现一个边界清楚的任务，自带测试，提交后交回 |
-| 终审 | Fable（`model: "fable"`，只读） | 大节点审查，主控打审查包 |
-| 阅读 | Claude Code 的 Sonnet 子代理（`model: "sonnet"`，只读） | 读代码、查资料，结论带文件行号或来源链接；主控核对原文后再用。不再用 agy |
+| 终审 | `epi -p` 派出的只读审查会话（epi 内部模型） | 大节点审查，主控打审查包 |
+| 阅读 | `epi -p` 派出的只读会话（epi 内部模型） | 读代码、查资料，结论带文件行号或来源链接；主控核对原文后再用 |
 
 每次合并后，在 memory 的 `subagent-quality-log.md` 里记一行：任务、作者、合并前退回几轮、合并后查出的 bug（P1 行为错误或安全问题 / P2 / P3 测试或整洁）。汇报时附上当前统计。
 
@@ -29,12 +29,12 @@
 - 设计先行：用户要设计时只讨论设计，不写代码。规格写进 `docs/` 里对应的设计文档，每条注明来源（实测 grok、源码笔记、还是主控自己定的）。
 - 合并前审查是强制的，不要等合并后再审。复杂的状态逻辑（编辑器坐标、队列、会话切换）尤其如此。
 - 审查—修复循环（2026-09-30 起，skills/hooks 分支上实际这样做）：
-  - Fable 每条发现都要复现：把复现脚本写进 scratchpad（`fable-review-N/`），标 CONFIRMED（跑出来了）或 PLAUSIBLE（推断），附文件行号和修法方向。
-  - 退回时把 Fable 的发现原样转给作者，附复现脚本路径；作者修完必须重跑这些脚本，并证明新测试在修复前失败：在临时副本里跑（`git archive` 或 `cp` 到 `/tmp`，换回修复前的 `src/`/`dist/` 再跑）。不要用 `git stash`：所有 worktree 共用一个 stash 栈，并行任务会互相弹出对方的改动（2026-10-02 U5 × D63）。修复前的副本可能缺少测试依赖的离线开关，所以在系统层面禁止联网再跑：`sandbox-exec -p '(version 1)(allow default)(deny network-outbound (remote ip))' node --test …`，测试需要本地服务时再加 `(allow network-outbound (remote ip "localhost:*"))`（D63 的修复前副本曾真的访问 npm registry）。
+  - 审查者每条发现都要复现：把复现脚本写进 scratchpad（`review-N/`），标 CONFIRMED（跑出来了）或 PLAUSIBLE（推断），附文件行号和修法方向。
+  - 退回时把审查的发现原样转给作者，附复现脚本路径；作者修完必须重跑这些脚本，并证明新测试在修复前失败：在临时副本里跑（`git archive` 或 `cp` 到 `/tmp`，换回修复前的 `src/`/`dist/` 再跑）。不要用 `git stash`：所有 worktree 共用一个 stash 栈，并行任务会互相弹出对方的改动（2026-10-02 U5 × D63）。修复前的副本可能缺少测试依赖的离线开关，所以在系统层面禁止联网再跑：`sandbox-exec -p '(version 1)(allow default)(deny network-outbound (remote ip))' node --test …`，测试需要本地服务时再加 `(allow network-outbound (remote ip "localhost:*"))`（D63 的修复前副本曾真的访问 npm registry）。
   - 每轮修复后都再审一次，只审新提交，但要重跑上一轮的全部复现脚本，并专门找绕过（大小写、软链接链、编码形式等）。
-  - 审查里遇到"这个算不算问题"的策略问题，由主控拍板并写进下一轮的任务说明，不让 Fable 或作者自己定。
+  - 审查里遇到"这个算不算问题"的策略问题，由主控拍板并写进下一轮的任务说明，不让顾问或作者自己定。
   - 安全和硬规则（配置隔离、密钥泄露）一律阻塞合并，哪怕改动很小；非阻塞的记下来，合并时一起处理或进待办。
-- 合并提交写明作者和审查情况，例如 `Merge … (Opus, Fable-reviewed before merge)`。主控在合并时改的地方写进合并提交说明。
+- 合并提交写明作者和审查情况，例如 `Merge … (epi 主控审查, epi-review passed before merge)`。主控在合并时改的地方写进合并提交说明。
 - 只提交到本地分支。推送、开 PR、发布都是对外操作，每次都要用户明确同意。
 
 ## 3. 给 subagent 的任务说明
