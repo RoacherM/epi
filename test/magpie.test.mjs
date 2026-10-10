@@ -520,6 +520,28 @@ test("a gateway that is not running is silent, until the run fails to find the M
   });
 });
 
+test("D81: unrelated model warnings and an overridden default do not name the absent gateway", async (t) => {
+  const server = await serverFor(t);
+  const fixture = setup(t, await closedUrl());
+  fixture.otherProvider(server.baseUrl);
+  for (const args of [
+    ["--model", "other/echo"],
+    ["--model", "other/echo", "--models", "zzz/*"],
+    ["--model", "other/echo:bogus"],
+  ]) {
+    const output = await cliRun(fixture, [...args, ...printArgs]);
+    assert.equal(output.stdout.trim(), "MAGPIE_OK 你好");
+    assert.doesNotMatch(output.stderr, /Magpie is not running/, args.join(" "));
+    if (args.includes("zzz/*")) assert.match(output.stderr, /No models match pattern/);
+    if (args.includes("other/echo:bogus")) assert.match(output.stderr, /Using custom model id/);
+  }
+  writeFileSync(join(fixture.epiHome, "pi", "settings.json"), JSON.stringify({ defaultProvider: "magpie", defaultModel: "missing" }));
+  for (const args of [["--model", "other/echo"], ["--models", "other/*"]]) {
+    const output = await cliRun(fixture, [...args, ...printArgs]);
+    assert.equal(output.stderr, "", args.join(" "));
+  }
+});
+
 // The other ways a run can depend on Magpie: the saved default, a scope pattern, the worker's
 // default. Each used to end as a different failure, or as a quiet switch to another model.
 test("a gateway that is not running is named when settings or a pattern select Magpie", async (t) => {

@@ -412,7 +412,10 @@ export async function createEpiRuntime(options) {
             ...collectExtensionDiagnostics(services),
             ...duplicateCommandDiagnostics(services, options.assembly),
             ...providers.warnings,
-            ...notRunningWarnings(providers, services.settingsManager.getDefaultProvider(), initial.diagnostics.length > 0),
+            ...notRunningWarnings(providers, {
+                defaultProvider: initial.options.model === undefined ? services.settingsManager.getDefaultProvider() : undefined,
+                diagnostics: initial.diagnostics,
+            }),
             ...initial.diagnostics,
         ];
         const initialModel = initial.options.model;
@@ -469,7 +472,7 @@ export async function createEpiRuntime(options) {
         // running may be the reason.
         if (created.session.model === undefined || created.session.model.provider === "unknown") {
             const said = new Set(diagnostics.map((diagnostic) => diagnostic.message));
-            diagnostics.push(...notRunningWarnings(providers, undefined, true).filter(({ message }) => !said.has(message)));
+            diagnostics.push(...notRunningWarnings(providers, { noModel: true }).filter(({ message }) => !said.has(message)));
         }
         return { ...created, services, diagnostics };
     };

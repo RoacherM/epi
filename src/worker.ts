@@ -145,7 +145,10 @@ async function main(): Promise<void> {
   // In the reported error, not on stderr: the task tool hands the model the error and keeps stderr
   // as an artifact only (task-runtime.ts).
   const notRunning = (choiceFailed: boolean): string =>
-    notRunningWarnings(providers, settingsManager.getDefaultProvider(), choiceFailed)
+    notRunningWarnings(providers, {
+      defaultProvider: resolvedModel?.model === undefined ? settingsManager.getDefaultProvider() : undefined,
+      noModel: choiceFailed,
+    })
       .map((warning) => `; ${warning.message}`)
       .join("");
   if (resolvedModel?.error !== undefined) {

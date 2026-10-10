@@ -17,12 +17,16 @@ export interface SettledProviders {
     notRunning: NotRunning[];
 }
 export declare function isConnectionRefused(error: unknown): boolean;
-/**
- * The `notRunning` entries a run has to show: all of them when its model choice went wrong
- * (`choiceFailed`: a model argument or pattern did not resolve, or the session has no model), and
- * otherwise the saved default provider's, since the run then quietly uses another model.
- */
-export declare function notRunningWarnings(settled: SettledProviders, defaultProvider: string | undefined, choiceFailed: boolean): Warning[];
+/** An absent local gateway matters only when model selection fails, names that provider in a
+ * diagnostic, or falls back from its saved default. Unrelated warnings must not implicate it. */
+export declare function notRunningWarnings(settled: SettledProviders, choice: {
+    defaultProvider?: string | undefined;
+    diagnostics?: readonly {
+        type: string;
+        message: string;
+    }[];
+    noModel?: boolean;
+}): Warning[];
 /**
  * Every path that picks or lists models calls this between createAgentSessionServices and the
  * pick: the TUI and print/json/rpc through createEpiRuntime, the task worker and --list-models

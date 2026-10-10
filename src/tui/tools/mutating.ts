@@ -57,6 +57,7 @@ interface ParsedDiff {
   lines: DiffLine[];
   additions: number;
   removals: number;
+  trailingSkipped: boolean;
 }
 
 /** Exported for test/pi-internals.test.mjs's `edit-diff-format` check (docs/pi-internals.md). */
@@ -100,7 +101,7 @@ export function parseDiffString(diffStr: string): ParsedDiff {
     afterSkip = false;
   }
 
-  return { lines, additions, removals };
+  return { lines, additions, removals, trailingSkipped: afterSkip };
 }
 
 function formatDiffSummary(additions: number, removals: number, theme: Theme): string {
@@ -118,7 +119,7 @@ function formatDiffSummary(additions: number, removals: number, theme: Theme): s
 
 type FormattedItem =
   | { kind: "line"; diffLine: DiffLine }
-  | { kind: "collapsed"; count: number };
+  | { kind: "collapsed"; count?: number };
 
 /** A run of consecutive add/remove rows, by index into the diff and by its first/last line number. */
 interface Hunk {
@@ -180,16 +181,16 @@ function contextBetween(diffLines: DiffLine[], hunk: Hunk, next: Hunk): Formatte
   ];
 }
 
-/** Up to 3 context rows after the last hunk, then a count of the remaining context rows Pi sent. */
-function trailingContext(diffLines: DiffLine[], lastHunk: Hunk): FormattedItem[] {
+/** Pi omits the file length, so a trailing skip marker means the hidden count is unknown. */
+function trailingContext(diffLines: DiffLine[], lastHunk: Hunk, trailingSkipped: boolean): FormattedItem[] {
   const trailing = diffLines.slice(lastHunk.endIdx + 1);
-  return [
-    ...lineItems(trailing.slice(0, 3)),
-    ...(trailing.length > 3 ? [{ kind: "collapsed", count: trailing.length - 3 } as const] : []),
-  ];
+  const gap: FormattedItem[] = trailingSkipped
+    ? [{ kind: "collapsed" }]
+    : trailing.length > 3 ? [{ kind: "collapsed", count: trailing.length - 3 }] : [];
+  return [...lineItems(trailing.slice(0, 3)), ...gap];
 }
 
-function collapseDiffContext(diffLines: DiffLine[]): FormattedItem[] {
+function collapseDiffContext(diffLines: DiffLine[], trailingSkipped: boolean): FormattedItem[] {
   const hunks = findHunks(diffLines);
   const firstHunk = hunks[0];
   const lastHunk = hunks[hunks.length - 1];
@@ -203,7 +204,7 @@ function collapseDiffContext(diffLines: DiffLine[]): FormattedItem[] {
     const next = hunks[h + 1];
     if (next !== undefined) items.push(...contextBetween(diffLines, hunk, next));
   });
-  items.push(...trailingContext(diffLines, lastHunk));
+  items.push(...trailingContext(diffLines, lastHunk, trailingSkipped));
   return items;
 }
 
@@ -219,7 +220,7 @@ function renderDiffExpanded(items: FormattedItem[], theme: Theme): string[] {
   return items.map((item) => {
     if (item.kind === "collapsed") {
       const indent = " ".repeat(gutterWidth);
-      return theme.fg("muted", `${indent} … ${item.count} unchanged lines`);
+      return theme.fg("muted", `${indent} …${item.count === undefined ? "" : ` ${item.count} unchanged lines`}`);
     }
     const { kind, lineNum, text } = item.diffLine;
     const gutter = String(lineNum).padStart(gutterWidth, " ");
@@ -260,7 +261,7 @@ function renderUnifiedDiffResult(
     return new LinesComponent(summary);
   }
 
-  const items = collapseDiffContext(parsed.lines);
+  const items = collapseDiffContext(parsed.lines, parsed.trailingSkipped);
   const lines = renderDiffExpanded(items, theme);
   return new LinesComponent(lines);
 }

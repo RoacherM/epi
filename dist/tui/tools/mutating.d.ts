@@ -10,6 +10,7 @@ interface ParsedDiff {
     lines: DiffLine[];
     additions: number;
     removals: number;
+    trailingSkipped: boolean;
 }
 /** Exported for test/pi-internals.test.mjs's `edit-diff-format` check (docs/pi-internals.md). */
 export declare function parseDiffString(diffStr: string): ParsedDiff;

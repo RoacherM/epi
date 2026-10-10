@@ -463,7 +463,7 @@ test("real tools execution against temporary files fed to mutating renderers", a
   const editExpLines = editExpanded.render(80);
   assert.ok(editExpLines.some((l) => l.includes("… 11 unchanged lines")));
   assert.ok(editExpLines.some((l) => l.includes("line fifteen")));
-  assert.ok(editExpLines.some((l) => l.includes("… 1 unchanged lines")));
+  assert.equal(editExpLines.at(-1).replace(/\x1b\[[0-9;]*m/g, "").trim(), "…");
 
   // Assert widths for all generated real lines
   assertWidths(bashExpanded);
@@ -485,6 +485,20 @@ async function renderRealEdit(t, edits, lineCount = 40) {
   const component = editRenderers.renderResult(result, { expanded: true, isPartial: false }, theme, { cwd: tmp });
   return component.render(120).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
 }
+
+test("D78: an elided edit tail has no fabricated count; an EOF tail keeps an exact count", async (t) => {
+  for (const length of [10, 40, 100]) {
+    const rows = await renderRealEdit(t, [{ oldText: "line 5\n", newText: "NEW 5\n" }], length);
+    assert.equal(rows.at(-1), "   …", `file length ${length}`);
+  }
+  const eof = await renderRealEdit(t, [{ oldText: "line 5\n", newText: "NEW 5\n" }], 9);
+  assert.equal(eof.at(-1), "   … 1 unchanged lines");
+  const short = await renderRealEdit(t, [{ oldText: "line 5\n", newText: "NEW 5\n" }], 8);
+  assert.equal(short.at(-1), " 8 line 8");
+  const noContext = editRenderers.renderResult({ content: [], details: { diff: "- 1 a\n+ 1 b\n    ..." } },
+    { expanded: true, isPartial: false }, theme, { cwd: "/" }).render(80).map(line => line.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.equal(noContext.at(-1), "   …");
+});
 
 // Walks the old-file rows ("line N") and the "… N unchanged lines" rows between them: no old line
 // may appear twice, and every collapsed count between two shown rows must equal the real gap.
@@ -522,8 +536,8 @@ test("edit: expanded multi-hunk diffs from the real edit tool keep every hunk an
   assert.deepEqual(far, [
     collapsed(1), ctx(2), ctx(3), ctx(4), " 5 line 5", " 5 NEW 5", ctx(6), ctx(7), ctx(8),
     collapsed(18), ctx(27), ctx(28), ctx(29), "30 line 30", "30 NEW 30", ctx(31), ctx(32), ctx(33),
-    // Trailing count only covers the context rows Pi sent (4 shown by Pi, 3 kept), not the rest of the file.
-    collapsed(1),
+    // Pi elides the rest of the file without a count.
+    "   …",
   ]);
   assertOldLinesAccountedFor(far.slice(0, -1));
 
@@ -535,7 +549,7 @@ test("edit: expanded multi-hunk diffs from the real edit tool keep every hunk an
   assert.deepEqual(near, [
     collapsed(1), ctx(2), ctx(3), ctx(4), " 5 line 5", " 5 NEW 5",
     ctx(6), ctx(7), ctx(8), ctx(9), ctx(10),
-    "11 line 11", "11 NEW 11", ctx(12), ctx(13), ctx(14), collapsed(1),
+    "11 line 11", "11 NEW 11", ctx(12), ctx(13), ctx(14), "   …",
   ]);
   assertOldLinesAccountedFor(near.slice(0, -1));
 
@@ -547,7 +561,7 @@ test("edit: expanded multi-hunk diffs from the real edit tool keep every hunk an
   assert.deepEqual(seven, [
     collapsed(1), ctx(2), ctx(3), ctx(4), " 5 line 5", " 5 NEW 5",
     ctx(6), ctx(7), ctx(8), collapsed(1), ctx(10), ctx(11), ctx(12),
-    "13 line 13", "13 NEW 13", ctx(14), ctx(15), ctx(16), collapsed(1),
+    "13 line 13", "13 NEW 13", ctx(14), ctx(15), ctx(16), "   …",
   ]);
   assertOldLinesAccountedFor(seven.slice(0, -1));
 
@@ -560,7 +574,7 @@ test("edit: expanded multi-hunk diffs from the real edit tool keep every hunk an
   assert.deepEqual(grown, [
     collapsed(1), ctx(2), ctx(3), ctx(4), " 5 line 5", " 5 NEW a", " 6 NEW b", " 7 NEW c",
     ctx(6), ctx(7), ctx(8), collapsed(18), ctx(27), ctx(28), ctx(29),
-    "30 line 30", "32 NEW 30", ctx(31), ctx(32), ctx(33), collapsed(1),
+    "30 line 30", "32 NEW 30", ctx(31), ctx(32), ctx(33), "   …",
   ]);
   assertOldLinesAccountedFor(grown.slice(0, -1));
 
@@ -588,7 +602,7 @@ test("edit: a hunk that changes the line count draws the gap to the next hunk on
   const ctx = (n) => `${String(n).padStart(2)} line ${n}`;
   const collapsed = (n) => `   … ${n} unchanged lines`;
   const head = [collapsed(1), ctx(2), ctx(3), ctx(4)];
-  const tail = (n) => [ctx(n + 1), ctx(n + 2), ctx(n + 3), collapsed(1)];
+  const tail = (n) => [ctx(n + 1), ctx(n + 2), ctx(n + 3), "   …"];
   // Gaps 1–8 reach the renderer whole (Pi elides only gaps over 2 × 4 lines); 9 crosses Pi's "...".
   for (let gap = 1; gap <= 9; gap++) {
     // The first hunk grows by one line, so the next hunk's old numbers lag its "+" rows.
@@ -644,7 +658,7 @@ test("edit: a short gap after one of Pi's \"...\" markers is still shown whole",
   assert.deepEqual(farThenShort, [
     "   … 1 unchanged lines", ctx(2), ctx(3), ctx(4), ...changed(5),
     ...expectedGap(6, 14), ...changed(20), ...expectedGap(21, 5), ...changed(26),
-    ctx(27), ctx(28), ctx(29), "   … 1 unchanged lines",
+    ctx(27), ctx(28), ctx(29), "   …",
   ]);
   assertOldLinesAccountedFor(farThenShort.slice(0, -1));
 });
@@ -661,7 +675,7 @@ test("edit: a short gap that Pi elides with \"...\" is collapsed, not shown as i
   const ctx = (n) => `${String(n).padStart(2)} line ${n}`;
   assert.deepEqual(rows, [
     "   … 2 unchanged lines", ctx(3), ctx(4), " 5 line 5", " 5 NEW 5",
-    ctx(6), ctx(7), "   … 2 unchanged lines", ctx(10), ctx(11), "12 line 12", "12 NEW 12", ctx(13), ctx(14),
+    ctx(6), ctx(7), "   … 2 unchanged lines", ctx(10), ctx(11), "12 line 12", "12 NEW 12", ctx(13), ctx(14), "   …",
   ]);
   assertOldLinesAccountedFor(rows);
 });

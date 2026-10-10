@@ -3,7 +3,7 @@
 // Every run spawns the real dist/cli.js with a temp HOME/EPI_HOME, offline.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -237,6 +237,58 @@ test("D85: intercepted input, terminating tools and replaced/reloaded sessions d
     assert.equal(result.status, 1, result.context);
   }
 });
+
+test("D86: active cancellation keeps text/JSON nonzero without labelling the message a request error", (t) => {
+  const slow = fileURLToPath(new URL("./fixtures/faux-slow.mjs", import.meta.url));
+  const abort = fileURLToPath(new URL("./fixtures/abort-on-message-extension.mjs", import.meta.url));
+  const f = fixture(t, [slow, abort]);
+  for (const mode of ["text", "json"]) {
+    const result = run(f, ["--no-project", "--no-session", "--model", "epi-faux/slow", "--mode", mode, "hi"]);
+    assert.equal(result.status, 1, result.context);
+    if (mode === "text") {
+      assert.equal(result.stderr, "Request was aborted\n", result.context);
+    } else {
+      assert.equal(result.stderr, "", result.context);
+      const events = result.stdout.trim().split("\n").map(line => JSON.parse(line));
+      assert.equal(events.findLast(event => event.type === "message_end").message.stopReason, "aborted");
+      assert.equal(events.at(-1).type, "agent_settled");
+    }
+  }
+});
+
+for (const operation of ["new_session", "switch_session", "fork"]) {
+  test(`D83: RPC ${operation} reports provider load failure once and clears stale diagnostics`, async (t) => {
+    const failedProvider = fileURLToPath(new URL("./fixtures/fail-provider-on-reload.mjs", import.meta.url));
+    const f = fixture(t, [fauxEcho, failedProvider]);
+    const seed = run(f, [...MODEL, "-p", "seed"]);
+    assert.equal(seed.status, 0, seed.context);
+    const sessionsDir = join(f.home, ".epi", "pi", "sessions");
+    const sessionPath = join(sessionsDir, sessionFiles(sessionsDir)[0]);
+    const entries = readFileSync(sessionPath, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    const entryId = entries.find(entry => entry.message?.role === "user").id;
+    const replacement = operation === "switch_session" ? { sessionPath } : operation === "fork" ? { entryId } : {};
+    const result = await rpc(f, ["--no-project", "--session", sessionPath, "--model", "selected/chosen"], [
+      { send: { id: "before", type: "get_state" }, until: '"id":"before"' },
+      { send: { id: "new", type: operation, ...replacement }, until: '"id":"new"' },
+      { send: { id: "after", type: "get_state" }, until: '"id":"after"' },
+      { send: { id: "recover", type: "new_session" }, until: '"id":"recover"' },
+      { send: { id: "recovered", type: "get_state" }, until: '"id":"recovered"' },
+    ]);
+    assert.equal(result.status, 0, result.context);
+    assert.equal(result.stderr, "", result.context);
+    const records = result.stdout.trim().split("\n").map(line => JSON.parse(line));
+    const state = id => records.find(record => record.id === id).data.model;
+    assert.equal(state("before").provider, "selected");
+    assert.equal(state("after").provider, "epi-faux");
+    assert.equal(state("recovered").provider, "selected");
+    assert.equal(records.find(record => record.id === "new").success, true);
+    const notices = records.filter(record => record.type === "extension_ui_request" && record.method === "notify");
+    assert.equal(notices.filter(record => record.message.includes("D83 provider reload failed")).length, 1, result.context);
+    assert.ok(notices.some(record => record.notifyType === "error" && /Model "selected\/chosen" not found/.test(record.message)), result.context);
+    const afterRecovery = records.slice(records.findIndex(record => record.id === "after") + 1);
+    assert.ok(!afterRecovery.some(record => record.type === "extension_ui_request"), result.context);
+  });
+}
 
 function rpc(f, args, commands) {
   return new Promise((resolve) => {

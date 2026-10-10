@@ -20,7 +20,7 @@
 | 情况 | 行为 |
 |---|---|
 | 网关在运行 | 每次启动请求一次目录，不管这次选的是哪个 provider |
-| 网关没运行或没安装（连接被拒绝） | 不提示，用保存的列表。这次运行依赖 Magpie 时（模型参数或模式解析出了问题、会话没有模型、或保存的默认 provider 是 magpie），加一行 `Warning: Model list refresh failed for magpie: Magpie is not running at …`，否则用户只会看到 `Unknown provider "magpie"`（硬规则：一个失败不能表现成另一个）。这一条对所有扩展 provider 一样，按"连接被拒绝"判断，不按名字（我定的） |
+| 网关没运行或没安装（连接被拒绝） | 不提示，用保存的列表。模型选择出现错误、会话没有模型、诊断明确提到该 provider，或未由 CLI/作用域选出模型且保存的默认 provider 是 magpie 时，加一行 `Warning: Model list refresh failed for magpie: Magpie is not running at …`，否则用户只会看到 `Unknown provider "magpie"`（硬规则：一个失败不能表现成另一个）。无关的模型警告不触发这条提示；CLI/作用域已经选出模型时不再看保存的默认 provider（D81）。这一条对所有扩展 provider 一样，按"连接被拒绝"判断，不按名字 |
 | 其他失败（超时、HTTP 错误、目录格式不对） | 每次都警告：`Warning: Model list refresh failed for magpie: …; using its last saved model list, if any.`，继续用保存的列表 |
 | 用保存的列表选中了 Magpie 的模型，但网关没运行 | 请求本身失败，报连接错误 |
 | `--offline`、任意值的 `EPI_OFFLINE` | 不联网，只用保存的列表 |

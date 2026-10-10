@@ -1171,7 +1171,7 @@ Benchmark 不是阶段 A/B 的实现内容，但阶段 A 的 JSON mode、stdout/
 - 连续执行两次 Epi dry-run 并比较原始输出；装配 digest 同时覆盖规范化 dry-run snapshot 和 bundle 文件 SHA-256；
 - 原样保留 request、assembly、fingerprint、Pi JSONL、stderr、可选 grader 输出及 metadata；
 - metadata 汇总 resolved model、token/cost、tool 调用/错误、compaction、Session/trust/capsule 和 orphan-process 检查；
-- 退出码稳定区分 success `0`、Harness `2`、infra `3`、model `4`、grader `5`；所有 child/grader 均使用 argv 数组，不经过 shell。
+- 退出码稳定区分 success `0`、Harness `2`、infra `3`、model `4`、grader `5`、cancelled `6`；已结束运行的最终请求为 `aborted` 时统一归为 cancelled，不因 Pi/Epi 子进程退出码不同而判为成功或 Harness 故障，不运行 grader（D86，见 [cli-design.md](cli-design.md)）。所有 child/grader 均使用 argv 数组，不经过 shell。
 
 机器契约由 `test/benchmark-adapter.test.mjs` 覆盖，包括：相同 bundle 跨独立 trial digest 一致、敏感状态不复制、PATH 无全局 `pi`、严格 JSONL、timeout 终止和四类失败映射。
 

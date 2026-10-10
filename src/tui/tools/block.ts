@@ -56,12 +56,22 @@ function fallbackCall(toolName: string, theme: Theme): Component {
   return new piTui.Text(theme.fg("toolTitle", theme.bold(toolName)), 0, 0);
 }
 
+function hasMalformedContent(result: AgentToolResult<unknown>): boolean {
+  if (!Array.isArray(result?.content)) return true;
+  return result.content.some((part) => {
+    if (part?.type === "text") return typeof part.text !== "string";
+    if (part?.type === "image") return typeof part.data !== "string" || typeof part.mimeType !== "string";
+    return true;
+  });
+}
+
 function fallbackResult(result: AgentToolResult<unknown>, expanded: boolean, theme: Theme): Component {
   const text = textContent(result).trimEnd();
   const lines = text === "" ? [] : text.split("\n");
   const shown = expanded ? lines : lines.slice(0, FALLBACK_LINES);
   const rows = shown.map((line) => theme.fg("toolOutput", line));
   if (shown.length < lines.length) rows.push(theme.fg("muted", `… +${lines.length - shown.length} lines (Ctrl+O to expand)`));
+  if (hasMalformedContent(result)) rows.push(theme.fg("muted", "(unrenderable tool result)"));
   return new piTui.Text(rows.join("\n"), 0, 0);
 }
 

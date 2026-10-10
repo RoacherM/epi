@@ -25,19 +25,28 @@ export function isConnectionRefused(error: unknown): boolean {
   return typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ECONNREFUSED";
 }
 
-/**
- * The `notRunning` entries a run has to show: all of them when its model choice went wrong
- * (`choiceFailed`: a model argument or pattern did not resolve, or the session has no model), and
- * otherwise the saved default provider's, since the run then quietly uses another model.
- */
+/** An absent local gateway matters only when model selection fails, names that provider in a
+ * diagnostic, or falls back from its saved default. Unrelated warnings must not implicate it. */
 export function notRunningWarnings(
   settled: SettledProviders,
-  defaultProvider: string | undefined,
-  choiceFailed: boolean,
+  choice: {
+    defaultProvider?: string | undefined;
+    diagnostics?: readonly { type: string; message: string }[];
+    noModel?: boolean;
+  },
 ): Warning[] {
-  const wanted = defaultProvider?.toLowerCase();
+  const diagnostics = choice.diagnostics ?? [];
+  const failed = choice.noModel === true || diagnostics.some(({ type }) => type === "error");
+  const wanted = choice.defaultProvider?.toLowerCase();
   return settled.notRunning
-    .filter(({ provider }) => choiceFailed || provider.toLowerCase() === wanted)
+    .filter(({ provider }) => {
+      const id = provider.toLowerCase();
+      return failed || id === wanted || diagnostics.some(({ message }) => {
+        // Pi quotes providers and model patterns in its model-resolution diagnostics.
+        const text = message.toLowerCase();
+        return text.includes(`"${id}"`) || text.includes(`"${id}/`);
+      });
+    })
     .map(({ type, message }) => ({ type, message }));
 }
 

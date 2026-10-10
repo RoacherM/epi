@@ -53,6 +53,7 @@ const EXIT_CODE = {
   infra: 3,
   model: 4,
   grader: 5,
+  cancelled: 6,
 };
 const VARIANTS = new Set([
   "pi-baseline",
@@ -518,8 +519,8 @@ function createMetricsCollector() {
     eventCount: 0,
     agentSettled: false,
     modelErrors: [],
-    /** Whether the LAST assistant message_end carried stopReason "error" (see classifyRun). */
-    lastAssistantErrored: false,
+    /** The final request outcome, not any earlier failed or cancelled attempt. */
+    lastAssistantStopReason: undefined,
     extensionErrors: [],
     resolvedModels: new Set(),
   };
@@ -558,7 +559,7 @@ function createMetricsCollector() {
         if (event.message.stopReason === "error") {
           state.modelErrors.push(String(event.message.errorMessage ?? "model error"));
         }
-        state.lastAssistantErrored = event.message.stopReason === "error";
+        state.lastAssistantStopReason = event.message.stopReason;
       }
       if (event.type === "compaction_end" && event.aborted !== true) {
         metrics.compactions += 1;
@@ -626,14 +627,12 @@ function classifyRun(run, collector) {
   if (run.spawnError !== undefined || run.timedOut || run.interrupted || run.signal !== null) {
     return "infra";
   }
-  // `epi --mode json` exits 1 when the final request failed (docs/cli-design.md); Pi exits 0. Any
-  // other non-zero exit is the harness's. In json mode Pi reports extension errors only on stderr
-  // (print-mode.js onError), whatever the exit code; other stderr lines are warnings and count for
-  // nothing, so Pi and Epi are classified alike.
-  const modelFailed = collector.modelErrors.length > 0;
-  const modelExit = run.code === 1 && collector.lastAssistantErrored;
+  // Epi exits 1 after a failed or aborted final request; Pi's JSON mode exits 0. Neither exit
+  // convention should change the classification, or hide an independent protocol/extension error.
+  const cancelled = collector.lastAssistantStopReason === "aborted";
+  const requestExit = run.code === 1 && (collector.lastAssistantStopReason === "error" || cancelled);
   if (
-    (run.code !== 0 && !modelExit) ||
+    (run.code !== 0 && !requestExit) ||
     run.invalidJsonLine !== undefined ||
     collector.extensionErrors.length > 0 ||
     EXTENSION_ERROR_LINE.test(run.stderr) ||
@@ -641,7 +640,8 @@ function classifyRun(run, collector) {
   ) {
     return "harness";
   }
-  if (modelFailed) {
+  if (cancelled) return "cancelled";
+  if (collector.modelErrors.length > 0) {
     return "model";
   }
   return null;
@@ -923,7 +923,7 @@ async function main(argv) {
     eventCount: collector.state.eventCount,
     orphanCheck,
     isolationCheck,
-    grader: options.grader === undefined
+    grader: graderRun === undefined
       ? { status: "not-run" }
       : {
           status: graderRun?.code === 0 ? "passed" : "failed",

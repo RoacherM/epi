@@ -70,7 +70,7 @@ export function parseDiffString(diffStr) {
         }
         afterSkip = false;
     }
-    return { lines, additions, removals };
+    return { lines, additions, removals, trailingSkipped: afterSkip };
 }
 function formatDiffSummary(additions, removals, theme) {
     if (additions > 0 && removals > 0) {
@@ -134,15 +134,15 @@ function contextBetween(diffLines, hunk, next) {
         ...lineItems(keptBefore),
     ];
 }
-/** Up to 3 context rows after the last hunk, then a count of the remaining context rows Pi sent. */
-function trailingContext(diffLines, lastHunk) {
+/** Pi omits the file length, so a trailing skip marker means the hidden count is unknown. */
+function trailingContext(diffLines, lastHunk, trailingSkipped) {
     const trailing = diffLines.slice(lastHunk.endIdx + 1);
-    return [
-        ...lineItems(trailing.slice(0, 3)),
-        ...(trailing.length > 3 ? [{ kind: "collapsed", count: trailing.length - 3 }] : []),
-    ];
+    const gap = trailingSkipped
+        ? [{ kind: "collapsed" }]
+        : trailing.length > 3 ? [{ kind: "collapsed", count: trailing.length - 3 }] : [];
+    return [...lineItems(trailing.slice(0, 3)), ...gap];
 }
-function collapseDiffContext(diffLines) {
+function collapseDiffContext(diffLines, trailingSkipped) {
     const hunks = findHunks(diffLines);
     const firstHunk = hunks[0];
     const lastHunk = hunks[hunks.length - 1];
@@ -156,7 +156,7 @@ function collapseDiffContext(diffLines) {
         if (next !== undefined)
             items.push(...contextBetween(diffLines, hunk, next));
     });
-    items.push(...trailingContext(diffLines, lastHunk));
+    items.push(...trailingContext(diffLines, lastHunk, trailingSkipped));
     return items;
 }
 function renderDiffExpanded(items, theme) {
@@ -170,7 +170,7 @@ function renderDiffExpanded(items, theme) {
     return items.map((item) => {
         if (item.kind === "collapsed") {
             const indent = " ".repeat(gutterWidth);
-            return theme.fg("muted", `${indent} … ${item.count} unchanged lines`);
+            return theme.fg("muted", `${indent} …${item.count === undefined ? "" : ` ${item.count} unchanged lines`}`);
         }
         const { kind, lineNum, text } = item.diffLine;
         const gutter = String(lineNum).padStart(gutterWidth, " ");
@@ -201,7 +201,7 @@ function renderUnifiedDiffResult(result, options, theme, context) {
         const summary = formatDiffSummary(parsed.additions, parsed.removals, theme);
         return new LinesComponent(summary);
     }
-    const items = collapseDiffContext(parsed.lines);
+    const items = collapseDiffContext(parsed.lines, parsed.trailingSkipped);
     const lines = renderDiffExpanded(items, theme);
     return new LinesComponent(lines);
 }

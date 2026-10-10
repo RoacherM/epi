@@ -49,7 +49,7 @@ function runAdapter(fixture, name, prompt, extra = [], variant = "epi-core-empty
       "--cwd",
       root,
       "--model",
-      "fixture/model",
+      fixture.model ?? "fixture/model",
       "--thinking",
       "off",
       "--tools",
@@ -57,7 +57,7 @@ function runAdapter(fixture, name, prompt, extra = [], variant = "epi-core-empty
       "--prompt",
       prompt,
       "--entry",
-      fakeHarness,
+      fixture.entry ?? fakeHarness,
       ...extra,
     ],
     {
@@ -184,6 +184,58 @@ test("benchmark adapter maps Harness, model, infra, and grader failures", () => 
     assert.equal(grader.result.status, 5, grader.result.stderr);
     assert.equal(grader.metadata.result.failureCategory, "grader");
     assert.equal(grader.metadata.grader.exitCode, 9);
+  } finally {
+    rmSync(fixture.fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("D86: a settled cancellation is neither success nor harness failure, for both exit conventions", () => {
+  const fixture = createFixture();
+  try {
+    const graderPath = join(fixture.fixtureRoot, "must-not-grade.mjs");
+    writeFileSync(graderPath, "process.exit(9);\n");
+    for (const [prompt, category, status] of [
+      ["ABORTED", "cancelled", 6],
+      ["ABORTED_EXIT_1", "cancelled", 6],
+      ["ABORTED_EXIT_2", "harness", 2],
+      ["ABORTED_THEN_OK", null, 0],
+      ["ABORTED_THEN_EXIT_1", "harness", 2],
+      ["ERROR_THEN_ABORTED", "cancelled", 6],
+      ["ABORTED_EXT_ERROR", "harness", 2],
+      ["ABORTED_UNSETTLED", "harness", 2],
+    ]) {
+      const extra = category === "cancelled" ? ["--grader", process.execPath, "--grader-arg", graderPath] : [];
+      const run = runAdapter(fixture, prompt, prompt, extra);
+      assert.equal(run.result.status, status, `${prompt}\n${run.result.stderr}`);
+      assert.equal(run.metadata.result.failureCategory, category, prompt);
+      assert.equal(run.metadata.result.success, category === null, prompt);
+      if (category === "cancelled") assert.deepEqual(run.metadata.grader, { status: "not-run" }, "cancelled trials must not be graded");
+    }
+  } finally {
+    rmSync(fixture.fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("D86: real Epi and Pi cancellation streams receive the same benchmark classification", () => {
+  const fixture = createFixture();
+  try {
+    const slow = join(root, "test/fixtures/faux-slow.mjs");
+    const abort = join(root, "test/fixtures/abort-on-message-extension.mjs");
+    writeFileSync(join(fixture.bundle, "epi.json"), JSON.stringify({
+      version: 1, extensions: [slow, abort], disable: ["epi:task", "epi:mcp", "epi:hooks"],
+    }));
+    const piWrapper = join(fixture.fixtureRoot, "pi-with-fixtures.mjs");
+    writeFileSync(piWrapper, `process.argv.splice(2, 0, "-e", ${JSON.stringify(slow)}, "-e", ${JSON.stringify(abort)});\n` +
+      `await import(${JSON.stringify(join(root, "node_modules/@earendil-works/pi-coding-agent/dist/cli.js"))});\n`);
+    for (const [variant, entry, exitCode] of [["epi-core-empty", join(root, "dist/cli.js"), 1], ["pi-baseline", piWrapper, 0]]) {
+      const trial = runAdapter({ ...fixture, entry, model: "epi-faux/slow" }, variant, "hi", [], variant, { EPI_OFFLINE: "1" });
+      assert.equal(trial.result.status, 6, trial.result.stderr);
+      assert.equal(trial.metadata.result.failureCategory, "cancelled");
+      assert.equal(trial.metadata.result.exitCode, exitCode);
+      assert.equal(trial.metadata.result.agentSettled, true);
+      assert.deepEqual(trial.metadata.result.modelErrors, []);
+      assert.match(readFileSync(join(trial.outputDir, "events.jsonl"), "utf8"), /"stopReason":"aborted"/);
+    }
   } finally {
     rmSync(fixture.fixtureRoot, { recursive: true, force: true });
   }

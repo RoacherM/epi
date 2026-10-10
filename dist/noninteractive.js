@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { initTheme, parseArgs, runPrintMode, runRpcMode, } from "@earendil-works/pi-coding-agent";
 import { EpiPreflightError } from "./errors.js";
 import { processFileArguments } from "./file-arguments.js";
-import { PROVIDER_LOGIN_HELP } from "./pi-output.js";
+import { PROVIDER_LOGIN_HELP, rewritePiText } from "./pi-output.js";
 import { trackRequestOutcome } from "./request-outcome.js";
 import { findNearestProjectManifest } from "./project.js";
 import { createEpiRuntime, settingsDiagnostics, StartupDiagnosticsError } from "./tui/services.js";
@@ -143,6 +143,31 @@ function reportStartup(runtime) {
         exitWithError(`No models available. ${PROVIDER_LOGIN_HELP}`);
     }
 }
+/** Pi's RPC runner binds the replacement session's UI before session_start, but does not report
+ * runtime diagnostics. Startup is already reported on stderr; reload does not replace the runtime. */
+function rpcReplacementDiagnostics(getRuntime) {
+    return {
+        name: "epi:rpc-diagnostics",
+        factory(pi) {
+            // RPC can bind the same session twice; each replacement has a fresh extension factory.
+            let reported = false;
+            pi.on("session_start", (event, ctx) => {
+                if (reported || event.reason === "startup" || event.reason === "reload")
+                    return;
+                reported = true;
+                const runtime = getRuntime();
+                const seen = new Set();
+                for (const { type, message } of [...settingsDiagnostics(runtime.services.settingsManager), ...runtime.diagnostics]) {
+                    const key = `${type}:${message}`;
+                    if (seen.has(key))
+                        continue;
+                    seen.add(key);
+                    ctx.ui.notify(rewritePiText(message), type);
+                }
+            });
+        },
+    };
+}
 /** `isStdoutClosed`: closed-stdout.ts's guard, which host.ts installs for print/json only. */
 export async function runNonInteractive(prepared, extensionFactories, isStdoutClosed) {
     const cwd = process.cwd();
@@ -152,7 +177,7 @@ export async function runNonInteractive(prepared, extensionFactories, isStdoutCl
     takeOverStdout();
     refuseUnsupportedArgs(parsed, mode);
     const outcome = trackRequestOutcome();
-    const runtime = await createRuntime(prepared, mode === "rpc" ? extensionFactories : [...extensionFactories, outcome.extension], cwd);
+    const runtime = await createRuntime(prepared, [...extensionFactories, mode === "rpc" ? rpcReplacementDiagnostics(() => runtime) : outcome.extension], cwd);
     if (mode !== "rpc") {
         await runPrint(runtime, parsed, mode, cwd, { outcome, isStdoutClosed });
         return;

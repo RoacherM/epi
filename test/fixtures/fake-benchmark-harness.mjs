@@ -52,6 +52,14 @@ if (prompt === "SLEEP") {
 // MODEL_ERROR_EXIT_1 as `epi --mode json` does; *_WARN_* adds an unrelated warning on stderr. *_THEN_*
 // fails a request and then ends normally; *_EXT_ERROR* writes Pi's json-mode extension error to stderr.
 const CASES = {
+  ABORTED: { abortLast: true, exit: 0 },
+  ABORTED_EXIT_1: { abortLast: true, exit: 1 },
+  ABORTED_EXIT_2: { abortLast: true, exit: 2 },
+  ABORTED_THEN_OK: { abortFirst: true, exit: 0 },
+  ABORTED_THEN_EXIT_1: { abortFirst: true, exit: 1 },
+  ERROR_THEN_ABORTED: { failFirst: true, abortLast: true, exit: 1 },
+  ABORTED_EXT_ERROR: { abortLast: true, exit: 0, stderr: "Extension error (/tmp/x.mjs): SyntaxError\n" },
+  ABORTED_UNSETTLED: { abortLast: true, exit: 0, unsettled: true },
   MODEL_ERROR: { failLast: true, exit: 0 },
   MODEL_ERROR_EXIT_1: { failLast: true, exit: 1 },
   MODEL_ERROR_WARN_EXIT_1: { failLast: true, exit: 1, stderr: "Warning: Model fixture/model not found. Using custom model id\n" },
@@ -61,15 +69,15 @@ const CASES = {
 };
 const run = CASES[prompt] ?? { exit: 0 };
 const usage = { input: 11, output: 2, cacheRead: 3, cacheWrite: 4, reasoning: 1, totalTokens: 21, cost: { total: 0.001 } };
-const assistantEnd = (failed) => ({
+const assistantEnd = (failed, aborted = false) => ({
   type: "message_end",
   message: {
     role: "assistant",
     content: [{ type: "text", text: failed ? "" : "BENCHMARK_OK" }],
     provider: "fixture",
     model: "model",
-    stopReason: failed ? "error" : "stop",
-    errorMessage: failed ? "fixture model failure" : undefined,
+    stopReason: aborted ? "aborted" : failed ? "error" : "stop",
+    errorMessage: aborted ? "Request was aborted" : failed ? "fixture model failure" : undefined,
     usage,
   },
 });
@@ -79,9 +87,10 @@ const events = [
   { type: "tool_execution_start", toolCallId: "fixture-call", toolName: "read", args: {} },
   { type: "tool_execution_end", toolCallId: "fixture-call", toolName: "read", result: {}, isError: false },
   ...(run.failFirst ? [assistantEnd(true)] : []),
-  assistantEnd(run.failLast === true),
+  ...(run.abortFirst ? [assistantEnd(false, true)] : []),
+  assistantEnd(run.failLast === true, run.abortLast === true),
   { type: "agent_end", messages: [] },
-  { type: "agent_settled" },
+  ...(run.unsettled ? [] : [{ type: "agent_settled" }]),
 ];
 for (const event of events) {
   process.stdout.write(`${JSON.stringify(event)}\n`);

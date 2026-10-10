@@ -109,7 +109,10 @@ async function main() {
         : resolveCliModel({ cliModel: capsule.model, modelRuntime });
     // In the reported error, not on stderr: the task tool hands the model the error and keeps stderr
     // as an artifact only (task-runtime.ts).
-    const notRunning = (choiceFailed) => notRunningWarnings(providers, settingsManager.getDefaultProvider(), choiceFailed)
+    const notRunning = (choiceFailed) => notRunningWarnings(providers, {
+        defaultProvider: resolvedModel?.model === undefined ? settingsManager.getDefaultProvider() : undefined,
+        noModel: choiceFailed,
+    })
         .map((warning) => `; ${warning.message}`)
         .join("");
     if (resolvedModel?.error !== undefined) {

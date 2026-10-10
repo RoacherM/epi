@@ -505,8 +505,10 @@ export class ChipEditor {
     // happens to line up with a chip in the draft.
     const recallsHistory = HISTORY_ACTIONS.some((action) => kb.matches(data, action));
     this.innerInput(data, recallsHistory ? "replace" : "edit");
-    if (DELETE_ACTIONS.some((action) => kb.matches(data, action))) {
-      this.removeChipFragments(before, CHAR_DELETE_ACTIONS.some((action) => kb.matches(data, action)));
+    // Pi's Editor treats Shift+Backspace as a character deletion independently of keybindings.
+    const deletesChar = CHAR_DELETE_ACTIONS.some((action) => kb.matches(data, action)) || piTui.matchesKey(data, "shift+backspace");
+    if (deletesChar || DELETE_ACTIONS.some((action) => kb.matches(data, action))) {
+      this.removeChipFragments(before, deletesChar);
     }
     this.snapOutOfChipSpan(before.lineCol);
   }

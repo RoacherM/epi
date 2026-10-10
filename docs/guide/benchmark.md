@@ -34,4 +34,4 @@ stderr.log
 metadata.json
 ```
 
-`events.jsonl` 是未改写的 Pi 事件流；`metadata.json` 记录版本、resolved model、时间、token/cost、tool error、压缩次数、进程/Session/capsule 泄漏检查和失败分类。退出码固定为：`0` 成功、`2` Harness/config、`3` infra/timeout、`4` model、`5` grader。可用 `--grader <executable>` 与重复的 `--grader-arg <value>` 直接传 argv；不经过 shell。
+`events.jsonl` 是未改写的 Pi 事件流；`metadata.json` 记录版本、resolved model、时间、token/cost、tool error、压缩次数、进程/Session/capsule 泄漏检查和失败分类。退出码固定为：`0` 成功、`2` Harness/config、`3` infra/timeout、`4` model、`5` grader、`6` cancelled。最终助手请求为 `stopReason: "aborted"` 且运行已结束时，Epi 和 Pi 都记为 `failureCategory: "cancelled"`、`success: false`；不执行 grader（`grader.status: "not-run"`），也不当作 harness 故障。`result.exitCode` 仍保留子进程原始退出码（Epi 为 1，Pi JSON 为 0）。协议/扩展错误、未结束的运行仍归 harness；外部信号、中断和超时仍归 infra。可用 `--grader <executable>` 与重复的 `--grader-arg <value>` 直接传 argv；不经过 shell。

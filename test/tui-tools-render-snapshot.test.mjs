@@ -269,7 +269,7 @@ test("snapshot: edit expanded diff with two hunks", () => {
     fg("toolDiffRemoved", "30 line 30"),
     fg("toolDiffAdded", "30 LINE 30"),
     ctxLine(31), ctxLine(32), ctxLine(33),
-    fg("muted", "   … 1 unchanged lines"),
+    fg("muted", "   …"),
   ]);
 });
 
@@ -365,6 +365,27 @@ test("snapshot: tool block fallback for a tool without renderers", () => {
   const mixed = { content: [{ type: "image", data: "", mimeType: "image/png" }, { type: "text", text: "t" }] };
   assert.deepEqual(framed.renderResult(mixed, collapsed, theme, ctx()).render(80).map((line) => line.trimEnd()), [`     ${fg("toolOutput", "t")}`]);
   assert.deepEqual(framed.renderResult({ content: [] }, collapsed, theme, ctx()).render(80), []);
+});
+
+test("D79: fallback makes malformed results visible without mislabelling valid empty or image results", () => {
+  const framed = toolBlock("third-party", undefined);
+  const image = { type: "image", data: "", mimeType: "image/png" };
+  const render = (result, width, expanded) => framed.renderResult(result, { expanded, isPartial: false }, theme, ctx())
+    .render(width).map(line => line.replace(/\x1b\[[0-9;]*m/g, "").trim());
+  for (const width of [40, 80, 120]) {
+    for (const expanded of [false, true]) {
+      for (const result of [null, {}, { content: null }, { content: {} }, { content: [null] },
+        { content: [{ type: "text", text: 42 }] }, { content: [{ type: "unknown" }] },
+        { content: [{ type: "text", text: "kept" }, null] }]) {
+        const rows = render(result, width, expanded);
+        assert.ok(rows.includes("(unrenderable tool result)"), JSON.stringify({ result, rows }));
+        if (result?.content?.[0]?.text === "kept") assert.ok(rows.includes("kept"));
+      }
+      for (const content of [[], [image], [{ type: "text", text: "" }], [{ type: "text", text: "ok" }, image]]) {
+        assert.ok(!render({ content }, width, expanded).some(line => line.includes("unrenderable")));
+      }
+    }
+  }
 });
 
 // ── `!cmd` block ─────────────────────────────────────────────────────────────

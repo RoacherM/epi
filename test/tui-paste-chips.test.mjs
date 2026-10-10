@@ -283,6 +283,27 @@ test("backspace deletes the whole chip in one keystroke", () => {
   assert.equal(editor.chipAtCursor(), undefined);
 });
 
+test("D28: kitty Shift+Backspace deletes image and text chips atomically, including undo and submit", () => {
+  for (const image of [false, true]) {
+    for (const prefix of ["see foo ", "a longer first line\nsee foo "]) {
+      const editor = makeEditor();
+      editor.setText(prefix);
+      if (image) editor.insertImageChip(ONE_PIXEL_PNG, "image/png");
+      else paste(editor, "one\ntwo\nthree\nfour");
+      const before = editor.getText();
+      editor.handleInput("\x1b[127;2u");
+      assert.equal(editor.getText(), prefix);
+      editor.handleInput("\x1f");
+      assert.equal(editor.getText(), before, "one undo restores the entire label");
+      editor.handleInput("\x1b[127;2u");
+      let sent;
+      editor.onSubmitImages = (text, images) => { sent = { text, images }; };
+      editor.handleInput(ENTER);
+      assert.deepEqual(sent, { text: prefix.trim(), images: [] }, "deletion must not leave autocomplete open");
+    }
+  }
+});
+
 // Pre-merge review, item 5: forward-delete and word-delete must remove the whole chip too, the same
 // as Backspace already does -- otherwise they eat into the marker one character/word at a time
 // (Editor has no idea it's meant to be atomic) and leave a corrupted fragment like "Pasted: 4 lines]"

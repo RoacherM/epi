@@ -28,7 +28,7 @@ Epi 是**改名叫 epi 的定制版 Pi**：
 
 Epi 自己维护这份清单。清单外的短参数（`-x`）一律报错退出。清单外的长参数（`--foo`）不会立刻报错：和 Pi 自己的 `parseArgs`（`unknownFlags`）一样先原样保留，交给运行时（所有模式都走 `src/tui/services.ts`）在扩展加载完之后核对——某个已加载的扩展用 `pi.registerFlag` 声明过这个参数就接受，否则在启动界面前按参数名报错退出（Pi 的 `agent-session-services.js` `applyExtensionFlagValues`）。`epi --help` 打印 Epi 自己的帮助文本，覆盖下表所有参数，不附上 Pi 的帮助；如果 Manifest 里的扩展注册了参数，额外打印一段"Extension options"（和 Pi 自己的 `--help` 一样，为此会先加载一遍扩展——只加载扩展，不建会话/连模型；加载失败就跳过这一段，`--help` 本身始终成功）。
 
-Manifest 里的扩展启动时加载失败，两条路径都和 Pi 一样报错退出（退出码 1）：显示 Pi 的原始错误 `Failed to load extension "<path>": ...`，后面跟 Epi 自己的提示 `Hint: Fix the extension, or remove it from the Manifest that declares it ("epi list" shows which).`。失败的是内置能力（`<inline:epi:task>` 等；`<inline:codemode>`、`<inline:tool-search>` 随 `epi:mcp` 加载，按 `epi:mcp` 算，提示写 "loaded with epi:mcp"。常见原因是第三方扩展注册了同名工具，例如 `todo`、`codemode`、`tool_search`）时，提示换成怎么关掉它：`"disable": ["epi:task"]` 加到哪个文件（它写在某个文件的 `extensions` 里时，先从那里删掉），或者删掉冲突的那个扩展（K4）。Pi 原来的提示 `Start without extensions using "pi -ne"` 不会出现：所有会加载扩展的模式都由 Epi 自己打印启动诊断（决策 N1），不经过 Pi 打印这条提示的代码。只有启动时的第一个运行时会因为加载错误退出（D45；之前界面会跳过失败的扩展直接启动，什么都不显示）；`/new`、`/resume`、`/fork`、`/import` 会重新加载扩展，这时的加载错误和 Pi 一样作为提示显示在对话里，界面继续运行。
+Manifest 里的扩展启动时加载失败，两条路径都和 Pi 一样报错退出（退出码 1）：显示 Pi 的原始错误 `Failed to load extension "<path>": ...`，后面跟 Epi 自己的提示 `Hint: Fix the extension, or remove it from the Manifest that declares it ("epi list" shows which).`。失败的是内置能力（`<inline:epi:task>` 等；`<inline:codemode>`、`<inline:tool-search>` 随 `epi:mcp` 加载，按 `epi:mcp` 算，提示写 "loaded with epi:mcp"。常见原因是第三方扩展注册了同名工具，例如 `todo`、`codemode`、`tool_search`）时，提示换成怎么关掉它：`"disable": ["epi:task"]` 加到哪个文件（它写在某个文件的 `extensions` 里时，先从那里删掉），或者删掉冲突的那个扩展（K4）。Pi 原来的提示 `Start without extensions using "pi -ne"` 不会出现：所有会加载扩展的模式都由 Epi 自己打印启动诊断（决策 N1），不经过 Pi 打印这条提示的代码。只有启动时的第一个运行时会因为加载错误退出（D45；之前界面会跳过失败的扩展直接启动，什么都不显示）；`/new`、`/resume`、`/fork`、`/import` 会重新加载扩展，这时的加载错误和 Pi 一样作为提示显示在对话里，界面继续运行。RPC 的 `new_session`、`switch_session`、`fork` 等会话替换也通过 `extension_ui_request`（`method: "notify"`）报告新运行时的诊断，每个诊断在同一次替换中只发一次（D83）；不重复启动时已写到 stderr 的诊断，不在原会话的 reload 上重放旧诊断。会话替换和模型回退仍由 Pi 决定，成功响应不表示扩展全部加载成功，客户端应展示通知并通过 `get_state` 获取当前模型。
 
 | 参数 | 和 Pi 对齐 | 说明 |
 |---|---|---|
@@ -45,6 +45,8 @@ Manifest 里的扩展启动时加载失败，两条路径都和 Pi 一样报错�
 | `-h/--help`、`-v/--version` | 是 | `--version` 打印 Epi 版本和锁定的内核版本 |
 | `--use-theme`、`--tui-mode` | **不提供** | 界面已换成 grok 风格：只有全屏，主题由 Epi 管 |
 | `-e/--extension`、`--skill`、`--prompt-template`、`--theme`、`--system-prompt`、`--append-system-prompt`、`--no-extensions`、`--no-skills`、`--no-prompt-templates`、`--no-themes`、`--no-context-files` | **不提供** | 资源不能通过这些 flag 传入；传入时报错并提示改 Manifest。Skills 除 Manifest 声明外还会从三个固定目录自动发现（docs/decisions.md S1，[docs/guide/configuration.md](guide/configuration.md) "Manifest"），同样不经过这些 flag |
+
+**取消与失败（D86）**：`error` 表示请求失败，`aborted` 表示请求被取消，两者都没有成功完成任务。因此 Epi 的 text/json 继续退出 1，JSON 事件中的 `stopReason` 保留原值，不把取消改写成错误。Benchmark adapter 对 Epi 的退出 1 和 Pi JSON 的退出 0 做统一解释：已结束且最终请求为 `aborted` 时记为 `cancelled`、adapter 退出 6，不运行 grader；更早的取消不覆盖后续正常完成的请求。协议错误、扩展错误或未结束的运行仍归 harness，进程信号、runner 超时和外部中断仍归 infra。stdout 提前关闭（D54）与 task worker 信号中断的既有约定不变。
 
 ### 2.1 环境变量：Pi 的 `PI_*` 不进 Epi（dogfood D63）
 

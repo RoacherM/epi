@@ -254,11 +254,11 @@ Epi 新写的文件也都在 `~/.epi/pi` 下：`themes/epi-grok-*.json`，键位
 | 错误、提示 | 一行，连续的提示原地更新 | 自己写 |
 
 **工具内容怎么渲染。** 7 个内置工具（read、bash、edit、write、grep、find、ls）的 Pi 渲染器共 1,058 行，没有导出。不复制这些代码，按 grok 样式自己写，直接读每个工具结果的 `details` 结构：
-- edit、write 的 diff 不带 `+`/`-` 列，只用行底色和行号颜色区分增删；
+- edit、write 的 diff 不带 `+`/`-` 列，只用行底色和行号颜色区分增删；edit 展开后的首部和段间省略保留准确行数。尾部有 Pi 的 `...` 标记时只显示 `…`，因为结果不含文件总长度；只有尾部到 EOF 完整可知时才显示精确的 `… N unchanged lines`（D78）；
 - read 截断成前 5 行 + `…` + 后 3 行；
 - bash 默认折叠，只显示命令。
 
-扩展注册的工具（比如 MCP 工具）用它们自己的 `renderCall` / `renderResult`，放进同一个卡片外框里。既没有内置样式也没有自带渲染器的工具，用通用样式：显示参数 JSON 和结果文本。
+扩展注册的工具（比如 MCP 工具）用它们自己的 `renderCall` / `renderResult`，放进同一个卡片外框里。既没有内置样式也没有自带渲染器的工具，用通用样式：显示参数 JSON 和结果文本。兜底结果中的 `content` 不是数组，或包含无效内容块时，保留可显示的文本并加一行 muted 的 `(unrenderable tool result)`；合法空数组、空文本和纯图片结果不报这个提示，不改模型收到的结果（D79）。
 
 **折叠。** `Ctrl+O` 切换所有工具块和折叠的用户消息（上面那行），`Ctrl+T` 切换所有 thinking。单个块用鼠标点标题行切换。快捷键栏对应显示 `Ctrl+o:expand`（不再是 `tools`，因为现在也展开用户消息）。v1 不做键盘逐块选中（grok 的 scrollback 焦点模式），放到 v1.1。
 
@@ -289,7 +289,7 @@ Epi 新写的文件也都在 `~/.epi/pi` 下：`themes/epi-grok-*.json`，键位
 | | 长文本 | 图片 |
 |---|---|---|
 | 何时变成标签 | 一次粘贴 ≥4 行 → `[Pasted: N lines]`；>10KB → `[Pasted: 12 KB]` | Ctrl+V 贴图片、`@图片`、拖进终端的图片路径 → `[Image #N]` |
-| 标签 | 原子：光标不能停在标签中间，退格一次删掉整个标签 | 同左 |
+| 标签 | 原子：光标不能停在标签中间，退格或 Shift+退格一次删掉整个标签；一次撤销恢复整个标签（D28） | 同左 |
 | 预览浮窗 | 刚粘贴完、或光标落在标签上时，在输入框上方显示：前 3 行、`⋮ (N more lines)`、后 3 行，底边提示 `enter or double-click to expand`（刚粘贴时提示 `paste again or double-click to expand`）。光标离开就消失 | 光标落在标签上时显示，标题 `Image #1 ─ PNG · 64x40 · 5.0 KB`，框里用终端图形协议画图（pi-tui 的 `Image` 组件）；终端不支持图形时只显示标题行 |
 | 展开 | 光标**真正落在**标签上（不是刚粘贴完、光标停在标签末尾那一下——grok 1.0.44 里两者不同：刚粘贴完底栏是 `Enter:send`、浮窗提示 `paste again or double-click to expand`；光标移到标签上后底栏才变成 `Enter:expand │ Shift+Enter:newline`、浮窗提示 `enter or double-click to expand`）时按 Enter、双击标签、或刚粘贴时再粘贴一次 → 标签换成全文 | 不展开；Enter 照常发送 |
 | 发送 | 标签换成全文后发给模型 | 图片作为图片附在消息里（`session.prompt(text, { images })`），不再让模型用 read 工具去读文件。`[Image #N]` 标签留在文字里一起发出，模型也看得到，用户可以说“第 2 张图”（照 Claude Code；D11，2026-09-30 主控定）。同一个标签在文字里出现几次，图片都只附一次，按标签第一次出现的顺序（D20） |
