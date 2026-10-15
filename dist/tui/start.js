@@ -2,6 +2,7 @@ import { parseArgs } from "@earendil-works/pi-coding-agent";
 import { passthroughHasFlag } from "../args.js";
 import { buildInlineExtensions } from "../extensions/index.js";
 import { createPreviewInlineExtension } from "../extensions/preview.js";
+import { createTraceInlineExtension } from "../extensions/trace.js";
 import { buildTuiInitialMessages } from "../file-arguments.js";
 import { findNearestProjectManifest } from "../project.js";
 import { runTuiApp } from "./app.js";
@@ -13,7 +14,7 @@ import { detectAppearance, installEpiTheme } from "./theme.js";
 function withInterfaceExtensions(extensionFactories) {
     const last = extensionFactories.findIndex((extension) => extension.name === "epi:system-prompt");
     const at = last < 0 ? extensionFactories.length : last;
-    return [...extensionFactories.slice(0, at), createPreviewInlineExtension(), ...extensionFactories.slice(at)];
+    return [...extensionFactories.slice(0, at), createPreviewInlineExtension(), createTraceInlineExtension(), ...extensionFactories.slice(at)];
 }
 /** The Manifest assembly, handed to the SDK. */
 export async function createRuntimeFromPrepared(prepared, cwd, 

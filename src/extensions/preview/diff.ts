@@ -42,6 +42,9 @@ export interface DiffRow {
   newNo?: number;
   /** For "gap": how many unchanged lines are not shown. */
   text: string;
+  /** For "gap": the 1-based line numbers the folded run starts at, so a reviewer can expand it. */
+  oldStart?: number;
+  newStart?: number;
   /** Character ranges of `text` that changed within the line. */
   emphasis?: Array<[number, number]>;
 }
@@ -113,9 +116,10 @@ export function diffTexts(before: string, after: string): FileDiff | undefined {
   if (patch === undefined) return undefined;
   const diff: FileDiff = { rows: [], added: 0, removed: 0, changeStarts: [] };
   let previousOldEnd = 1;
+  let previousNewEnd = 1;
   for (const hunk of patch.hunks) {
     const skipped = hunk.oldStart - previousOldEnd;
-    if (skipped > 0) diff.rows.push({ kind: "gap", text: String(skipped) });
+    if (skipped > 0) diff.rows.push({ kind: "gap", text: String(skipped), oldStart: previousOldEnd, newStart: previousNewEnd });
     const hunkStart = diff.rows.length;
     let oldNo = hunk.oldStart;
     let newNo = hunk.newStart;
@@ -140,9 +144,10 @@ export function diffTexts(before: string, after: string): FileDiff | undefined {
       }
     }
     previousOldEnd = oldNo;
+    previousNewEnd = newNo;
     emphasizeRuns(diff.rows, hunkStart);
   }
   const tail = oldLines.length + 1 - previousOldEnd;
-  if (patch.hunks.length > 0 && tail > 0) diff.rows.push({ kind: "gap", text: String(tail) });
+  if (patch.hunks.length > 0 && tail > 0) diff.rows.push({ kind: "gap", text: String(tail), oldStart: previousOldEnd, newStart: previousNewEnd });
   return diff;
 }

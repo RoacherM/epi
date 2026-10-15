@@ -9,6 +9,8 @@
 | [配置](configuration.md) | 和 Pi 的隔离、配置布局、项目信任、Manifest、Skill 自动发现、`/reload`、故障定位 |
 | [Magpie](magpie.md) | 内置 provider：自动模型发现、逐模型协议、缓存、离线和可选连接配置 |
 | [Preview](preview.md) | `/preview`：看 agent 改了什么（diff），浏览目录，看文件、Markdown、图片和视频 |
+| [Review](review.md) | `/review`：连续多文件 diff、展开上下文、版本绑定的批注与回草稿 |
+| [Trace](trace.md) | `/trace`：这次会话的执行轨迹：时间轴、一步一行、五栏目详情 |
 | [Task](task.md) | `epi:task`：隔离子进程里的子任务与 Agent profile |
 | [MCP](mcp.md) | `epi:mcp`：`mcp.json`、codemode、`epi mcp` |
 | [Hooks](hooks.md) | `epi:hooks`：事件、决策、handler 类型 |
@@ -19,7 +21,8 @@
 | 能力 | 作用 | 文档 |
 |---|---|---|
 | `magpie` provider | 本地 Magpie 网关；自动发现模型，按模型使用 Messages / Responses / Chat Completions / Gemini | [Magpie](magpie.md) |
-| `epi:preview` | `/preview`：agent 改动的 diff 和三栏文件浏览，只在交互界面里，模型看不到 | [Preview](preview.md) |
+| `epi:preview` | `/preview` 与 `/review`：agent 改动的 diff、连续审查、版本绑定批注和三栏文件浏览，只在交互界面里，模型看不到 | [Preview](preview.md)、[Review](review.md) |
+| `epi:trace` | `/trace`：会话执行轨迹，时间轴、步骤列表和五栏目详情，只在交互界面里，模型看不到 | [Trace](trace.md) |
 | `epi:task` | `task`、`task_status`、`task_wait`、`task_cancel`、`todo`：在隔离的子进程里跑子任务，Agent profile 放在 `agents/*.md` | [Task](task.md) |
 | `epi:mcp` | 读 `mcp.json` 接入 MCP 服务，使用锁定 Pi 的原生 MCP 支持；`epi mcp` 管理 | [MCP](mcp.md) |
 | `epi:hooks` | 读 `hooks.json`，在会话、提示、工具调用等事件上运行 command/http/prompt/agent handler | [Hooks](hooks.md) |

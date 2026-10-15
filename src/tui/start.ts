@@ -6,6 +6,7 @@ import { type AgentSessionRuntime, type InlineExtension, parseArgs } from "@eare
 import { passthroughHasFlag } from "../args.js";
 import { buildInlineExtensions } from "../extensions/index.js";
 import { createPreviewInlineExtension } from "../extensions/preview.js";
+import { createTraceInlineExtension } from "../extensions/trace.js";
 import { buildTuiInitialMessages } from "../file-arguments.js";
 import type { PreparedEpiRun } from "../host.js";
 import { findNearestProjectManifest } from "../project.js";
@@ -20,7 +21,7 @@ import { detectAppearance, installEpiTheme } from "./theme.js";
 function withInterfaceExtensions(extensionFactories: InlineExtension[]): InlineExtension[] {
   const last = extensionFactories.findIndex((extension) => extension.name === "epi:system-prompt");
   const at = last < 0 ? extensionFactories.length : last;
-  return [...extensionFactories.slice(0, at), createPreviewInlineExtension(), ...extensionFactories.slice(at)];
+  return [...extensionFactories.slice(0, at), createPreviewInlineExtension(), createTraceInlineExtension(), ...extensionFactories.slice(at)];
 }
 
 /** The Manifest assembly, handed to the SDK. */
