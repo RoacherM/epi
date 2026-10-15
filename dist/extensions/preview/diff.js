@@ -79,10 +79,11 @@ export function diffTexts(before, after) {
         return undefined;
     const diff = { rows: [], added: 0, removed: 0, changeStarts: [] };
     let previousOldEnd = 1;
+    let previousNewEnd = 1;
     for (const hunk of patch.hunks) {
         const skipped = hunk.oldStart - previousOldEnd;
         if (skipped > 0)
-            diff.rows.push({ kind: "gap", text: String(skipped) });
+            diff.rows.push({ kind: "gap", text: String(skipped), oldStart: previousOldEnd, newStart: previousNewEnd });
         const hunkStart = diff.rows.length;
         let oldNo = hunk.oldStart;
         let newNo = hunk.newStart;
@@ -110,11 +111,12 @@ export function diffTexts(before, after) {
             }
         }
         previousOldEnd = oldNo;
+        previousNewEnd = newNo;
         emphasizeRuns(diff.rows, hunkStart);
     }
     const tail = oldLines.length + 1 - previousOldEnd;
     if (patch.hunks.length > 0 && tail > 0)
-        diff.rows.push({ kind: "gap", text: String(tail) });
+        diff.rows.push({ kind: "gap", text: String(tail), oldStart: previousOldEnd, newStart: previousNewEnd });
     return diff;
 }
 //# sourceMappingURL=diff.js.map

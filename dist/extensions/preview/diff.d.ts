@@ -4,6 +4,9 @@ export interface DiffRow {
     newNo?: number;
     /** For "gap": how many unchanged lines are not shown. */
     text: string;
+    /** For "gap": the 1-based line numbers the folded run starts at, so a reviewer can expand it. */
+    oldStart?: number;
+    newStart?: number;
     /** Character ranges of `text` that changed within the line. */
     emphasis?: Array<[number, number]>;
 }

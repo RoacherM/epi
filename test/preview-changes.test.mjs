@@ -67,7 +67,7 @@ test("a diff has line numbers on both sides, gaps for unchanged lines, the chang
   const diff = diffTexts(`${before}\n`, `${after}\n`);
   assert.equal(diff.added, 2);
   assert.equal(diff.removed, 1);
-  assert.deepEqual(diff.rows[0], { kind: "gap", text: "1" });
+  assert.deepEqual(diff.rows[0], { kind: "gap", text: "1", oldStart: 1, newStart: 1 });
   const removed = diff.rows.find((row) => row.kind === "remove");
   const added = diff.rows.find((row) => row.kind === "add");
   assert.deepEqual([removed.oldNo, removed.newNo, removed.text], [5, undefined, "line 5"]);
@@ -76,7 +76,7 @@ test("a diff has line numbers on both sides, gaps for unchanged lines, the chang
   assert.deepEqual(added.emphasis, [[5, 9]]);
   assert.equal(diff.changeStarts.length, 2);
   assert.equal(diff.rows[diff.changeStarts[1]].text, "added");
-  assert.deepEqual(diff.rows.at(-1), { kind: "gap", text: "2" });
+  assert.deepEqual(diff.rows.at(-1), { kind: "gap", text: "2", oldStart: 19, newStart: 20 });
 });
 
 test("a new, a deleted and an empty file count their real lines, not a phantom empty line", () => {

@@ -67,9 +67,9 @@ test("SDK path gives the model exactly what the piMain path gives it", (t) => {
   const viaSdk = JSON.parse(readFileSync(sdkOut, "utf8"));
   assert.doesNotMatch(viaSdk.systemPrompt, /AMBIENT-/);
   assert.equal(viaSdk.systemPrompt, viaPiMain.systemPrompt);
-  // The interactive path also has /preview, an interface feature print mode does not load
-  // (src/tui/start.ts); it is a command only, so the system prompt above is still the same.
-  assert.deepEqual(viaSdk.commands, [...viaPiMain.commands.filter((name) => name !== "llama"), "preview"]);
+  // The interactive path also has /preview, /review and /trace, interface features print mode does
+  // not load (src/tui/start.ts); they are commands only, so the system prompt above is still the same.
+  assert.deepEqual(viaSdk.commands, [...viaPiMain.commands.filter((name) => name !== "llama"), "preview", "review", "trace"]);
 });
 
 test("SDK path ignores project .pi/settings.json", (t) => {

@@ -5,12 +5,13 @@ import { basename, dirname, resolve } from "node:path";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 
 import { ChangeLedger } from "./preview/ledger.js";
+import { isReviewNote, REVIEW_NOTE_ENTRY, ReviewNoteStore } from "./preview/notes.js";
 import type { PageStart } from "./preview/page.js";
 import type { PaneSource, PlayerHost, PlayerPane } from "./preview/player-pane.js";
 
 /** The extension's own version, apart from Epi's (docs/architecture.md: built-in extensions are
  * versioned on their own; the change log is in docs/guide/preview.md, the tags are preview-v*). */
-export const PREVIEW_VERSION = "0.3.0";
+export const PREVIEW_VERSION = "0.4.0";
 
 /** The pi.events channel other extensions ask for the video player on (docs/preview-design.md §5.2):
  * they emit `{}` and find `player` filled in when emit returns. */
@@ -49,6 +50,9 @@ export function createPreviewInlineExtension(): InlineExtension {
     factory: (pi) => {
       // One ledger per session: the factory runs again for /new, /resume, /fork and /reload.
       const ledger = new ChangeLedger();
+      // Review annotations live with the extension, like the ledger: a new session starts empty and
+      // re-reads whatever its own branch recorded (docs/review-design.md §4).
+      const reviewNotes = new ReviewNoteStore();
       pi.on("tool_call", (event, ctx) => {
         ledger.onToolCall(event.toolName, event.input, ctx.cwd);
       });
@@ -138,6 +142,48 @@ export function createPreviewInlineExtension(): InlineExtension {
           if (refs === "") return;
           const text = ctx.ui.getEditorText();
           ctx.ui.setEditorText(text && !text.endsWith(" ") ? `${text} ${refs} ` : `${text}${refs} `);
+        },
+      });
+      pi.registerCommand("review", {
+        description: "Review changed code continuously in one page: expand context, jump files, annotate, and bring notes back to the draft",
+        handler: async (_args, ctx) => {
+          if (ctx.mode !== "tui") {
+            ctx.ui.notify("/review needs the interactive TUI", "error");
+            return;
+          }
+          // Notes are persisted as custom entries; a /reload or /resume rebuilds the store from the
+          // current branch only, so a note from an abandoned branch is not merged back in.
+          for (const entry of ctx.sessionManager.getBranch()) {
+            if (entry.type === "custom" && entry.customType === REVIEW_NOTE_ENTRY && isReviewNote(entry.data)) {
+              reviewNotes.restore(entry.data);
+            }
+          }
+          const [{ ReviewPage }, { loadReview }] = await Promise.all([
+            import("./preview/review-page.js"), import("./preview/source.js"),
+          ]);
+          const result = await ctx.ui.custom<{ draft: string } | undefined>(
+            (tui, theme, _keybindings, done) => {
+              const page = new ReviewPage({
+                tui,
+                theme,
+                cwd: ctx.cwd,
+                source: "changes",
+                load: (source) => loadReview(source, { ledger, cwd: ctx.cwd }),
+                notes: reviewNotes,
+                sessionId: ctx.sessionManager.getSessionId(),
+                branchAnchor: ctx.sessionManager.getLeafId() ?? "",
+                persist: (note) => pi.appendEntry(REVIEW_NOTE_ENTRY, note),
+                done,
+              });
+              open = page;
+              return page;
+            },
+            { overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "center" } },
+          );
+          open = undefined;
+          if (result === undefined) return;
+          const text = ctx.ui.getEditorText();
+          ctx.ui.setEditorText(text ? `${text}${text.endsWith("\n") ? "" : "\n\n"}${result.draft}` : result.draft);
         },
       });
     },

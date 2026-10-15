@@ -9,7 +9,7 @@
 
 它是内置扩展 `epi:preview`，只在交互界面里加载，模型看不到它。设计见 [preview-design.md](../preview-design.md)。
 
-当前版本：**0.3.0**（扩展有自己的版本号，和 Epi 的版本分开，见文末的更新记录）。
+当前版本：**0.4.0**（扩展有自己的版本号，和 Epi 的版本分开，见文末的更新记录）。0.4.0 起同一扩展也提供 `/review`，见 [Review](review.md)。
 
 ## 打开
 
@@ -243,6 +243,7 @@ interface PreviewPlayerApi {
 
 | 版本 | 随 Epi（formerly MMP） | 内容 |
 |---|---|---|
+| 0.4.0 | 下一次 Epi 版本 | `/review`：连续多文件 diff、gap 原地展开、跨文件改动跳转、版本绑定的行内批注、带回草稿；比较来源可切换 agent 变更账 / Index→Working Tree / HEAD→Index |
 | 0.3.0 | 0.1.13 | 通过 `pi.events` 给其他扩展提供视频播放面板（`epi/preview/player/v1`）；`/preview` 自己的视频查看器也改用这个面板，看起来和以前一样 |
 | 0.2.0 | 0.1.12 | "改动"：agent 改过的文件和 diff（本次会话 / 上一轮）；整页形态和 agent 状态行；diff 和完整文件里的搜索、跳到行号；记住每个文件看到的位置 |
 | 0.1.1 | 0.1.11 | 文件或目录被删后显示 `not found`，读不了的目录说明原因，不再显示成空目录；另一个扩展也注册 `/preview` 时启动报错；名字里有换行的文件不插入并提示 |
