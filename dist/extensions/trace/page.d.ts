@@ -31,7 +31,6 @@ export declare class TracePage {
     private detailScroll;
     private follow;
     /** `waterfall`: bar positioned on the visible time axis; `duration`: bar length by duration. */
-    private barMode;
     private readonly finder;
     private prompt;
     private message;
@@ -54,26 +53,25 @@ export declare class TracePage {
     private findNext;
     private bodyHeight;
     private chromeRows;
+    /** Rows per lane in the top dot matrix. */
+    private laneRows;
     private detailWidth;
-    /** The bar column width for a content width; the left part holds the step text. */
-    private barWidth;
-    /** A pixel grid: 2-wide cells with a 1-column gap, so a step draws as discrete pixels rather
-     * than a line. `left` is the text column; `usedWidth` the pixels' total width. */
-    private pixelGeometry;
+    /** Pixel grid geometry: 2-wide cells with a 1-column gap, after a 6-column lane label. */
+    private gridGeometry;
     /** Keep the cursor's row on screen and the list scroll in range, before anything is drawn. */
     private syncList;
     private visibleSteps;
     private durationOf;
-    private maxVisibleDuration;
-    /** The time window of the steps currently on screen: the waterfall never compresses the whole
+    /** The time window of the steps currently on screen: the grid never compresses the whole
      * session, only what is visible right now. */
     private visibleWindow;
-    /** Cells for the duration bar chart: length proportional to the duration, from the same column. */
-    private durationCells;
-    private barCells;
-    private stepTone;
-    /** The axis above the list: only the visible window's start and total, aligned to the bar column. */
-    private axisLine;
+    /** Active count per pixel column for the two lanes, capped at the lane's row count so a dense
+     * bucket stacks instead of overflowing. */
+    private gridRows;
+    /** The dot matrix at the top: one block of rows per lane, only the visible window's time span. */
+    private gridLines;
+    /** The axis under the grid, aligned to the pixel columns. */
+    private gridAxis;
     private headerLine;
     private listRow;
     private listLines;

@@ -18,7 +18,6 @@ export class TracePage {
     detailScroll = 0;
     follow = true;
     /** `waterfall`: bar positioned on the visible time axis; `duration`: bar length by duration. */
-    barMode = "waterfall";
     finder = new Finder();
     prompt;
     message = "";
@@ -124,8 +123,6 @@ export class TracePage {
             this.moveCursor(Math.floor(page / 2), summary);
         else if (matchesKey(data, "ctrl+u"))
             this.moveCursor(-Math.floor(page / 2), summary);
-        else if (data === "v")
-            this.barMode = this.barMode === "waterfall" ? "duration" : "waterfall";
         else if (matchesKey(data, "return") || data === "l" || matchesKey(data, "right") || matchesKey(data, "tab"))
             this.openDetail();
     }
@@ -190,7 +187,12 @@ export class TracePage {
         return Math.max(3, height - this.chromeRows(height));
     }
     chromeRows(height) {
-        return 1 /* header */ + 1 /* waterfall axis */ + (height < 16 ? 0 : 1) /* blank */ + 1 /* status */;
+        const grid = this.laneRows(height) * 2 + 1; // Model rows, Tools rows, axis
+        return 1 /* header */ + grid + (height < 16 ? 0 : 1) /* blank */ + 1 /* status */;
+    }
+    /** Rows per lane in the top dot matrix. */
+    laneRows(height) {
+        return height >= 22 ? 2 : 1;
     }
     detailWidth() {
         const width = this.options.tui.terminal.columns;
@@ -200,19 +202,13 @@ export class TracePage {
             return width - Math.max(56, Math.floor(width / 2)) - 1;
         return width;
     }
-    /** The bar column width for a content width; the left part holds the step text. */
-    barWidth(contentWidth) {
-        return Math.max(10, Math.min(48, Math.floor(contentWidth * 0.34)));
-    }
-    /** A pixel grid: 2-wide cells with a 1-column gap, so a step draws as discrete pixels rather
-     * than a line. `left` is the text column; `usedWidth` the pixels' total width. */
-    pixelGeometry(contentWidth) {
-        const barWidth = this.barWidth(contentWidth);
+    /** Pixel grid geometry: 2-wide cells with a 1-column gap, after a 6-column lane label. */
+    gridGeometry(width) {
+        const available = Math.max(8, width - 7);
         const pixelWidth = 2;
         const gap = 1;
-        const units = Math.max(4, Math.floor((barWidth + gap) / (pixelWidth + gap)));
-        const usedWidth = units * pixelWidth + (units - 1) * gap;
-        return { units, pixelWidth, gap, usedWidth, left: Math.max(0, contentWidth - usedWidth) };
+        const units = Math.max(4, Math.floor((available + gap) / (pixelWidth + gap)));
+        return { units, pixelWidth, gap, usedWidth: units * pixelWidth + (units - 1) * gap };
     }
     /** Keep the cursor's row on screen and the list scroll in range, before anything is drawn. */
     syncList(summary, height) {
@@ -235,16 +231,7 @@ export class TracePage {
             return step.span.endMs - step.span.startMs;
         return undefined;
     }
-    maxVisibleDuration(steps) {
-        let max = 0;
-        for (const step of steps) {
-            const ms = this.durationOf(step);
-            if (ms !== undefined)
-                max = Math.max(max, ms);
-        }
-        return max;
-    }
-    /** The time window of the steps currently on screen: the waterfall never compresses the whole
+    /** The time window of the steps currently on screen: the grid never compresses the whole
      * session, only what is visible right now. */
     visibleWindow(steps) {
         let start = Number.POSITIVE_INFINITY;
@@ -263,77 +250,83 @@ export class TracePage {
             return undefined;
         return { startMs: start, endMs: end <= start ? start + 1 : end };
     }
-    /** Cells for the duration bar chart: length proportional to the duration, from the same column. */
-    durationCells(step, width, maxDuration) {
-        const cells = Array(width).fill("empty");
-        const ms = this.durationOf(step);
-        if (ms === undefined || ms <= 0 || maxDuration <= 0)
-            return cells;
-        const length = Math.max(1, Math.min(width, Math.round((ms / maxDuration) * width)));
-        for (let at = 0; at < length; at += 1)
-            cells[at] = "bar";
-        return cells;
-    }
-    barCells(step, window, width) {
-        const cells = Array(width).fill("empty");
+    /** Active count per pixel column for the two lanes, capped at the lane's row count so a dense
+     * bucket stacks instead of overflowing. */
+    gridRows(visible, window, units, laneRows) {
+        const model = Array(units).fill(0);
+        const tools = Array(units).fill(0);
         const span = Math.max(1, window.endMs - window.startMs);
-        const column = (atMs) => Math.max(0, Math.min(width - 1, Math.floor(((atMs - window.startMs) / span) * width)));
-        if (step.span !== undefined) {
-            const from = column(step.span.startMs);
-            const endMs = step.span.endMs;
-            if (endMs === undefined) {
-                cells[from] = "marker";
+        const column = (atMs) => Math.max(0, Math.min(units - 1, Math.floor(((atMs - window.startMs) / span) * units)));
+        for (const step of visible) {
+            const lane = step.kind === "model" ? model : step.kind === "tool" ? tools : undefined;
+            if (lane === undefined)
+                continue;
+            let from;
+            let to;
+            if (step.span !== undefined) {
+                from = column(step.span.startMs);
+                to = step.span.endMs === undefined ? from : Math.max(from, column(step.span.endMs));
             }
-            else {
-                const to = Math.max(from, Math.min(width - 1, Math.ceil(((endMs - window.startMs) / span) * width) - 1));
-                for (let at = from; at <= to; at += 1)
-                    cells[at] = "bar";
-                if (from === to)
-                    cells[from] = "marker";
+            else if (step.atMs !== undefined) {
+                from = to = column(step.atMs);
             }
+            else
+                continue;
+            for (let unit = from; unit <= to; unit += 1)
+                lane[unit] = Math.min(laneRows, lane[unit] + 1);
         }
-        else if (step.atMs !== undefined) {
-            cells[column(step.atMs)] = "marker";
-        }
-        return cells;
+        return { model, tools };
     }
-    stepTone(step) {
-        if (step.status === "error" || step.status === "aborted")
-            return "error";
-        if (step.status === "running")
-            return "warning";
-        if (step.status === "length" || step.status === "deferred")
-            return "warning";
-        if (step.kind === "model")
-            return "accent";
-        if (step.kind === "tool")
-            return "success";
-        return "dim";
-    }
-    /** The axis above the list: only the visible window's start and total, aligned to the bar column. */
-    axisLine(contentWidth, window, maxDuration) {
+    /** The dot matrix at the top: one block of rows per lane, only the visible window's time span. */
+    gridLines(width, visible, window, laneRows) {
         const th = this.options.theme;
-        const barWidth = this.pixelGeometry(contentWidth).usedWidth;
-        const left = contentWidth - barWidth;
-        if (this.barMode === "duration") {
-            const label = maxDuration > 0 ? `duration · max ${formatDuration(maxDuration)}` : "no duration in view";
-            return th.fg("dim", pad(`${" ".repeat(left)}${label}`, contentWidth));
+        const labelWidth = 6;
+        const geo = this.gridGeometry(width);
+        if (window === undefined) {
+            const rows = [`${pad(th.fg("dim", "Model"), labelWidth)} ${th.fg("dim", "no timing in view")}`];
+            while (rows.length < laneRows * 2 + 1)
+                rows.push(" ".repeat(labelWidth));
+            return rows;
         }
-        if (window === undefined)
-            return th.fg("dim", pad(`${" ".repeat(left)}no timing in view`, contentWidth));
-        const region = Array(barWidth).fill(" ");
-        // Reference marks at 0/25/50/75/100% under a uniform baseline make the scale readable.
-        for (let step = 0; step <= 4; step += 1)
-            region[Math.round((step * (barWidth - 1)) / 4)] = "┬";
+        const grid = this.gridRows(visible, window, geo.units, laneRows);
+        const rows = [];
+        const lanes = [
+            { name: "Model", cells: grid.model, tone: "accent" },
+            { name: "Tools", cells: grid.tools, tone: "success" },
+        ];
+        for (const lane of lanes) {
+            for (let row = 0; row < laneRows; row += 1) {
+                const label = row === 0 ? pad(th.fg("dim", lane.name), labelWidth) : " ".repeat(labelWidth);
+                let body = "";
+                for (let unit = 0; unit < geo.units; unit += 1) {
+                    const active = lane.cells[unit] > 0 && row >= laneRows - lane.cells[unit];
+                    const glyph = (active ? "█" : "·").repeat(geo.pixelWidth);
+                    body += active ? th.fg(lane.tone, glyph) : th.fg("dim", glyph);
+                    if (unit < geo.units - 1)
+                        body += " ".repeat(geo.gap);
+                }
+                rows.push(`${label} ${body}`);
+            }
+        }
+        rows.push(this.gridAxis(labelWidth, geo, window));
+        return rows;
+    }
+    /** The axis under the grid, aligned to the pixel columns. */
+    gridAxis(labelWidth, geo, window) {
+        const th = this.options.theme;
+        const region = Array(geo.usedWidth).fill(" ");
+        const tickStep = Math.max(1, Math.round((geo.units - 1) / 4));
+        for (let unit = 0; unit < geo.units; unit += tickStep)
+            region[unit * (geo.pixelWidth + geo.gap)] = "┬";
         const start = "+0ms";
-        for (let index = 0; index < start.length && index < barWidth; index += 1)
+        for (let index = 0; index < start.length && index < geo.usedWidth; index += 1)
             region[index] = start[index];
         const total = formatDuration(window.endMs - window.startMs);
-        const endAt = barWidth - total.length;
+        const endAt = geo.usedWidth - total.length;
         if (endAt >= start.length + 1)
             for (let index = 0; index < total.length; index += 1)
                 region[endAt + index] = total[index];
-        return th.fg("dim", " ".repeat(left) + region.join(""));
+        return th.fg("dim", " ".repeat(labelWidth + 1) + region.join(""));
     }
     headerLine(width, summary) {
         const th = this.options.theme;
@@ -351,34 +344,22 @@ export class TracePage {
             parts.push(th.fg("warning", `${summary.observing} live`));
         return pad(parts.join(th.fg("dim", "  ·  ")), width);
     }
-    listRow(step, index, selected, contentWidth, window, maxDuration) {
+    listRow(step, index, selected, width) {
         const th = this.options.theme;
         const durationMs = this.durationOf(step);
         const marker = selected ? "›" : " ";
         const seq = String(index + 1).padStart(3);
         const duration = pad(formatDuration(durationMs), 7);
         const glyph = KIND_GLYPH[step.kind] ?? "?";
-        const typeWidth = contentWidth >= 80 ? 12 : 8;
+        const typeWidth = width >= 80 ? 12 : 8;
         const type = pad(step.object, typeWidth);
         const status = step.status === "completed" || step.status === "pending" ? "" : ` ${step.status}`;
         const note = step.note === undefined ? "" : ` ${step.note}`;
-        const geo = this.pixelGeometry(contentWidth);
-        const leftPlain = pad(`${marker}${seq} ${duration} ${glyph} ${type} ${step.title}${note}${status}`, geo.left);
-        const durationMode = this.barMode === "duration";
-        const cells = durationMode
-            ? this.durationCells(step, geo.units, maxDuration)
-            : window === undefined ? Array(geo.units).fill("empty") : this.barCells(step, window, geo.units);
-        const pixel = (filled) => (filled ? "█".repeat(geo.pixelWidth) : "·".repeat(geo.pixelWidth));
-        const separator = " ".repeat(geo.gap);
-        const barPlain = cells.map((kind) => pixel(kind !== "empty")).join(separator);
-        if (selected)
-            return th.style(leftPlain + barPlain, { bg: "selectedBg", bold: true });
-        const tone = this.stepTone(step);
-        const leftTone = step.status === "error" || step.status === "aborted" ? "error" : step.status === "running" ? "accent" : step.kind === "event" || step.kind === "user" ? "dim" : "text";
-        const barStyled = cells.map((kind) => th.fg(kind === "empty" ? "dim" : tone, pixel(kind !== "empty"))).join(separator);
-        return th.fg(leftTone, leftPlain) + barStyled;
+        const body = pad(`${marker}${seq} ${duration} ${glyph} ${type} ${step.title}${note}${status}`, width);
+        const tone = step.status === "error" || step.status === "aborted" ? "error" : step.status === "running" ? "accent" : step.status === "length" || step.status === "deferred" ? "warning" : step.kind === "event" || step.kind === "user" ? "dim" : "text";
+        return selected ? th.style(body, { bg: "selectedBg", bold: true }) : th.fg(tone, body);
     }
-    listLines(width, height, summary, window, maxDuration) {
+    listLines(width, height, summary) {
         const th = this.options.theme;
         if (summary.steps.length === 0) {
             return Array.from({ length: height }, (_, row) => pad(row === 0 ? th.fg("dim", " No steps recorded in this session yet.") : "", width));
@@ -390,7 +371,7 @@ export class TracePage {
             if (step === undefined)
                 return " ".repeat(Math.max(0, width - 1)) + bar[row];
             const selected = index === this.cursor && this.focus === "list";
-            return this.listRow(step, index, selected, width - 1, window, maxDuration) + bar[row];
+            return this.listRow(step, index, selected, width - 1) + bar[row];
         });
     }
     // ── inspector ────────────────────────────────────────────────────────────
@@ -560,13 +541,13 @@ export class TracePage {
         const height = this.options.tui.terminal.rows;
         const compact = height < 16;
         const summary = this.summary();
+        const laneRows = this.laneRows(height);
         const bodyHeight = this.bodyHeight();
         this.syncList(summary, bodyHeight);
         const visible = this.visibleSteps(summary, bodyHeight);
         const window = this.visibleWindow(visible);
-        const maxDuration = this.maxVisibleDuration(visible);
         const rows = [this.headerLine(width, summary)];
-        rows.push(this.axisLine(width - 1, window, maxDuration) + " ");
+        rows.push(...this.gridLines(width, visible, window, laneRows));
         if (!compact)
             rows.push("");
         const wide = width >= 120 && this.detailOpen;
@@ -580,7 +561,7 @@ export class TracePage {
             const shown = bars.slice(this.detailScroll, this.detailScroll + bodyHeight);
             const bar = scrollbar(th, bars.length, bodyHeight, this.detailScroll, bodyHeight);
             if (wide) {
-                const list = this.listLines(leftWidth - 1, bodyHeight, summary, window, maxDuration);
+                const list = this.listLines(leftWidth - 1, bodyHeight, summary);
                 for (let row = 0; row < bodyHeight; row += 1) {
                     rows.push(`${pad(list[row] ?? "", leftWidth - 1)}${th.fg("border", "│")}${pad(this.finder.highlight(shown[row] ?? "", (text) => th.inverse(text)), rightWidth - 1)}${bar[row]}`);
                 }
@@ -592,7 +573,7 @@ export class TracePage {
             }
         }
         else {
-            const list = this.listLines(width - 1, bodyHeight, summary, window, maxDuration);
+            const list = this.listLines(width - 1, bodyHeight, summary);
             for (let row = 0; row < bodyHeight; row += 1)
                 rows.push(list[row] ?? " ".repeat(Math.max(0, width - 1)));
         }
@@ -611,7 +592,7 @@ export class TracePage {
         if (this.focus === "detail" && this.detailOpen) {
             return "←/→ section · 1-5 · j/k scroll · / search · n/N · Tab list · Esc back";
         }
-        return "j/k select · Enter detail · v bars · / search · G latest · Esc close";
+        return "j/k select · Enter detail · / search · G latest · Esc close";
     }
     handleMouse(event) {
         const geometry = this.geometry;

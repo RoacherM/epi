@@ -45,6 +45,8 @@ Epi 通过 `/v1/models` 获取模型列表，不会后台轮询、启动 Magpie 
 
 Magpie 新增或删除模型后，下一次查询同步列表。
 
+列表是精简过的：同一个模型在多个上游（或路由组）都有时，只留特性最全的一条，平手时用 `group/` 路由组；Magpie 没有整理过的厂商原始条目（名称就是原始 ID，如 `aiberm/anthropic/claude-opus-5.5`）和 `-disabled` 条目不显示。不在列表里的 ID 不能用 `--model` 指定。
+
 命令行指定 Magpie 模型最好带 `magpie/` 前缀或 `--provider magpie`。只写 `--model claude/claude-opus-5-5` 也能用：Pi 的模型匹配能在目录里找到这个 ID。
 
 协议选择顺序：
