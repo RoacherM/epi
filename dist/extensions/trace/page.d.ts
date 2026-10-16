@@ -57,6 +57,9 @@ export declare class TracePage {
     private detailWidth;
     /** The bar column width for a content width; the left part holds the step text. */
     private barWidth;
+    /** A pixel grid: 2-wide cells with a 1-column gap, so a step draws as discrete pixels rather
+     * than a line. `left` is the text column; `usedWidth` the pixels' total width. */
+    private pixelGeometry;
     /** Keep the cursor's row on screen and the list scroll in range, before anything is drawn. */
     private syncList;
     private visibleSteps;

@@ -99,17 +99,71 @@ function toModel(model, baseUrl) {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     };
 }
+/** An entry Magpie lists but has not curated: its name is just the vendor's raw ID (Aiberm's
+ * `anthropic/…` channel, Antigravity's `-tiered` and agent IDs), or the ID says it is disabled.
+ * Measured 2026-10-16: these were the entries that answered 403/404 or a policy refusal. */
+function uncurated(model) {
+    const slug = model.id.slice(model.id.indexOf("/") + 1);
+    return model.display_name === slug || model.id.endsWith("-disabled");
+}
+/** The model a catalog entry serves, whichever upstream and naming style it comes through:
+ * `group/auto-claude-opus-5-5`, `factory/claude-opus-5-5` and `aiberm/claude-opus-5-5` are one model.
+ * Context (`@500k`), thinking and date suffixes name variants of the same model. */
+function modelKey(model) {
+    return model.id
+        .slice(model.id.indexOf("/") + 1)
+        .replace(/^auto-/, "")
+        .replace(/^(anthropic|openai|google)\//, "")
+        .replace(/@\d+k$/, "")
+        .replace(/[:-]thinking$/, "")
+        .replace(/-\d{8}$/, "")
+        .replaceAll(".", "-")
+        .toLowerCase();
+}
+/** Feature rank: image input, reasoning, effort levels, context, output; compared in that order. */
+function features(model) {
+    return [
+        model.modalities?.input?.includes("image") ? 1 : 0,
+        model.reasoning === true ? 1 : 0,
+        model.supported_reasoning_levels?.length ?? 0,
+        model.context_window ?? model.context_length ?? model.max_input_tokens ?? 0,
+        model.max_output_tokens ?? 0,
+    ];
+}
+function compareFeatures(a, b) {
+    const [fa, fb] = [features(a), features(b)];
+    for (let i = 0; i < fa.length; i += 1)
+        if (fa[i] !== fb[i])
+            return fa[i] - fb[i];
+    // On a tie, Magpie's routing group wins: it fails over to the next upstream.
+    return Number(a.id.startsWith("group/")) - Number(b.id.startsWith("group/"));
+}
+/** One entry per model: the curated one with the most features, in the catalog's order. */
+function simplify(models) {
+    const best = new Map();
+    for (const model of models) {
+        if (uncurated(model))
+            continue;
+        const key = modelKey(model);
+        const current = best.get(key);
+        if (!current || compareFeatures(model, current) > 0)
+            best.set(key, model);
+    }
+    const kept = new Set(best.values());
+    return models.filter((model) => kept.has(model));
+}
 export function parseMagpieModels(value, baseUrl) {
     const catalog = catalogSchema.safeParse(value);
     if (!catalog.success)
         throw new Error("Magpie returned an invalid model catalog");
     const ids = new Set();
-    return catalog.data.data.filter((model) => !model.type || ["model", "chat"].includes(model.type)).map((model) => {
+    for (const model of catalog.data.data) {
         if (ids.has(model.id))
             throw new Error("Magpie returned duplicate model IDs");
         ids.add(model.id);
-        return toModel(model, baseUrl);
-    });
+    }
+    const chat = catalog.data.data.filter((model) => !model.type || ["model", "chat"].includes(model.type));
+    return simplify(chat).map((model) => toModel(model, baseUrl));
 }
 export async function discoverMagpieModels(baseUrl, signal, apiKey = MAGPIE_DEFAULT_KEY, timeoutMs = DISCOVERY_TIMEOUT_MS) {
     const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
