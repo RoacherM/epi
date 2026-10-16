@@ -152,6 +152,25 @@ test("a note written on a tab-indented line is matched after the tab is drawn as
   assert.equal(note.startLine, 3);
 });
 
+test("a staged rename that is also modified in the work tree is a rename on the staged side, a modify on the unstaged side", { skip: !hasGit }, (t) => {
+  const { dir, git } = repo(t);
+  writeFileSync(join(dir, "old.txt"), "alpha\n");
+  git("add", "old.txt");
+  git("commit", "-q", "-m", "init");
+  git("mv", "old.txt", "new.txt");
+  git("add", "new.txt"); // stage the rename and the staged content
+  writeFileSync(join(dir, "new.txt"), "alpha\nbeta\n"); // then change the work tree only
+  const staged = loadReview("staged", { ledger: new ChangeLedger(), cwd: dir }).find((file) => file.path === "new.txt");
+  assert.equal(staged.status, "renamed");
+  assert.equal(staged.oldText, "alpha\n");
+  assert.equal(staged.newText, "alpha\n");
+  const unstaged = loadReview("unstaged", { ledger: new ChangeLedger(), cwd: dir }).find((file) => file.path === "new.txt");
+  // The index holds the new path, so the unstaged comparison is index -> work tree, a modify.
+  assert.equal(unstaged.status, "modified");
+  assert.equal(unstaged.oldText, "alpha\n");
+  assert.equal(unstaged.newText, "alpha\nbeta\n");
+});
+
 test("a work-tree-only rename is shown as the old file deleted and the new file untracked", { skip: !hasGit }, (t) => {
   const { dir, git } = repo(t);
   writeFileSync(join(dir, "old name.txt"), "alpha\n");

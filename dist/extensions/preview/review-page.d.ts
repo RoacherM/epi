@@ -40,7 +40,8 @@ export declare class ReviewPage {
     /** Files whose diff has been computed this session, in order; grows as the cursor moves. */
     private loadedThrough;
     constructor(options: ReviewPageOptions);
-    /** A failed git read is shown as a message, never as "no changes". */
+    /** A failed git read is shown as a message, never as "no changes". Undefined means it failed, so
+     * the caller keeps the current files and the message. */
     private loadFiles;
     dispose(): void;
     private key;

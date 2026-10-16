@@ -92,17 +92,18 @@ export class ReviewPage {
 
   constructor(private readonly options: ReviewPageOptions) {
     this.source = options.source;
-    this.files = this.loadFiles(options.source);
+    this.files = this.loadFiles(options.source) ?? [];
     this.loadedThrough = Math.min(this.files.length - 1, 2);
   }
 
-  /** A failed git read is shown as a message, never as "no changes". */
-  private loadFiles(source: ReviewSourceKind): ReviewFile[] {
+  /** A failed git read is shown as a message, never as "no changes". Undefined means it failed, so
+   * the caller keeps the current files and the message. */
+  private loadFiles(source: ReviewSourceKind): ReviewFile[] | undefined {
     try {
       return this.options.load(source);
     } catch (error) {
       this.message = `could not read ${SOURCE_LABEL[source]}: ${error instanceof Error ? error.message : String(error)}`;
-      return [];
+      return undefined;
     }
   }
 
@@ -292,7 +293,16 @@ export class ReviewPage {
   private move(delta: number, rows: DisplayRow[]): void {
     const next = Math.max(0, Math.min(rows.length - 1, this.cursor + delta));
     this.cursor = next;
-    this.ensureLoaded(this.cursorFileIndex(rows));
+    // Landing on an unloaded file expands the files before it, which shifts the cursor's absolute
+    // index; re-find the target file's header after loading.
+    const targetFile = rows[next]?.fileIndex ?? 0;
+    const wasLoaded = this.loadedThrough;
+    this.ensureLoaded(targetFile);
+    if (this.loadedThrough !== wasLoaded) {
+      const fresh = this.rows();
+      const header = fresh.findIndex((row) => row.kind === "header" && row.fileIndex === targetFile);
+      if (header >= 0) this.cursor = header;
+    }
   }
 
   private clamp(rows: DisplayRow[]): void {
@@ -346,8 +356,9 @@ export class ReviewPage {
         }
       }
       // Nothing in the loaded files: bring in the next few and continue. Expanding appends rows
-      // after the cursor, so its index stays valid.
-      if (this.loadedThrough >= this.files.length - 1) break;
+      // after the cursor, so its index stays valid. Backwards never needs more: every file before
+      // the cursor's file is already loaded.
+      if (backwards || this.loadedThrough >= this.files.length - 1) break;
       this.loadedThrough = Math.min(this.files.length - 1, this.loadedThrough + 3);
     }
     this.message = backwards ? "no change above" : "no change below";
@@ -409,8 +420,10 @@ export class ReviewPage {
   private cycleSource(): void {
     const order: ReviewSourceKind[] = ["changes", "unstaged", "staged"];
     const next = order[(order.indexOf(this.source) + 1) % order.length]!;
+    const files = this.loadFiles(next);
+    if (files === undefined) return;
     this.source = next;
-    this.files = this.loadFiles(next);
+    this.files = files;
     this.diffs.clear();
     this.cursor = 0;
     this.scroll = 0;
@@ -422,7 +435,9 @@ export class ReviewPage {
   private refresh(): void {
     const before = this.rows();
     const currentPath = before[this.cursor]?.file.path;
-    this.files = this.loadFiles(this.source);
+    const files = this.loadFiles(this.source);
+    if (files === undefined) return;
+    this.files = files;
     this.diffs.clear();
     this.loadedThrough = Math.min(this.files.length - 1, 2);
     const outcome = this.options.notes.recheck(this.files);
@@ -599,8 +614,17 @@ export class ReviewPage {
     }
     if (event.type === "click") {
       const row = this.scroll + (event.y - this.bodyTop);
-      if (row >= 0 && row < this.rows().length) {
+      const rows = this.rows();
+      if (row >= 0 && row < rows.length) {
+        const targetFile = rows[row]!.fileIndex;
         this.cursor = row;
+        const wasLoaded = this.loadedThrough;
+        this.ensureLoaded(targetFile);
+        if (this.loadedThrough !== wasLoaded) {
+          const fresh = this.rows();
+          const header = fresh.findIndex((candidate) => candidate.kind === "header" && candidate.fileIndex === targetFile);
+          if (header >= 0) this.cursor = header;
+        }
         this.options.tui.requestRender();
       }
       return { capture: true };
