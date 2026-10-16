@@ -187,12 +187,7 @@ export class TracePage {
         return Math.max(3, height - this.chromeRows(height));
     }
     chromeRows(height) {
-        const grid = this.laneRows(height) * 2 + 1; // Model rows, Tools rows, axis
-        return 1 /* header */ + grid + (height < 16 ? 0 : 1) /* blank */ + 1 /* status */;
-    }
-    /** Rows per lane in the top dot matrix. */
-    laneRows(height) {
-        return height >= 22 ? 2 : 1;
+        return 1 /* header */ + 1 /* dot matrix */ + 1 /* axis */ + (height < 16 ? 0 : 1) /* blank */ + 1 /* status */;
     }
     detailWidth() {
         const width = this.options.tui.terminal.columns;
@@ -202,12 +197,11 @@ export class TracePage {
             return width - Math.max(56, Math.floor(width / 2)) - 1;
         return width;
     }
-    /** Pixel grid geometry: 2-wide cells with a 1-column gap, after a 6-column lane label. */
+    /** Pixel geometry: 2-wide cells with a 1-column gap. */
     gridGeometry(width) {
-        const available = Math.max(8, width - 7);
         const pixelWidth = 2;
         const gap = 1;
-        const units = Math.max(4, Math.floor((available + gap) / (pixelWidth + gap)));
+        const units = Math.max(4, Math.floor((Math.max(8, width - 1) + gap) / (pixelWidth + gap)));
         return { units, pixelWidth, gap, usedWidth: units * pixelWidth + (units - 1) * gap };
     }
     /** Keep the cursor's row on screen and the list scroll in range, before anything is drawn. */
@@ -250,15 +244,14 @@ export class TracePage {
             return undefined;
         return { startMs: start, endMs: end <= start ? start + 1 : end };
     }
-    /** Active count per pixel column for the two lanes, capped at the lane's row count so a dense
-     * bucket stacks instead of overflowing. */
-    gridRows(visible, window, units, laneRows) {
-        const model = Array(units).fill(0);
-        const tools = Array(units).fill(0);
+    /** One flag set per pixel column: which lane was active, and whether it errored or is running.
+     * Both lanes share one row, so an overlap draws as a two-tone cell. */
+    gridCells(visible, window, units) {
+        const cells = Array.from({ length: units }, () => ({ model: false, tools: false, error: false, running: false }));
         const span = Math.max(1, window.endMs - window.startMs);
         const column = (atMs) => Math.max(0, Math.min(units - 1, Math.floor(((atMs - window.startMs) / span) * units)));
         for (const step of visible) {
-            const lane = step.kind === "model" ? model : step.kind === "tool" ? tools : undefined;
+            const lane = step.kind === "model" ? "model" : step.kind === "tool" ? "tools" : undefined;
             if (lane === undefined)
                 continue;
             let from;
@@ -272,52 +265,47 @@ export class TracePage {
             }
             else
                 continue;
-            for (let unit = from; unit <= to; unit += 1)
-                lane[unit] = Math.min(laneRows, lane[unit] + 1);
-        }
-        return { model, tools };
-    }
-    /** The dot matrix at the top: one block of rows per lane, only the visible window's time span. */
-    gridLines(width, visible, window, laneRows) {
-        const th = this.options.theme;
-        const labelWidth = 6;
-        const geo = this.gridGeometry(width);
-        if (window === undefined) {
-            const rows = [`${pad(th.fg("dim", "Model"), labelWidth)} ${th.fg("dim", "no timing in view")}`];
-            while (rows.length < laneRows * 2 + 1)
-                rows.push(" ".repeat(labelWidth));
-            return rows;
-        }
-        const grid = this.gridRows(visible, window, geo.units, laneRows);
-        const rows = [];
-        const lanes = [
-            { name: "Model", cells: grid.model, tone: "accent" },
-            { name: "Tools", cells: grid.tools, tone: "success" },
-        ];
-        for (const lane of lanes) {
-            for (let row = 0; row < laneRows; row += 1) {
-                const label = row === 0 ? pad(th.fg("dim", lane.name), labelWidth) : " ".repeat(labelWidth);
-                let body = "";
-                for (let unit = 0; unit < geo.units; unit += 1) {
-                    const active = lane.cells[unit] > 0 && row >= laneRows - lane.cells[unit];
-                    const glyph = (active ? "█" : "·").repeat(geo.pixelWidth);
-                    body += active ? th.fg(lane.tone, glyph) : th.fg("dim", glyph);
-                    if (unit < geo.units - 1)
-                        body += " ".repeat(geo.gap);
-                }
-                rows.push(`${label} ${body}`);
+            const error = step.status === "error" || step.status === "aborted";
+            const running = step.status === "running";
+            for (let unit = from; unit <= to; unit += 1) {
+                const cell = cells[unit];
+                cell[lane] = true;
+                if (error)
+                    cell.error = true;
+                if (running)
+                    cell.running = true;
             }
         }
-        rows.push(this.gridAxis(labelWidth, geo, window));
-        return rows;
+        return cells;
     }
-    /** The axis under the grid, aligned to the pixel columns. */
-    gridAxis(labelWidth, geo, window) {
+    /** The single dot-matrix row: only lit cells are drawn, the rest is blank. A cell where both
+     * lanes were active is a two-tone half block. */
+    gridMatrix(cells, geo) {
+        const th = this.options.theme;
+        let out = "";
+        cells.forEach((cell, unit) => {
+            const active = cell.model || cell.tools;
+            let glyph;
+            if (!active)
+                glyph = " ".repeat(geo.pixelWidth);
+            else if (cell.error)
+                glyph = th.fg("error", "█".repeat(geo.pixelWidth));
+            else if (cell.running)
+                glyph = th.fg("warning", "█".repeat(geo.pixelWidth));
+            else if (cell.model && cell.tools)
+                glyph = th.fg("accent", th.bg("toolSuccessBg", "▀".repeat(geo.pixelWidth)));
+            else if (cell.model)
+                glyph = th.fg("accent", "█".repeat(geo.pixelWidth));
+            else
+                glyph = th.fg("success", "█".repeat(geo.pixelWidth));
+            out += glyph + (unit < cells.length - 1 ? " ".repeat(geo.gap) : "");
+        });
+        return out;
+    }
+    /** The axis under the matrix: just the window's start and total. */
+    gridAxis(geo, window) {
         const th = this.options.theme;
         const region = Array(geo.usedWidth).fill(" ");
-        const tickStep = Math.max(1, Math.round((geo.units - 1) / 4));
-        for (let unit = 0; unit < geo.units; unit += tickStep)
-            region[unit * (geo.pixelWidth + geo.gap)] = "┬";
         const start = "+0ms";
         for (let index = 0; index < start.length && index < geo.usedWidth; index += 1)
             region[index] = start[index];
@@ -326,23 +314,16 @@ export class TracePage {
         if (endAt >= start.length + 1)
             for (let index = 0; index < total.length; index += 1)
                 region[endAt + index] = total[index];
-        return th.fg("dim", " ".repeat(labelWidth + 1) + region.join(""));
+        return th.fg("dim", " " + region.join(""));
     }
     headerLine(width, summary) {
         const th = this.options.theme;
         const branch = this.options.branch();
-        const state = this.options.recorder.running ? th.fg("accent", "● running") : th.fg("dim", "○ idle");
-        const coverage = summary.coverage;
-        const parts = [
-            th.style(" trace ", { bg: "selectedBg", fg: "accent", bold: true }),
-            th.fg("text", branch ?? "(no branch)"),
-            th.fg("dim", `${summary.groups} user message${summary.groups === 1 ? "" : "s"} · ${summary.steps.length} steps`),
-            state,
-            th.fg("dim", `${coverage.withSpan} spanned · ${coverage.durationOnly} duration only · ${coverage.untimed} untimed`),
-        ];
-        if (summary.observing > 0)
-            parts.push(th.fg("warning", `${summary.observing} live`));
-        return pad(parts.join(th.fg("dim", "  ·  ")), width);
+        const count = `${summary.steps.length} step${summary.steps.length === 1 ? "" : "s"}`;
+        const left = `${th.style(" trace ", { bg: "selectedBg", fg: "accent", bold: true })} ${th.fg("text", branch ?? "(no branch)")} ${th.fg("dim", `· ${count}`)}`;
+        const right = this.options.recorder.running ? th.fg("accent", "● running") : th.fg("dim", "○ idle");
+        const gap = Math.max(1, width - visibleWidth(left) - visibleWidth(right) - 2);
+        return ` ${left}${" ".repeat(gap)}${right} `;
     }
     listRow(step, index, selected, width) {
         const th = this.options.theme;
@@ -541,13 +522,20 @@ export class TracePage {
         const height = this.options.tui.terminal.rows;
         const compact = height < 16;
         const summary = this.summary();
-        const laneRows = this.laneRows(height);
         const bodyHeight = this.bodyHeight();
         this.syncList(summary, bodyHeight);
         const visible = this.visibleSteps(summary, bodyHeight);
         const window = this.visibleWindow(visible);
         const rows = [this.headerLine(width, summary)];
-        rows.push(...this.gridLines(width, visible, window, laneRows));
+        if (window === undefined) {
+            rows.push(` ${th.fg("dim", "no timing in view")}`);
+            rows.push("");
+        }
+        else {
+            const geo = this.gridGeometry(width);
+            rows.push(" " + this.gridMatrix(this.gridCells(visible, window, geo.units), geo));
+            rows.push(this.gridAxis(geo, window));
+        }
         if (!compact)
             rows.push("");
         const wide = width >= 120 && this.detailOpen;

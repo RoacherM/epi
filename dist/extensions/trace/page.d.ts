@@ -53,10 +53,8 @@ export declare class TracePage {
     private findNext;
     private bodyHeight;
     private chromeRows;
-    /** Rows per lane in the top dot matrix. */
-    private laneRows;
     private detailWidth;
-    /** Pixel grid geometry: 2-wide cells with a 1-column gap, after a 6-column lane label. */
+    /** Pixel geometry: 2-wide cells with a 1-column gap. */
     private gridGeometry;
     /** Keep the cursor's row on screen and the list scroll in range, before anything is drawn. */
     private syncList;
@@ -65,12 +63,13 @@ export declare class TracePage {
     /** The time window of the steps currently on screen: the grid never compresses the whole
      * session, only what is visible right now. */
     private visibleWindow;
-    /** Active count per pixel column for the two lanes, capped at the lane's row count so a dense
-     * bucket stacks instead of overflowing. */
-    private gridRows;
-    /** The dot matrix at the top: one block of rows per lane, only the visible window's time span. */
-    private gridLines;
-    /** The axis under the grid, aligned to the pixel columns. */
+    /** One flag set per pixel column: which lane was active, and whether it errored or is running.
+     * Both lanes share one row, so an overlap draws as a two-tone cell. */
+    private gridCells;
+    /** The single dot-matrix row: only lit cells are drawn, the rest is blank. A cell where both
+     * lanes were active is a two-tone half block. */
+    private gridMatrix;
+    /** The axis under the matrix: just the window's start and total. */
     private gridAxis;
     private headerLine;
     private listRow;

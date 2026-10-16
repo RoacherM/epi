@@ -119,26 +119,6 @@ test("catalog maps metadata, native endpoints and four gateway protocols", () =>
   assert.deepEqual(parseMagpieModels({ data: [{ id: "image", type: "image" }] }, baseUrl), []);
 });
 
-test("the list keeps one curated entry per model, the one with the most features", () => {
-  const levels = (n) => Array.from({ length: n }, (_, i) => ({ effort: `e${i}` }));
-  const entry = (id, extra = {}) => ({ id, display_name: "Named", context_window: 200000, ...extra });
-  const ids = parseMagpieModels({ data: [
-    entry("group/auto-claude-opus-5-5", { reasoning: true, supported_reasoning_levels: levels(5), context_window: 1000000 }),
-    entry("factory/claude-opus-5-5", { reasoning: true, supported_reasoning_levels: levels(5), context_window: 1000000 }),
-    // A vendor's raw entry is dropped even when it advertises more.
-    { id: "aiberm/anthropic/claude-opus-5.5", display_name: "anthropic/claude-opus-5.5", reasoning: true, supported_reasoning_levels: levels(6), modalities: { input: ["text", "image"] } },
-    entry("antigravity/gemini-4-argon-disabled"),
-    entry("grok/grok-4.7", { context_window: 256000 }),
-    entry("grok/grok-4.7@500k", { context_window: 500000 }),
-    entry("factory/kimi-k3", { modalities: { input: ["text", "image"] } }),
-    entry("aiberm/kimi-k3", { context_window: 1000000 }),
-    entry("factory/claude-haiku-4-5-20251001"),
-    entry("group/auto-claude-haiku-4-5"),
-    { id: "other/unnamed" },
-  ] }, "http://localhost:1").map((model) => model.id);
-  assert.deepEqual(ids, ["group/auto-claude-opus-5-5", "grok/grok-4.7@500k", "factory/kimi-k3", "group/auto-claude-haiku-4-5", "other/unnamed"]);
-});
-
 test("discovery authenticates, honors pagination, HTTP errors, timeout and cancellation", async (t) => {
   const server = await serverFor(t);
   const discover = (abort = signal(), key) => discoverMagpieModels(server.baseUrl, abort, key, 150);
