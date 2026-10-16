@@ -48,7 +48,7 @@ const shown = (screen) => screen.join("\n");
 const firstTurn = [["waitReady"], ["type", "change things"], ["key", "enter"], ["waitFor", { regex: "EDIT-DONE[\\s\\S]*Worked for" }]];
 const openTrace = [["type", "/trace"], ["key", "enter"], ["waitFor", "user message", { screen: true }]];
 
-test("/trace opens full-screen with a waterfall row per visible step, without the composer", (t) => {
+test("/trace opens full-screen with a dot-matrix timeline at the top and the steps below", (t) => {
   const { screens, exit } = runApp(t, [
     ...firstTurn, ...openTrace, ["screen", "trace"],
     ["key", "esc"], ["waitGone", " trace ", { screen: true }], ["waitFor", "❯", { screen: true }], ["screen", "back"],
@@ -57,10 +57,12 @@ test("/trace opens full-screen with a waterfall row per visible step, without th
   const trace = shown(screens.trace);
   assert.match(trace, / trace /);
   assert.match(trace, /user message/);
-  // The waterfall axis and at least one drawn bar/marker are on screen.
+  // The dot matrix sits above the list: lane labels, an axis, and lit pixels.
+  assert.match(trace, /Model/);
+  assert.match(trace, /Tools/);
   assert.match(trace, /\+0ms/);
   assert.match(trace, /█/);
-  // Steps from the real turn: the edit tool and the write tool are both listed.
+  // The icon markers live in the list, not in the list's right-hand side.
   assert.match(trace, /edit/);
   assert.match(trace, /write/);
   // The composer is gone while the page owns the screen, and is back after Esc.
@@ -69,31 +71,16 @@ test("/trace opens full-screen with a waterfall row per visible step, without th
   void exit;
 });
 
-test("v switches between the positioned waterfall and the duration bar chart", (t) => {
-  const { screens } = runApp(t, [
-    ...firstTurn, ...openTrace, ["screen", "waterfall"],
-    ["type", "v"], ["waitFor", "duration · max", { screen: true }], ["screen", "duration"],
-    ["type", "v"], ["waitFor", "+0ms", { screen: true }], ["screen", "back"],
-    ["detach"],
-  ]);
-  assert.match(shown(screens.waterfall), /\+0ms/);
-  assert.match(shown(screens.duration), /duration · max/);
-  assert.match(shown(screens.duration), /█/);
-  assert.match(shown(screens.back), /\+0ms/);
-});
-
-test("a slow tool gets a proportional bar, not a fixed stub", (t) => {
+test("a slow tool lights a longer run of pixels than a fast one", (t) => {
   const slowTurn = [["waitReady"], ["type", "run them"], ["key", "enter"], ["waitFor", { regex: "SLOW-TOOLS-DONE[\\s\\S]*Worked for" }, { timeoutMs: 40_000 }]];
   const { screens } = runApp(t, [
     ...slowTurn, ["type", "/trace"], ["key", "enter"], ["waitFor", "user message", { screen: true }],
-    ["screen", "waterfall"],
-    ["type", "v"], ["waitFor", "duration · max", { screen: true }], ["screen", "duration"],
+    ["screen", "trace"],
     ["detach"],
   ], { extension: fauxSlowTools, model: "epi-faux/slowtools" });
-  const waterfall = shown(screens.waterfall);
-  assert.match(waterfall, /1\.2s/);
-  assert.match(waterfall, /(?:██ ){4,}/);
-  assert.match(shown(screens.duration), /sleep 1\.2/);
+  const trace = shown(screens.trace);
+  assert.match(trace, /1\.2s/);
+  assert.match(trace, /(?:██ ){4,}/);
 });
 
 test("Enter opens the inspector, the sections switch, and Esc returns to the list", (t) => {
