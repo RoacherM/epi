@@ -1,6 +1,7 @@
 // Git reads for /review (docs/review-design.md §3): argv arrays, machine output, no shell and no
-// user-configured diff or textconv program. Every call passes -z so paths are literal, never
-// quoted or re-encoded. Failures are returned, not thrown, so the page can show what happened.
+// user-configured diff or textconv program. Path listings use -z so paths are literal, never quoted
+// or re-encoded; blob reads use an explicit object name and never a path that could look like a
+// flag. Status and index failures throw, so the page shows them instead of "no changes".
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
