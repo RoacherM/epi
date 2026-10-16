@@ -45,23 +45,23 @@ function runApp(t, steps, { rows, columns } = {}) {
 
 const shown = (screen) => screen.join("\n");
 const firstTurn = [["waitReady"], ["type", "change things"], ["key", "enter"], ["waitFor", { regex: "EDIT-DONE[\\s\\S]*Worked for" }]];
-const openTrace = [["type", "/trace"], ["key", "enter"], ["waitFor", "Model", { screen: true }]];
+const openTrace = [["type", "/trace"], ["key", "enter"], ["waitFor", "user message", { screen: true }]];
 
-test("/trace opens full-screen with the timeline lanes and the steps, without the composer", (t) => {
+test("/trace opens full-screen with a waterfall row per visible step, without the composer", (t) => {
   const { screens, exit } = runApp(t, [
-    ...firstTurn, ...openTrace,
-    ["waitFor", "Tools", { screen: true }], ["screen", "trace"],
+    ...firstTurn, ...openTrace, ["screen", "trace"],
     ["key", "esc"], ["waitGone", " trace ", { screen: true }], ["waitFor", "❯", { screen: true }], ["screen", "back"],
     ["detach"],
   ]);
   const trace = shown(screens.trace);
   assert.match(trace, / trace /);
-  assert.match(trace, /Model/);
-  assert.match(trace, /Tools/);
+  assert.match(trace, /user message/);
+  // The waterfall axis and at least one drawn bar/marker are on screen.
+  assert.match(trace, /\+0ms/);
+  assert.match(trace, /[━◆]/);
   // Steps from the real turn: the edit tool and the write tool are both listed.
   assert.match(trace, /edit/);
   assert.match(trace, /write/);
-  assert.match(trace, /user message/);
   // The composer is gone while the page owns the screen, and is back after Esc.
   assert.doesNotMatch(trace, /❯/);
   assert.match(shown(screens.back), /❯/);
