@@ -186,7 +186,12 @@ export class TracePage {
     bodyHeight() {
         const height = this.options.tui.terminal.rows;
         const base = height < 16 ? 3 : 4; // header, axis, blank (not compact), status
-        return Math.max(3, Math.floor((height - base) / 2));
+        return Math.max(3, height - base - this.topRows());
+    }
+    /** A fixed slice of the list shown as the dot matrix above it, never growing with the session. */
+    topRows() {
+        const height = this.options.tui.terminal.rows;
+        return Math.min(5, Math.max(2, Math.round(height * 0.12)));
     }
     detailWidth() {
         const width = this.options.tui.terminal.columns;
@@ -213,9 +218,6 @@ export class TracePage {
         if (this.cursor >= this.listScroll + height)
             this.listScroll = this.cursor - height + 1;
         this.listScroll = Math.max(0, Math.min(this.listScroll, Math.max(0, summary.steps.length - height)));
-    }
-    visibleSteps(summary, height) {
-        return summary.steps.slice(this.listScroll, this.listScroll + height);
     }
     durationOf(step) {
         if (step.duration !== undefined)
@@ -328,11 +330,13 @@ export class TracePage {
         const seq = String(index + 1).padStart(3);
         const duration = pad(formatDuration(durationMs), 7);
         const glyph = KIND_GLYPH[step.kind] ?? "?";
+        // The icon carries the same colour the step has in the dot matrix above.
+        const iconTone = step.status === "error" || step.status === "aborted" ? "error" : step.status === "running" ? "warning" : step.kind === "model" ? "accent" : step.kind === "tool" ? "success" : step.kind === "user" ? "text" : "dim";
         const typeWidth = width >= 80 ? 12 : 8;
         const type = pad(step.object, typeWidth);
         const status = step.status === "completed" || step.status === "pending" ? "" : ` ${step.status}`;
         const note = step.note === undefined ? "" : ` ${step.note}`;
-        const body = pad(`${marker}${seq} ${duration} ${glyph} ${type} ${step.title}${note}${status}`, width);
+        const body = pad(`${marker}${seq} ${duration} ${th.fg(iconTone, glyph)} ${type} ${step.title}${note}${status}`, width);
         const tone = step.status === "error" || step.status === "aborted" ? "error" : step.status === "running" ? "accent" : step.status === "length" || step.status === "deferred" ? "warning" : step.kind === "event" || step.kind === "user" ? "dim" : "text";
         return selected ? th.style(body, { bg: "selectedBg", bold: true }) : th.fg(tone, body);
     }
@@ -520,26 +524,29 @@ export class TracePage {
         const summary = this.summary();
         const bodyHeight = this.bodyHeight();
         this.syncList(summary, bodyHeight);
-        const visible = this.visibleSteps(summary, bodyHeight);
-        const window = this.visibleWindow(visible);
         const labelWidth = 5;
         const geo = this.gridGeometry(width - labelWidth);
         const rows = [this.headerLine(width, summary)];
-        if (window === undefined) {
+        // The matrix is a fixed-height window on the selected step, not one row per visible step.
+        const topCount = this.topRows();
+        const topStart = Math.max(0, Math.min(this.cursor - Math.floor((topCount - 1) / 2), Math.max(0, summary.steps.length - topCount)));
+        const topSteps = summary.steps.slice(topStart, topStart + topCount);
+        const topWindow = this.visibleWindow(topSteps);
+        if (topWindow === undefined) {
             rows.push(` ${pad("", labelWidth)}${th.fg("dim", "no timing in view")}`);
-            for (let index = 0; index < bodyHeight; index += 1)
+            for (let index = 0; index < topCount; index += 1)
                 rows.push("");
         }
         else {
-            const map = this.timelineMap(visible, geo.units);
-            rows.push(` ${pad("", labelWidth)}${this.gridAxis(geo, map.skipped, window)}`);
-            for (let index = 0; index < bodyHeight; index += 1) {
-                const step = visible[index];
+            const map = this.timelineMap(topSteps, geo.units);
+            rows.push(` ${pad("", labelWidth)}${this.gridAxis(geo, map.skipped, topWindow)}`);
+            for (let index = 0; index < topCount; index += 1) {
+                const step = topSteps[index];
                 if (step === undefined) {
                     rows.push("");
                     continue;
                 }
-                const stepNumber = this.listScroll + index;
+                const stepNumber = topStart + index;
                 const selected = stepNumber === this.cursor;
                 const label = pad(`${selected ? "›" : " "}${String(stepNumber + 1).padStart(3)} `, labelWidth);
                 rows.push(` ${th.fg(selected ? "text" : "dim", label)}${this.stepBar(step, map.columnOf, geo)}`);

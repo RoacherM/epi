@@ -52,12 +52,13 @@ export declare class TracePage {
     private submit;
     private findNext;
     private bodyHeight;
+    /** A fixed slice of the list shown as the dot matrix above it, never growing with the session. */
+    private topRows;
     private detailWidth;
     /** Pixel geometry: two glyphs per cell with a 1-column gap, matching the agreed mockup. */
     private gridGeometry;
     /** Keep the cursor's row on screen and the list scroll in range, before anything is drawn. */
     private syncList;
-    private visibleSteps;
     private durationOf;
     /** The time window of the steps currently on screen: the grid never compresses the whole
      * session, only what is visible right now. */
