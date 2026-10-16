@@ -17,6 +17,8 @@ export class TracePage {
     section = 0;
     detailScroll = 0;
     follow = true;
+    /** `waterfall`: bar positioned on the visible time axis; `duration`: bar length by duration. */
+    barMode = "waterfall";
     finder = new Finder();
     prompt;
     message = "";
@@ -122,6 +124,8 @@ export class TracePage {
             this.moveCursor(Math.floor(page / 2), summary);
         else if (matchesKey(data, "ctrl+u"))
             this.moveCursor(-Math.floor(page / 2), summary);
+        else if (data === "v")
+            this.barMode = this.barMode === "waterfall" ? "duration" : "waterfall";
         else if (matchesKey(data, "return") || data === "l" || matchesKey(data, "right") || matchesKey(data, "tab"))
             this.openDetail();
     }
@@ -214,6 +218,22 @@ export class TracePage {
     visibleSteps(summary, height) {
         return summary.steps.slice(this.listScroll, this.listScroll + height);
     }
+    durationOf(step) {
+        if (step.duration !== undefined)
+            return step.duration.ms;
+        if (step.span?.endMs !== undefined)
+            return step.span.endMs - step.span.startMs;
+        return undefined;
+    }
+    maxVisibleDuration(steps) {
+        let max = 0;
+        for (const step of steps) {
+            const ms = this.durationOf(step);
+            if (ms !== undefined)
+                max = Math.max(max, ms);
+        }
+        return max;
+    }
     /** The time window of the steps currently on screen: the waterfall never compresses the whole
      * session, only what is visible right now. */
     visibleWindow(steps) {
@@ -233,28 +253,37 @@ export class TracePage {
             return undefined;
         return { startMs: start, endMs: end <= start ? start + 1 : end };
     }
-    /** The cells of one row's waterfall bar: a bar for a span, a diamond for a lone instant, else
-     * blank. The caller colours them. */
+    /** Cells for the duration bar chart: length proportional to the duration, from the same column. */
+    durationCells(step, width, maxDuration) {
+        const cells = Array(width).fill("empty");
+        const ms = this.durationOf(step);
+        if (ms === undefined || ms <= 0 || maxDuration <= 0)
+            return cells;
+        const length = Math.max(1, Math.min(width, Math.round((ms / maxDuration) * width)));
+        for (let at = 0; at < length; at += 1)
+            cells[at] = "bar";
+        return cells;
+    }
     barCells(step, window, width) {
-        const cells = Array(width).fill(" ");
+        const cells = Array(width).fill("empty");
         const span = Math.max(1, window.endMs - window.startMs);
         const column = (atMs) => Math.max(0, Math.min(width - 1, Math.floor(((atMs - window.startMs) / span) * width)));
         if (step.span !== undefined) {
             const from = column(step.span.startMs);
             const endMs = step.span.endMs;
             if (endMs === undefined) {
-                cells[from] = "◆";
+                cells[from] = "marker";
             }
             else {
                 const to = Math.max(from, Math.min(width - 1, Math.ceil(((endMs - window.startMs) / span) * width) - 1));
                 for (let at = from; at <= to; at += 1)
-                    cells[at] = "━";
+                    cells[at] = "bar";
                 if (from === to)
-                    cells[from] = "◆";
+                    cells[from] = "marker";
             }
         }
         else if (step.atMs !== undefined) {
-            cells[column(step.atMs)] = "◆";
+            cells[column(step.atMs)] = "marker";
         }
         return cells;
     }
@@ -272,13 +301,20 @@ export class TracePage {
         return "dim";
     }
     /** The axis above the list: only the visible window's start and total, aligned to the bar column. */
-    axisLine(contentWidth, window) {
+    axisLine(contentWidth, window, maxDuration) {
         const th = this.options.theme;
         const barWidth = this.barWidth(contentWidth);
         const left = contentWidth - barWidth;
+        if (this.barMode === "duration") {
+            const label = maxDuration > 0 ? `duration · max ${formatDuration(maxDuration)}` : "no duration in view";
+            return th.fg("dim", pad(`${" ".repeat(left)}${label}`, contentWidth));
+        }
         if (window === undefined)
             return th.fg("dim", pad(`${" ".repeat(left)}no timing in view`, contentWidth));
         const region = Array(barWidth).fill(" ");
+        // Reference marks at 0/25/50/75/100% under a uniform baseline make the scale readable.
+        for (let step = 0; step <= 4; step += 1)
+            region[Math.round((step * (barWidth - 1)) / 4)] = "┬";
         const start = "+0ms";
         for (let index = 0; index < start.length && index < barWidth; index += 1)
             region[index] = start[index];
@@ -305,9 +341,9 @@ export class TracePage {
             parts.push(th.fg("warning", `${summary.observing} live`));
         return pad(parts.join(th.fg("dim", "  ·  ")), width);
     }
-    listRow(step, index, selected, contentWidth, window) {
+    listRow(step, index, selected, contentWidth, window, maxDuration) {
         const th = this.options.theme;
-        const durationMs = step.duration?.ms ?? (step.span?.endMs === undefined ? undefined : step.span.endMs - step.span.startMs);
+        const durationMs = this.durationOf(step);
         const marker = selected ? "›" : " ";
         const seq = String(index + 1).padStart(3);
         const duration = pad(formatDuration(durationMs), 7);
@@ -319,14 +355,20 @@ export class TracePage {
         const barWidth = this.barWidth(contentWidth);
         const left = contentWidth - barWidth;
         const leftPlain = pad(`${marker}${seq} ${duration} ${glyph} ${type} ${step.title}${note}${status}`, left);
-        const barPlain = (window === undefined ? " ".repeat(barWidth) : this.barCells(step, window, barWidth).join(""));
-        const tone = this.stepTone(step);
+        const durationMode = this.barMode === "duration";
+        const cells = durationMode
+            ? this.durationCells(step, barWidth, maxDuration)
+            : window === undefined ? Array(barWidth).fill("empty") : this.barCells(step, window, barWidth);
+        const glyphOf = (kind) => (kind === "bar" ? "━" : kind === "marker" ? "◆" : durationMode ? " " : "─");
+        const barPlain = cells.map(glyphOf).join("");
         if (selected)
             return th.style(leftPlain + barPlain, { bg: "selectedBg", bold: true });
+        const tone = this.stepTone(step);
         const leftTone = step.status === "error" || step.status === "aborted" ? "error" : step.status === "running" ? "accent" : step.kind === "event" || step.kind === "user" ? "dim" : "text";
-        return th.fg(leftTone, leftPlain) + th.fg(tone, barPlain);
+        const barStyled = cells.map((kind) => th.fg(kind === "empty" ? "dim" : tone, glyphOf(kind))).join("");
+        return th.fg(leftTone, leftPlain) + barStyled;
     }
-    listLines(width, height, summary, window) {
+    listLines(width, height, summary, window, maxDuration) {
         const th = this.options.theme;
         if (summary.steps.length === 0) {
             return Array.from({ length: height }, (_, row) => pad(row === 0 ? th.fg("dim", " No steps recorded in this session yet.") : "", width));
@@ -338,7 +380,7 @@ export class TracePage {
             if (step === undefined)
                 return " ".repeat(Math.max(0, width - 1)) + bar[row];
             const selected = index === this.cursor && this.focus === "list";
-            return this.listRow(step, index, selected, width - 1, window) + bar[row];
+            return this.listRow(step, index, selected, width - 1, window, maxDuration) + bar[row];
         });
     }
     // ── inspector ────────────────────────────────────────────────────────────
@@ -510,9 +552,11 @@ export class TracePage {
         const summary = this.summary();
         const bodyHeight = this.bodyHeight();
         this.syncList(summary, bodyHeight);
-        const window = this.visibleWindow(this.visibleSteps(summary, bodyHeight));
+        const visible = this.visibleSteps(summary, bodyHeight);
+        const window = this.visibleWindow(visible);
+        const maxDuration = this.maxVisibleDuration(visible);
         const rows = [this.headerLine(width, summary)];
-        rows.push(this.axisLine(width - 1, window) + " ");
+        rows.push(this.axisLine(width - 1, window, maxDuration) + " ");
         if (!compact)
             rows.push("");
         const wide = width >= 120 && this.detailOpen;
@@ -526,7 +570,7 @@ export class TracePage {
             const shown = bars.slice(this.detailScroll, this.detailScroll + bodyHeight);
             const bar = scrollbar(th, bars.length, bodyHeight, this.detailScroll, bodyHeight);
             if (wide) {
-                const list = this.listLines(leftWidth - 1, bodyHeight, summary, window);
+                const list = this.listLines(leftWidth - 1, bodyHeight, summary, window, maxDuration);
                 for (let row = 0; row < bodyHeight; row += 1) {
                     rows.push(`${pad(list[row] ?? "", leftWidth - 1)}${th.fg("border", "│")}${pad(this.finder.highlight(shown[row] ?? "", (text) => th.inverse(text)), rightWidth - 1)}${bar[row]}`);
                 }
@@ -538,7 +582,7 @@ export class TracePage {
             }
         }
         else {
-            const list = this.listLines(width - 1, bodyHeight, summary, window);
+            const list = this.listLines(width - 1, bodyHeight, summary, window, maxDuration);
             for (let row = 0; row < bodyHeight; row += 1)
                 rows.push(list[row] ?? " ".repeat(Math.max(0, width - 1)));
         }
@@ -557,7 +601,7 @@ export class TracePage {
         if (this.focus === "detail" && this.detailOpen) {
             return "←/→ section · 1-5 · j/k scroll · / search · n/N · Tab list · Esc back";
         }
-        return "j/k select · Enter detail · / search · G latest · Esc close";
+        return "j/k select · Enter detail · v bars · / search · G latest · Esc close";
     }
     handleMouse(event) {
         const geometry = this.geometry;
