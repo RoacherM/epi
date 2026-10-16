@@ -39,6 +39,23 @@ test("npm-shrinkwrap.json pins Epi's version and the Pi packages package.json na
   assert.deepEqual(piTuiCopies, ["node_modules/@earendil-works/pi-tui"]);
 });
 
+test("every Pi package in the tree is pinned as an exact direct dependency", () => {
+  // npm 11 ignores a tarball's npm-shrinkwrap.json on a global install, so a Pi package reachable
+  // only through pi-coding-agent's `^1.1.0` range resolves to a newer minor and breaks the locked
+  // Pi (0.1.19 shipped pi-codemode 1.3.0 and failed to start). Pin every one directly.
+  const piPackages = Object.keys(shrinkwrap.packages)
+    .filter((path) => /^node_modules\/@earendil-works\/[^/]+$/.test(path))
+    .map((path) => path.slice("node_modules/".length));
+  assert.ok(piPackages.length >= PI_PACKAGES.length, "no Pi packages found in the shrinkwrap");
+  for (const name of piPackages) {
+    assert.equal(
+      pkg.dependencies[name],
+      shrinkwrap.packages[`node_modules/${name}`].version,
+      `${name} must be an exact direct dependency of package.json (got ${pkg.dependencies[name]})`,
+    );
+  }
+});
+
 test("every package in npm-shrinkwrap.json resolves from registry.npmjs.org", () => {
   // npm install on a machine set to a mirror writes the mirror's URLs; published, every user would
   // download from that mirror. Rewrite them to https://registry.npmjs.org/ (the integrity stays).
