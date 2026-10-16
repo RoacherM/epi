@@ -231,9 +231,9 @@ export class TracePage {
   }
 
   private durationOf(step: TraceStep): number | undefined {
-    if (step.duration !== undefined) return step.duration.ms;
-    if (step.span?.endMs !== undefined) return step.span.endMs - step.span.startMs;
-    return undefined;
+    // The list's duration column is the recorded execute/response time only. A tool's observed
+    // lifecycle span (drawn on the timeline) must not be shown here as if it were execute time.
+    return step.duration?.ms;
   }
 
   /** The time window of the steps currently on screen: the grid never compresses the whole

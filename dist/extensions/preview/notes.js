@@ -1,3 +1,8 @@
+// Version-bound review annotations (docs/review-design.md §4): a note records which side of the
+// comparison it is on, the content hashes of both sides at the time, and the quoted text, so a
+// later refresh can tell whether the line it was written on is still the same code. A note whose
+// anchor cannot be relocated is marked stale instead of being silently pinned to another line.
+import { displayLines } from "./diff.js";
 let counter = 0;
 /** Custom session entry type for a persisted review note (docs/review-design.md §4). */
 export const REVIEW_NOTE_ENTRY = "epi.review.note.v1";
@@ -132,9 +137,11 @@ function relocate(note, file) {
     const text = note.side === "old" ? file.oldText : file.newText;
     if (text === undefined || note.quote === "")
         return undefined;
-    const lines = text.split("\n");
+    // Both sides are compared as drawn (tabs and line endings normalised), because the quote came
+    // from the rendered diff row, not from the raw bytes.
+    const lines = displayLines(text);
     // Match the whole quote as a block, so a multi-line note is never split across occurrences.
-    const quoteLines = note.quote.split("\n");
+    const quoteLines = displayLines(note.quote);
     const matches = [];
     for (let index = 0; index + quoteLines.length <= lines.length; index += 1) {
         let equal = true;
