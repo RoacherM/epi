@@ -46,9 +46,9 @@ function runApp(t, steps, { rows, columns, extension = fauxEdit, model = "epi-fa
 
 const shown = (screen) => screen.join("\n");
 const firstTurn = [["waitReady"], ["type", "change things"], ["key", "enter"], ["waitFor", { regex: "EDIT-DONE[\\s\\S]*Worked for" }]];
-const openTrace = [["type", "/trace"], ["key", "enter"], ["waitFor", "user message", { screen: true }]];
+const openTrace = [["type", "/trace"], ["key", "enter"], ["waitFor", "steps", { screen: true }]];
 
-test("/trace opens full-screen with a dot-matrix timeline at the top and the steps below", (t) => {
+test("/trace opens full-screen with a single-row dot matrix and the steps below", (t) => {
   const { screens, exit } = runApp(t, [
     ...firstTurn, ...openTrace, ["screen", "trace"],
     ["key", "esc"], ["waitGone", " trace ", { screen: true }], ["waitFor", "❯", { screen: true }], ["screen", "back"],
@@ -56,13 +56,12 @@ test("/trace opens full-screen with a dot-matrix timeline at the top and the ste
   ]);
   const trace = shown(screens.trace);
   assert.match(trace, / trace /);
-  assert.match(trace, /user message/);
-  // The dot matrix sits above the list: lane labels, an axis, and lit pixels.
-  assert.match(trace, /Model/);
-  assert.match(trace, /Tools/);
+  assert.match(trace, /steps/);
+  // One dot-matrix row above the list, with an axis and lit pixels.
   assert.match(trace, /\+0ms/);
   assert.match(trace, /█/);
-  // The icon markers live in the list, not in the list's right-hand side.
+  // No lane labels any more: the row is unlabelled.
+  assert.doesNotMatch(trace, /Model/);
   assert.match(trace, /edit/);
   assert.match(trace, /write/);
   // The composer is gone while the page owns the screen, and is back after Esc.
@@ -74,7 +73,7 @@ test("/trace opens full-screen with a dot-matrix timeline at the top and the ste
 test("a slow tool lights a longer run of pixels than a fast one", (t) => {
   const slowTurn = [["waitReady"], ["type", "run them"], ["key", "enter"], ["waitFor", { regex: "SLOW-TOOLS-DONE[\\s\\S]*Worked for" }, { timeoutMs: 40_000 }]];
   const { screens } = runApp(t, [
-    ...slowTurn, ["type", "/trace"], ["key", "enter"], ["waitFor", "user message", { screen: true }],
+    ...slowTurn, ["type", "/trace"], ["key", "enter"], ["waitFor", "steps", { screen: true }],
     ["screen", "trace"],
     ["detach"],
   ], { extension: fauxSlowTools, model: "epi-faux/slowtools" });

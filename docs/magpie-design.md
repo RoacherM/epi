@@ -44,14 +44,6 @@
 | openai | openai-completions | root/v1 |
 | gemini | google-generative-ai | root/v1beta |
 
-列表精简（决策 MG3）：目录里同一个模型常在多个上游各出现一次，还有厂商原始条目，Epi 只保留每个模型一条：
-
-1. 去掉未整理的条目：`display_name` 就是去掉上游前缀后的 ID（例如 Aiberm 的 `anthropic/claude-opus-5.5`、Antigravity 的 `gemini-pro-agent`），或 ID 以 `-disabled` 结尾。2026-10-16 实测这些条目返回 403、404 或策略拒绝；同名的 `aiberm/anthropic/claude-opus-5.5` 和 `aiberm/claude-opus-5-5` 一个被拒、一个正常，`openai/gpt-5.5` 比 `gpt-5.5` 多出约 4000 个隐藏输入 token，所以它们不是同一条通道。
-2. 同一模型按 ID 归一：去掉上游前缀、`auto-`、`anthropic/`/`openai/`/`google/`、`@<n>k`、`:thinking`/`-thinking`、8 位日期后缀，`.` 换成 `-`。
-3. 每个模型留特性最全的一条，依次比较：图片输入、reasoning、档位数、上下文、输出上限；平手时 `group/` 路由组优先（它会换上游重试）。列表保持目录顺序。
-
-被去掉的 ID 不在 Pi 的模型列表里，`--model` 也找不到。规则只用目录字段和命名惯例，不列具体模型。
-
 允许目录分页；重复 ID、错误 schema、未识别的目录响应和循环分页要报错，不发布部分列表。合理缺省值用于未提供的 token 上限。
 
 ## 保存的列表
