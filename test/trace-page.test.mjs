@@ -59,7 +59,7 @@ test("/trace opens full-screen with a waterfall row per visible step, without th
   assert.match(trace, /user message/);
   // The waterfall axis and at least one drawn bar/marker are on screen.
   assert.match(trace, /\+0ms/);
-  assert.match(trace, /[━◆]/);
+  assert.match(trace, /█/);
   // Steps from the real turn: the edit tool and the write tool are both listed.
   assert.match(trace, /edit/);
   assert.match(trace, /write/);
@@ -78,7 +78,7 @@ test("v switches between the positioned waterfall and the duration bar chart", (
   ]);
   assert.match(shown(screens.waterfall), /\+0ms/);
   assert.match(shown(screens.duration), /duration · max/);
-  assert.match(shown(screens.duration), /[━◆]/);
+  assert.match(shown(screens.duration), /█/);
   assert.match(shown(screens.back), /\+0ms/);
 });
 
@@ -92,7 +92,7 @@ test("a slow tool gets a proportional bar, not a fixed stub", (t) => {
   ], { extension: fauxSlowTools, model: "epi-faux/slowtools" });
   const waterfall = shown(screens.waterfall);
   assert.match(waterfall, /1\.2s/);
-  assert.match(waterfall, /━━━/);
+  assert.match(waterfall, /(?:██ ){4,}/);
   assert.match(shown(screens.duration), /sleep 1\.2/);
 });
 

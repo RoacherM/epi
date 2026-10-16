@@ -204,6 +204,16 @@ export class TracePage {
     barWidth(contentWidth) {
         return Math.max(10, Math.min(48, Math.floor(contentWidth * 0.34)));
     }
+    /** A pixel grid: 2-wide cells with a 1-column gap, so a step draws as discrete pixels rather
+     * than a line. `left` is the text column; `usedWidth` the pixels' total width. */
+    pixelGeometry(contentWidth) {
+        const barWidth = this.barWidth(contentWidth);
+        const pixelWidth = 2;
+        const gap = 1;
+        const units = Math.max(4, Math.floor((barWidth + gap) / (pixelWidth + gap)));
+        const usedWidth = units * pixelWidth + (units - 1) * gap;
+        return { units, pixelWidth, gap, usedWidth, left: Math.max(0, contentWidth - usedWidth) };
+    }
     /** Keep the cursor's row on screen and the list scroll in range, before anything is drawn. */
     syncList(summary, height) {
         if (this.follow)
@@ -303,7 +313,7 @@ export class TracePage {
     /** The axis above the list: only the visible window's start and total, aligned to the bar column. */
     axisLine(contentWidth, window, maxDuration) {
         const th = this.options.theme;
-        const barWidth = this.barWidth(contentWidth);
+        const barWidth = this.pixelGeometry(contentWidth).usedWidth;
         const left = contentWidth - barWidth;
         if (this.barMode === "duration") {
             const label = maxDuration > 0 ? `duration · max ${formatDuration(maxDuration)}` : "no duration in view";
@@ -352,20 +362,20 @@ export class TracePage {
         const type = pad(step.object, typeWidth);
         const status = step.status === "completed" || step.status === "pending" ? "" : ` ${step.status}`;
         const note = step.note === undefined ? "" : ` ${step.note}`;
-        const barWidth = this.barWidth(contentWidth);
-        const left = contentWidth - barWidth;
-        const leftPlain = pad(`${marker}${seq} ${duration} ${glyph} ${type} ${step.title}${note}${status}`, left);
+        const geo = this.pixelGeometry(contentWidth);
+        const leftPlain = pad(`${marker}${seq} ${duration} ${glyph} ${type} ${step.title}${note}${status}`, geo.left);
         const durationMode = this.barMode === "duration";
         const cells = durationMode
-            ? this.durationCells(step, barWidth, maxDuration)
-            : window === undefined ? Array(barWidth).fill("empty") : this.barCells(step, window, barWidth);
-        const glyphOf = (kind) => (kind === "bar" ? "━" : kind === "marker" ? "◆" : durationMode ? " " : "─");
-        const barPlain = cells.map(glyphOf).join("");
+            ? this.durationCells(step, geo.units, maxDuration)
+            : window === undefined ? Array(geo.units).fill("empty") : this.barCells(step, window, geo.units);
+        const pixel = (filled) => (filled ? "█".repeat(geo.pixelWidth) : "·".repeat(geo.pixelWidth));
+        const separator = " ".repeat(geo.gap);
+        const barPlain = cells.map((kind) => pixel(kind !== "empty")).join(separator);
         if (selected)
             return th.style(leftPlain + barPlain, { bg: "selectedBg", bold: true });
         const tone = this.stepTone(step);
         const leftTone = step.status === "error" || step.status === "aborted" ? "error" : step.status === "running" ? "accent" : step.kind === "event" || step.kind === "user" ? "dim" : "text";
-        const barStyled = cells.map((kind) => th.fg(kind === "empty" ? "dim" : tone, glyphOf(kind))).join("");
+        const barStyled = cells.map((kind) => th.fg(kind === "empty" ? "dim" : tone, pixel(kind !== "empty"))).join(separator);
         return th.fg(leftTone, leftPlain) + barStyled;
     }
     listLines(width, height, summary, window, maxDuration) {
