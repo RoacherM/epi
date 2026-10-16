@@ -197,7 +197,7 @@ export class TracePage {
             return width - Math.max(56, Math.floor(width / 2)) - 1;
         return width;
     }
-    /** Pixel geometry: 2-wide cells with a 1-column gap. */
+    /** Pixel geometry: two glyphs per cell with a 1-column gap, matching the agreed mockup. */
     gridGeometry(width) {
         const pixelWidth = 2;
         const gap = 1;
@@ -279,9 +279,10 @@ export class TracePage {
         return cells;
     }
     /** The single dot-matrix row: only lit cells are drawn, the rest is blank. A cell where both
-     * lanes were active is a two-tone half block. */
+     * lanes were active shows one dot of each colour. */
     gridMatrix(cells, geo) {
         const th = this.options.theme;
+        const dots = (tone) => th.fg(tone, "▪".repeat(geo.pixelWidth));
         let out = "";
         cells.forEach((cell, unit) => {
             const active = cell.model || cell.tools;
@@ -289,15 +290,17 @@ export class TracePage {
             if (!active)
                 glyph = " ".repeat(geo.pixelWidth);
             else if (cell.error)
-                glyph = th.fg("error", "█".repeat(geo.pixelWidth));
+                glyph = dots("error");
             else if (cell.running)
-                glyph = th.fg("warning", "█".repeat(geo.pixelWidth));
-            else if (cell.model && cell.tools)
-                glyph = th.fg("accent", th.bg("toolSuccessBg", "▀".repeat(geo.pixelWidth)));
+                glyph = dots("warning");
+            else if (cell.model && cell.tools) {
+                const half = Math.max(1, Math.floor(geo.pixelWidth / 2));
+                glyph = th.fg("accent", "▪".repeat(half)) + th.fg("success", "▪".repeat(geo.pixelWidth - half));
+            }
             else if (cell.model)
-                glyph = th.fg("accent", "█".repeat(geo.pixelWidth));
+                glyph = dots("accent");
             else
-                glyph = th.fg("success", "█".repeat(geo.pixelWidth));
+                glyph = dots("success");
             out += glyph + (unit < cells.length - 1 ? " ".repeat(geo.gap) : "");
         });
         return out;

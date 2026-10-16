@@ -54,7 +54,7 @@ export declare class TracePage {
     private bodyHeight;
     private chromeRows;
     private detailWidth;
-    /** Pixel geometry: 2-wide cells with a 1-column gap. */
+    /** Pixel geometry: two glyphs per cell with a 1-column gap, matching the agreed mockup. */
     private gridGeometry;
     /** Keep the cursor's row on screen and the list scroll in range, before anything is drawn. */
     private syncList;
@@ -67,7 +67,7 @@ export declare class TracePage {
      * Both lanes share one row, so an overlap draws as a two-tone cell. */
     private gridCells;
     /** The single dot-matrix row: only lit cells are drawn, the rest is blank. A cell where both
-     * lanes were active is a two-tone half block. */
+     * lanes were active shows one dot of each colour. */
     private gridMatrix;
     /** The axis under the matrix: just the window's start and total. */
     private gridAxis;

@@ -59,7 +59,7 @@ test("/trace opens full-screen with a single-row dot matrix and the steps below"
   assert.match(trace, /steps/);
   // One dot-matrix row above the list, with an axis and lit pixels.
   assert.match(trace, /\+0ms/);
-  assert.match(trace, /█/);
+  assert.match(trace, /▪/);
   // No lane labels any more: the row is unlabelled.
   assert.doesNotMatch(trace, /Model/);
   assert.match(trace, /edit/);
@@ -79,7 +79,7 @@ test("a slow tool lights a longer run of pixels than a fast one", (t) => {
   ], { extension: fauxSlowTools, model: "epi-faux/slowtools" });
   const trace = shown(screens.trace);
   assert.match(trace, /1\.2s/);
-  assert.match(trace, /(?:██ ){4,}/);
+  assert.match(trace, /(?:▪▪ ){4,}/);
 });
 
 test("Enter opens the inspector, the sections switch, and Esc returns to the list", (t) => {
