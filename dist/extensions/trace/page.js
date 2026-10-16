@@ -264,12 +264,12 @@ export class TracePage {
     }
     /** One step's dot-matrix row: its span as blocks, an instant as one cell, empty when untimed.
      * User and event steps show a single marker so every step on screen has its own row. */
-    stepBar(step, columnOf, geo) {
+    stepBar(step, columnOf, geo, selected) {
         const th = this.options.theme;
-        const cells = Array(geo.units).fill(" ".repeat(geo.pixelWidth));
+        const cells = Array.from({ length: geo.units }, () => ({ text: " ".repeat(geo.pixelWidth), lit: false }));
         const mark = (from, to, tone) => {
             for (let unit = from; unit <= to; unit += 1)
-                cells[unit] = th.fg(tone, "▪".repeat(geo.pixelWidth));
+                cells[unit] = { text: th.fg(tone, "▪".repeat(geo.pixelWidth)), lit: true };
         };
         if (step.kind === "model" || step.kind === "tool") {
             const tone = step.status === "error" || step.status === "aborted" ? "error" : step.status === "running" ? "warning" : step.kind === "model" ? "accent" : "success";
@@ -290,7 +290,11 @@ export class TracePage {
             if (step.atMs !== undefined)
                 mark(columnOf(step.atMs), columnOf(step.atMs), "dim");
         }
-        return cells.map((cell, unit) => cell + (unit < geo.units - 1 ? " ".repeat(geo.gap) : "")).join("");
+        return cells.map((cell, unit) => {
+            // The selected step's dots are reversed so it is findable in the minimap.
+            const glyph = selected && cell.lit ? th.inverse(cell.text) : cell.text;
+            return glyph + (unit < geo.units - 1 ? " ".repeat(geo.gap) : "");
+        }).join("");
     }
     /** The axis above the step rows: the window's start and total, with a dot pair where a long idle
      * gap was folded. */
@@ -548,8 +552,9 @@ export class TracePage {
                 }
                 const stepNumber = topStart + index;
                 const selected = stepNumber === this.cursor;
-                const label = pad(`${selected ? "›" : " "}${String(stepNumber + 1).padStart(3)} `, labelWidth);
-                rows.push(` ${th.fg(selected ? "text" : "dim", label)}${this.stepBar(step, map.columnOf, geo)}`);
+                const pointer = selected ? (this.detailOpen ? "▸" : "›") : " ";
+                const label = pad(`${pointer}${String(stepNumber + 1).padStart(3)} `, labelWidth);
+                rows.push(` ${th.fg(selected ? "accent" : "dim", label)}${this.stepBar(step, map.columnOf, geo, selected)}`);
             }
         }
         if (!compact)
