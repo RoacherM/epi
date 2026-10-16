@@ -30,4 +30,21 @@ export declare function laneRow(timeline: Timeline, lane: "model" | "tools", wid
 /** The axis label row, with each tick's label placed as close to its column as possible. */
 export declare function axisRow(timeline: Timeline, width: number): string;
 export declare function timelineRange(timeline: Timeline): string;
+/** One cell of the grid timeline: how many spans are active in that time bucket, and the worst
+ * status among them. Rendered as a GitHub-like block when active. */
+export interface GridCell {
+    active: number;
+    tone: "normal" | "running" | "error";
+}
+export interface GridLane {
+    lane: "model" | "tools";
+    cells: GridCell[];
+}
+/** The 0-based grid column an instant falls in. */
+export declare function columnOf(timeline: Timeline, atMs: number, columns: number): number;
+/** The inclusive column range a span covers (a single column when it is an instant). */
+export declare function columnRange(timeline: Timeline, startMs: number, endMs: number, columns: number): [number, number];
+/** The timeline as `columns` time buckets per lane, for a grid of filled/empty cells. A bar fills
+ * every bucket it overlaps; active counts let the renderer show concurrency as stacked rows. */
+export declare function buildGrid(timeline: Timeline, columns: number): GridLane[];
 //# sourceMappingURL=timeline.d.ts.map

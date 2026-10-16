@@ -51,8 +51,16 @@ export declare class TracePage {
     private submit;
     private findNext;
     private bodyHeight;
+    /** Rows the grid timeline takes above the body: two lanes, each `laneRows` tall, plus the axis. */
+    private laneRows;
+    private chromeRows;
     private detailWidth;
-    private colorizeLane;
+    /** Cell width, gap and column count for the grid at this terminal width. */
+    private gridGeometry;
+    private gridTone;
+    /** The selected step's column range, so its cells stand out in the grid. */
+    private selectedHighlight;
+    /** The GitHub-like grid: one block per active time bucket, stacked rows for concurrency. */
     private timelineLines;
     private headerLine;
     private listRow;
