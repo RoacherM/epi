@@ -30,6 +30,8 @@ export declare class TracePage {
     private section;
     private detailScroll;
     private follow;
+    /** `waterfall`: bar positioned on the visible time axis; `duration`: bar length by duration. */
+    private barMode;
     private readonly finder;
     private prompt;
     private message;
@@ -58,11 +60,13 @@ export declare class TracePage {
     /** Keep the cursor's row on screen and the list scroll in range, before anything is drawn. */
     private syncList;
     private visibleSteps;
+    private durationOf;
+    private maxVisibleDuration;
     /** The time window of the steps currently on screen: the waterfall never compresses the whole
      * session, only what is visible right now. */
     private visibleWindow;
-    /** The cells of one row's waterfall bar: a bar for a span, a diamond for a lone instant, else
-     * blank. The caller colours them. */
+    /** Cells for the duration bar chart: length proportional to the duration, from the same column. */
+    private durationCells;
     private barCells;
     private stepTone;
     /** The axis above the list: only the visible window's start and total, aligned to the bar column. */
