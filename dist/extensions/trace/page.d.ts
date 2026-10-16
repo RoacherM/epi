@@ -52,7 +52,6 @@ export declare class TracePage {
     private submit;
     private findNext;
     private bodyHeight;
-    private chromeRows;
     private detailWidth;
     /** Pixel geometry: two glyphs per cell with a 1-column gap, matching the agreed mockup. */
     private gridGeometry;
@@ -63,13 +62,13 @@ export declare class TracePage {
     /** The time window of the steps currently on screen: the grid never compresses the whole
      * session, only what is visible right now. */
     private visibleWindow;
-    /** One flag set per pixel column: which lane was active, and whether it errored or is running.
-     * Both lanes share one row, so an overlap draws as a two-tone cell. */
-    private gridCells;
-    /** The single dot-matrix row: only lit cells are drawn, the rest is blank. A cell where both
-     * lanes were active shows one dot of each colour. */
-    private gridMatrix;
-    /** The axis under the matrix: just the window's start and total. */
+    /** The visible model/tool activity as time intervals, for the folding map. */
+    private timelineMap;
+    /** One step's dot-matrix row: its span as blocks, an instant as one cell, empty when untimed.
+     * User and event steps show a single marker so every step on screen has its own row. */
+    private stepBar;
+    /** The axis above the step rows: the window's start and total, with a dot pair where a long idle
+     * gap was folded. */
     private gridAxis;
     private headerLine;
     private listRow;

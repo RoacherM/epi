@@ -8,6 +8,7 @@ import { piTui } from "../../tui/pi-tui.js";
 import { pad, scrollbar } from "../preview/draw.js";
 import { Finder, LinePrompt } from "../preview/search.js";
 import { contentLines, formatClock, formatDuration, formatOffset, safeJson, usageLines } from "./format.js";
+import { foldTimeline } from "./fold.js";
 import type { TraceRecorder } from "./record.js";
 import type { TraceStep, TraceSummary } from "./types.js";
 import { projectTrace } from "./project.js";
@@ -195,11 +196,8 @@ export class TracePage {
 
   private bodyHeight(): number {
     const height = this.options.tui.terminal.rows;
-    return Math.max(3, height - this.chromeRows(height));
-  }
-
-  private chromeRows(height: number): number {
-    return 1 /* header */ + 1 /* dot matrix */ + 1 /* axis */ + (height < 16 ? 0 : 1) /* blank */ + 1 /* status */;
+    const base = height < 16 ? 3 : 4; // header, axis, blank (not compact), status
+    return Math.max(3, Math.floor((height - base) / 2));
   }
 
   private detailWidth(): number {
@@ -242,6 +240,8 @@ export class TracePage {
     let start = Number.POSITIVE_INFINITY;
     let end = Number.NEGATIVE_INFINITY;
     for (const step of steps) {
+      // Only execution defines the window: user/event timestamps would stretch it over idle time.
+      if (step.kind !== "model" && step.kind !== "tool") continue;
       if (step.span !== undefined) {
         start = Math.min(start, step.span.startMs);
         end = Math.max(end, step.span.endMs ?? step.span.startMs);
@@ -254,67 +254,59 @@ export class TracePage {
     return { startMs: start, endMs: end <= start ? start + 1 : end };
   }
 
-  /** One flag set per pixel column: which lane was active, and whether it errored or is running.
-   * Both lanes share one row, so an overlap draws as a two-tone cell. */
-  private gridCells(visible: readonly TraceStep[], window: { startMs: number; endMs: number }, units: number): Array<{ model: boolean; tools: boolean; error: boolean; running: boolean }> {
-    const cells = Array.from({ length: units }, () => ({ model: false, tools: false, error: false, running: false }));
-    const span = Math.max(1, window.endMs - window.startMs);
-    const column = (atMs: number): number => Math.max(0, Math.min(units - 1, Math.floor(((atMs - window.startMs) / span) * units)));
+  /** The visible model/tool activity as time intervals, for the folding map. */
+  private timelineMap(visible: readonly TraceStep[], units: number): { columnOf: (atMs: number) => number; skipped: Set<number> } {
+    const intervals: Array<[number, number]> = [];
     for (const step of visible) {
-      const lane = step.kind === "model" ? "model" : step.kind === "tool" ? "tools" : undefined;
-      if (lane === undefined) continue;
-      let from: number;
-      let to: number;
-      if (step.span !== undefined) {
-        from = column(step.span.startMs);
-        to = step.span.endMs === undefined ? from : Math.max(from, column(step.span.endMs));
-      } else if (step.atMs !== undefined) {
-        from = to = column(step.atMs);
-      } else continue;
-      const error = step.status === "error" || step.status === "aborted";
-      const running = step.status === "running";
-      for (let unit = from; unit <= to; unit += 1) {
-        const cell = cells[unit]!;
-        cell[lane] = true;
-        if (error) cell.error = true;
-        if (running) cell.running = true;
-      }
+      if (step.kind !== "model" && step.kind !== "tool") continue;
+      if (step.span !== undefined) intervals.push([step.span.startMs, step.span.endMs ?? step.span.startMs]);
+      else if (step.atMs !== undefined) intervals.push([step.atMs, step.atMs]);
     }
-    return cells;
+    const folded = foldTimeline(intervals, units);
+    return folded;
   }
 
-  /** The single dot-matrix row: only lit cells are drawn, the rest is blank. A cell where both
-   * lanes were active shows one dot of each colour. */
-  private gridMatrix(cells: Array<{ model: boolean; tools: boolean; error: boolean; running: boolean }>, geo: { pixelWidth: number; gap: number }): string {
+  /** One step's dot-matrix row: its span as blocks, an instant as one cell, empty when untimed.
+   * User and event steps show a single marker so every step on screen has its own row. */
+  private stepBar(step: TraceStep, columnOf: (atMs: number) => number, geo: { units: number; pixelWidth: number; gap: number }): string {
     const th = this.options.theme;
-    const dots = (tone: Tone): string => th.fg(tone, "▪".repeat(geo.pixelWidth));
-    let out = "";
-    cells.forEach((cell, unit) => {
-      const active = cell.model || cell.tools;
-      let glyph: string;
-      if (!active) glyph = " ".repeat(geo.pixelWidth);
-      else if (cell.error) glyph = dots("error");
-      else if (cell.running) glyph = dots("warning");
-      else if (cell.model && cell.tools) {
-        const half = Math.max(1, Math.floor(geo.pixelWidth / 2));
-        glyph = th.fg("accent", "▪".repeat(half)) + th.fg("success", "▪".repeat(geo.pixelWidth - half));
-      } else if (cell.model) glyph = dots("accent");
-      else glyph = dots("success");
-      out += glyph + (unit < cells.length - 1 ? " ".repeat(geo.gap) : "");
-    });
-    return out;
+    const cells = Array<string>(geo.units).fill(" ".repeat(geo.pixelWidth));
+    const mark = (from: number, to: number, tone: Tone): void => {
+      for (let unit = from; unit <= to; unit += 1) cells[unit] = th.fg(tone, "▪".repeat(geo.pixelWidth));
+    };
+    if (step.kind === "model" || step.kind === "tool") {
+      const tone: Tone = step.status === "error" || step.status === "aborted" ? "error" : step.status === "running" ? "warning" : step.kind === "model" ? "accent" : "success";
+      if (step.span !== undefined) {
+        const from = columnOf(step.span.startMs);
+        const to = step.span.endMs === undefined ? from : Math.max(from, columnOf(step.span.endMs));
+        mark(from, to, tone);
+      } else if (step.atMs !== undefined) {
+        mark(columnOf(step.atMs), columnOf(step.atMs), tone);
+      }
+    } else if (step.kind === "user") {
+      if (step.atMs !== undefined) mark(columnOf(step.atMs), columnOf(step.atMs), "text");
+    } else if (step.kind === "event") {
+      if (step.atMs !== undefined) mark(columnOf(step.atMs), columnOf(step.atMs), "dim");
+    }
+    return cells.map((cell, unit) => cell + (unit < geo.units - 1 ? " ".repeat(geo.gap) : "")).join("");
   }
 
-  /** The axis under the matrix: just the window's start and total. */
-  private gridAxis(geo: { usedWidth: number }, window: { startMs: number; endMs: number }): string {
+  /** The axis above the step rows: the window's start and total, with a dot pair where a long idle
+   * gap was folded. */
+  private gridAxis(geo: { usedWidth: number; pixelWidth: number; gap: number }, skipped: ReadonlySet<number>, window: { startMs: number; endMs: number }): string {
     const th = this.options.theme;
-    const region = Array<string>(geo.usedWidth).fill(" ");
+    const chars = Array<string>(geo.usedWidth).fill(" ");
     const start = "+0ms";
-    for (let index = 0; index < start.length && index < geo.usedWidth; index += 1) region[index] = start[index]!;
+    for (let index = 0; index < start.length && index < geo.usedWidth; index += 1) chars[index] = start[index]!;
     const total = formatDuration(window.endMs - window.startMs);
     const endAt = geo.usedWidth - total.length;
-    if (endAt >= start.length + 1) for (let index = 0; index < total.length; index += 1) region[endAt + index] = total[index]!;
-    return th.fg("dim", " " + region.join(""));
+    if (endAt >= start.length + 1) for (let index = 0; index < total.length; index += 1) chars[endAt + index] = total[index]!;
+    for (const unit of skipped) {
+      const at = unit * (geo.pixelWidth + geo.gap);
+      if (chars[at] === " ") chars[at] = "·";
+      if (at + 1 < geo.usedWidth && chars[at + 1] === " ") chars[at + 1] = "·";
+    }
+    return th.fg("dim", chars.join(""));
   }
 
   private headerLine(width: number, summary: TraceSummary): string {
@@ -525,14 +517,26 @@ export class TracePage {
     this.syncList(summary, bodyHeight);
     const visible = this.visibleSteps(summary, bodyHeight);
     const window = this.visibleWindow(visible);
+    const labelWidth = 5;
+    const geo = this.gridGeometry(width - labelWidth);
     const rows: string[] = [this.headerLine(width, summary)];
     if (window === undefined) {
-      rows.push(` ${th.fg("dim", "no timing in view")}`);
-      rows.push("");
+      rows.push(` ${pad("", labelWidth)}${th.fg("dim", "no timing in view")}`);
+      for (let index = 0; index < bodyHeight; index += 1) rows.push("");
     } else {
-      const geo = this.gridGeometry(width);
-      rows.push(" " + this.gridMatrix(this.gridCells(visible, window, geo.units), geo));
-      rows.push(this.gridAxis(geo, window));
+      const map = this.timelineMap(visible, geo.units);
+      rows.push(` ${pad("", labelWidth)}${this.gridAxis(geo, map.skipped, window)}`);
+      for (let index = 0; index < bodyHeight; index += 1) {
+        const step = visible[index];
+        if (step === undefined) {
+          rows.push("");
+          continue;
+        }
+        const stepNumber = this.listScroll + index;
+        const selected = stepNumber === this.cursor;
+        const label = pad(`${selected ? "›" : " "}${String(stepNumber + 1).padStart(3)} `, labelWidth);
+        rows.push(` ${th.fg(selected ? "text" : "dim", label)}${this.stepBar(step, map.columnOf, geo)}`);
+      }
     }
     if (!compact) rows.push("");
     const wide = width >= 120 && this.detailOpen;

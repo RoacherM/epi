@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { contentLines, formatDuration, safeJson, usageLines } from "../dist/extensions/trace/format.js";
+import { foldTimeline } from "../dist/extensions/trace/fold.js";
 import { projectTrace } from "../dist/extensions/trace/project.js";
 import { TraceRecorder } from "../dist/extensions/trace/record.js";
 
@@ -251,6 +252,20 @@ test("safeJson survives cycles and truncates", () => {
 test("contentLines turns an image into metadata, not base64", () => {
   const lines = contentLines([{ type: "text", text: "a\nb" }, { type: "image", data: "AAAA", mimeType: "image/png" }]);
   assert.deepEqual(lines, ["a", "b", "[image image/png · 4 base64 chars]"]);
+});
+
+test("idle folding keeps both activity clusters visible and marks the folded gap", () => {
+  const folded = foldTimeline([[0, 10], [4000, 4010]], 20);
+  assert.deepEqual([...folded.skipped], [10]);
+  // The first cluster keeps the left columns; the second is not squeezed off by the 4 s idle.
+  assert.equal(folded.columnOf(0), 0);
+  assert.equal(folded.columnOf(10), 9);
+  assert.equal(folded.columnOf(4000), 11);
+  assert.equal(folded.columnOf(4010), 19);
+  // A single continuous span fills the whole row and folds nothing.
+  const single = foldTimeline([[0, 1000]], 20);
+  assert.deepEqual([...single.skipped], []);
+  assert.deepEqual([single.columnOf(0), single.columnOf(1000)], [0, 19]);
 });
 
 test("a session with no timing reports zero spanned steps", () => {
