@@ -120,4 +120,50 @@ export function timelineRange(timeline) {
         return "no timing recorded";
     return `${formatDuration(timeline.endMs - timeline.startMs)} total window`;
 }
+/** The 0-based grid column an instant falls in. */
+export function columnOf(timeline, atMs, columns) {
+    if (timeline.empty || columns <= 0)
+        return 0;
+    const span = Math.max(1, timeline.endMs - timeline.startMs);
+    return Math.max(0, Math.min(columns - 1, Math.floor(((atMs - timeline.startMs) / span) * columns)));
+}
+/** The inclusive column range a span covers (a single column when it is an instant). */
+export function columnRange(timeline, startMs, endMs, columns) {
+    const from = columnOf(timeline, startMs, columns);
+    const to = endMs <= startMs ? from : Math.max(from, columnOf(timeline, endMs, columns));
+    return [from, to];
+}
+function worseTone(a, b) {
+    const rank = { normal: 0, running: 1, error: 2 };
+    return rank[b] > rank[a] ? b : a;
+}
+function toneOf(status) {
+    if (status === "error" || status === "aborted")
+        return "error";
+    if (status === "running")
+        return "running";
+    return "normal";
+}
+/** The timeline as `columns` time buckets per lane, for a grid of filled/empty cells. A bar fills
+ * every bucket it overlaps; active counts let the renderer show concurrency as stacked rows. */
+export function buildGrid(timeline, columns) {
+    const lanes = [
+        { lane: "model", cells: Array.from({ length: columns }, () => ({ active: 0, tone: "normal" })) },
+        { lane: "tools", cells: Array.from({ length: columns }, () => ({ active: 0, tone: "normal" })) },
+    ];
+    if (timeline.empty || columns <= 0)
+        return lanes;
+    for (const bar of timeline.bars) {
+        const target = lanes.find((entry) => entry.lane === bar.lane);
+        if (target === undefined)
+            continue;
+        const [from, to] = columnRange(timeline, bar.startMs, bar.endMs, columns);
+        for (let column = from; column <= to; column += 1) {
+            const cell = target.cells[column];
+            cell.active += 1;
+            cell.tone = worseTone(cell.tone, toneOf(bar.status));
+        }
+    }
+    return lanes;
+}
 //# sourceMappingURL=timeline.js.map

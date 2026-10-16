@@ -133,3 +133,61 @@ export function timelineRange(timeline: Timeline): string {
   if (timeline.empty) return "no timing recorded";
   return `${formatDuration(timeline.endMs - timeline.startMs)} total window`;
 }
+
+/** One cell of the grid timeline: how many spans are active in that time bucket, and the worst
+ * status among them. Rendered as a GitHub-like block when active. */
+export interface GridCell {
+  active: number;
+  tone: "normal" | "running" | "error";
+}
+
+export interface GridLane {
+  lane: "model" | "tools";
+  cells: GridCell[];
+}
+
+/** The 0-based grid column an instant falls in. */
+export function columnOf(timeline: Timeline, atMs: number, columns: number): number {
+  if (timeline.empty || columns <= 0) return 0;
+  const span = Math.max(1, timeline.endMs - timeline.startMs);
+  return Math.max(0, Math.min(columns - 1, Math.floor(((atMs - timeline.startMs) / span) * columns)));
+}
+
+/** The inclusive column range a span covers (a single column when it is an instant). */
+export function columnRange(timeline: Timeline, startMs: number, endMs: number, columns: number): [number, number] {
+  const from = columnOf(timeline, startMs, columns);
+  const to = endMs <= startMs ? from : Math.max(from, columnOf(timeline, endMs, columns));
+  return [from, to];
+}
+
+function worseTone(a: GridCell["tone"], b: GridCell["tone"]): GridCell["tone"] {
+  const rank = { normal: 0, running: 1, error: 2 };
+  return rank[b] > rank[a] ? b : a;
+}
+
+function toneOf(status: string): GridCell["tone"] {
+  if (status === "error" || status === "aborted") return "error";
+  if (status === "running") return "running";
+  return "normal";
+}
+
+/** The timeline as `columns` time buckets per lane, for a grid of filled/empty cells. A bar fills
+ * every bucket it overlaps; active counts let the renderer show concurrency as stacked rows. */
+export function buildGrid(timeline: Timeline, columns: number): GridLane[] {
+  const lanes: GridLane[] = [
+    { lane: "model", cells: Array.from({ length: columns }, () => ({ active: 0, tone: "normal" as const })) },
+    { lane: "tools", cells: Array.from({ length: columns }, () => ({ active: 0, tone: "normal" as const })) },
+  ];
+  if (timeline.empty || columns <= 0) return lanes;
+  for (const bar of timeline.bars) {
+    const target = lanes.find((entry) => entry.lane === bar.lane);
+    if (target === undefined) continue;
+    const [from, to] = columnRange(timeline, bar.startMs, bar.endMs, columns);
+    for (let column = from; column <= to; column += 1) {
+      const cell = target.cells[column]!;
+      cell.active += 1;
+      cell.tone = worseTone(cell.tone, toneOf(bar.status));
+    }
+  }
+  return lanes;
+}

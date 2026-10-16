@@ -6,7 +6,7 @@ import test from "node:test";
 import { contentLines, formatDuration, safeJson, usageLines } from "../dist/extensions/trace/format.js";
 import { projectTrace } from "../dist/extensions/trace/project.js";
 import { TraceRecorder } from "../dist/extensions/trace/record.js";
-import { axisRow, buildTimeline, laneRow } from "../dist/extensions/trace/timeline.js";
+import { axisRow, buildGrid, buildTimeline, columnOf, laneRow } from "../dist/extensions/trace/timeline.js";
 
 const ISO = (ms) => new Date(ms).toISOString();
 const message = (id, msg, ms = 1000) => ({ type: "message", id, parentId: null, timestamp: ISO(ms), message: msg });
@@ -277,6 +277,28 @@ test("the timeline draws model and tool lanes on one scale with markers for inst
   assert.equal(modelRow.length, 30);
   assert.match(modelRow, /━/);
   assert.match(axisRow(timeline, 30), /\+/);
+});
+
+test("the grid fills one cell per active bucket and stacks concurrency", () => {
+  const summary = {
+    steps: [
+      { id: "t1", kind: "tool", source: "session", status: "completed", title: "", object: "a", raw: {}, span: { startMs: 0, endMs: 400, source: "x" } },
+      { id: "t2", kind: "tool", source: "session", status: "running", title: "", object: "b", raw: {}, span: { startMs: 200, endMs: 600, source: "x" } },
+      { id: "m1", kind: "model", source: "session", status: "completed", title: "", object: "m", raw: {}, span: { startMs: 800, endMs: 1000, source: "x" } },
+    ],
+    startMs: 0, endMs: 300, coverage: { total: 3, withSpan: 3, durationOnly: 0, untimed: 0 }, groups: 0, observing: 0,
+  };
+  const timeline = buildTimeline(summary, { nowMs: 1000 });
+  const lanes = buildGrid(timeline, 6);
+  const tools = lanes.find((lane) => lane.lane === "tools");
+  const model = lanes.find((lane) => lane.lane === "model");
+  // Column 0: tool 1 only. Column 1: both tools overlap, so the cell stacks two rows.
+  assert.equal(tools.cells[0].active, 1);
+  assert.equal(tools.cells[1].active, 2);
+  assert.equal(tools.cells[1].tone, "running");
+  assert.equal(model.cells[4].active, 1);
+  assert.equal(model.cells[0].active, 0);
+  assert.deepEqual([columnOf(timeline, 0, 6), columnOf(timeline, 999, 6), columnOf(timeline, 1000, 6)], [0, 5, 5]);
 });
 
 test("a session with no timing reports an empty timeline instead of a fake zero-second one", () => {
