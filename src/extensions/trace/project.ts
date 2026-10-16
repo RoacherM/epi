@@ -188,7 +188,14 @@ function modelStep(entry: SessionEntry, message: AssistantMessage, nowMs: number
   };
 }
 
-function toolStep(entry: SessionEntry, parentId: string, call: ToolCall, tools: ReadonlyMap<string, unknown>, recorder: TraceRecorder, nowMs: number): TraceStep {
+interface ToolStepContext {
+  tools: ReadonlyMap<string, unknown>;
+  recorder: TraceRecorder;
+  nowMs: number;
+}
+
+function toolStep(entry: SessionEntry, parentId: string, call: ToolCall, context: ToolStepContext): TraceStep {
+  const { tools, recorder, nowMs } = context;
   const args = argumentsOf(call);
   const target = toolTarget(call.name, args);
   const note = editNote(args);
@@ -409,7 +416,7 @@ export function projectTrace(branch: readonly SessionEntry[], recorder: TraceRec
         steps.push(model);
         for (const block of message.content) {
           if (block.type !== "toolCall") continue;
-          const step = toolStep(entry, model.id, block, tools, recorder, nowMs);
+          const step = toolStep(entry, model.id, block, { tools, recorder, nowMs });
           // A duplicate call id is ambiguous: the first call keeps the result association, and the
           // later one is kept but marked, rather than silently overwriting the first (docs §5).
           if (toolSteps.has(block.id)) step.warning = "duplicate call id; the result association is ambiguous";
@@ -437,10 +444,12 @@ export function projectTrace(branch: readonly SessionEntry[], recorder: TraceRec
       continue;
     }
     if (entry.type === "custom" && TRACE_CUSTOM_TYPES.has(entry.customType)) continue;
-    // A compaction entry carries a complete prompt/tool checkpoint; replay it so a call after the
-    // boundary sees the schema that was actually declared then.
+    // A compaction entry carries a complete prompt/tool checkpoint; it becomes the leading system
+    // message of the compacted context, so the tool set is reset to what the checkpoint declares.
     if (entry.type === "compaction" && entry.systemMessage !== undefined) {
-      applyToolChanges(entry.systemMessage as { toolsAdded?: unknown; toolsRemoved?: unknown }, tools);
+      const checkpoint = entry.systemMessage as { toolsAdded?: unknown; toolsRemoved?: unknown };
+      if (Array.isArray(checkpoint.toolsAdded)) tools.clear();
+      applyToolChanges(checkpoint, tools);
     }
     const detail = eventDetail(entry);
     steps.push(eventStep(entry, detail.object, detail.title));

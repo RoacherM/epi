@@ -6,7 +6,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 function git(cwd, args) {
     try {
-        const stdout = execFileSync("git", ["-C", cwd, ...args], {
+        // core.fsmonitor=false keeps a user hook from running as a side effect of these reads.
+        const stdout = execFileSync("git", ["-C", cwd, "-c", "core.fsmonitor=false", ...args], {
             maxBuffer: 64 * 1024 * 1024,
             env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat" },
         });
@@ -22,18 +23,12 @@ export function isGitRepo(cwd) {
     const result = git(cwd, ["rev-parse", "--is-inside-work-tree"]);
     return result.ok && result.stdout.toString("utf8").trim() === "true";
 }
-export function headSha(cwd) {
-    const result = git(cwd, ["rev-parse", "--verify", "HEAD"]);
-    if (!result.ok)
-        return undefined;
-    const sha = result.stdout.toString("utf8").trim();
-    return sha === "" ? undefined : sha;
-}
-/** `git status --porcelain=v2 -z`: one entry per path, renames keep their old path. */
+/** `git status --porcelain=v2 -z`: one entry per path, renames keep their old path. Throws when git
+ * itself fails, so a broken repository is not shown as "no changes". */
 export function statusChanges(cwd) {
     const result = git(cwd, ["status", "--porcelain=v2", "-z", "--untracked-files=all"]);
     if (!result.ok)
-        return [];
+        throw new Error(`git status failed: ${result.error ?? "unknown error"}`);
     const fields = result.stdout.toString("utf8").split("\0");
     const changes = [];
     for (let index = 0; index < fields.length; index += 1) {
@@ -64,9 +59,9 @@ export function statusChanges(cwd) {
 /** The index's blob for each path, from `ls-files --stage -z`. */
 export function indexBlobs(cwd) {
     const result = git(cwd, ["ls-files", "--stage", "-z"]);
-    const blobs = new Map();
     if (!result.ok)
-        return blobs;
+        throw new Error(`git ls-files failed: ${result.error ?? "unknown error"}`);
+    const blobs = new Map();
     for (const field of result.stdout.toString("utf8").split("\0")) {
         if (field === "")
             continue;

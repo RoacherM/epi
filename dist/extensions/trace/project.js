@@ -158,7 +158,8 @@ function modelStep(entry, message, nowMs) {
         ...(callIds.length === 0 ? {} : { callIds }),
     };
 }
-function toolStep(entry, parentId, call, tools, recorder, nowMs) {
+function toolStep(entry, parentId, call, context) {
+    const { tools, recorder, nowMs } = context;
     const args = argumentsOf(call);
     const target = toolTarget(call.name, args);
     const note = editNote(args);
@@ -376,7 +377,7 @@ export function projectTrace(branch, recorder, nowMs = Date.now()) {
                 for (const block of message.content) {
                     if (block.type !== "toolCall")
                         continue;
-                    const step = toolStep(entry, model.id, block, tools, recorder, nowMs);
+                    const step = toolStep(entry, model.id, block, { tools, recorder, nowMs });
                     // A duplicate call id is ambiguous: the first call keeps the result association, and the
                     // later one is kept but marked, rather than silently overwriting the first (docs §5).
                     if (toolSteps.has(block.id))
@@ -408,10 +409,13 @@ export function projectTrace(branch, recorder, nowMs = Date.now()) {
         }
         if (entry.type === "custom" && TRACE_CUSTOM_TYPES.has(entry.customType))
             continue;
-        // A compaction entry carries a complete prompt/tool checkpoint; replay it so a call after the
-        // boundary sees the schema that was actually declared then.
+        // A compaction entry carries a complete prompt/tool checkpoint; it becomes the leading system
+        // message of the compacted context, so the tool set is reset to what the checkpoint declares.
         if (entry.type === "compaction" && entry.systemMessage !== undefined) {
-            applyToolChanges(entry.systemMessage, tools);
+            const checkpoint = entry.systemMessage;
+            if (Array.isArray(checkpoint.toolsAdded))
+                tools.clear();
+            applyToolChanges(checkpoint, tools);
         }
         const detail = eventDetail(entry);
         steps.push(eventStep(entry, detail.object, detail.title));

@@ -2,7 +2,7 @@
 // git repository is created and removed. Skipped where git is unavailable.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -139,6 +139,34 @@ test("a note whose range does not match its quote goes stale even with the same 
   const note = store.add({ sessionId: "s", branchAnchor: "l", source: "changes", path: "z.ts", side: "new", startLine: 1, endLine: 3, quote: "a\nb", text: "x", file });
   assert.deepEqual(store.recheck([file]), { kept: 0, stale: 1 });
   assert.equal(note.state, "stale");
+});
+
+test("a note written on a tab-indented line is matched after the tab is drawn as spaces", () => {
+  const store = new ReviewNoteStore();
+  const raw = "one\n\tindent();\n";
+  const file = { source: "changes", path: "t.ts", status: "modified", oldHash: "o", newHash: "n1", oldText: "", newText: raw };
+  // The UI quoted the rendered line (tab expanded), while the file bytes still hold the tab.
+  const note = store.add({ sessionId: "s", branchAnchor: "l", source: "changes", path: "t.ts", side: "new", startLine: 2, endLine: 2, quote: "    indent();", text: "x", file });
+  const moved = { ...file, newHash: "n2", newText: `zero\n${raw}` };
+  assert.deepEqual(store.recheck([moved]), { kept: 1, stale: 0 });
+  assert.equal(note.startLine, 3);
+});
+
+test("a work-tree-only rename is shown as the old file deleted and the new file untracked", { skip: !hasGit }, (t) => {
+  const { dir, git } = repo(t);
+  writeFileSync(join(dir, "old name.txt"), "alpha\n");
+  git("add", "old name.txt");
+  git("commit", "-q", "-m", "init");
+  renameSync(join(dir, "old name.txt"), join(dir, "new name.txt"));
+  writeFileSync(join(dir, "new name.txt"), "alpha\nbeta\n");
+  const files = loadReview("unstaged", { ledger: new ChangeLedger(), cwd: dir });
+  // git itself does not call this a rename: the index still has the old path, so the old side is
+  // deleted and the new path is untracked. The page must show that, not pretend it is a modify.
+  const deleted = files.find((file) => file.path === "old name.txt");
+  assert.equal(deleted?.status, "deleted");
+  const added = files.find((file) => file.path === "new name.txt");
+  assert.equal(added?.status, "new");
+  assert.equal(added?.newText, "alpha\nbeta\n");
 });
 
 test("bringing notes to the draft keeps the source, side, line and quote, and flags stale ones", () => {

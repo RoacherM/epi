@@ -1,34 +1,23 @@
 // Live observations for /trace (docs/trace-design.md §4.1, §6.2): the SDK only records a tool's
 // execute() time, so the wall-clock lifecycle span comes from the tool_execution_start/end events
-// this process sees. The recorder keeps those spans and a bounded set of in-flight tools; the
-// projection reconciles them with the session branch by call id.
+// this process sees. The recorder keeps those spans and the in-flight tools; the projection
+// reconciles them with the session branch by call id.
 //
 // Times are wall-clock milliseconds (Date.now), the same domain as session entry timestamps, so the
-// timeline can place both. The monotonic reading is kept alongside for interval math that must not
-// be fooled by a wall-clock jump.
+// timeline can place both.
 /** A bounded, per-session store. The extension factory makes a new one on every (re)bind. */
 export class TraceRecorder {
-    /** Bumped on every observation; the page uses it to discard stale notifications. */
+    /** Bumped on every observation; the page uses it to discard stale projections. */
     generation = 0;
     running = false;
-    /** Wall clock when the current agent run started, for a run marker. */
-    runStartMs;
     spans = new Map();
     listeners = new Set();
     wallClock;
-    monotonicClock;
     constructor(options = {}) {
         this.wallClock = options.wallClock ?? (() => Date.now());
-        this.monotonicClock = options.monotonicClock ?? (() => performance.now());
     }
-    toolStart(callId, toolName, parentToolCallId) {
-        this.spans.set(callId, {
-            callId,
-            toolName,
-            ...(parentToolCallId === undefined ? {} : { parentToolCallId }),
-            startMs: this.wallClock(),
-            monotonicStart: this.monotonicClock(),
-        });
+    toolStart(callId, toolName) {
+        this.spans.set(callId, { callId, toolName, startMs: this.wallClock() });
         this.notify();
     }
     toolEnd(callId) {
@@ -36,21 +25,15 @@ export class TraceRecorder {
         if (observation === undefined || observation.endMs !== undefined)
             return;
         observation.endMs = this.wallClock();
-        observation.monotonicEnd = this.monotonicClock();
         this.notify();
     }
     agentStart() {
         this.running = true;
-        this.runStartMs = this.wallClock();
         this.notify();
     }
     agentEnd() {
         this.running = false;
         this.notify();
-    }
-    /** Every observation for the branch, keyed by call id. */
-    observations() {
-        return this.spans;
     }
     /** In-flight tools with no result yet: the projection turns these into running steps. */
     inFlight() {

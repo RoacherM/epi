@@ -92,8 +92,18 @@ export class ReviewPage {
 
   constructor(private readonly options: ReviewPageOptions) {
     this.source = options.source;
-    this.files = options.load(options.source);
+    this.files = this.loadFiles(options.source);
     this.loadedThrough = Math.min(this.files.length - 1, 2);
+  }
+
+  /** A failed git read is shown as a message, never as "no changes". */
+  private loadFiles(source: ReviewSourceKind): ReviewFile[] {
+    try {
+      return this.options.load(source);
+    } catch (error) {
+      this.message = `could not read ${SOURCE_LABEL[source]}: ${error instanceof Error ? error.message : String(error)}`;
+      return [];
+    }
   }
 
   dispose(): void {}
@@ -174,7 +184,7 @@ export class ReviewPage {
             const newNo = startNew + offset;
             const text = cache.oldLines[oldNo - 1] ?? "";
             out.push({ fileIndex, file, kind: "diff", text, diffIndex, side: "old", oldNo, newNo });
-            this.pushAnnotations(out, fileIndex, file, notes, "old", oldNo, "new", newNo);
+            this.pushAnnotations(out, fileIndex, file, notes, [{ side: "old", line: oldNo }, { side: "new", line: newNo }]);
           }
           return;
         }
@@ -182,9 +192,9 @@ export class ReviewPage {
         const line = side === "new" ? row.newNo : row.oldNo;
         out.push({ fileIndex, file, kind: "diff", text: row.text, diffIndex, side, ...(row.oldNo === undefined ? {} : { oldNo: row.oldNo }), ...(row.newNo === undefined ? {} : { newNo: row.newNo }) });
         if (row.kind === "context" && row.oldNo !== undefined && row.newNo !== undefined) {
-          this.pushAnnotations(out, fileIndex, file, notes, "old", row.oldNo, "new", row.newNo);
+          this.pushAnnotations(out, fileIndex, file, notes, [{ side: "old", line: row.oldNo }, { side: "new", line: row.newNo }]);
         } else if (line !== undefined && row.kind !== "context") {
-          this.pushAnnotations(out, fileIndex, file, notes, side, line, side, line);
+          this.pushAnnotations(out, fileIndex, file, notes, [{ side, line }]);
         }
       });
     });
@@ -196,13 +206,10 @@ export class ReviewPage {
     fileIndex: number,
     file: ReviewFile,
     notes: Map<string, ReviewNote[]>,
-    sideA: "old" | "new",
-    lineA: number | undefined,
-    sideB: "old" | "new",
-    lineB: number | undefined,
+    anchors: ReadonlyArray<{ side: "old" | "new"; line: number | undefined }>,
   ): void {
     const seen = new Set<string>();
-    for (const [side, line] of [[sideA, lineA], [sideB, lineB]] as const) {
+    for (const { side, line } of anchors) {
       if (line === undefined) continue;
       for (const note of notes.get(`${side}:${line}`) ?? []) {
         if (seen.has(note.id)) continue;
@@ -326,15 +333,22 @@ export class ReviewPage {
   }
 
   private jumpChange(backwards: boolean): void {
-    for (let index = this.cursor + (backwards ? -1 : 1); index >= 0 && index < this.rows().length; index += backwards ? -1 : 1) {
-      const row = this.rows()[index];
-      if (row?.kind === "diff" && row.diffIndex !== undefined) {
-        const diffRow = this.diffFor(row.file).diff?.rows[row.diffIndex];
-        if (diffRow !== undefined && diffRow.kind !== "context" && diffRow.kind !== "gap") {
-          this.cursor = index;
-          return;
+    for (;;) {
+      const rows = this.rows();
+      for (let index = this.cursor + (backwards ? -1 : 1); index >= 0 && index < rows.length; index += backwards ? -1 : 1) {
+        const row = rows[index];
+        if (row?.kind === "diff" && row.diffIndex !== undefined) {
+          const diffRow = this.diffFor(row.file).diff?.rows[row.diffIndex];
+          if (diffRow !== undefined && diffRow.kind !== "context" && diffRow.kind !== "gap") {
+            this.cursor = index;
+            return;
+          }
         }
       }
+      // Nothing in the loaded files: bring in the next few and continue. Expanding appends rows
+      // after the cursor, so its index stays valid.
+      if (this.loadedThrough >= this.files.length - 1) break;
+      this.loadedThrough = Math.min(this.files.length - 1, this.loadedThrough + 3);
     }
     this.message = backwards ? "no change above" : "no change below";
   }
@@ -396,7 +410,7 @@ export class ReviewPage {
     const order: ReviewSourceKind[] = ["changes", "unstaged", "staged"];
     const next = order[(order.indexOf(this.source) + 1) % order.length]!;
     this.source = next;
-    this.files = this.options.load(next);
+    this.files = this.loadFiles(next);
     this.diffs.clear();
     this.cursor = 0;
     this.scroll = 0;
@@ -408,7 +422,7 @@ export class ReviewPage {
   private refresh(): void {
     const before = this.rows();
     const currentPath = before[this.cursor]?.file.path;
-    this.files = this.options.load(this.source);
+    this.files = this.loadFiles(this.source);
     this.diffs.clear();
     this.loadedThrough = Math.min(this.files.length - 1, 2);
     const outcome = this.options.notes.recheck(this.files);

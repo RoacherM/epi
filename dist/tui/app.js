@@ -1,13 +1,10 @@
-// Epi TUI v2: fullscreen grok-build layout, transcript, prompt, extension host, lifecycle.
-// Layout and data flow follow docs/tui-design.md 2.2 and 4.1.
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { getSelectListTheme, } from "@earendil-works/pi-coding-agent";
 import { runUserBash } from "./bash-block.js";
 import { aggregateStatusLineStats, defaultStatusLine, headerBar, PromptFrame, queuedMessagesBar, shortcutsBar, splitPromptZone, TurnStatus, } from "./chrome.js";
 import { findBuiltin, slashCompletions } from "./builtins.js";
 import { errorText } from "./errors.js";
 import { createExtensionUIContext } from "./ext-host.js";
+import { readGitBranch } from "../git-branch.js";
 import { installKeybindings } from "./keybindings.js";
 import { createKeyActions } from "./keys.js";
 import { ChipEditor, unattachedImageLabels } from "./paste-chips.js";
@@ -58,18 +55,6 @@ function hideBelowRows(terminal, maxRows, component) {
         invalidate: () => component.invalidate(),
         handleMouse: (event) => (terminal.rows <= maxRows ? undefined : component.handleMouse?.(event)),
     };
-}
-function readGitBranch(cwd) {
-    for (let dir = cwd;; dir = dirname(dir)) {
-        try {
-            const head = readFileSync(join(dir, ".git", "HEAD"), "utf8").trim();
-            return head.startsWith("ref: refs/heads/") ? head.slice("ref: refs/heads/".length) : head.slice(0, 7);
-        }
-        catch {
-            if (dirname(dir) === dir)
-                return undefined;
-        }
-    }
 }
 export async function runTuiApp(options) {
     const { runtime, theme, cwd } = options;

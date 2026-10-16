@@ -15,8 +15,8 @@ export interface GitChange {
     unmerged: boolean;
 }
 export declare function isGitRepo(cwd: string): boolean;
-export declare function headSha(cwd: string): string | undefined;
-/** `git status --porcelain=v2 -z`: one entry per path, renames keep their old path. */
+/** `git status --porcelain=v2 -z`: one entry per path, renames keep their old path. Throws when git
+ * itself fails, so a broken repository is not shown as "no changes". */
 export declare function statusChanges(cwd: string): GitChange[];
 export interface IndexBlob {
     oid: string;

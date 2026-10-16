@@ -7,6 +7,7 @@ import { contentLines, formatDuration, safeJson, usageLines } from "../dist/exte
 import { foldTimeline } from "../dist/extensions/trace/fold.js";
 import { projectTrace } from "../dist/extensions/trace/project.js";
 import { TraceRecorder } from "../dist/extensions/trace/record.js";
+import { TRACE_VERSION } from "../dist/extensions/trace.js";
 
 const ISO = (ms) => new Date(ms).toISOString();
 const message = (id, msg, ms = 1000) => ({ type: "message", id, parentId: null, timestamp: ISO(ms), message: msg });
@@ -40,10 +41,13 @@ const toolResult = (callId, name, extra = {}) => ({
 
 function recorder() {
   let wall = 10_000;
-  let mono = 0;
-  const r = new TraceRecorder({ wallClock: () => wall, monotonicClock: () => mono });
-  return { r, tick: (value) => { wall += value; mono += value; } };
+  const r = new TraceRecorder({ wallClock: () => wall });
+  return { r, tick: (value) => { wall += value; } };
 }
+
+test("the extension reports its own version", () => {
+  assert.match(TRACE_VERSION, /^\d+\.\d+\.\d+$/);
+});
 
 test("a model response is one step, each tool call is one step, and a result attaches by call id", () => {
   const { r } = recorder();
@@ -108,7 +112,7 @@ test("an observed tool span is used for the timeline, while execute duration sta
 test("a still-running tool the branch does not know about becomes a live observation step", () => {
   const { r } = recorder();
   r.agentStart();
-  r.toolStart("c9", "grep", "parent1");
+  r.toolStart("c9", "grep");
   const summary = projectTrace([message("u1", { role: "user", content: "hi", timestamp: 1 })], r);
   const live = summary.steps.at(-1);
   assert.equal(live.source, "observation");
@@ -208,7 +212,7 @@ test("a timestamp far in the future keeps its duration but draws no span", () =>
 
 test("an observed end before its start is not drawn as a span", () => {
   let wall = 10_000;
-  const r = new TraceRecorder({ wallClock: () => wall, monotonicClock: () => 0 });
+  const r = new TraceRecorder({ wallClock: () => wall });
   r.toolStart("c1", "bash");
   wall = 9_000; // a wall-clock step back
   r.toolEnd("c1");
@@ -223,6 +227,24 @@ test("the recorder generation advances on every observation so a live step re-pr
   const before = r.generation;
   r.toolStart("c1", "bash");
   assert.ok(r.generation > before);
+});
+
+test("a compaction checkpoint replaces the tool set, so a tool it omits is no longer known", () => {
+  const { r } = recorder();
+  const branch = [
+    message("s1", system([readTool, editToolV1])),
+    {
+      type: "compaction", id: "co1", parentId: null, timestamp: ISO(2000), summary: "sum",
+      firstKeptEntryId: "s1", tokensBefore: 10,
+      systemMessage: { role: "system", content: "", toolsAdded: [editToolV2], timestamp: 2000 },
+    },
+    message("a1", assistant([{ type: "toolCall", id: "c1", name: "read", arguments: { path: "a" } }], { stopReason: "toolUse", timestamp: 2200 })),
+  ];
+  const summary = projectTrace(branch, r);
+  const step = summary.steps.find((candidate) => candidate.tool?.callId === "c1");
+  // `read` was declared before the compaction but not in the checkpoint, so it is gone.
+  assert.equal(step.tool.schema.declaration, undefined);
+  assert.match(step.tool.schema.unavailable, /not declared/);
 });
 
 test("usage keeps subsets labelled instead of double-counting, and a zero cost is not called free", () => {

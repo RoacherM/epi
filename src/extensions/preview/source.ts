@@ -43,14 +43,16 @@ function decode(bytes: Buffer | undefined): string | undefined {
   return bytes === undefined ? undefined : bytes.toString("utf8");
 }
 
-function buildFile(
-  source: ReviewSourceKind,
-  path: string,
-  oldPath: string | undefined,
-  oldBytes: Buffer | undefined,
-  newBytes: Buffer | undefined,
-  extra: { untracked?: boolean; unmerged?: boolean; note?: string } = {},
-): ReviewFile {
+interface FileSides {
+  oldBytes: Buffer | undefined;
+  newBytes: Buffer | undefined;
+  untracked?: boolean;
+  unmerged?: boolean;
+  note?: string;
+}
+
+function buildFile(source: ReviewSourceKind, path: string, oldPath: string | undefined, sides: FileSides): ReviewFile {
+  const { oldBytes, newBytes } = sides;
   const file: ReviewFile = {
     source,
     path,
@@ -59,14 +61,14 @@ function buildFile(
     oldHash: hash(oldBytes),
     newHash: hash(newBytes),
   };
-  if (extra.unmerged === true) {
+  if (sides.unmerged === true) {
     file.status = "conflict";
     file.note = "unresolved merge conflict; the index has more than one stage";
     return file;
   }
-  if (extra.note !== undefined) {
+  if (sides.note !== undefined) {
     file.status = "unreadable";
-    file.note = extra.note;
+    file.note = sides.note;
     return file;
   }
   if (looksBinary(oldBytes) || looksBinary(newBytes)) {
@@ -80,7 +82,7 @@ function buildFile(
     return file;
   }
   if (oldPath !== undefined && oldPath !== "" && oldPath !== path) file.status = "renamed";
-  else if (oldBytes === undefined) file.status = extra.untracked === true ? "new" : "new";
+  else if (oldBytes === undefined) file.status = "new";
   else if (newBytes === undefined) file.status = "deleted";
   const oldText = decode(oldBytes);
   const newText = decode(newBytes);
@@ -119,7 +121,7 @@ function ledgerFiles(ledger: ChangeLedger, cwd: string): ReviewFile[] {
       note = "not on disk now";
     }
     const oldBytes = before.kind === "text" ? Buffer.from(before.text, "utf8") : undefined;
-    const file = buildFile("changes", displayPath(cwd, change.path), undefined, oldBytes, newBytes, note === undefined ? {} : { note });
+    const file = buildFile("changes", displayPath(cwd, change.path), undefined, { oldBytes, newBytes, ...(note === undefined ? {} : { note }) });
     if (before.kind === "absent" && newBytes !== undefined) file.status = "new";
     files.push(file);
   }
@@ -133,14 +135,18 @@ function gitFiles(kind: "unstaged" | "staged", cwd: string): ReviewFile[] {
     const staged = change.indexStatus !== "." || change.unmerged;
     if (kind === "staged" ? !staged : !(change.worktreeStatus !== "." || change.untracked || change.unmerged)) continue;
     if (kind === "unstaged" && change.unmerged) continue; // conflicts belong to the staged view
-    const indexEntry = blobs.get(change.path);
+    // The index holds the old path for a work-tree-only rename, and the new path once staged.
+    const indexPath = kind === "unstaged" && change.oldPath !== undefined ? change.oldPath : change.path;
+    const indexEntry = blobs.get(indexPath);
     const oldBytes = kind === "staged"
       ? headContent(cwd, change.oldPath ?? change.path)
       : (indexEntry === undefined ? undefined : readBlob(cwd, indexEntry.oid));
     const newBytes = kind === "staged"
       ? (indexEntry === undefined ? undefined : readBlob(cwd, indexEntry.oid))
       : worktreeContent(cwd, change.path);
-    files.push(buildFile(kind, change.path, change.oldPath, oldBytes, newBytes, {
+    files.push(buildFile(kind, change.path, change.oldPath, {
+      oldBytes,
+      newBytes,
       ...(change.untracked ? { untracked: true } : {}),
       ...(change.unmerged ? { unmerged: true } : {}),
     }));
