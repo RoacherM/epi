@@ -95,10 +95,7 @@ function ledgerFiles(ledger, cwd) {
             note = "not on disk now";
         }
         const oldBytes = before.kind === "text" ? Buffer.from(before.text, "utf8") : undefined;
-        const file = buildFile("changes", displayPath(cwd, change.path), undefined, { oldBytes, newBytes, ...(note === undefined ? {} : { note }) });
-        if (before.kind === "absent" && newBytes !== undefined)
-            file.status = "new";
-        files.push(file);
+        files.push(buildFile("changes", displayPath(cwd, change.path), undefined, { oldBytes, newBytes, ...(note === undefined ? {} : { note }) }));
     }
     return files.sort((a, b) => a.path.localeCompare(b.path));
 }
@@ -111,19 +108,18 @@ function gitFiles(kind, cwd) {
             continue;
         if (kind === "unstaged" && change.unmerged)
             continue; // conflicts belong to the staged view
-        // The index holds the old path for a work-tree-only rename, and the new path once staged.
-        const indexPath = kind === "unstaged" && change.oldPath !== undefined ? change.oldPath : change.path;
-        const indexEntry = blobs.get(indexPath);
+        const indexEntry = blobs.get(change.path);
         const oldBytes = kind === "staged"
             ? headContent(cwd, change.oldPath ?? change.path)
             : (indexEntry === undefined ? undefined : readBlob(cwd, indexEntry.oid));
         const newBytes = kind === "staged"
             ? (indexEntry === undefined ? undefined : readBlob(cwd, indexEntry.oid))
             : worktreeContent(cwd, change.path);
-        files.push(buildFile(kind, change.path, change.oldPath, {
+        // A rename is only a rename on the staged side (HEAD -> index). The unstaged side compares the
+        // index path with the work tree, so it is a modify, not a rename.
+        files.push(buildFile(kind, change.path, kind === "staged" ? change.oldPath : undefined, {
             oldBytes,
             newBytes,
-            ...(change.untracked ? { untracked: true } : {}),
             ...(change.unmerged ? { unmerged: true } : {}),
         }));
     }
