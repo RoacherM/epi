@@ -51,17 +51,22 @@ export declare class TracePage {
     private submit;
     private findNext;
     private bodyHeight;
-    /** Rows the grid timeline takes above the body: two lanes, each `laneRows` tall, plus the axis. */
-    private laneRows;
     private chromeRows;
     private detailWidth;
-    /** Cell width, gap and column count for the grid at this terminal width. */
-    private gridGeometry;
-    private gridTone;
-    /** The selected step's column range, so its cells stand out in the grid. */
-    private selectedHighlight;
-    /** The GitHub-like grid: one block per active time bucket, stacked rows for concurrency. */
-    private timelineLines;
+    /** The bar column width for a content width; the left part holds the step text. */
+    private barWidth;
+    /** Keep the cursor's row on screen and the list scroll in range, before anything is drawn. */
+    private syncList;
+    private visibleSteps;
+    /** The time window of the steps currently on screen: the waterfall never compresses the whole
+     * session, only what is visible right now. */
+    private visibleWindow;
+    /** The cells of one row's waterfall bar: a bar for a span, a diamond for a lone instant, else
+     * blank. The caller colours them. */
+    private barCells;
+    private stepTone;
+    /** The axis above the list: only the visible window's start and total, aligned to the bar column. */
+    private axisLine;
     private headerLine;
     private listRow;
     private listLines;

@@ -133,16 +133,3 @@ export interface TraceSummary {
   /** How many of the steps are live observations rather than session entries. */
   observing: number;
 }
-
-/** What the timeline draws: one bar per step with a span, one marker per step with only an instant. */
-export interface TraceBar {
-  id: string;
-  kind: TraceKind;
-  lane: "model" | "tools";
-  startMs: number;
-  endMs: number;
-  /** True when the bar is a zero-width marker (a result instant, or a still-running start). */
-  marker: boolean;
-  running: boolean;
-  status: TraceStatus;
-}

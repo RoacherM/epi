@@ -1,12 +1,11 @@
 // /trace data: projection from session entries plus observations, honest timing, schema replay,
-// usage subset handling, and the timeline builder. Pure unit tests, no TUI.
+// and usage subset handling. Pure unit tests, no TUI.
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import { contentLines, formatDuration, safeJson, usageLines } from "../dist/extensions/trace/format.js";
 import { projectTrace } from "../dist/extensions/trace/project.js";
 import { TraceRecorder } from "../dist/extensions/trace/record.js";
-import { axisRow, buildGrid, buildTimeline, columnOf, laneRow } from "../dist/extensions/trace/timeline.js";
 
 const ISO = (ms) => new Date(ms).toISOString();
 const message = (id, msg, ms = 1000) => ({ type: "message", id, parentId: null, timestamp: ISO(ms), message: msg });
@@ -254,59 +253,10 @@ test("contentLines turns an image into metadata, not base64", () => {
   assert.deepEqual(lines, ["a", "b", "[image image/png · 4 base64 chars]"]);
 });
 
-test("the timeline draws model and tool lanes on one scale with markers for instants", () => {
-  const { r, tick } = recorder();
-  r.agentStart();
-  r.toolStart("c1", "read");
-  tick(100);
-  r.toolEnd("c1");
-  const branch = [
-    message("a1", assistant([{ type: "text", text: "hi" }, { type: "toolCall", id: "c1", name: "read", arguments: { path: "a" } }], { durationMs: 1000, timestamp: 1000 })),
-    message("t1", toolResult("c1", "read", { durationMs: 16, timestamp: 2600 })),
-  ];
-  const summary = projectTrace(branch, r);
-  const timeline = buildTimeline(summary, { nowMs: 3000, tickCount: 4 });
-  assert.equal(timeline.empty, false);
-  assert.ok(timeline.startMs <= 1000);
-  const modelBar = timeline.bars.find((bar) => bar.lane === "model");
-  assert.equal(modelBar.marker, false);
-  assert.equal(modelBar.running, false);
-  const toolsBar = timeline.bars.find((bar) => bar.lane === "tools");
-  assert.equal(toolsBar.startMs, 10_000);
-  const modelRow = laneRow(timeline, "model", 30, { empty: "·", bar: "━", marker: "◆" });
-  assert.equal(modelRow.length, 30);
-  assert.match(modelRow, /━/);
-  assert.match(axisRow(timeline, 30), /\+/);
-});
-
-test("the grid fills one cell per active bucket and stacks concurrency", () => {
-  const summary = {
-    steps: [
-      { id: "t1", kind: "tool", source: "session", status: "completed", title: "", object: "a", raw: {}, span: { startMs: 0, endMs: 400, source: "x" } },
-      { id: "t2", kind: "tool", source: "session", status: "running", title: "", object: "b", raw: {}, span: { startMs: 200, endMs: 600, source: "x" } },
-      { id: "m1", kind: "model", source: "session", status: "completed", title: "", object: "m", raw: {}, span: { startMs: 800, endMs: 1000, source: "x" } },
-    ],
-    startMs: 0, endMs: 300, coverage: { total: 3, withSpan: 3, durationOnly: 0, untimed: 0 }, groups: 0, observing: 0,
-  };
-  const timeline = buildTimeline(summary, { nowMs: 1000 });
-  const lanes = buildGrid(timeline, 6);
-  const tools = lanes.find((lane) => lane.lane === "tools");
-  const model = lanes.find((lane) => lane.lane === "model");
-  // Column 0: tool 1 only. Column 1: both tools overlap, so the cell stacks two rows.
-  assert.equal(tools.cells[0].active, 1);
-  assert.equal(tools.cells[1].active, 2);
-  assert.equal(tools.cells[1].tone, "running");
-  assert.equal(model.cells[4].active, 1);
-  assert.equal(model.cells[0].active, 0);
-  assert.deepEqual([columnOf(timeline, 0, 6), columnOf(timeline, 999, 6), columnOf(timeline, 1000, 6)], [0, 5, 5]);
-});
-
-test("a session with no timing reports an empty timeline instead of a fake zero-second one", () => {
+test("a session with no timing reports zero spanned steps", () => {
   const { r } = recorder();
   const branch = [message("u1", { role: "user", content: "hi", timestamp: 1 })];
   const summary = projectTrace(branch, r);
-  const timeline = buildTimeline(summary, { nowMs: 2000 });
-  // A user message is not a lane bar; there is nothing timed to draw.
-  assert.equal(timeline.bars.some((bar) => bar.marker), true);
   assert.equal(summary.coverage.withSpan, 0);
+  assert.equal(summary.steps[0].kind, "user");
 });

@@ -2,7 +2,6 @@ import { piTui } from "../../tui/pi-tui.js";
 import { pad, scrollbar } from "../preview/draw.js";
 import { Finder, LinePrompt } from "../preview/search.js";
 import { contentLines, formatClock, formatDuration, formatOffset, safeJson, usageLines } from "./format.js";
-import { buildGrid, buildTimeline, columnRange } from "./timeline.js";
 import { projectTrace } from "./project.js";
 const { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } = piTui;
 const SECTIONS = ["Summary", "Payload", "Result", "Schema", "Timing"];
@@ -186,17 +185,8 @@ export class TracePage {
         const height = this.options.tui.terminal.rows;
         return Math.max(3, height - this.chromeRows(height));
     }
-    /** Rows the grid timeline takes above the body: two lanes, each `laneRows` tall, plus the axis. */
-    laneRows(height) {
-        if (height >= 24)
-            return 3;
-        if (height >= 18)
-            return 2;
-        return 1;
-    }
     chromeRows(height) {
-        const grid = this.laneRows(height) * 2 + 1;
-        return 1 + grid + (height < 16 ? 0 : 1) + 1;
+        return 1 /* header */ + 1 /* waterfall axis */ + (height < 16 ? 0 : 1) /* blank */ + 1 /* status */;
     }
     detailWidth() {
         const width = this.options.tui.terminal.columns;
@@ -206,91 +196,98 @@ export class TracePage {
             return width - Math.max(56, Math.floor(width / 2)) - 1;
         return width;
     }
-    /** Cell width, gap and column count for the grid at this terminal width. */
-    gridGeometry(width, labelWidth) {
-        const available = Math.max(8, width - labelWidth - 1);
-        const cellWidth = available >= 60 ? 3 : available >= 28 ? 2 : 1;
-        const gap = available / (cellWidth + 1) >= 12 ? 1 : 0;
-        const columns = Math.max(4, Math.floor((available + gap) / (cellWidth + gap)));
-        return { cellWidth, gap, columns };
+    /** The bar column width for a content width; the left part holds the step text. */
+    barWidth(contentWidth) {
+        return Math.max(10, Math.min(48, Math.floor(contentWidth * 0.34)));
     }
-    gridTone(tone, lane) {
-        if (tone === "error")
-            return "error";
-        if (tone === "running")
-            return "warning";
-        return lane === "model" ? "accent" : "success";
+    /** Keep the cursor's row on screen and the list scroll in range, before anything is drawn. */
+    syncList(summary, height) {
+        if (this.follow)
+            this.cursor = summary.steps.length - 1;
+        this.cursor = Math.max(0, Math.min(this.cursor, Math.max(0, summary.steps.length - 1)));
+        if (this.cursor < this.listScroll)
+            this.listScroll = this.cursor;
+        if (this.cursor >= this.listScroll + height)
+            this.listScroll = this.cursor - height + 1;
+        this.listScroll = Math.max(0, Math.min(this.listScroll, Math.max(0, summary.steps.length - height)));
     }
-    /** The selected step's column range, so its cells stand out in the grid. */
-    selectedHighlight(summary, timeline, columns) {
-        const step = this.currentStep(summary);
-        if (step === undefined || step.kind === "event" || step.kind === "user" || step.kind === "unknown")
+    visibleSteps(summary, height) {
+        return summary.steps.slice(this.listScroll, this.listScroll + height);
+    }
+    /** The time window of the steps currently on screen: the waterfall never compresses the whole
+     * session, only what is visible right now. */
+    visibleWindow(steps) {
+        let start = Number.POSITIVE_INFINITY;
+        let end = Number.NEGATIVE_INFINITY;
+        for (const step of steps) {
+            if (step.span !== undefined) {
+                start = Math.min(start, step.span.startMs);
+                end = Math.max(end, step.span.endMs ?? step.span.startMs);
+            }
+            else if (step.atMs !== undefined) {
+                start = Math.min(start, step.atMs);
+                end = Math.max(end, step.atMs);
+            }
+        }
+        if (!Number.isFinite(start) || !Number.isFinite(end))
             return undefined;
-        const lane = step.kind === "model" ? "model" : "tools";
-        if (step.span !== undefined) {
-            const [from, to] = columnRange(timeline, step.span.startMs, step.span.endMs ?? step.span.startMs, columns);
-            return { lane, from, to };
-        }
-        if (step.atMs !== undefined) {
-            const [from, to] = columnRange(timeline, step.atMs, step.atMs, columns);
-            return { lane, from, to };
-        }
-        return undefined;
+        return { startMs: start, endMs: end <= start ? start + 1 : end };
     }
-    /** The GitHub-like grid: one block per active time bucket, stacked rows for concurrency. */
-    timelineLines(width, summary) {
+    /** The cells of one row's waterfall bar: a bar for a span, a diamond for a lone instant, else
+     * blank. The caller colours them. */
+    barCells(step, window, width) {
+        const cells = Array(width).fill(" ");
+        const span = Math.max(1, window.endMs - window.startMs);
+        const column = (atMs) => Math.max(0, Math.min(width - 1, Math.floor(((atMs - window.startMs) / span) * width)));
+        if (step.span !== undefined) {
+            const from = column(step.span.startMs);
+            const endMs = step.span.endMs;
+            if (endMs === undefined) {
+                cells[from] = "◆";
+            }
+            else {
+                const to = Math.max(from, Math.min(width - 1, Math.ceil(((endMs - window.startMs) / span) * width) - 1));
+                for (let at = from; at <= to; at += 1)
+                    cells[at] = "━";
+                if (from === to)
+                    cells[from] = "◆";
+            }
+        }
+        else if (step.atMs !== undefined) {
+            cells[column(step.atMs)] = "◆";
+        }
+        return cells;
+    }
+    stepTone(step) {
+        if (step.status === "error" || step.status === "aborted")
+            return "error";
+        if (step.status === "running")
+            return "warning";
+        if (step.status === "length" || step.status === "deferred")
+            return "warning";
+        if (step.kind === "model")
+            return "accent";
+        if (step.kind === "tool")
+            return "success";
+        return "dim";
+    }
+    /** The axis above the list: only the visible window's start and total, aligned to the bar column. */
+    axisLine(contentWidth, window) {
         const th = this.options.theme;
-        const labelWidth = 6;
-        const height = this.options.tui.terminal.rows;
-        const laneRows = this.laneRows(height);
-        const timeline = buildTimeline(summary, { tickCount: 6 });
-        const { cellWidth, gap, columns } = this.gridGeometry(width, labelWidth);
-        if (timeline.empty) {
-            const out = [
-                `${pad(th.fg("dim", "Model"), labelWidth)} ${th.fg("dim", "no timing recorded for this session")}`,
-            ];
-            while (out.length < laneRows * 2 + 1)
-                out.push(" ".repeat(labelWidth));
-            return out;
-        }
-        const lanes = buildGrid(timeline, columns);
-        const highlight = this.selectedHighlight(summary, timeline, columns);
-        const rows = [];
-        for (const lane of lanes) {
-            for (let row = 0; row < laneRows; row += 1) {
-                const label = row === 0 ? pad(th.fg("dim", lane.lane === "model" ? "Model" : "Tools"), labelWidth) : " ".repeat(labelWidth);
-                let body = "";
-                for (let column = 0; column < columns; column += 1) {
-                    const cell = lane.cells[column];
-                    const filled = cell.active > 0 && row >= laneRows - Math.min(cell.active, laneRows);
-                    const glyph = (filled ? "█" : "·").repeat(cellWidth);
-                    const hot = highlight !== undefined && highlight.lane === lane.lane && column >= highlight.from && column <= highlight.to;
-                    if (hot)
-                        body += th.inverse(th.fg(filled ? this.gridTone(cell.tone, lane.lane) : "dim", glyph));
-                    else if (filled)
-                        body += th.fg(this.gridTone(cell.tone, lane.lane), glyph);
-                    else
-                        body += th.fg("dim", glyph);
-                    if (gap > 0 && column < columns - 1)
-                        body += " ";
-                }
-                rows.push(`${label} ${body}`);
-            }
-        }
-        // Axis: each tick label starts at its column; the grid cell is wider than one character.
-        const axisWidth = labelWidth + 1 + columns * (cellWidth + gap);
-        const axis = Array(axisWidth).fill(" ");
-        for (const tick of timeline.ticks) {
-            let at = labelWidth + 1 + Math.floor(((tick.atMs - timeline.startMs) / Math.max(1, timeline.endMs - timeline.startMs)) * columns) * (cellWidth + gap);
-            for (const char of tick.label) {
-                if (at >= axisWidth)
-                    break;
-                axis[at] = char;
-                at += 1;
-            }
-        }
-        rows.push(th.fg("dim", axis.join("").replace(/\s+$/, "")));
-        return rows;
+        const barWidth = this.barWidth(contentWidth);
+        const left = contentWidth - barWidth;
+        if (window === undefined)
+            return th.fg("dim", pad(`${" ".repeat(left)}no timing in view`, contentWidth));
+        const region = Array(barWidth).fill(" ");
+        const start = "+0ms";
+        for (let index = 0; index < start.length && index < barWidth; index += 1)
+            region[index] = start[index];
+        const total = formatDuration(window.endMs - window.startMs);
+        const endAt = barWidth - total.length;
+        if (endAt >= start.length + 1)
+            for (let index = 0; index < total.length; index += 1)
+                region[endAt + index] = total[index];
+        return th.fg("dim", " ".repeat(left) + region.join(""));
     }
     headerLine(width, summary) {
         const th = this.options.theme;
@@ -308,45 +305,32 @@ export class TracePage {
             parts.push(th.fg("warning", `${summary.observing} live`));
         return pad(parts.join(th.fg("dim", "  ·  ")), width);
     }
-    listRow(step, index, selected, width) {
+    listRow(step, index, selected, contentWidth, window) {
         const th = this.options.theme;
         const durationMs = step.duration?.ms ?? (step.span?.endMs === undefined ? undefined : step.span.endMs - step.span.startMs);
         const marker = selected ? "›" : " ";
         const seq = String(index + 1).padStart(3);
         const duration = pad(formatDuration(durationMs), 7);
         const glyph = KIND_GLYPH[step.kind] ?? "?";
-        const typeWidth = width >= 80 ? 12 : 8;
+        const typeWidth = contentWidth >= 80 ? 12 : 8;
         const type = pad(step.object, typeWidth);
         const status = step.status === "completed" || step.status === "pending" ? "" : ` ${step.status}`;
         const note = step.note === undefined ? "" : ` ${step.note}`;
-        const body = `${marker}${seq} ${duration} ${glyph} ${type} ${step.title}${note}${status}`;
-        const tone = selected
-            ? "text"
-            : step.status === "error" || step.status === "aborted"
-                ? "error"
-                : step.status === "running"
-                    ? "accent"
-                    : step.status === "length" || step.status === "deferred"
-                        ? "warning"
-                        : step.kind === "event" || step.kind === "user"
-                            ? "dim"
-                            : "text";
-        const clipped = pad(body, width);
-        return selected ? th.style(clipped, { bg: "selectedBg", bold: true }) : th.fg(tone, clipped);
+        const barWidth = this.barWidth(contentWidth);
+        const left = contentWidth - barWidth;
+        const leftPlain = pad(`${marker}${seq} ${duration} ${glyph} ${type} ${step.title}${note}${status}`, left);
+        const barPlain = (window === undefined ? " ".repeat(barWidth) : this.barCells(step, window, barWidth).join(""));
+        const tone = this.stepTone(step);
+        if (selected)
+            return th.style(leftPlain + barPlain, { bg: "selectedBg", bold: true });
+        const leftTone = step.status === "error" || step.status === "aborted" ? "error" : step.status === "running" ? "accent" : step.kind === "event" || step.kind === "user" ? "dim" : "text";
+        return th.fg(leftTone, leftPlain) + th.fg(tone, barPlain);
     }
-    listLines(width, height, summary) {
+    listLines(width, height, summary, window) {
         const th = this.options.theme;
         if (summary.steps.length === 0) {
             return Array.from({ length: height }, (_, row) => pad(row === 0 ? th.fg("dim", " No steps recorded in this session yet.") : "", width));
         }
-        if (this.follow)
-            this.cursor = summary.steps.length - 1;
-        this.cursor = Math.max(0, Math.min(this.cursor, summary.steps.length - 1));
-        if (this.cursor < this.listScroll)
-            this.listScroll = this.cursor;
-        if (this.cursor >= this.listScroll + height)
-            this.listScroll = this.cursor - height + 1;
-        this.listScroll = Math.max(0, Math.min(this.listScroll, Math.max(0, summary.steps.length - height)));
         const bar = scrollbar(th, summary.steps.length, height, this.listScroll, height);
         return Array.from({ length: height }, (_, row) => {
             const index = this.listScroll + row;
@@ -354,7 +338,7 @@ export class TracePage {
             if (step === undefined)
                 return " ".repeat(Math.max(0, width - 1)) + bar[row];
             const selected = index === this.cursor && this.focus === "list";
-            return pad(this.listRow(step, index, selected, width - 1), width - 1) + bar[row];
+            return this.listRow(step, index, selected, width - 1, window) + bar[row];
         });
     }
     // ── inspector ────────────────────────────────────────────────────────────
@@ -524,11 +508,13 @@ export class TracePage {
         const height = this.options.tui.terminal.rows;
         const compact = height < 16;
         const summary = this.summary();
+        const bodyHeight = this.bodyHeight();
+        this.syncList(summary, bodyHeight);
+        const window = this.visibleWindow(this.visibleSteps(summary, bodyHeight));
         const rows = [this.headerLine(width, summary)];
-        rows.push(...this.timelineLines(width, summary));
+        rows.push(this.axisLine(width - 1, window) + " ");
         if (!compact)
             rows.push("");
-        const bodyHeight = this.bodyHeight();
         const wide = width >= 120 && this.detailOpen;
         const leftWidth = wide ? Math.max(56, Math.floor(width / 2)) : width;
         const rightWidth = wide ? width - leftWidth - 1 : width;
@@ -540,7 +526,7 @@ export class TracePage {
             const shown = bars.slice(this.detailScroll, this.detailScroll + bodyHeight);
             const bar = scrollbar(th, bars.length, bodyHeight, this.detailScroll, bodyHeight);
             if (wide) {
-                const list = this.listLines(leftWidth - 1, bodyHeight, summary);
+                const list = this.listLines(leftWidth - 1, bodyHeight, summary, window);
                 for (let row = 0; row < bodyHeight; row += 1) {
                     rows.push(`${pad(list[row] ?? "", leftWidth - 1)}${th.fg("border", "│")}${pad(this.finder.highlight(shown[row] ?? "", (text) => th.inverse(text)), rightWidth - 1)}${bar[row]}`);
                 }
@@ -552,7 +538,7 @@ export class TracePage {
             }
         }
         else {
-            const list = this.listLines(width - 1, bodyHeight, summary);
+            const list = this.listLines(width - 1, bodyHeight, summary, window);
             for (let row = 0; row < bodyHeight; row += 1)
                 rows.push(list[row] ?? " ".repeat(Math.max(0, width - 1)));
         }
