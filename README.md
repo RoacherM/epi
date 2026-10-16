@@ -32,9 +32,15 @@ Epi 是基于 Pi SDK 的可定制终端编程助手。自有 grok 风格 TUI，�
 - **建在 Pi 上**：模型、Agent Loop、Session 用锁定版本的 Pi SDK，功能和 Pi 对齐。
 - **配置只属于 Epi**：独立的 `~/.epi`，不读 Pi 或其他工具的配置，不认 `PI_*` 环境变量；项目配置要先信任。
 - **显式装配**：Rules、Skills、Extensions 由 Manifest 声明；内建 Task（子任务）、MCP、Hooks 默认开启，可以关掉。
-- **不用离开终端去审查**：`/preview` 看 agent 改了什么（diff），以及文件、Markdown、图片和视频。
+- **不用离开终端去审查**：`/preview` 看 agent 改了什么，`/review` 连续审查多个文件并写批注，`/trace` 看这次到底执行了什么、花了多久。
 
 ## 最近更新
+
+**0.1.19：执行轨迹（`/trace`）与连续代码审查（`/review`）**
+
+- `/trace` 全屏看一次会话执行了什么：顶部是固定高度的点阵小地图，每个可见步骤一行、按时间定位、模型/工具/用户/事件各一色，选中的那一步反显高亮，大段空闲折成一个 `··`；下面是步骤列表和 Summary / Payload / Result / Schema / Timing 五个栏目。耗时区分「SDK 记录的响应/执行耗时」和「观察到的工具生命周期区间」，缺起止时只显示已记录的耗时，不伪造跨度；工具 Schema 按调用当时的声明回放。
+- `/review` 全屏连续审查：多个文件的 diff 排在一页，gap 原地展开，`]c`/`[c` 跨文件跳改动，`.`/`,` 跳文件，`c` 给某一行写批注（绑定文件版本与旧/新侧，刷新后只在引用唯一匹配时移动，否则标 stale），`B` 把批注打包成草稿放回输入框，`s` 在「agent 变更账 / Index→Working Tree / HEAD→Index」之间切换。
+- 两者都只在交互界面里加载，模型看不到（`model-snapshot` 无变化）。详细用法见 [Trace](docs/guide/trace.md) 与 [Review](docs/guide/review.md)。
 
 **0.1.12：在 Epi 里看 agent 改了什么**
 
@@ -87,5 +93,5 @@ epi
 
 ## 文档
 
-- [使用文档](docs/guide/README.md)：[安装与升级](docs/guide/install.md) · [命令行](docs/guide/cli.md) · [配置](docs/guide/configuration.md) · [Preview](docs/guide/preview.md) · [Task](docs/guide/task.md) · [MCP](docs/guide/mcp.md) · [Hooks](docs/guide/hooks.md)
+- [使用文档](docs/guide/README.md)：[安装与升级](docs/guide/install.md) · [命令行](docs/guide/cli.md) · [配置](docs/guide/configuration.md) · [Preview](docs/guide/preview.md) · [Review](docs/guide/review.md) · [Trace](docs/guide/trace.md) · [Task](docs/guide/task.md) · [MCP](docs/guide/mcp.md) · [Hooks](docs/guide/hooks.md)
 - 开发：[架构设计（原则）](docs/architecture.md) · [实现与契约](docs/development.md) · [开发流程](docs/dev-workflow.md)（[自举流程](docs/dev-workflow-herdr.md)、[通用的工作流图（wayne-skills 的 workflow-graph skill）](https://github.com/RoacherM/Wayne-Skills/blob/main/skills/workflow-graph/SKILL.md)） · [设计决策](docs/decisions.md)；给开发代理的入口是 [AGENTS.md](AGENTS.md)
