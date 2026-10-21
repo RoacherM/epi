@@ -143,3 +143,34 @@ test("a custom message_end draws the message", () => {
   transcript.handle({ type: "message_end", message: { role: "custom", customType: "note", content: "CUSTOM-TEXT", display: true, timestamp: Date.now() } });
   assert.match(rendered(transcript), /CUSTOM-TEXT/);
 });
+
+// tool_execution_end carries durationMs at the top level, not inside `result`; replayed toolResult
+// messages carry it themselves. Both reach a renderer as `context.durationMs` (docs/tui-transcript-
+// layout-implementation.md W1), live and on /resume alike.
+test("a tool's durationMs reaches its renderers live and from a replayed toolResult", () => {
+  const seen = [];
+  const definition = {
+    renderCall: (_args, _theme, context) => { seen.push(["call", context.durationMs]); return { render: () => ["CALL"], invalidate() {} }; },
+    renderResult: (_result, _options, _theme, context) => { seen.push(["result", context.durationMs]); return { render: () => [], invalidate() {} }; },
+  };
+  const session = (messages = []) => ({
+    messages,
+    sessionManager: { getCwd: () => "/tmp" },
+    extensionRunner: { getMarkdownTransformers: () => [], getMessageRenderer: () => undefined, resolveToolRenderers: (_name, base) => base() },
+    getToolDefinition: () => definition,
+    getAllTools: () => [],
+  });
+
+  const live = new Transcript({ requestRender() {} }, theme, session());
+  live.handle({ type: "tool_execution_start", toolCallId: "c1", toolName: "custom_tool", args: {} });
+  live.handle({ type: "tool_execution_end", toolCallId: "c1", toolName: "custom_tool", result: toolResult("ok"), isError: false, durationMs: 1234 });
+  assert.deepEqual(seen.slice(-2), [["call", 1234], ["result", 1234]]);
+
+  seen.length = 0;
+  const replay = new Transcript({ requestRender() {} }, theme, session());
+  replay.reset(session([
+    assistantMessage([{ type: "toolCall", id: "c2", name: "custom_tool", arguments: {} }]),
+    { role: "toolResult", toolCallId: "c2", toolName: "custom_tool", content: [{ type: "text", text: "ok" }], isError: false, timestamp: Date.now(), durationMs: 56 },
+  ]));
+  assert.deepEqual(seen.slice(-2), [["call", 56], ["result", 56]]);
+});

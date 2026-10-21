@@ -35,6 +35,7 @@ export declare class ToolEntry extends ToolExecutionComponent {
         }>;
         details?: unknown;
         isError: boolean;
+        durationMs?: number;
     }, isPartial?: boolean): void;
     setExpanded(expanded: boolean): void;
     render(width: number): string[];

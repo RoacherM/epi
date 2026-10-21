@@ -306,7 +306,9 @@ export class Transcript {
   }
 
   private toolEnded(event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>): void {
-    this.tool(event.toolName, event.toolCallId).updateResult({ ...event.result, isError: event.isError }, false);
+    // durationMs is a top-level event field, not part of `result`; Pi's interactive-mode.js passes it
+    // the same way, and its ToolExecutionComponent hands it to renderers as `context.durationMs`.
+    this.tool(event.toolName, event.toolCallId).updateResult({ ...event.result, isError: event.isError, durationMs: event.durationMs }, false);
     // Pi also stops, and drains follow-ups, after a batch whose every tool returned `terminate:
     // true` (agent-loop.js shouldTerminateToolBatch; each of the batch's calls ends here once).
     if (this.toolBatch !== undefined) {

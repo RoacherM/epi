@@ -81,7 +81,7 @@ export class ToolEntry extends ToolExecutionComponent {
   }
 
   override updateResult(
-    result: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; details?: unknown; isError: boolean },
+    result: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; details?: unknown; isError: boolean; durationMs?: number },
     isPartial = false,
   ): void {
     super.updateResult(result, isPartial);
