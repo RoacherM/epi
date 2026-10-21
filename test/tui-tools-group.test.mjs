@@ -253,23 +253,23 @@ test("assistant text between tool calls splits the group; each side still groups
   assert.match(out, /Here is what those files contain\./);
 });
 
-// Merge check (pi-087-upgrade's tool grouping + this branch's thinking/AssistantBlock, together for
-// the first time): a thinking-only assistant turn (no text) must break a group exactly like a
-// text-only one does -- the M4 spec says "breaks on text *or thinking*", and AssistantBlock renders
-// a real, non-empty ThinkingBlock for it (never []), so GroupedMessages' bridge check (only bridges a
-// child that renders zero lines) naturally stops there without either file needing to know about the
-// other's internals.
-test("assistant thinking between tool calls splits the group; each side still groups on its own", () => {
+// A thinking-only assistant turn (no text) draws no row while collapsed (`∴` only heads text,
+// docs/tui-transcript-layout-design.md §7.2-4), so it no longer splits a run; GroupedMessages only
+// bridges a child that renders zero lines, so neither file needs the other's internals. Once Ctrl+T
+// shows the thinking, it renders a row and splits the run again.
+test("collapsed thinking between tool calls doesn't split the group; shown thinking does", () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   runTool(transcript, "read", "c1");
   runTool(transcript, "read", "c2");
   assistantEnd(transcript, [{ type: "thinking", thinking: "reasoning about what those files contain" }]);
   runTool(transcript, "read", "c3");
   runTool(transcript, "read", "c4");
+  assert.match(render(transcript), /◈ Read 4 files/);
+  transcript.setThinkingExpanded(true);
   const out = render(transcript);
   const groupCount = (out.match(/◈ Read 2 files/g) ?? []).length;
   assert.equal(groupCount, 2, "expected two separate 'Read 2 files' groups, not one merged run of 4");
-  assert.match(out, /Thought/, "the thinking block itself must still render");
+  assert.match(out, /reasoning about what those files contain/, "the thinking block itself must render");
 });
 
 test("an assistant turn with only tool calls (no text) does not itself split a group", () => {

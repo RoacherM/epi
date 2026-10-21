@@ -64,8 +64,8 @@ test("expanded thinking renders byte-for-byte like Pi's AssistantMessageComponen
   for (const width of [30, 50, 80, 120]) {
     const block = new AssistantBlock(theme, message, [transformer], false, true);
     const lines = block.render(width).map(stripOsc);
-    const header = lines.findIndex((line) => line.includes("Thought"));
-    assert.ok(header !== -1, `expected the Thought header at width ${width}`);
+    const header = lines.findIndex((line) => line.includes("∴"));
+    assert.ok(header !== -1, `expected the ∴ header at width ${width}`);
     const body = lines.slice(header + 1);
     const innerWidth = piTui.visibleWidth(body[0] ?? "");
     assert.ok(body.every((line) => piTui.visibleWidth(line) === innerWidth), `body rows must share one width at ${width}`);
