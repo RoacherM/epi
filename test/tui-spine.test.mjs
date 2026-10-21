@@ -359,3 +359,36 @@ for (const protocol of ["kitty", "iterm2"]) {
     assert.equal(second[reserved], first[reserved], "and doesn't change a frame later");
   });
 }
+
+// Review round 4: a Kitty image with no `r=` (encodeKitty with columns only; the terminal picks the
+// height) still keeps the blank rows after it.
+test("a Kitty image with no stated height keeps the blank rows after it", async (t) => {
+  const { ToolEntry, GroupedMessages } = await import("../dist/tui/tools/group.js");
+  const caps = piTui.getCapabilities();
+  piTui.setCapabilities({ ...caps, images: "kitty" });
+  const realNow = Date.now;
+  let now = 10_000;
+  Date.now = () => now;
+  t.after(() => { piTui.setCapabilities(caps); Date.now = realNow; });
+  const sequence = piTui.encodeKitty(pngData(), { columns: 4, imageId: piTui.allocateImageId(), moveCursor: false });
+  assert.doesNotMatch(sequence, /,r=/);
+  const resultRows = [sequence, "", "     after"];
+  const entry = new ToolEntry("image", "i", {}, {
+    renderShell: "self",
+    renderCall: () => ({ render: () => ["   ◆ image"], invalidate() {} }),
+    renderResult: () => ({ render: () => resultRows, invalidate() {} }),
+  }, { requestRender() {} }, "/w", undefined);
+  entry.updateResult({ content: [{ type: "text", text: "ok" }], isError: false });
+  t.after(() => entry.dispose());
+  const messages = new piTui.Container();
+  messages.addChild(entry);
+  const group = new GroupedMessages(messages, { requestRender() {} }, theme, () => true);
+  const original = messages.render(80);
+  const anchor = original.findIndex((row) => row.includes("\x1b_G"));
+  const first = group.render(80);
+  now += 200;
+  const second = group.render(80);
+  assert.equal(first[anchor + 1], original[anchor + 1]);
+  assert.equal(second[anchor + 1], original[anchor + 1]);
+  assert.match(strip(first[anchor + 2]), /^ [│┃]   after$/, "visible text after the image still gets the spine");
+});
