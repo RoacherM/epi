@@ -32,13 +32,13 @@ token 清单来自 0.87 的 `theme-schema.json`：前景（fg）必填 45 个、
 | mdHeading | fg | ✓ | #1abc9c | #0A8E70 | md_h1（Pi 只有一个标题 token） |
 | mdLink | fg | ✓ | #73daca | #0C947C | tm: link |
 | mdLinkUrl | fg | ✓ | #6c6c6c | #767676 | gray |
-| mdCode | fg | ✓ | #3A95AB | #0082AA | 暗：md_code；亮：tm: inline raw |
-| mdCodeBlock | fg | ✓ | #89ddff | #0082AA | tm: fenced_code |
+| mdCode | fg | ✓ | #8fb3c0 | #4f6f7a | 2026-10-21 降饱和（[对话区排版](tui-transcript-layout-design.md) R5：一段话里五六处青色抢走层级）；原值暗 #3A95AB（md_code）、亮 #0082AA（tm: inline raw） |
+| mdCodeBlock | fg | ✓ | #b8c0cc | #5c6b77 | 2026-10-21 降为冷灰白（同上 §7.2-1：整块青色在深底上糊成光斑）；原值 #89ddff / #0082AA（tm: fenced_code） |
 | mdCodeBlockBorder | fg | ✓ | #585858 | #a5a5a5 | gray_dim |
 | mdQuote | fg | ✓ | #6c6c6c | #767676 | gray |
 | mdQuoteBorder | fg | ✓ | #4e5579 | #b0b0b0 | tm: blockquote |
 | mdHr | fg | ✓ | #585858 | #a5a5a5 | gray_dim |
-| mdListBullet | fg | ✓ | #9abdf5 | #4A72B0 | tm: list_item |
+| mdListBullet | fg | ✓ | #6c6c6c | #767676 | 2026-10-21 改为 muted（同上 R5：结构字符不抢正文）；原值 #9abdf5 / #4A72B0（tm: list_item） |
 | toolDiffAdded | fg | ✓ | #9ece6a | #378E23 | diff_insert_fg |
 | toolDiffRemoved | fg | ✓ | #f7768e | #CD3048 | diff_delete_fg |
 | toolDiffContext | fg | ✓ | #6c6c6c | #767676 | gray |
