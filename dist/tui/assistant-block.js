@@ -9,6 +9,7 @@
 import { AssistantMessageComponent, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { fit, formatDuration, markPromptZone, spread, splitPromptZone, clockColumns } from "./chrome.js";
 import { rewritePiText } from "../pi-output.js";
+import { motionTime, railGlyph } from "./motion.js";
 import { piTui } from "./pi-tui.js";
 import { createFlashState, disposeFlash, paintFlashRail, startFlash } from "./tools/flash.js";
 // Matches transcript.ts's CONTENT_PAD: a 1-column rail plus 2 columns of padding, so thinking lines
@@ -125,8 +126,14 @@ class ThinkingBlock {
         return this.body;
     }
     render(width) {
-        // The rail column is the blank first column of `pad`; it flashes once when the run ends.
-        return paintFlashRail(this.renderLines(width), this.flash, this.theme);
+        // The rail column is the blank first column of `pad`: a pulse runs down it while thinking
+        // (docs/tui-motion-design.md M4), and it flashes once when the run ends.
+        const lines = this.renderLines(width);
+        if (this.active) {
+            const t = motionTime();
+            return lines.map((line, row) => (line.startsWith(" ") ? railGlyph(this.theme, row, t) + line.slice(1) : line));
+        }
+        return paintFlashRail(lines, this.flash, this.theme);
     }
     /** Only the header row (the `Thought for Ns` / `Thinking…` line) toggles -- clicking into an
      * expanded block's body shouldn't collapse it back out from under a text selection. */

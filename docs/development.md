@@ -107,8 +107,9 @@ epi <参数>
 | 部分 | 代码 | 做什么 |
 |---|---|---|
 | 应用主体 | `src/tui/app.ts` | 布局、事件接线、提交分发、会话替换时的重新绑定 |
-| 外框 | `chrome.ts`、`src/startup-page.ts` | 顶栏、状态行、底栏、启动页 |
+| 外框 | `chrome.ts`、`src/startup-page.ts`、`motion.ts` | 顶栏、状态行、底栏、启动页；动效原语（[tui-motion-design.md](tui-motion-design.md)） |
 | 对话区 | `transcript.ts`、`assistant-block.ts`、`bash-block.ts`、`tools/` | 用户消息、回答、思考块、每种工具的卡片 |
+| 只读查看 | `buffer/` | 动作键、搜索与 `:N`、滚动条、带行号的文本视图、工具块悬浮窗；`/preview`、`/review`、`/trace` 共用（[tui-buffer-components.md](tui-buffer-components.md)） |
 | 输入 | `paste-chips.ts`、`key-handlers.ts`、`keybindings.ts`、`queued-messages.ts` | 编辑器、图片和粘贴标签、快捷键、排队的消息 |
 | 命令 | `commands.ts`、`session-commands.ts`、`settings-command.ts`、`info-commands.ts` 等 | `/login`、`/model`、`/resume`、`/settings`、`/compact` 等内置命令 |
 | 扩展宿主 | `ext-host.ts`、`dialogs.ts` | 实现 Pi 扩展界面接口的 28 个方法，外加 Epi 自己的 `setStatusLine`（输入框底边统计，[statusbar-design.md](statusbar-design.md)），扩展的对话框和面板在这里显示（决策 D4） |

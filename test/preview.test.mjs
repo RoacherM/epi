@@ -13,7 +13,7 @@ import { createPreviewInlineExtension, PREVIEW_PLAYER_CHANNEL, PREVIEW_VERSION }
 import { clock, humanSize, kindOf, loadDoc, printable, readListing } from "../dist/extensions/preview/files.js";
 import { Player, StillCache, stillJob } from "../dist/extensions/preview/media.js";
 import { PlayerPane } from "../dist/extensions/preview/player-pane.js";
-import { Viewer } from "../dist/extensions/preview/view.js";
+import { FileBrowser, Viewer } from "../dist/extensions/preview/view.js";
 import { createEpiTheme } from "../dist/tui/theme.js";
 import { piTui } from "../dist/tui/pi-tui.js";
 
@@ -167,7 +167,7 @@ test("the file viewer searches with / and n, goes to a line with :, and says whe
   const { screens } = runApp(t, [
     ...open(" long.txt"), ["waitFor", "80 lines", { screen: true }],
     ["type", "/"], ["type", "needle"], ["key", "enter"], ["waitFor", "60 the needle", { screen: true }], ["screen", "found"],
-    ["type", "g"], ["type", ":"], ["type", "40"], ["key", "enter"], ["waitFor", { regex: "│40 filler" }, { screen: true }], ["screen", "line40"],
+    ["type", "gg"], ["type", ":"], ["type", "40"], ["key", "enter"], ["waitFor", { regex: "│40 filler" }, { screen: true }], ["screen", "line40"],
     ["type", "/"], ["type", "absent"], ["key", "enter"], ["waitFor", "not found: absent", { screen: true }],
     ["type", "/"], ["type", "45"], ["key", "enter"], ["waitFor", "not found: 45", { screen: true }],
     ["detach"],
@@ -175,6 +175,41 @@ test("the file viewer searches with / and n, goes to a line with :, and says whe
   assert.match(firstBodyRow(screens.found), /60 the needle is here/);
   assert.match(firstBodyRow(screens.line40), /40 filler/);
 
+});
+
+// docs/tui-buffer-overlay-design.md §7.5: the shared motion keys. A single `g` no longer jumps; `gg`
+// does, `NG` goes to line N, and `5j` moves five lines.
+test("the file viewer takes Vim motions: NG, 5j, gg, and a lone g does nothing", (t) => {
+  const long = Array.from({ length: 80 }, () => "filler").join("\n");
+  const firstBodyRow = (screen) => screen.find((row) => /^│\s*\d+ /.test(row)) ?? "";
+  const { screens } = runApp(t, [
+    ...open(" long.txt"), ["waitFor", "80 lines", { screen: true }],
+    ["type", "40G"], ["waitFor", { regex: "│40 filler" }, { screen: true }], ["screen", "line40"],
+    ["type", "5j"], ["waitFor", { regex: "│45 filler" }, { screen: true }], ["screen", "down5"],
+    ["type", "g"], ["wait", 200], ["screen", "loneG"],
+    ["type", "g"], ["waitFor", { regex: "│ 1 filler" }, { screen: true }], ["screen", "top"],
+    ["detach"],
+  ], { files: { "long.txt": `${long}\n` }, rows: 20 });
+  assert.match(firstBodyRow(screens.line40), /40 filler/);
+  assert.match(firstBodyRow(screens.down5), /45 filler/);
+  assert.match(firstBodyRow(screens.loneG), /45 filler/, "one g waits for the second");
+  assert.match(firstBodyRow(screens.top), / 1 filler/);
+});
+
+// Review (gemini-4-argon) P2: a key that only starts a count or `g` clears the old message; that
+// change must be drawn, not left on screen until the next key.
+test("the file list redraws when a count or g clears its message", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "epi-preview-redraw-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, "a.txt"), "a\n");
+  let renders = 0;
+  const tui = { requestRender: () => { renders += 1; }, terminal: { rows: 30, columns: 100 } };
+  const browser = new FileBrowser(tui, createEpiTheme("dark"), dir, () => {});
+  for (const key of [".", "g", "1"]) {
+    const before = renders;
+    browser.handleInput(key);
+    assert.ok(renders > before, `no redraw after ${JSON.stringify(key)}`);
+  }
 });
 
 test("a filter narrows the listing, and marked files are inserted together", (t) => {

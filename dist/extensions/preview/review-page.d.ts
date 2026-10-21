@@ -34,6 +34,7 @@ export declare class ReviewPage {
     private readonly finder;
     private prompt;
     private pending;
+    private readonly motions;
     private message;
     private height;
     private bodyTop;
@@ -56,6 +57,9 @@ export declare class ReviewPage {
     private cursorFileIndex;
     handleInput(data: string): void;
     private page;
+    /** The shared motion keys. `G` and `NG` load every file first: rows past the loaded files do
+     * not exist yet. Relative moves go through move(), which loads the file they land in. */
+    private applyMotionKey;
     private move;
     private clamp;
     private activate;

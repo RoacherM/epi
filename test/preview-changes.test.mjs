@@ -9,8 +9,10 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { diffTexts } from "../dist/extensions/preview/diff.js";
+import { DiffView } from "../dist/extensions/preview/changes.js";
 import { ChangeLedger } from "../dist/extensions/preview/ledger.js";
-import { Finder } from "../dist/extensions/preview/search.js";
+import { createEpiTheme } from "../dist/tui/theme.js";
+import { Finder } from "../dist/tui/buffer/search.js";
 
 const harness = fileURLToPath(new URL("./fixtures/tui-harness.mjs", import.meta.url));
 const summary = (diff) => ({
@@ -25,6 +27,38 @@ function tempDir(t) {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
+
+// Review 3 (gemini-4-argon): on the last page every later change is already on screen and the top
+// cannot move; ]c used to "jump" there again and again without a word.
+test("]c on the last page says there is no change below instead of going nowhere", (t) => {
+  const dir = tempDir(t);
+  const path = join(dir, "long.txt");
+  const before = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`);
+  writeFileSync(path, `${before.join("\n")}\n`);
+  const ledger = new ChangeLedger();
+  ledger.onAgentStart();
+  ledger.onToolCall("edit", { path }, dir);
+  const after = [...before];
+  after[2] = "changed 3";
+  after[56] = "changed 57";
+  after[58] = "changed 59";
+  writeFileSync(path, `${after.join("\n")}\n`);
+  ledger.onAgentEnd();
+  const view = new DiffView(ledger, createEpiTheme("dark"), path, "session", dir);
+  const status = () => view.render(80, 8).status.replace(/\x1b\[[0-9;]*m/g, "");
+  status();
+  const press = (keys) => { for (const key of keys) view.handleInput(key); };
+  press(["]", "c"]);
+  assert.doesNotMatch(status(), /no change below/);
+  const seen = [];
+  for (let i = 0; i < 4; i += 1) {
+    press(["]", "c"]);
+    seen.push(status());
+  }
+  assert.ok(seen.some((line) => /no change below/.test(line)), seen.join("\n"));
+  press(["[", "c"]);
+  assert.doesNotMatch(status(), /no change above/, "[c still goes back");
+});
 
 test("the ledger keeps each file as it was before the agent's first change, per session and per turn", (t) => {
   const dir = tempDir(t);
@@ -174,11 +208,11 @@ test("in a diff taller than the screen, ]c [c move between changes, / searches, 
     ["type", "]"], ["type", "c"], ["waitFor", "- const value30 = 30;", { screen: true }], ["screen", "secondChange"],
     ["type", "["], ["type", "c"], ["waitFor", "getSession", { screen: true }], ["screen", "backToFirst"],
     ["type", "/"], ["type", "added"], ["key", "enter"], ["waitFor", "const added = true", { screen: true }], ["screen", "found"],
-    ["type", "g"], ["waitFor", "1 unchanged line", { screen: true }],
+    ["type", "gg"], ["waitFor", "1 unchanged line", { screen: true }],
     ["type", ":"], ["type", "33"], ["key", "enter"], ["waitFor", { regex: "32 33 +const value32" }, { screen: true }],
     ["type", "/"], ["type", "nowhere"], ["key", "enter"], ["waitFor", "not found: nowhere", { screen: true }],
     // Fold markers are not file text: "/unchanged" finds nothing although "⋯ N unchanged lines" is shown.
-    ["type", "g"], ["type", "/"], ["type", "unchanged"], ["key", "enter"], ["waitFor", "not found: unchanged", { screen: true }],
+    ["type", "gg"], ["type", "/"], ["type", "unchanged"], ["key", "enter"], ["waitFor", "not found: unchanged", { screen: true }],
     ["detach"],
   ], { rows: 10 });
   assert.match(shown(screens.firstChange), / 5 +- export function getSession/);

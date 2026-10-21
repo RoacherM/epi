@@ -7,11 +7,13 @@ import {
   getMarkdownTheme,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, Container, TUI } from "@earendil-works/pi-tui";
+import type { Component, Container, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 
 import { AssistantBlock } from "./assistant-block.js";
 import { UserBashBlock } from "./bash-block.js";
+import { BlockInspectorOverlay, type InspectTarget } from "./buffer/inspector.js";
 import { formatDuration, messageText, UserMessageBlock } from "./chrome.js";
+import { writeClipboardText } from "./clipboard.js";
 import { rewritePiText } from "../pi-output.js";
 import { imageLabelNumbers } from "./paste-chips.js";
 import { piTui } from "./pi-tui.js";
@@ -38,6 +40,9 @@ export class Transcript {
   private streaming: AssistantBlock | undefined;
   private toolsExpanded = false;
   private thinkingExpanded = false;
+  /** The open block inspector, at most one (docs/tui-buffer-overlay-design.md §4): opening
+   * another replaces it, and reset() (/new, /resume, /reload, /tree) closes it. */
+  private inspector: OverlayHandle | undefined;
   /** Set on the *first* `agent_start` of a prompt run (item 2's `Worked for Ns` footer), read and
    * cleared on `agent_settled` -- this process's own clock, not anything from the event stream,
    * since none of these events carry a timestamp. Not reset on a later `agent_start`: `agent.
@@ -82,6 +87,7 @@ export class Transcript {
 
   /** New session after /new, /resume, /reload: clear and replay its history. */
   reset(session: AgentSession): void {
+    this.closeInspector();
     this.session = session;
     // Drop pending completion-flash timers (tools/flash.ts) before the entries they belong to go
     // away, and the same for any group line mid-flash.
@@ -112,6 +118,27 @@ export class Transcript {
     for (const entry of session.sessionManager.getBranch?.() ?? []) {
       if (entry.type === "message" && entry.message.role === "user") this.noteImageLabels(messageText(entry.message.content));
     }
+  }
+
+  /** Shows `target` in the floating inspector, replacing one already open; it has the keyboard
+   * until closed, then focus goes back to whatever had it. */
+  inspect(target: InspectTarget): void {
+    this.closeInspector();
+    const overlay = new BlockInspectorOverlay(this.theme, target, {
+      close: () => this.closeInspector(),
+      copy: (text) => writeClipboardText(text),
+      requestRender: () => this.tui.requestRender(),
+      terminalRows: () => this.tui.terminal.rows,
+    });
+    this.inspector = this.tui.showOverlay(overlay, { width: "88%", minWidth: 24, anchor: "center" });
+    this.tui.requestRender();
+  }
+
+  closeInspector(): void {
+    if (this.inspector === undefined) return;
+    this.inspector.hide();
+    this.inspector = undefined;
+    this.tui.requestRender();
   }
 
   /** The highest `[Image #N]` label in this session's user messages: those shown, and those
@@ -369,7 +396,7 @@ export class Transcript {
         this.tool(message.toolName, message.toolCallId).updateResult(message, false);
         break;
       case "bashExecution":
-        this.add(UserBashBlock.fromMessage(this.theme, message));
+        this.add(UserBashBlock.fromMessage(this.theme, message, (target) => this.inspect(target)));
         break;
       case "custom":
         if (message.display) {
@@ -406,7 +433,7 @@ export class Transcript {
     const definition = this.session.getToolDefinition(toolName);
     const isBuiltIn = this.session.getAllTools().find((tool) => tool.name === toolName)?.sourceInfo.source === "builtin";
     const base = (isBuiltIn ? builtInToolRenderers[toolName] : undefined) ?? definition;
-    const renderers = toolBlock(toolName, this.session.extensionRunner.resolveToolRenderers(toolName, () => base));
+    const renderers = toolBlock(toolName, this.session.extensionRunner.resolveToolRenderers(toolName, () => base), (target) => this.inspect(target));
     const component = new ToolEntry(
       toolName,
       toolCallId,

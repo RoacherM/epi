@@ -9,9 +9,10 @@ import type { Theme, ToolExecutionOptions } from "@earendil-works/pi-coding-agen
 import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import type { Component, Container, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
+import { breathe, motionTime, railGlyph } from "../motion.js";
 import { piTui } from "../pi-tui.js";
 import type { ToolRenderers } from "./types.js";
-import { createFlashState, disposeFlash, type FlashState, isFlashing, paintRailTone, startFlash } from "./flash.js";
+import { createFlashState, disposeFlash, type FlashState, flashRail, isFlashing, paintFlashRail, paintRail, startFlash } from "./flash.js";
 
 export type GroupKind = "read" | "grep" | "find" | "ls";
 
@@ -103,7 +104,7 @@ export class ToolEntry extends ToolExecutionComponent {
   }
 
   override render(width: number): string[] {
-    return isFlashing(this.flash) ? paintRailTone(super.render(width), this.flash.tone, this.theme) : super.render(width);
+    return paintFlashRail(super.render(width), this.flash, this.theme);
   }
 
   /** Cleared on `Transcript.reset()` so a stale flash timer never fires after this entry is gone. */
@@ -151,17 +152,19 @@ function summarize(members: MemberLike[]): { running: number; completed: number;
 }
 
 /** Pure text+layout for the collapsed group line, split out from `GroupedMessages` so widths
- * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. */
-export function verbGroupLine(members: MemberLike[], theme: Theme, width: number): string {
+ * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the rail
+ * pulses and the `◈` breathes (docs/tui-motion-design.md M5), both read at `t` seconds. */
+export function verbGroupLine(members: MemberLike[], theme: Theme, width: number, t = motionTime()): string {
   const { running, failed, completed, breakdown } = summarize(members);
   const anyRunning = running > 0;
   const anyFailed = failed > 0;
   let text = anyRunning ? `${RUN_LABEL} · ${completed} completed` : breakdown;
   if (anyFailed) text += ` ${theme.fg("error", `· ${failed} failed`)}`;
-  const rail = anyRunning ? theme.fg("accent", "┃") : " ";
+  const rail = anyRunning ? railGlyph(theme, 0, t) : " ";
   const lead = `${rail}${" ".repeat(PREFIX - 1)}`;
-  const bulletTone = anyRunning ? "accent" : anyFailed ? "error" : "muted";
-  const bullet = theme.fg(bulletTone, "◈ ");
+  const bullet = anyRunning
+    ? breathe(theme, "accent", "thinkingHigh", t, "◈ ")
+    : theme.fg(anyFailed ? "error" : "muted", "◈ ");
   const contentWidth = Math.max(1, width - PREFIX - 2);
   return lead + bullet + piTui.truncateToWidth(text, contentWidth);
 }
@@ -363,7 +366,8 @@ export class GroupedMessages implements Component {
   /**
    * The merged line has no group-level flash timer of its own: once every member has settled, it
    * paints its rail in whichever tone a still-flashing member is showing (error wins over success),
-   * which is exactly the 400ms window each member already tracks on its own `ToolEntry.flash`. This
+   * which is exactly the 400ms window each member already tracks on its own `ToolEntry.flash` (and
+   * fades the same way, read from that member's own state). This
    * needs no "did a render happen between running and settled" observation -- pi-tui's own render
    * throttle can (and in the real app, does) coalesce a fast run's frames so no such render ever
    * happens, which a wall-clock read of `isFlashing()` doesn't care about.
@@ -372,8 +376,8 @@ export class GroupedMessages implements Component {
     const line = verbGroupLine(members, this.theme, width);
     if (members.some((member) => member.status === "running")) return ["", line];
     const flashing = members.filter((member) => isFlashing(member.flash));
-    if (flashing.length === 0) return ["", line];
-    const tone = flashing.some((member) => member.flash.tone === "error") ? "error" : "success";
-    return ["", ...paintRailTone([line], tone, this.theme)];
+    const shown = flashing.find((member) => member.flash.tone === "error") ?? flashing[0];
+    if (shown === undefined) return ["", line];
+    return ["", ...paintRail([line], flashRail(shown.flash, this.theme))];
   }
 }

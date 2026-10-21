@@ -3,6 +3,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionRuntime, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 
+import type { InspectTarget } from "./buffer/inspector.js";
 import type { ProjectIdentity } from "./project-guard.js";
 
 export type NoticeTone = "info" | "warning" | "error";
@@ -29,6 +30,8 @@ export interface CommandHost {
   flash(text: string): void;
   /** Append a block to the transcript (command output, info panels). */
   addBlock(component: Component): void;
+  /** Opens a block's full content in the floating inspector (docs/tui-buffer-overlay-design.md). */
+  inspect(target: InspectTarget): void;
   getEditorText(): string;
   /** Whether the editor's autocomplete list is open (it takes Esc to close itself). */
   isShowingAutocomplete(): boolean;

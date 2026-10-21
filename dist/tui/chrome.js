@@ -174,17 +174,36 @@ export class UserMessageBlock {
 }
 // ── turn status row ───────────────────────────────────────────────────────────
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+// Spinner frame interval, also for an extension's custom frames that don't set one.
 const SPINNER_MS = 133;
+// docs/tui-motion-design.md §3.2: one tick for the status row and every running rail it redraws.
+const MOTION_TICK_MS = 80;
 /** `⠧ Waiting for response… 2.4s ····· 2.4s ⇣2.3k [stop]`; zero rows when idle. */
 export class TurnStatus {
     theme;
     state;
     requestRender;
     timer;
+    indicator;
     constructor(theme, state, requestRender) {
         this.theme = theme;
         this.state = state;
         this.requestRender = requestRender;
+    }
+    /** `ui.setWorkingIndicator`; undefined restores the built-in. */
+    setIndicator(indicator) {
+        this.indicator = indicator;
+    }
+    /** The indicator glyphs followed by their separating space, or "" when hidden. */
+    indicatorText(now) {
+        const custom = this.indicator?.frames;
+        if (custom !== undefined) {
+            if (custom.length === 0)
+                return "";
+            const interval = this.indicator?.intervalMs !== undefined && this.indicator.intervalMs > 0 ? this.indicator.intervalMs : SPINNER_MS;
+            return `${custom[Math.floor(now / interval) % custom.length] ?? ""} `;
+        }
+        return `${this.theme.fg("accent", SPINNER[Math.floor(now / SPINNER_MS) % SPINNER.length] ?? "")} `;
     }
     render(width) {
         const turn = this.state();
@@ -192,11 +211,10 @@ export class TurnStatus {
             this.stop();
             return [];
         }
-        this.timer ??= setInterval(this.requestRender, SPINNER_MS).unref();
+        this.timer ??= setInterval(this.requestRender, MOTION_TICK_MS).unref();
         const now = Date.now();
-        const frame = SPINNER[Math.floor(now / SPINNER_MS) % SPINNER.length] ?? SPINNER[0];
         const phase = width >= 60 ? ` ${this.theme.fg("muted", formatDuration(now - turn.phaseStartedAt))}` : "";
-        const left = `${this.theme.fg("accent", frame ?? "")} ${this.theme.fg("text", turn.activity)}${phase}`;
+        const left = `${this.indicatorText(now)}${this.theme.fg("text", turn.activity)}${phase}`;
         const totalOutput = turn.committedOutput + turn.outputTokens;
         const tokens = totalOutput > 0 ? ` ${turn.estimated ? "~" : ""}⇣${formatTokens(totalOutput).toLowerCase()}` : "";
         const elapsedMs = now - turn.startedAt;

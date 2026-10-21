@@ -1,6 +1,6 @@
 import { type ExtensionUIContext, type Theme } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteProvider, Component, TUI } from "@earendil-works/pi-tui";
-import type { StatusLineFormatter } from "./chrome.js";
+import type { StatusLineFormatter, WorkingIndicator } from "./chrome.js";
 /** What the extension host may do to the screen; implemented by the app. */
 export interface HostSurface {
     readonly tui: TUI;
@@ -18,6 +18,8 @@ export interface HostSurface {
         message?: string | undefined;
         visible?: boolean | undefined;
     }): void;
+    /** Pi's setWorkingIndicator: replace the turn status indicator; undefined restores the built-in. */
+    setWorkingIndicator(indicator: WorkingIndicator | undefined): void;
     setTitle(title: string): void;
     getEditorText(): string;
     setEditorText(text: string): void;

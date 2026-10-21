@@ -117,7 +117,7 @@ const marks = {};
 const screens = {};
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let inputStart = 0;
-const INPUT_STEPS = new Set(["type", "paste", "key", "mouse"]);
+const INPUT_STEPS = new Set(["type", "paste", "key", "mouse", "clickText"]);
 let detached = false;
 for (const [kind, value, opts = {}] of steps) {
   if (INPUT_STEPS.has(kind)) inputStart = output.length;
@@ -216,6 +216,17 @@ for (const [kind, value, opts = {}] of steps) {
   // not a synthesized TuiMouseEvent -- so this proves a click really reaches the target component.
   // `value` is `{x, y, clicks}` (0-based column/row, `clicks` repeats press+release well inside
   // pi-tui's 500ms double-click window).
+  // A left click on the first on-screen occurrence of `value` (a string), at its first column.
+  else if (kind === "clickText") {
+    const current = await currentScreen();
+    const y = current.findIndex((row) => row.includes(value));
+    if (y < 0) fail(`no ${JSON.stringify(value)} on screen to click`, current);
+    const x = current[y].indexOf(value);
+    onInput(`\x1b[<0;${x + 1};${y + 1}M`);
+    await sleep(20);
+    onInput(`\x1b[<0;${x + 1};${y + 1}m`);
+    await sleep(50);
+  }
   else if (kind === "mouse") {
     const { x, y, clicks = 1 } = value;
     for (let i = 0; i < clicks; i += 1) {

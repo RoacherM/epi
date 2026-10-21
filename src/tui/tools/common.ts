@@ -2,8 +2,15 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 
+import type { InspectTarget } from "../buffer/inspector.js";
 import { piTui } from "../pi-tui.js";
 import type { ToolRenderContext } from "./types.js";
+
+/** Rows of a rendered block that open the inspector (the `… N more lines` row), and what they open. */
+export interface Inspectable {
+  rows: readonly number[];
+  target: InspectTarget;
+}
 
 /**
  * Lines cut to the viewport width. Entries may hold several rows separated by "\n". A single string
@@ -11,17 +18,25 @@ import type { ToolRenderContext } from "./types.js";
  */
 export class LinesComponent implements Component {
   private lines: string[] = [];
+  private inspectable: Inspectable | undefined;
 
-  constructor(lines: string[] | string) {
-    this.setLines(lines);
+  constructor(lines: string[] | string, inspectable?: Inspectable) {
+    this.setLines(lines, inspectable);
   }
 
-  setLines(lines: string[] | string): void {
+  /** `inspectable` row indices count the rows as split here, one per "\n"-separated part. */
+  setLines(lines: string[] | string, inspectable?: Inspectable): void {
     if (typeof lines === "string") {
       this.lines = lines ? lines.split("\n") : [];
     } else {
       this.lines = lines.flatMap((line) => line.split("\n"));
     }
+    this.inspectable = inspectable;
+  }
+
+  /** The inspector target behind rendered row `row`, if that row opens one. */
+  inspectTargetAt(row: number): InspectTarget | undefined {
+    return this.inspectable?.rows.includes(row) ? this.inspectable.target : undefined;
   }
 
   invalidate(): void {}
@@ -32,12 +47,12 @@ export class LinesComponent implements Component {
 }
 
 /** Reuses the renderer's previous LinesComponent (Pi hands it back as `lastComponent`) when there is one. */
-export function createOrUpdateLines(context: ToolRenderContext, lines: string[]): Component {
+export function createOrUpdateLines(context: ToolRenderContext, lines: string[], inspectable?: Inspectable): Component {
   if (context.lastComponent instanceof LinesComponent) {
-    context.lastComponent.setLines(lines);
+    context.lastComponent.setLines(lines, inspectable);
     return context.lastComponent;
   }
-  return new LinesComponent(lines);
+  return new LinesComponent(lines, inspectable);
 }
 
 /** The text parts of a tool result joined by "\n"; images and malformed parts are skipped. */

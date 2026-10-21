@@ -4,12 +4,14 @@ import { homedir } from "node:os";
 import { basename, dirname, extname, relative } from "node:path";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { piTui } from "../../tui/pi-tui.js";
-import { centered, imageBody, pad, scrollbar, scrollFromBar } from "./draw.js";
+import { scrollbar, scrollFromBar } from "../../tui/buffer/scrollbar.js";
+import { centered, imageBody, pad } from "./draw.js";
 import { existsSync, statSync } from "node:fs";
 import { clock, HEX_BYTES, humanSize, icon, kindOf, loadDoc, localTime, MAX_TEXT_BYTES, permString, printable, readListing, restat } from "./files.js";
 import { probe, StillCache, stillJob } from "./media.js";
 import { PlayerPane } from "./player-pane.js";
-import { Finder, LinePrompt } from "./search.js";
+import { applyMotion, MotionKeys } from "../../tui/buffer/motion-keys.js";
+import { TextNavigation } from "../../tui/buffer/navigation.js";
 const { Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } = piTui;
 /** Rows the page itself takes around a view's body: the top border, the title row, the key row,
  * the bottom border, and the agent status line under it (page.ts). */
@@ -27,9 +29,8 @@ export class Viewer {
     markdown = true;
     /** `gutters` (line numbers) and `contents` make up `rows`; search looks at the contents only. */
     rowsCache;
-    finder = new Finder();
-    prompt;
-    message = "";
+    /** Motions, `/` `n` `N` and `:N` in the text view; searches the contents, not the gutter. */
+    nav;
     info;
     /** The probe has answered (or failed): a video waits for it, to play at the source's frame rate. */
     probed = false;
@@ -47,6 +48,16 @@ export class Viewer {
         const gif = entry.isFile && extname(entry.name).toLowerCase() === ".gif";
         this.mode = kind === "video" || gif ? "video" : kind === "text" ? "text" : "image";
         this.scroll = lastScroll.get(`view:${entry.path}`) ?? 0;
+        this.nav = new TextNavigation({
+            rows: () => this.rowsCache?.contents ?? [],
+            top: () => this.scroll,
+            setTop: (row) => {
+                this.scroll = row;
+            },
+            maxTop: () => Math.max(0, (this.rowsCache?.rows.length ?? 0) - this.height),
+            page: () => Math.max(1, this.height - 1),
+            goToLine: (line) => this.lineRow(line),
+        });
         if (this.mode !== "text" && kind !== "quicklook") {
             void probe(entry.path)
                 .then((info) => {
@@ -66,58 +77,19 @@ export class Viewer {
     }
     /** Typing a search or a line number: every key goes to the prompt, not to the view. */
     get busy() {
-        return this.prompt !== undefined;
+        return this.nav.prompt !== undefined;
     }
-    /** `/` and `:` in the text view (docs/preview-design.md §3.3). True when the key was taken. */
-    handleSearchKeys(data) {
-        if (this.prompt) {
-            const done = this.prompt.handleInput(data);
-            if (done === "submit")
-                this.submitPrompt(this.prompt);
-            if (done !== undefined)
-                this.prompt = undefined;
-            return true;
-        }
-        if (data === "/" || data === ":") {
-            this.prompt = new LinePrompt(data);
-            this.message = "";
-            return true;
-        }
-        if (data === "n" || data === "N") {
-            this.findNext(data === "N");
-            return true;
-        }
-        return false;
-    }
-    submitPrompt(prompt) {
-        if (prompt.kind === "/") {
-            this.finder.query = prompt.text;
-            this.findNext(false, this.scroll - 1);
-            return;
-        }
-        const line = Number.parseInt(prompt.text, 10);
+    /** `:N` and `NG`: the row line N starts on. */
+    lineRow(line) {
         const starts = this.rowsCache?.lineStarts;
-        if (!Number.isFinite(line) || line < 1)
-            this.message = `not a line number: ${printable(prompt.text)}`;
-        else if (!starts)
-            this.message = "line numbers are in the raw view: press r first";
-        else
-            this.scroll = starts[Math.min(line, starts.length) - 1] ?? 0;
-    }
-    findNext(backwards, from = this.scroll) {
-        if (this.finder.query === "")
-            return;
-        const row = this.finder.next(this.rowsCache?.contents ?? [], from, backwards);
-        if (row === undefined)
-            this.message = `not found: ${printable(this.finder.query)}`;
-        else
-            this.scroll = row;
+        if (!starts)
+            return { error: "line numbers are in the raw view: press r first" };
+        return { row: starts[Math.min(line, starts.length) - 1] ?? 0 };
     }
     /** Returns "back" or "insert" when the browser should act. */
     handleInput(data) {
-        if (this.mode === "text" && this.handleSearchKeys(data))
+        if (this.mode === "text" && this.nav.handle(data).kind === "taken")
             return undefined;
-        this.message = "";
         if (matchesKey(data, "escape") || data === "q" || matchesKey(data, "backspace"))
             return "back";
         if (data === "i")
@@ -131,24 +103,7 @@ export class Viewer {
                 return "back";
             return undefined;
         }
-        const page = Math.max(1, this.height - 1);
-        if (data === "j" || matchesKey(data, "down"))
-            this.scroll += 1;
-        else if (data === "k" || matchesKey(data, "up"))
-            this.scroll -= 1;
-        else if (data === " " || matchesKey(data, "pageDown") || matchesKey(data, "ctrl+f"))
-            this.scroll += page;
-        else if (data === "b" || matchesKey(data, "pageUp") || matchesKey(data, "ctrl+b"))
-            this.scroll -= page;
-        else if (matchesKey(data, "ctrl+d"))
-            this.scroll += Math.floor(page / 2);
-        else if (matchesKey(data, "ctrl+u"))
-            this.scroll -= Math.floor(page / 2);
-        else if (data === "g")
-            this.scroll = 0;
-        else if (data === "G")
-            this.scroll = Number.MAX_SAFE_INTEGER;
-        else if (data === "w")
+        if (data === "w")
             this.wrap = !this.wrap;
         else if (data === "r")
             this.markdown = !this.markdown;
@@ -165,11 +120,11 @@ export class Viewer {
         if (this.mode !== "text")
             return;
         if (event.type === "wheel") {
-            this.scroll += event.wheelDelta ?? 0;
+            this.nav.scrollTo(this.scroll + (event.wheelDelta ?? 0));
         }
         else if ((event.type === "press" || event.type === "drag") && x >= this.width - 1 && y < this.height) {
             const total = this.rowsCache?.rows.length ?? 0;
-            this.scroll = scrollFromBar(y, this.height, total, this.height);
+            this.nav.scrollTo(scrollFromBar(y, this.height, total, this.height));
         }
     }
     textRows(width) {
@@ -216,12 +171,13 @@ export class Viewer {
         this.rowsCache = { key, rows: contents.map((content, index) => allGutters[index] + content), gutters: allGutters, contents, lineStarts };
         return this.rowsCache.rows;
     }
-    /** The key row: the prompt while typing, else a message or the key hints, and the position. */
+    /** The key row: the prompt while typing, else an error or the key hints, and the position. */
     statusLine(hints, position) {
         const th = this.theme;
-        if (this.prompt)
-            return ` ${th.fg("accent", `${this.prompt.kind}${printable(this.prompt.text)}▏`)}`;
-        const left = this.message ? th.fg("warning", this.message) : th.fg("dim", hints);
+        const { prompt, status } = this.nav;
+        if (prompt)
+            return ` ${th.fg("accent", `${prompt.kind}${printable(prompt.text)}▏`)}`;
+        const left = status?.tone === "error" ? th.fg("warning", status.text) : th.fg("dim", hints);
         return ` ${left}  ${th.fg("accent", position)}`;
     }
     render(width, height) {
@@ -250,7 +206,7 @@ export class Viewer {
                 const at = this.scroll + row;
                 if (at >= rows.length)
                     return " ".repeat(width - 1) + bar[row];
-                return pad((cache.gutters[at] ?? "") + this.finder.highlight(cache.contents[at] ?? "", invert), width - 1) + bar[row];
+                return pad((cache.gutters[at] ?? "") + this.nav.highlight(cache.contents[at] ?? "", invert), width - 1) + bar[row];
             });
             const last = Math.min(rows.length, this.scroll + height);
             const percent = max === 0 ? 100 : Math.round((this.scroll / max) * 100);
@@ -259,7 +215,7 @@ export class Viewer {
             return {
                 title: `${name} ${th.fg("dim", `${label} · ${humanSize(this.entry.size)}`)}`,
                 body,
-                status: this.statusLine(`j/k scroll · / search · : line · g/G ends · w wrap ${this.wrap ? "off" : "on"}${md} · i insert · q back`, `${this.scroll + 1}-${last}/${rows.length} ${percent}%`),
+                status: this.statusLine(`j/k scroll · / search · : line · gg/G ends · w wrap ${this.wrap ? "off" : "on"}${md} · i insert · q back`, `${this.scroll + 1}-${last}/${rows.length} ${percent}%`),
             };
         }
         const info = this.info;
@@ -303,6 +259,8 @@ export class FileBrowser {
     showHidden = false;
     filter = "";
     filtering = false;
+    // Space marks a file here, so it does not page.
+    motions = new MotionKeys({ space: false });
     marked = new Set();
     /** Remembers the cursor per directory so going back lands where you were. */
     lastCursor = new Map();
@@ -465,7 +423,18 @@ export class FileBrowser {
             this.tui.requestRender();
             return;
         }
-        const half = Math.floor(this.bodyHeight() / 2);
+        const keys = this.motions.handle(data);
+        if (keys.kind === "pending") {
+            // The message was cleared above; draw that.
+            this.tui.requestRender();
+            return;
+        }
+        if (keys.kind === "motion") {
+            // A half page was `bodyHeight / 2`, so a page is the body height.
+            this.cursor = applyMotion(keys.motion, this.cursor, this.bodyHeight(), this.visible().length - 1);
+            this.tui.requestRender();
+            return;
+        }
         if (matchesKey(data, "escape") || data === "q") {
             if (this.filter) {
                 this.filter = "";
@@ -476,22 +445,10 @@ export class FileBrowser {
                 return;
             }
         }
-        else if (data === "j" || matchesKey(data, "down"))
-            this.move(1);
-        else if (data === "k" || matchesKey(data, "up"))
-            this.move(-1);
         else if (data === "l" || matchesKey(data, "right") || matchesKey(data, "return"))
             this.open(this.current());
         else if (data === "h" || matchesKey(data, "left"))
             this.leave();
-        else if (data === "g")
-            this.cursor = 0;
-        else if (data === "G")
-            this.cursor = Math.max(0, this.visible().length - 1);
-        else if (matchesKey(data, "ctrl+d"))
-            this.move(half);
-        else if (matchesKey(data, "ctrl+u"))
-            this.move(-half);
         else if (data === "J")
             this.previewScroll += 5;
         else if (data === "K")

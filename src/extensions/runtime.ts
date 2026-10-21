@@ -12,9 +12,13 @@ import {
   renderEpiRuntimePrompt,
   type EpiRuntimeIdentity,
 } from "../runtime-identity.js";
-import { renderEpiStartupPage } from "../startup-page.js";
+import { renderAnimatedEpiStartupPage, renderEpiStartupPage, welcomeMotionStrength } from "../startup-page.js";
+import { FrameTicker, motionTime } from "../tui/motion.js";
 import { crossProjectRefusal, type ProjectIdentity } from "../tui/project-guard.js";
 import { readUpdateCache, refreshUpdateCache, updateNotice } from "../update.js";
+
+/** Welcome-page frame interval: about 24 frames a second. */
+const HEADER_FRAME_MS = 42;
 
 export interface UpdateCheckOptions {
   epiHome: string;
@@ -101,6 +105,10 @@ export function createEpiRuntimeExtensions(
     name: "epi:runtime",
     factory(pi) {
       let sessionActive = false;
+      // The welcome page's redraw timer (docs/tui-motion-design.md §3.2): runs while the intro
+      // plays and the transcript still draws the page; stops itself a tick after the first message
+      // hides it, and for good once the intro has settled.
+      let headerTicker: FrameTicker | undefined;
 
       function showUpdateNotice(context: ExtensionContext): void {
         if (updateCheck === undefined || updateCheck.disabled) {
@@ -182,30 +190,42 @@ export function createEpiRuntimeExtensions(
             notifyVerboseStartup(activeAssembly, context);
           }
         }
-        context.ui.setHeader((_tui, theme) => ({
-          render(width) {
-            // Read the model at render time so /login and /model show up on the page.
-            const model = context.model;
-            const pageOptions = model === undefined
-              ? {}
-              : {
-                  modelName: model.name,
-                  modelProvider: model.provider,
-                  modelId: model.id,
-                };
-            return renderEpiStartupPage(
-              activeIdentity,
-              theme,
-              width,
-              pageOptions,
-            );
-          },
-          invalidate() {},
-        }));
+        context.ui.setHeader((tui, theme) => {
+          headerTicker?.stop();
+          const ticker = new FrameTicker(HEADER_FRAME_MS, () => tui.requestRender());
+          headerTicker = ticker;
+          // A new header per session_start, so /new and /resume replay the intro.
+          let firstDrawnAt: number | undefined;
+          return {
+            render(width) {
+              const now = Date.now();
+              firstDrawnAt ??= now;
+              const strength = welcomeMotionStrength(now - firstDrawnAt);
+              // Read the model at render time so /login and /model show up on the page.
+              const model = context.model;
+              const pageOptions = model === undefined
+                ? {}
+                : {
+                    modelName: model.name,
+                    modelProvider: model.provider,
+                    modelId: model.id,
+                  };
+              if (strength === 0) {
+                ticker.stop();
+                return renderEpiStartupPage(activeIdentity, theme, width, pageOptions);
+              }
+              ticker.rendered();
+              return renderAnimatedEpiStartupPage(activeIdentity, theme, width, pageOptions, motionTime(now), strength);
+            },
+            invalidate() {},
+          };
+        });
       });
 
       pi.on("session_shutdown", () => {
         sessionActive = false;
+        headerTicker?.stop();
+        headerTicker = undefined;
       });
 
       pi.on("resources_discover", () => ({

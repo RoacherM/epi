@@ -18,7 +18,7 @@ export function createExtensionUIContext(surface) {
         setStatusLine: (format) => surface.setStatusLine(format),
         setWorkingMessage: (message) => surface.setWorking({ message }),
         setWorkingVisible: (visible) => surface.setWorking({ visible }),
-        setWorkingIndicator: () => unsupported(surface, "setWorkingIndicator"),
+        setWorkingIndicator: (options) => surface.setWorkingIndicator(options),
         setHiddenThinkingLabel: () => unsupported(surface, "setHiddenThinkingLabel"),
         setWidget: ((key, content, options) => {
             const placement = options?.placement ?? "aboveEditor";

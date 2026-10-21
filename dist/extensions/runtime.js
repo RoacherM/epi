@@ -1,8 +1,11 @@
 import { findNearestProjectManifest } from "../project.js";
 import { createEpiRuntimeIdentity, createEpiRuntimeReport, normalizeLoadedSkills, renderEpiRuntimePrompt, } from "../runtime-identity.js";
-import { renderEpiStartupPage } from "../startup-page.js";
+import { renderAnimatedEpiStartupPage, renderEpiStartupPage, welcomeMotionStrength } from "../startup-page.js";
+import { FrameTicker, motionTime } from "../tui/motion.js";
 import { crossProjectRefusal } from "../tui/project-guard.js";
 import { readUpdateCache, refreshUpdateCache, updateNotice } from "../update.js";
+/** Welcome-page frame interval: about 24 frames a second. */
+const HEADER_FRAME_MS = 42;
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
@@ -54,6 +57,10 @@ export function createEpiRuntimeExtensions(initialIdentity, initialAssembly, res
         name: "epi:runtime",
         factory(pi) {
             let sessionActive = false;
+            // The welcome page's redraw timer (docs/tui-motion-design.md §3.2): runs while the intro
+            // plays and the transcript still draws the page; stops itself a tick after the first message
+            // hides it, and for good once the intro has settled.
+            let headerTicker;
             function showUpdateNotice(context) {
                 if (updateCheck === undefined || updateCheck.disabled) {
                     return;
@@ -120,24 +127,41 @@ export function createEpiRuntimeExtensions(initialIdentity, initialAssembly, res
                         notifyVerboseStartup(activeAssembly, context);
                     }
                 }
-                context.ui.setHeader((_tui, theme) => ({
-                    render(width) {
-                        // Read the model at render time so /login and /model show up on the page.
-                        const model = context.model;
-                        const pageOptions = model === undefined
-                            ? {}
-                            : {
-                                modelName: model.name,
-                                modelProvider: model.provider,
-                                modelId: model.id,
-                            };
-                        return renderEpiStartupPage(activeIdentity, theme, width, pageOptions);
-                    },
-                    invalidate() { },
-                }));
+                context.ui.setHeader((tui, theme) => {
+                    headerTicker?.stop();
+                    const ticker = new FrameTicker(HEADER_FRAME_MS, () => tui.requestRender());
+                    headerTicker = ticker;
+                    // A new header per session_start, so /new and /resume replay the intro.
+                    let firstDrawnAt;
+                    return {
+                        render(width) {
+                            const now = Date.now();
+                            firstDrawnAt ??= now;
+                            const strength = welcomeMotionStrength(now - firstDrawnAt);
+                            // Read the model at render time so /login and /model show up on the page.
+                            const model = context.model;
+                            const pageOptions = model === undefined
+                                ? {}
+                                : {
+                                    modelName: model.name,
+                                    modelProvider: model.provider,
+                                    modelId: model.id,
+                                };
+                            if (strength === 0) {
+                                ticker.stop();
+                                return renderEpiStartupPage(activeIdentity, theme, width, pageOptions);
+                            }
+                            ticker.rendered();
+                            return renderAnimatedEpiStartupPage(activeIdentity, theme, width, pageOptions, motionTime(now), strength);
+                        },
+                        invalidate() { },
+                    };
+                });
             });
             pi.on("session_shutdown", () => {
                 sessionActive = false;
+                headerTicker?.stop();
+                headerTicker = undefined;
             });
             pi.on("resources_discover", () => ({
                 skillPaths: activeAssembly.skills.map((skill) => skill.value),

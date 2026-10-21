@@ -5,14 +5,11 @@ import { dirname, extname, join } from "node:path";
 
 import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
 
-/** Text that is safe to draw: the terminal must never interpret what a file is called or contains.
- * ESC becomes a visible mark; other C0 and C1 controls (a lone U+009B is CSI to some terminals),
- * line breaks and bidi overrides are removed. Tabs are left to the caller. */
-export function printable(text: string): string {
-  return text
-    .replace(/\x1b/g, "␛")
-    .replace(/[\x00-\x08\x0a-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, "");
-}
+import { printable } from "../../tui/buffer/search.js";
+
+// printable moved to the shared buffer layer (it echoes prompt text too); re-exported for the
+// preview modules that import it from here.
+export { printable };
 
 export interface Entry {
   /** The name on disk, for file operations. */

@@ -373,6 +373,10 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
       if (change.visible !== undefined) workingVisible = change.visible;
       tui.requestRender();
     },
+    setWorkingIndicator(indicator) {
+      turnStatus.setIndicator(indicator);
+      tui.requestRender();
+    },
     setTitle: (title) => terminal.setTitle(title),
     getEditorText: () => editor.getText(),
     setEditorText: (text) => {
@@ -408,6 +412,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     notice: (text, tone) => transcript.notice(text, tone ?? "info"),
     flash: (text) => tui.flash(text),
     addBlock: (component) => transcript.addBlock(component),
+    inspect: (target) => transcript.inspect(target),
     getEditorText: () => editor.getText(),
     isShowingAutocomplete: () => editor.isShowingAutocomplete(),
     setEditorText: (text) => surface.setEditorText(text),
@@ -474,6 +479,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     tuiStopped = true;
     clearTerminalProgress();
     turnStatus.stop();
+    transcript.closeInspector();
     tui.stop({ preserveScreen: true });
   }
 
@@ -832,6 +838,8 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
     rebuildWidgets();
     surface.setHeader(undefined);
     surface.setFooter(undefined);
+    // Pi's resetExtensionUI calls setWorkingIndicator() too: the next session starts on the built-in.
+    turnStatus.setIndicator(undefined);
     autocompleteWrappers = [];
     // Pi's resetExtensionUI order: detach the old session's wrappers from the editor now, before
     // their captured ctx goes stale, not only when bind()/reloadSession() finish.

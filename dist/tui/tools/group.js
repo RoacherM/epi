@@ -1,6 +1,7 @@
 import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import { breathe, motionTime, railGlyph } from "../motion.js";
 import { piTui } from "../pi-tui.js";
-import { createFlashState, disposeFlash, isFlashing, paintRailTone, startFlash } from "./flash.js";
+import { createFlashState, disposeFlash, flashRail, isFlashing, paintFlashRail, paintRail, startFlash } from "./flash.js";
 const GROUP_KINDS = new Set(["read", "grep", "find", "ls"]);
 /** Only a built-in read/grep/find/ls tool groups; an extension overriding one of these names (or any
  * other extension tool) never does (docs/tui-design.md 4.2: "Only built-in read-only tools group"). */
@@ -71,7 +72,7 @@ export class ToolEntry extends ToolExecutionComponent {
         super.setExpanded(expanded);
     }
     render(width) {
-        return isFlashing(this.flash) ? paintRailTone(super.render(width), this.flash.tone, this.theme) : super.render(width);
+        return paintFlashRail(super.render(width), this.flash, this.theme);
     }
     /** Cleared on `Transcript.reset()` so a stale flash timer never fires after this entry is gone. */
     dispose() {
@@ -115,18 +116,20 @@ function summarize(members) {
     return { running, completed, failed, breakdown };
 }
 /** Pure text+layout for the collapsed group line, split out from `GroupedMessages` so widths
- * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. */
-export function verbGroupLine(members, theme, width) {
+ * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the rail
+ * pulses and the `◈` breathes (docs/tui-motion-design.md M5), both read at `t` seconds. */
+export function verbGroupLine(members, theme, width, t = motionTime()) {
     const { running, failed, completed, breakdown } = summarize(members);
     const anyRunning = running > 0;
     const anyFailed = failed > 0;
     let text = anyRunning ? `${RUN_LABEL} · ${completed} completed` : breakdown;
     if (anyFailed)
         text += ` ${theme.fg("error", `· ${failed} failed`)}`;
-    const rail = anyRunning ? theme.fg("accent", "┃") : " ";
+    const rail = anyRunning ? railGlyph(theme, 0, t) : " ";
     const lead = `${rail}${" ".repeat(PREFIX - 1)}`;
-    const bulletTone = anyRunning ? "accent" : anyFailed ? "error" : "muted";
-    const bullet = theme.fg(bulletTone, "◈ ");
+    const bullet = anyRunning
+        ? breathe(theme, "accent", "thinkingHigh", t, "◈ ")
+        : theme.fg(anyFailed ? "error" : "muted", "◈ ");
     const contentWidth = Math.max(1, width - PREFIX - 2);
     return lead + bullet + piTui.truncateToWidth(text, contentWidth);
 }
@@ -318,7 +321,8 @@ export class GroupedMessages {
     /**
      * The merged line has no group-level flash timer of its own: once every member has settled, it
      * paints its rail in whichever tone a still-flashing member is showing (error wins over success),
-     * which is exactly the 400ms window each member already tracks on its own `ToolEntry.flash`. This
+     * which is exactly the 400ms window each member already tracks on its own `ToolEntry.flash` (and
+     * fades the same way, read from that member's own state). This
      * needs no "did a render happen between running and settled" observation -- pi-tui's own render
      * throttle can (and in the real app, does) coalesce a fast run's frames so no such render ever
      * happens, which a wall-clock read of `isFlashing()` doesn't care about.
@@ -328,10 +332,10 @@ export class GroupedMessages {
         if (members.some((member) => member.status === "running"))
             return ["", line];
         const flashing = members.filter((member) => isFlashing(member.flash));
-        if (flashing.length === 0)
+        const shown = flashing.find((member) => member.flash.tone === "error") ?? flashing[0];
+        if (shown === undefined)
             return ["", line];
-        const tone = flashing.some((member) => member.flash.tone === "error") ? "error" : "success";
-        return ["", ...paintRailTone([line], tone, this.theme)];
+        return ["", ...paintRail([line], flashRail(shown.flash, this.theme))];
     }
 }
 //# sourceMappingURL=group.js.map

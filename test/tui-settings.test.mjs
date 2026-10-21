@@ -34,6 +34,9 @@ function makeEnv(t, { extension = "faux-echo.mjs", settings } = {}) {
         },
         encoding: "utf8",
         timeout: 60_000,
+        // Every `mark` snapshots the whole output so far, and the welcome page's intro plays at
+        // startup and after /reload: a long run passes the 1 MB default.
+        maxBuffer: 64 * 1024 * 1024,
       });
       assert.equal(result.status, 0, result.stderr);
       const parsed = JSON.parse(result.stdout);

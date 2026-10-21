@@ -5,6 +5,7 @@ import { relative, resolve } from "node:path";
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 
+import type { InspectTarget } from "../buffer/inspector.js";
 import { isErrorResult, LinesComponent, textContent, truncateOutputLines } from "./common.js";
 import type { ToolRenderContext, ToolRenderers } from "./types.js";
 
@@ -35,14 +36,23 @@ function parseBashOutput(rawText: string, isError: boolean): { exitCode: number;
   return { exitCode, lines };
 }
 
-function formatCallLine(verb: string, args: any, theme: Theme, context?: ToolRenderContext): string {
+/** The file an edit/write call targets, relative to the cwd; "" when the call names none. */
+function callPath(args: any, context?: ToolRenderContext): string {
   const rawPath = typeof args?.path === "string" ? args.path : typeof args?.file_path === "string" ? args.file_path : "";
-  if (!rawPath) {
-    return theme.bold(verb);
-  }
+  if (!rawPath) return "";
   const cwd = context?.cwd;
-  const relPath = cwd ? relative(cwd, resolve(cwd, rawPath)) : rawPath;
-  return `${theme.bold(verb)} ${relPath}`;
+  return cwd ? relative(cwd, resolve(cwd, rawPath)) : rawPath;
+}
+
+function formatCallLine(verb: string, args: any, theme: Theme, context?: ToolRenderContext): string {
+  const relPath = callPath(args, context);
+  return relPath ? `${theme.bold(verb)} ${relPath}` : theme.bold(verb);
+}
+
+/** The inspector's title for an edit/write block: the call line, unstyled. */
+function inspectTitle(verb: string, context: ToolRenderContext): string {
+  const relPath = callPath(context.args, context);
+  return relPath ? `${verb} ${relPath}` : verb;
 }
 
 interface DiffLine {
@@ -263,13 +273,23 @@ function renderUnifiedDiffResult(
 
   const items = collapseDiffContext(parsed.lines, parsed.trailingSkipped);
   const lines = renderDiffExpanded(items, theme);
-  return new LinesComponent(lines);
+  // Each `… N unchanged lines` row opens the whole diff Pi returned, uncollapsed.
+  const rows = items.flatMap((item, index) => (item.kind === "collapsed" ? [index] : []));
+  if (rows.length === 0) return new LinesComponent(lines);
+  const target: InspectTarget = {
+    title: inspectTitle("edit", context),
+    subtitle: `+${parsed.additions} −${parsed.removals}`,
+    lines: renderDiffExpanded(lineItems(parsed.lines), theme),
+    text: diffStr,
+  };
+  return new LinesComponent(lines, { rows, target });
 }
 
 function renderWriteNewFileResult(
   contentStr: string,
   options: { expanded: boolean },
   theme: Theme,
+  title: string,
 ): Component {
   const clean = contentStr.replace(/\r\n/g, "\n").replace(/\n$/, "");
   const lines = clean.length > 0 ? clean.split("\n") : [];
@@ -286,7 +306,17 @@ function renderWriteNewFileResult(
     const gutter = String(idx + 1).padStart(gutterWidth, " ");
     return theme.fg("toolDiffAdded", `${gutter} ${line}`);
   });
-  return new LinesComponent(rendered);
+  if (lines.length <= displayLines.length) return new LinesComponent(rendered);
+  // The rest of the file opens in the inspector from this row.
+  rendered.push(theme.fg("muted", `… ${lines.length - displayLines.length} more lines`));
+  const target: InspectTarget = {
+    title,
+    subtitle: `${lineCount} lines`,
+    lines: lines.map((line) => theme.fg("toolDiffAdded", line.replace(/\t/g, "   "))),
+    firstLineNumber: 1,
+    text: clean,
+  };
+  return new LinesComponent(rendered, { rows: [displayLines.length], target });
 }
 
 export const bashRenderers: ToolRenderers = {
@@ -311,7 +341,18 @@ export const bashRenderers: ToolRenderers = {
     }
 
     const painted = lines.map((l) => theme.fg("toolOutput", l));
-    return new LinesComponent(truncateOutputLines(painted, (text) => theme.fg("muted", text)));
+    const shown = truncateOutputLines(painted, (text) => theme.fg("muted", text));
+    if (shown.length === painted.length) return new LinesComponent(shown);
+    // truncateOutputLines's ellipsis row (index 2) opens every line of the output.
+    const command = typeof context.args?.command === "string" ? context.args.command : "";
+    const target: InspectTarget = {
+      title: `$ ${command.split("\n")[0] ?? ""}`,
+      subtitle: `${lines.length} lines · exit ${exitCode}`,
+      lines: painted,
+      firstLineNumber: 1,
+      text: lines.join("\n"),
+    };
+    return new LinesComponent(shown, { rows: [2], target });
   },
 };
 
@@ -336,7 +377,7 @@ export const writeRenderers: ToolRenderers = {
     // Pi's write tool always returns `details: undefined` (write.js): it has no prior file
     // content to diff against, so there is no diff branch here, only the new-file line dump.
     const content = typeof context.args?.content === "string" ? context.args.content : "";
-    return renderWriteNewFileResult(content, options, theme);
+    return renderWriteNewFileResult(content, options, theme, inspectTitle("write", context));
   },
 };
 

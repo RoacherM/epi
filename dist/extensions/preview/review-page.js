@@ -1,7 +1,9 @@
 import { piTui } from "../../tui/pi-tui.js";
-import { pad, scrollbar } from "./draw.js";
+import { scrollbar } from "../../tui/buffer/scrollbar.js";
+import { pad } from "./draw.js";
 import { diffTexts, displayLines } from "./diff.js";
-import { Finder, LinePrompt } from "./search.js";
+import { applyMotion, MotionKeys } from "../../tui/buffer/motion-keys.js";
+import { Finder, LinePrompt } from "../../tui/buffer/search.js";
 const { matchesKey, truncateToWidth, visibleWidth } = piTui;
 const SOURCE_LABEL = {
     changes: "the agent's ledger changes",
@@ -31,6 +33,7 @@ export class ReviewPage {
     finder = new Finder();
     prompt;
     pending;
+    motions = new MotionKeys();
     message = "";
     height = 0;
     bodyTop = 0;
@@ -192,6 +195,17 @@ export class ReviewPage {
             this.options.tui.requestRender();
             return;
         }
+        const keys = this.motions.handle(data);
+        if (keys.kind === "pending") {
+            this.options.tui.requestRender();
+            return;
+        }
+        if (keys.kind === "motion") {
+            this.applyMotionKey(keys.motion);
+            this.clamp(this.rows());
+            this.options.tui.requestRender();
+            return;
+        }
         const rows = this.rows();
         if (matchesKey(data, "escape")) {
             if (this.finder.query !== "")
@@ -219,24 +233,6 @@ export class ReviewPage {
             this.jumpFile(-1);
         else if (matchesKey(data, "return"))
             this.activate(rows);
-        else if (data === "j" || matchesKey(data, "down"))
-            this.move(1, rows);
-        else if (data === "k" || matchesKey(data, "up"))
-            this.move(-1, rows);
-        else if (data === " " || matchesKey(data, "pageDown"))
-            this.move(this.page(), rows);
-        else if (data === "b" || matchesKey(data, "pageUp"))
-            this.move(-this.page(), rows);
-        else if (matchesKey(data, "ctrl+d"))
-            this.move(Math.floor(this.page() / 2), rows);
-        else if (matchesKey(data, "ctrl+u"))
-            this.move(-Math.floor(this.page() / 2), rows);
-        else if (data === "g")
-            this.cursor = 0;
-        else if (data === "G") {
-            this.loadedThrough = Math.max(0, this.files.length - 1);
-            this.cursor = Math.max(0, this.rows().length - 1);
-        }
         else if (data === "c")
             this.annotate(rows);
         else if (data === "m")
@@ -254,6 +250,22 @@ export class ReviewPage {
     }
     page() {
         return Math.max(1, this.height - 1);
+    }
+    /** The shared motion keys. `G` and `NG` load every file first: rows past the loaded files do
+     * not exist yet. Relative moves go through move(), which loads the file they land in. */
+    applyMotionKey(motion) {
+        if (motion.kind === "top") {
+            this.cursor = 0;
+            return;
+        }
+        if (motion.kind === "bottom" || motion.kind === "line") {
+            this.loadedThrough = Math.max(0, this.files.length - 1);
+            const last = this.rows().length - 1;
+            this.cursor = applyMotion(motion, this.cursor, this.page(), last);
+            return;
+        }
+        const rows = this.rows();
+        this.move(applyMotion(motion, this.cursor, this.page(), Number.MAX_SAFE_INTEGER) - this.cursor, rows);
     }
     move(delta, rows) {
         const next = Math.max(0, Math.min(rows.length - 1, this.cursor + delta));
@@ -564,7 +576,7 @@ export class ReviewPage {
         if (this.pending)
             return ` ${th.fg("accent", this.pending)}${th.fg("dim", "  c: next or previous change")}`;
         const position = this.files.length === 0 ? "0/0" : `${(this.cursorFileIndex() ?? 0) + 1}/${this.files.length}`;
-        const left = this.message !== "" ? th.fg("warning", this.message) : th.fg("dim", "j/k move · ]c/[c change · . , file · enter expand/collapse · c note · m read · s source · R refresh · B to draft · Esc close");
+        const left = this.message !== "" ? th.fg("warning", this.message) : th.fg("dim", "j/k move · gg/G ends · ]c/[c change · . , file · enter expand/collapse · c note · m read · s source · R refresh · B to draft · Esc close");
         // Keep the position on screen even when the hints are wider than the terminal.
         const positionWidth = visibleWidth(position);
         const clipped = truncateToWidth(left, Math.max(1, width - positionWidth - 3), "…");

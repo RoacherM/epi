@@ -47,6 +47,12 @@ export declare class UserMessageBlock implements Component {
     render(width: number): string[];
     invalidate(): void;
 }
+/** Pi's WorkingIndicatorOptions (ui.setWorkingIndicator): custom frames drawn verbatim, `[]` hides
+ * the indicator. Undefined means Epi's built-in braille spinner. */
+export interface WorkingIndicator {
+    frames?: string[];
+    intervalMs?: number;
+}
 export interface TurnState {
     startedAt: number;
     phaseStartedAt: number;
@@ -63,7 +69,12 @@ export declare class TurnStatus implements Component {
     private readonly state;
     private readonly requestRender;
     private timer;
+    private indicator;
     constructor(theme: Theme, state: () => TurnState | undefined, requestRender: () => void);
+    /** `ui.setWorkingIndicator`; undefined restores the built-in. */
+    setIndicator(indicator: WorkingIndicator | undefined): void;
+    /** The indicator glyphs followed by their separating space, or "" when hidden. */
+    private indicatorText;
     render(width: number): string[];
     stop(): void;
     invalidate(): void;

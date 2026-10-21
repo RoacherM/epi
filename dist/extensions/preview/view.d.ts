@@ -26,9 +26,8 @@ export declare class Viewer {
     private markdown;
     /** `gutters` (line numbers) and `contents` make up `rows`; search looks at the contents only. */
     private rowsCache;
-    private readonly finder;
-    private prompt;
-    private message;
+    /** Motions, `/` `n` `N` and `:N` in the text view; searches the contents, not the gutter. */
+    private readonly nav;
     private info;
     /** The probe has answered (or failed): a video waits for it, to play at the source's frame rate. */
     private probed;
@@ -40,16 +39,14 @@ export declare class Viewer {
     dispose(): void;
     /** Typing a search or a line number: every key goes to the prompt, not to the view. */
     get busy(): boolean;
-    /** `/` and `:` in the text view (docs/preview-design.md §3.3). True when the key was taken. */
-    private handleSearchKeys;
-    private submitPrompt;
-    private findNext;
+    /** `:N` and `NG`: the row line N starts on. */
+    private lineRow;
     /** Returns "back" or "insert" when the browser should act. */
     handleInput(data: string): "back" | "insert" | undefined;
     /** `x`/`y` are relative to the body; `y === height` is the status row. */
     handleMouse(event: TuiMouseEvent, x: number, y: number): void;
     private textRows;
-    /** The key row: the prompt while typing, else a message or the key hints, and the position. */
+    /** The key row: the prompt while typing, else an error or the key hints, and the position. */
     private statusLine;
     render(width: number, height: number): ViewFrame;
 }
@@ -68,6 +65,7 @@ export declare class FileBrowser {
     private showHidden;
     private filter;
     private filtering;
+    private readonly motions;
     private marked;
     /** Remembers the cursor per directory so going back lands where you were. */
     private lastCursor;

@@ -4,10 +4,12 @@
 // (excluded when `excludeFromContext`). Epi draws its own grok-style frame instead of reusing Pi's
 // exported `BashExecutionComponent` (rail `┃` + `◆`, matching tools/block.ts).
 import { keyText, type Theme } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
+import type { InspectTarget } from "./buffer/inspector.js";
 import type { CommandHost } from "./command-host.js";
 import { errorText } from "./errors.js";
+import { motionTime, railGlyph } from "./motion.js";
 import { piTui } from "./pi-tui.js";
 import { truncateOutputLines } from "./tools/common.js";
 
@@ -43,11 +45,13 @@ export class UserBashBlock implements Component {
     private readonly theme: Theme,
     private readonly command: string,
     private readonly excludeFromContext: boolean,
+    // Opens the full output from the `… +N lines` row of a finished, truncated block.
+    private readonly onInspect?: (target: InspectTarget) => void,
   ) {}
 
   /** Replays a finished `bashExecution` session message after /new, /resume or /reload. */
-  static fromMessage(theme: Theme, message: FinishedBashMessage): UserBashBlock {
-    const block = new UserBashBlock(theme, message.command, message.excludeFromContext ?? false);
+  static fromMessage(theme: Theme, message: FinishedBashMessage, onInspect?: (target: InspectTarget) => void): UserBashBlock {
+    const block = new UserBashBlock(theme, message.command, message.excludeFromContext ?? false, onInspect);
     if (message.output) block.appendOutput(message.output);
     block.setComplete(message.exitCode, message.cancelled);
     return block;
@@ -67,32 +71,55 @@ export class UserBashBlock implements Component {
     this.status = cancelled ? "cancelled" : exitCode === undefined || exitCode !== 0 ? "error" : "done";
   }
 
+  /** The output as lines, without the single trailing newline most commands leave. */
+  private lines(): string[] {
+    const text = this.outputLines.join("\n").replace(/\n$/, "");
+    return text === "" ? [] : text.split("\n");
+  }
+
   render(width: number): string[] {
     const running = this.status === "running";
-    const rail = running ? this.theme.fg("accent", "┃") : " ";
+    const t = motionTime();
+    const rail = (row: number) => (running ? railGlyph(this.theme, row, t) : " ");
     const bulletTone = running ? "accent" : this.status === "error" ? "error" : "muted";
     const bullet = this.theme.fg(bulletTone, "◆ ");
     const verb = this.excludeFromContext ? "!!" : "$";
-    const callLine = `${rail}${" ".repeat(CALL_PREFIX - 1)}${bullet}${this.theme.fg("bashMode", this.theme.bold(`${verb} ${this.command}`))}`;
+    const callLine = `${rail(0)}${" ".repeat(CALL_PREFIX - 1)}${bullet}${this.theme.fg("bashMode", this.theme.bold(`${verb} ${this.command}`))}`;
 
-    // Drop the single trailing newline most commands leave, so it doesn't render as a blank row.
-    const text = this.outputLines.join("\n").replace(/\n$/, "");
-    const lines = text === "" ? [] : text.split("\n");
+    const lines = this.lines();
     // While running, show the live tail (matches tools/mutating.ts bashRenderers' `isPartial` case);
     // once finished, apply the fixed head/ellipsis/tail rule instead.
     const shown = running ? lines.slice(-3) : truncateBashOutput(lines);
-    const bodyPrefix = `${rail}${" ".repeat(RESULT_PREFIX - 1)}`;
-    const body = shown.map((entry) => bodyPrefix + this.theme.fg("toolOutput", entry));
+    const bodyPrefix = (row: number) => `${rail(row)}${" ".repeat(RESULT_PREFIX - 1)}`;
+    const body = shown.map((entry, index) => bodyPrefix(index + 1) + this.theme.fg("toolOutput", entry));
 
+    const statusRow = shown.length + 1;
     const statusLine = running
-      ? `${bodyPrefix}${this.theme.fg("muted", `Running… (${keyText("app.interrupt")} to cancel)`)}`
+      ? `${bodyPrefix(statusRow)}${this.theme.fg("muted", `Running… (${keyText("app.interrupt")} to cancel)`)}`
       : this.status === "cancelled"
-        ? `${bodyPrefix}${this.theme.fg("warning", "(cancelled)")}`
+        ? `${bodyPrefix(statusRow)}${this.theme.fg("warning", "(cancelled)")}`
         : this.status === "error"
-          ? `${bodyPrefix}${this.theme.fg("error", this.exitCode === undefined ? "failed" : `exit ${this.exitCode}`)}`
-          : `${bodyPrefix}${this.theme.fg("muted", "exit 0")}`;
+          ? `${bodyPrefix(statusRow)}${this.theme.fg("error", this.exitCode === undefined ? "failed" : `exit ${this.exitCode}`)}`
+          : `${bodyPrefix(statusRow)}${this.theme.fg("muted", "exit 0")}`;
 
     return [callLine, ...body, statusLine].map((line) => piTui.truncateToWidth(line, width));
+  }
+
+  /** The `… +N lines` row (the call line, then two output rows above it) opens the full output. */
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type !== "click" || event.button !== "left" || this.onInspect === undefined) return undefined;
+    if (this.status === "running" || event.y !== 3) return undefined;
+    const lines = this.lines();
+    if (truncateBashOutput(lines).length === lines.length) return undefined;
+    const exit = this.status === "cancelled" ? "cancelled" : this.exitCode === undefined ? "failed" : `exit ${this.exitCode}`;
+    this.onInspect({
+      title: `${this.excludeFromContext ? "!!" : "$"} ${this.command}`,
+      subtitle: `${lines.length} lines · ${exit}`,
+      lines: lines.map((line) => this.theme.fg("toolOutput", line)),
+      firstLineNumber: 1,
+      text: lines.join("\n"),
+    });
+    return { handled: true };
   }
 
   invalidate(): void {}
@@ -129,7 +156,7 @@ export async function runUserBash(host: CommandHost, text: string): Promise<bool
     return true;
   }
 
-  const block = new UserBashBlock(host.theme, command, excludeFromContext);
+  const block = new UserBashBlock(host.theme, command, excludeFromContext, (target) => host.inspect(target));
   host.addBlock(block);
 
   if (eventResult?.result) {

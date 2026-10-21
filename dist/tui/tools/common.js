@@ -5,16 +5,23 @@ import { piTui } from "../pi-tui.js";
  */
 export class LinesComponent {
     lines = [];
-    constructor(lines) {
-        this.setLines(lines);
+    inspectable;
+    constructor(lines, inspectable) {
+        this.setLines(lines, inspectable);
     }
-    setLines(lines) {
+    /** `inspectable` row indices count the rows as split here, one per "\n"-separated part. */
+    setLines(lines, inspectable) {
         if (typeof lines === "string") {
             this.lines = lines ? lines.split("\n") : [];
         }
         else {
             this.lines = lines.flatMap((line) => line.split("\n"));
         }
+        this.inspectable = inspectable;
+    }
+    /** The inspector target behind rendered row `row`, if that row opens one. */
+    inspectTargetAt(row) {
+        return this.inspectable?.rows.includes(row) ? this.inspectable.target : undefined;
     }
     invalidate() { }
     render(width) {
@@ -22,12 +29,12 @@ export class LinesComponent {
     }
 }
 /** Reuses the renderer's previous LinesComponent (Pi hands it back as `lastComponent`) when there is one. */
-export function createOrUpdateLines(context, lines) {
+export function createOrUpdateLines(context, lines, inspectable) {
     if (context.lastComponent instanceof LinesComponent) {
-        context.lastComponent.setLines(lines);
+        context.lastComponent.setLines(lines, inspectable);
         return context.lastComponent;
     }
-    return new LinesComponent(lines);
+    return new LinesComponent(lines, inspectable);
 }
 /** The text parts of a tool result joined by "\n"; images and malformed parts are skipped. */
 export function textContent(result) {

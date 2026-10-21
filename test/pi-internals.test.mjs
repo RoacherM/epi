@@ -808,6 +808,35 @@ const registry = [
     },
   },
   {
+    id: "read-continuation-notice",
+    async check() {
+      const { createReadToolDefinition } = await import("@earendil-works/pi-coding-agent");
+      const { splitReadNotice } = await import(pathToFileURL(join(root, "dist", "tui", "tools", "read-only.js")).href);
+      const dir = mkdtempSync(join(tmpdir(), "epi-read-notice-"));
+      try {
+        // 3000 short lines: past Pi's 2000-line cap; 1200 lines of 60 bytes: past its 50KB cap.
+        writeFileSync(join(dir, "many.txt"), Array.from({ length: 3000 }, (_, i) => `l${i + 1}`).join("\n"));
+        writeFileSync(join(dir, "wide.txt"), Array.from({ length: 1200 }, (_, i) => `${i + 1}`.padEnd(59, "x")).join("\n"));
+        const read = createReadToolDefinition(dir);
+        const run = async (args) => (await read.execute("c", args, undefined, undefined, { cwd: dir })).content[0].text;
+        const cases = [
+          [await run({ path: "many.txt" }), /^lines 1–2000 of 3000$/, "l2000"],
+          [await run({ path: "wide.txt" }), /^lines 1–\d+ of 1200 · 50\.0KB limit$/, undefined],
+          [await run({ path: "many.txt", offset: 10, limit: 5 }), /^2986 more lines in file$/, "l14"],
+        ];
+        for (const [output, notice, lastLine] of cases) {
+          const split = splitReadNotice(output);
+          assert.match(split.notice ?? "", notice, `Pi's read notice no longer parses: ${JSON.stringify(output.slice(-120))}`);
+          assert.doesNotMatch(split.content, /\[|offset=/, "the notice left part of itself in the content");
+          if (lastLine !== undefined) assert.equal(split.content.split("\n").at(-1), lastLine);
+        }
+        assert.equal(splitReadNotice(await run({ path: "many.txt", offset: 2990 })).notice, undefined, "a complete read has no notice");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  },
+  {
     id: "edit-diff-format",
     async check() {
       const { generateDiffString } = await import("@earendil-works/pi-coding-agent");

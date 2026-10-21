@@ -1,4 +1,5 @@
-// Drawing helpers shared by the browser and the viewer: fixed-width cells, scrollbars, images.
+// Drawing helpers shared by the browser and the viewer: fixed-width cells, images. The scrollbar is
+// src/tui/buffer/scrollbar.ts, shared with the block inspector.
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { ImageDimensions } from "@earendil-works/pi-tui";
 
@@ -45,21 +46,6 @@ function imageIndent(base64: string, mimeType: string, width: number, height: nu
   const scale = Math.min((width * cell.widthPx) / size.widthPx, (height * cell.heightPx) / size.heightPx);
   const columns = Math.min(width, Math.ceil((size.widthPx * scale) / cell.widthPx));
   return Math.max(0, Math.floor((width - columns) / 2));
-}
-
-/** Rows of a vertical scrollbar; blank when everything fits. */
-export function scrollbar(theme: Theme, total: number, visible: number, offset: number, height: number): string[] {
-  if (total <= visible) return Array<string>(height).fill(" ");
-  const size = Math.max(1, Math.round((height * visible) / total));
-  const start = Math.round(((height - size) * offset) / Math.max(1, total - visible));
-  return Array.from({ length: height }, (_, row) =>
-    row >= start && row < start + size ? theme.fg("accent", "┃") : theme.fg("dim", "│"),
-  );
-}
-
-export function scrollFromBar(row: number, height: number, total: number, visible: number): number {
-  const ratio = Math.max(0, Math.min(1, row / Math.max(1, height - 1)));
-  return Math.round(ratio * Math.max(0, total - visible));
 }
 
 export function centered(text: string, width: number, height: number): string[] {

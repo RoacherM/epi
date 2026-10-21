@@ -12,6 +12,7 @@ import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-wo
 
 import { fit, formatDuration, markPromptZone, spread, splitPromptZone, clockColumns } from "./chrome.js";
 import { rewritePiText } from "../pi-output.js";
+import { motionTime, railGlyph } from "./motion.js";
 import { piTui } from "./pi-tui.js";
 import { createFlashState, disposeFlash, type FlashState, paintFlashRail, startFlash } from "./tools/flash.js";
 
@@ -133,8 +134,14 @@ class ThinkingBlock implements Component {
   }
 
   render(width: number): string[] {
-    // The rail column is the blank first column of `pad`; it flashes once when the run ends.
-    return paintFlashRail(this.renderLines(width), this.flash, this.theme);
+    // The rail column is the blank first column of `pad`: a pulse runs down it while thinking
+    // (docs/tui-motion-design.md M4), and it flashes once when the run ends.
+    const lines = this.renderLines(width);
+    if (this.active) {
+      const t = motionTime();
+      return lines.map((line, row) => (line.startsWith(" ") ? railGlyph(this.theme, row, t) + line.slice(1) : line));
+    }
+    return paintFlashRail(lines, this.flash, this.theme);
   }
 
   /** Only the header row (the `Thought for Ns` / `Thinking…` line) toggles -- clicking into an

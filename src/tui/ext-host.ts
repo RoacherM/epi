@@ -4,7 +4,7 @@ import { ExtensionInputComponent, type ExtensionUIContext, type Theme } from "@e
 import type { AutocompleteProvider, Component, TUI } from "@earendil-works/pi-tui";
 
 import { confirmInEditorSlot, dialog, editInEditorSlot, selectInEditorSlot } from "./dialogs.js";
-import type { StatusLineFormatter } from "./chrome.js";
+import type { StatusLineFormatter, WorkingIndicator } from "./chrome.js";
 import { piTui } from "./pi-tui.js";
 
 /** What the extension host may do to the screen; implemented by the app. */
@@ -21,6 +21,8 @@ export interface HostSurface {
   /** Replace the prompt frame's bottom-right label formatter; undefined restores the built-in. */
   setStatusLine(formatter: StatusLineFormatter | undefined): void;
   setWorking(options: { message?: string | undefined; visible?: boolean | undefined }): void;
+  /** Pi's setWorkingIndicator: replace the turn status indicator; undefined restores the built-in. */
+  setWorkingIndicator(indicator: WorkingIndicator | undefined): void;
   setTitle(title: string): void;
   getEditorText(): string;
   setEditorText(text: string): void;
@@ -55,7 +57,7 @@ export function createExtensionUIContext(surface: HostSurface): EpiExtensionUICo
     setStatusLine: (format) => surface.setStatusLine(format),
     setWorkingMessage: (message) => surface.setWorking({ message }),
     setWorkingVisible: (visible) => surface.setWorking({ visible }),
-    setWorkingIndicator: () => unsupported(surface, "setWorkingIndicator"),
+    setWorkingIndicator: (options) => surface.setWorkingIndicator(options),
     setHiddenThinkingLabel: () => unsupported(surface, "setHiddenThinkingLabel"),
     setWidget: ((key: string, content: unknown, options?: { placement?: "aboveEditor" | "belowEditor" }) => {
       const placement = options?.placement ?? "aboveEditor";

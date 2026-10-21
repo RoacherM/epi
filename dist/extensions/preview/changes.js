@@ -4,10 +4,12 @@ import { readFileSync, statSync } from "node:fs";
 import { relative } from "node:path";
 import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
 import { piTui } from "../../tui/pi-tui.js";
-import { centered, pad, scrollbar } from "./draw.js";
+import { scrollbar } from "../../tui/buffer/scrollbar.js";
+import { centered, pad } from "./draw.js";
 import { diffTexts, displayLines } from "./diff.js";
 import { MAX_TEXT_BYTES, printable } from "./files.js";
-import { Finder, LinePrompt } from "./search.js";
+import { applyMotion, MotionKeys } from "../../tui/buffer/motion-keys.js";
+import { TextNavigation } from "../../tui/buffer/navigation.js";
 import { lastScroll } from "./view.js";
 const { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } = piTui;
 const HIGHLIGHT_LIMIT = 256 * 1024;
@@ -84,6 +86,8 @@ export class ChangesList {
     scope = "session";
     cursor = 0;
     scroll = 0;
+    height = 1;
+    motions = new MotionKeys();
     constructor(ledger, theme, cwd) {
         this.ledger = ledger;
         this.theme = theme;
@@ -94,17 +98,16 @@ export class ChangesList {
     }
     handleInput(data) {
         const count = changedFiles(this.ledger, this.scope).length;
+        const keys = this.motions.handle(data);
+        if (keys.kind === "pending")
+            return undefined;
+        if (keys.kind === "motion") {
+            this.cursor = applyMotion(keys.motion, this.cursor, Math.max(1, this.height - 1), count - 1);
+            return undefined;
+        }
         if (matchesKey(data, "escape") || data === "q")
             return { kind: "back" };
-        if (data === "j" || matchesKey(data, "down"))
-            this.cursor = Math.min(count - 1, this.cursor + 1);
-        else if (data === "k" || matchesKey(data, "up"))
-            this.cursor = Math.max(0, this.cursor - 1);
-        else if (data === "g")
-            this.cursor = 0;
-        else if (data === "G")
-            this.cursor = Math.max(0, count - 1);
-        else if (data === "t") {
+        if (data === "t") {
             this.scope = this.scope === "session" ? "turn" : "session";
             this.cursor = 0;
         }
@@ -123,9 +126,10 @@ export class ChangesList {
     render(width, height) {
         const th = this.theme;
         const changes = changedFiles(this.ledger, this.scope);
+        this.height = height;
         this.cursor = Math.max(0, Math.min(this.cursor, changes.length - 1));
         const title = `${th.fg("accent", "changes")} ${th.fg("dim", `· ${SCOPE_LABEL[this.scope]} · ${changes.length} file${changes.length === 1 ? "" : "s"}`)}`;
-        const hints = "j/k move · enter diff · t session/turn · i insert · tab files · q close";
+        const hints = "j/k move · gg/G ends · enter diff · t session/turn · i insert · tab files · q close";
         if (changes.length === 0) {
             const text = `The agent has not changed a file in ${SCOPE_LABEL[this.scope]}.`;
             return { title, body: centered(th.fg("dim", text), width, height), status: ` ${th.fg("dim", hints)}` };
@@ -161,13 +165,12 @@ export class DiffView {
     cwd;
     scroll;
     wrap = true;
-    finder = new Finder();
-    prompt;
     /** "]" or "[" typed, waiting for the "c" of ]c / [c. */
     pending;
-    message = "";
     cache;
     height = 0;
+    /** Motions, `/` `n` `N` and `:N`; searches the diff text, not the gutters or fold markers. */
+    nav;
     constructor(ledger, theme, path, scope, cwd) {
         this.ledger = ledger;
         this.theme = theme;
@@ -175,9 +178,19 @@ export class DiffView {
         this.scope = scope;
         this.cwd = cwd;
         this.scroll = lastScroll.get(`diff:${path}`) ?? 0;
+        this.nav = new TextNavigation({
+            rows: () => this.searchableRows(),
+            top: () => this.scroll,
+            setTop: (row) => {
+                this.scroll = row;
+            },
+            maxTop: () => Math.max(0, (this.cache?.contents.length ?? 0) - this.height),
+            page: () => Math.max(1, this.height - 1),
+            goToLine: (line) => this.lineRow(line),
+        });
     }
     get busy() {
-        return this.prompt !== undefined;
+        return this.nav.prompt !== undefined;
     }
     dispose() {
         lastScroll.set(`diff:${this.path}`, this.scroll);
@@ -188,101 +201,63 @@ export class DiffView {
             ?? this.ledger.changes("session").find((change) => change.path === this.path))?.before;
     }
     handleInput(data) {
-        if (this.prompt) {
-            const done = this.prompt.handleInput(data);
-            if (done === "submit")
-                this.submit(this.prompt);
-            if (done !== undefined)
-                this.prompt = undefined;
-            return undefined;
-        }
-        this.message = "";
-        if (this.pending) {
+        if (this.nav.prompt === undefined && this.pending) {
             const direction = this.pending;
             this.pending = undefined;
+            this.nav.status = undefined;
             if (data === "c")
                 this.jumpToChange(direction === "[");
             return undefined;
         }
-        const page = Math.max(1, this.height - 1);
+        if (this.nav.handle(data).kind === "taken")
+            return undefined;
         if (matchesKey(data, "escape") || data === "q" || data === "h" || matchesKey(data, "left"))
             return { kind: "back" };
         if (data === "]" || data === "[")
             this.pending = data;
-        else if (data === "/" || data === ":")
-            this.prompt = new LinePrompt(data);
-        else if (data === "n" || data === "N")
-            this.findNext(data === "N", this.scroll);
         else if (data === "d")
             return { kind: "file", path: this.path };
         else if (data === "i")
             return { kind: "insert", paths: [this.path] };
         else if (data === "w")
             this.wrap = !this.wrap;
-        else if (data === "j" || matchesKey(data, "down"))
-            this.scroll += 1;
-        else if (data === "k" || matchesKey(data, "up"))
-            this.scroll -= 1;
-        else if (data === " " || matchesKey(data, "pageDown") || matchesKey(data, "ctrl+f"))
-            this.scroll += page;
-        else if (data === "b" || matchesKey(data, "pageUp") || matchesKey(data, "ctrl+b"))
-            this.scroll -= page;
-        else if (matchesKey(data, "ctrl+d"))
-            this.scroll += Math.floor(page / 2);
-        else if (matchesKey(data, "ctrl+u"))
-            this.scroll -= Math.floor(page / 2);
-        else if (data === "g")
-            this.scroll = 0;
-        else if (data === "G")
-            this.scroll = Number.MAX_SAFE_INTEGER;
         return undefined;
     }
-    submit(prompt) {
-        if (prompt.kind === "/") {
-            this.finder.query = prompt.text;
-            this.findNext(false, this.scroll - 1);
-            return;
-        }
-        const line = Number.parseInt(prompt.text, 10);
+    /** `:N` and `NG`: the first shown row at or after line N of the file as it is now. */
+    lineRow(line) {
         const cache = this.cache;
-        if (!Number.isFinite(line) || line < 1) {
-            this.message = `not a line number: ${printable(prompt.text)}`;
-            return;
-        }
         if (!cache || cache.comparison.kind !== "diff")
-            return;
-        // The first shown row at or after that line of the file as it is now.
+            return undefined;
         const rows = cache.comparison.diff.rows;
         const index = rows.findIndex((row) => row.newNo !== undefined && row.newNo >= line);
         if (index < 0)
-            this.message = `line ${line} is not in a shown part of the diff`;
-        else
-            this.scroll = cache.firstRow[index];
+            return { error: `line ${line} is not in a shown part of the diff` };
+        return { row: cache.firstRow[index] };
     }
-    findNext(backwards, from) {
-        if (this.finder.query === "")
-            return;
+    /** The rows as searched: folded-line markers are not text of the file. */
+    searchableRows() {
         const cache = this.cache;
-        // Folded-line markers are not text of the file.
-        const searchable = cache ? cache.contents.map((content, at) => (cache.comparison.kind === "diff" && cache.comparison.diff.rows[cache.rowOf[at]]?.kind === "gap" ? "" : content)) : [];
-        const row = this.finder.next(searchable, from, backwards);
-        if (row === undefined)
-            this.message = `not found: ${printable(this.finder.query)}`;
-        else
-            this.scroll = row;
+        if (!cache)
+            return [];
+        return cache.contents.map((content, at) => (cache.comparison.kind === "diff" && cache.comparison.diff.rows[cache.rowOf[at]]?.kind === "gap" ? "" : content));
     }
     jumpToChange(backwards) {
         const cache = this.cache;
         if (!cache || cache.comparison.kind !== "diff")
             return;
         const starts = cache.comparison.diff.changeStarts.map((index) => cache.firstRow[index]);
+        // On the last page every later change is already on screen and the top cannot move: that is
+        // "no change below" too, not a jump that silently goes nowhere.
+        // The top as it shows: a restored or pre-render scroll may still be past the end.
+        const maxTop = Math.max(0, cache.contents.length - this.height);
+        const top = Math.min(this.scroll, maxTop);
         const target = backwards
-            ? [...starts].reverse().find((row) => row < this.scroll)
-            : starts.find((row) => row > this.scroll);
+            ? [...starts].reverse().find((row) => row < top)
+            : starts.find((row) => row > top && Math.min(row, maxTop) > top);
         if (target === undefined)
-            this.message = backwards ? "no change above" : "no change below";
+            this.nav.status = { text: backwards ? "no change above" : "no change below", tone: "error" };
         else
-            this.scroll = target;
+            this.nav.scrollTo(target);
     }
     styleRow(row, highlighted) {
         const th = this.theme;
@@ -355,7 +330,7 @@ export class DiffView {
         const th = this.theme;
         const cache = this.layout(width - 1);
         const name = th.fg("accent", displayPath(this.cwd, this.path));
-        const hints = "j/k scroll · ]c [c changes · / search · : line · d file · w wrap · i insert · q back";
+        const hints = "j/k scroll · gg/G ends · ]c [c changes · / search · : line · d file · w wrap · i insert · q back";
         if (cache.comparison.kind === "note") {
             return {
                 title: name,
@@ -374,7 +349,7 @@ export class DiffView {
                 return " ".repeat(width);
             const isGap = cache.comparison.kind === "diff" && cache.comparison.diff.rows[cache.rowOf[row]]?.kind === "gap";
             const content = cache.contents[row] ?? "";
-            return pad((cache.gutters[row] ?? "") + (isGap ? content : this.finder.highlight(content, invert)), width - 1) + bar[at];
+            return pad((cache.gutters[row] ?? "") + (isGap ? content : this.nav.highlight(content, invert)), width - 1) + bar[at];
         });
         const label = status === "new" ? "new file" : status === "deleted" ? "deleted" : SCOPE_LABEL[this.scope];
         return {
@@ -385,11 +360,12 @@ export class DiffView {
     }
     statusLine(hints, position) {
         const th = this.theme;
-        if (this.prompt)
-            return ` ${th.fg("accent", `${this.prompt.kind}${printable(this.prompt.text)}▏`)}`;
+        const { prompt, status } = this.nav;
+        if (prompt)
+            return ` ${th.fg("accent", `${prompt.kind}${printable(prompt.text)}▏`)}`;
         if (this.pending)
             return ` ${th.fg("accent", `${this.pending}`)}${th.fg("dim", "  c: next or previous change")}`;
-        const left = this.message ? th.fg("warning", this.message) : th.fg("dim", hints);
+        const left = status?.tone === "error" ? th.fg("warning", status.text) : th.fg("dim", hints);
         return ` ${left}  ${th.fg("accent", position)}`;
     }
 }

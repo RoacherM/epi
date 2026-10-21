@@ -79,13 +79,28 @@ function renderError(context, theme, output, { fallback, expanded, label }) {
     }
     return createOrUpdateLines(context, errorLines.map((line) => theme.fg("error", line)));
 }
-/** Expanded grep/find/ls listing: the first 10 rows, then a count of the rest. */
-function firstTen(lines, theme) {
+/** Expanded grep/find/ls listing: the first 10 rows, then a count of the rest, which opens every
+ * row in the inspector (titled `title`). */
+function firstTen(context, lines, theme, title) {
     const display = lines.slice(0, 10).map((line) => theme.fg("toolOutput", line));
-    if (lines.length > 10) {
-        display.push(theme.fg("muted", `… ${lines.length - 10} more`));
-    }
-    return display;
+    if (lines.length <= 10)
+        return createOrUpdateLines(context, display);
+    display.push(theme.fg("muted", `… ${lines.length - 10} more`));
+    const target = {
+        title,
+        subtitle: `${lines.length} ${lines.length === 1 ? "line" : "lines"}`,
+        lines: lines.map((line) => theme.fg("toolOutput", line)),
+        firstLineNumber: 1,
+        text: lines.join("\n"),
+    };
+    return createOrUpdateLines(context, display, { rows: [10], target });
+}
+/** `:offset-end` for a read call's range, "" when it read the whole file (also the call line's). */
+function readRange(args) {
+    const start = args?.offset ?? 1;
+    const end = args?.limit !== undefined ? start + args.limit - 1 : "";
+    const hasRange = args?.offset !== undefined || args?.limit !== undefined;
+    return hasRange ? `:${start}${end ? `-${end}` : ""}` : "";
 }
 // -----------------------------------------------------------------------------
 // read renderer
@@ -93,10 +108,7 @@ function firstTen(lines, theme) {
 function renderReadCall(args, theme, context) {
     const rawPath = String(args?.path ?? args?.file_path ?? "");
     const relPath = formatRelativePath(rawPath, context.cwd);
-    const start = args?.offset ?? 1;
-    const end = args?.limit !== undefined ? start + args.limit - 1 : "";
-    const hasRange = args?.offset !== undefined || args?.limit !== undefined;
-    const rangeStr = hasRange ? `:${start}${end ? `-${end}` : ""}` : "";
+    const rangeStr = readRange(args);
     const callText = `${theme.fg("toolTitle", theme.bold("read"))} ${theme.fg("accent", relPath)}${rangeStr ? theme.fg("warning", rangeStr) : ""}`;
     return createOrUpdateLines(context, [callText]);
 }
@@ -107,15 +119,7 @@ function renderReadResult(result, options, theme, context) {
     if (isErrorResult(result, context)) {
         return renderError(context, theme, output, { fallback: "Error reading file", expanded: options.expanded, label: relPath });
     }
-    let renderedLines;
-    try {
-        const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
-        renderedLines = highlightCode(replaceTabs(output), lang);
-    }
-    catch {
-        renderedLines = output.split("\n").map((line) => theme.fg("toolOutput", replaceTabs(line)));
-    }
-    const lines = trimTrailingEmptyLines(renderedLines);
+    const lines = highlightRead(output, rawPath, theme);
     const totalLines = result.details?.truncation?.totalLines ?? lines.length;
     if (!options.expanded) {
         // grok content rule: collapsed always states the line count. The call line already shows
@@ -131,7 +135,56 @@ function renderReadResult(result, options, theme, context) {
     const tail = lines.slice(-3);
     const omitted = lines.length - 8;
     const omittedLine = theme.fg("muted", `… ${omitted} more lines`);
-    return createOrUpdateLines(context, [...head, omittedLine, ...tail]);
+    return createOrUpdateLines(context, [...head, omittedLine, ...tail], readInspectable(context, relPath, output, theme));
+}
+// Pi's read tool (core/tools/read.js) ends a cut-off result with one of these after a blank line:
+// `[Showing lines A-B of N. Use offset=…]`, the same with ` (50.0KB limit)`, or `[N more lines in
+// file. Use offset=…]` (the call's own `limit`). Registered in docs/pi-internals.md.
+const READ_NOTICE = /\n\n\[(Showing lines (\d+)-(\d+) of (\d+)(?: \(([^)]+) limit\))?|(\d+) more lines in file)\. Use offset=\d+ to continue\.\]\n*$/;
+/** A read result split into the file's own lines and Pi's "there is more" notice, as a short
+ * label (`lines 1–955 of 1098 · 50.0KB limit`, `142 more lines in file`); exported for
+ * test/pi-internals.test.mjs's `read-continuation-notice` check. */
+export function splitReadNotice(output) {
+    const match = READ_NOTICE.exec(output);
+    if (match === null)
+        return { content: output, notice: undefined };
+    const content = output.slice(0, match.index);
+    if (match[6] !== undefined)
+        return { content, notice: `${match[6]} more lines in file` };
+    const limit = match[5] === undefined ? "" : ` · ${match[5]} limit`;
+    return { content, notice: `lines ${match[2]}–${match[3]} of ${match[4]}${limit}` };
+}
+/** The `… N more lines` row of an expanded read opens every line it returned, numbered from the
+ * call's offset. Pi's continuation notice is not a file line: it moves to the subtitle. */
+function readInspectable(context, relPath, output, theme) {
+    const rawPath = String(context.args?.path ?? context.args?.file_path ?? "");
+    const language = rawPath ? getLanguageFromPath(rawPath) : undefined;
+    const offset = Number(context.args?.offset ?? 1);
+    const { content, notice } = splitReadNotice(output);
+    const lines = highlightRead(content, rawPath, theme);
+    const parts = [notice ?? `${lines.length} lines`, ...(language === undefined ? [] : [language])];
+    return {
+        rows: [5],
+        target: {
+            title: `read ${relPath}${readRange(context.args)}`,
+            subtitle: parts.join(" · "),
+            lines,
+            firstLineNumber: Number.isInteger(offset) && offset > 0 ? offset : 1,
+            text: content.replace(/\n+$/, ""),
+        },
+    };
+}
+/** Highlighted lines of read output, trailing blank lines dropped. */
+function highlightRead(output, rawPath, theme) {
+    let renderedLines;
+    try {
+        const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
+        renderedLines = highlightCode(replaceTabs(output), lang);
+    }
+    catch {
+        renderedLines = output.split("\n").map((line) => theme.fg("toolOutput", replaceTabs(line)));
+    }
+    return trimTrailingEmptyLines(renderedLines);
 }
 export const readRenderers = {
     renderCall: renderReadCall,
@@ -166,7 +219,7 @@ function renderGrepResult(result, options, theme, context) {
     if (lines.length === 0) {
         return createOrUpdateLines(context, [theme.fg("muted", "No matches found")]);
     }
-    return createOrUpdateLines(context, firstTen(lines, theme));
+    return firstTen(context, lines, theme, `grep ${pattern}`);
 }
 export const grepRenderers = {
     renderCall: renderGrepCall,
@@ -195,7 +248,7 @@ function entryListResult(toolName, emptyMarker, labelOf) {
         if (entries.length === 0) {
             return createOrUpdateLines(context, [theme.fg("muted", emptyMarker)]);
         }
-        return createOrUpdateLines(context, firstTen(entries, theme));
+        return firstTen(context, entries, theme, `${toolName} ${labelOf(context)}`);
     };
 }
 function renderFindCall(args, theme, context) {

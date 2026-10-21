@@ -46,8 +46,9 @@ interface MemberLike {
     status: Status;
 }
 /** Pure text+layout for the collapsed group line, split out from `GroupedMessages` so widths
- * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. */
-export declare function verbGroupLine(members: MemberLike[], theme: Theme, width: number): string;
+ * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the rail
+ * pulses and the `◈` breathes (docs/tui-motion-design.md M5), both read at `t` seconds. */
+export declare function verbGroupLine(members: MemberLike[], theme: Theme, width: number, t?: number): string;
 /**
  * Wraps `Transcript`'s `messages` container: folds consecutive collapsed built-in read-only tool
  * blocks into one line at render time. Swapped in for `this.messages` as `root`'s child; `add()`
@@ -90,7 +91,8 @@ export declare class GroupedMessages implements Component {
     /**
      * The merged line has no group-level flash timer of its own: once every member has settled, it
      * paints its rail in whichever tone a still-flashing member is showing (error wins over success),
-     * which is exactly the 400ms window each member already tracks on its own `ToolEntry.flash`. This
+     * which is exactly the 400ms window each member already tracks on its own `ToolEntry.flash` (and
+     * fades the same way, read from that member's own state). This
      * needs no "did a render happen between running and settled" observation -- pi-tui's own render
      * throttle can (and in the real app, does) coalesce a fast run's frames so no such render ever
      * happens, which a wall-clock read of `isFlashing()` doesn't care about.
