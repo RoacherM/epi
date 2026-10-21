@@ -45,6 +45,12 @@ test("token counts read like grok's header", () => {
   assert.equal(formatTokens(2300), "2.3K");
   assert.equal(formatTokens(2000), "2K");
   assert.equal(formatTokens(256_000), "256K");
+  assert.equal(formatTokens(999_000), "999K");
+  assert.equal(formatTokens(999_999), "1M");
+  assert.equal(formatTokens(1_000_000), "1M");
+  assert.equal(formatTokens(156_186_000), "156M");
+  assert.equal(formatTokens(1_234_000_000), "1.2B");
+  assert.equal(formatTokens(2_500_000_000_000), "2500B");
 });
 
 test("header keeps the context count on the right and truncates the path first", () => {

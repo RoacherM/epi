@@ -41,8 +41,16 @@ export function shortenPath(path: string, home = homedir()): string {
 
 export function formatTokens(count: number): string {
   if (count < 1000) return String(count);
-  const thousands = count / 1000;
-  return thousands >= 100 ? `${Math.round(thousands)}K` : `${thousands.toFixed(1).replace(/\.0$/, "")}K`;
+  const units = ["K", "M", "B"];
+  let value = count / 1000;
+  let unit = 0;
+  // 999.5 and up would round to "1000"; carry into the next unit instead.
+  while (value >= 999.5 && unit < units.length - 1) {
+    value /= 1000;
+    unit += 1;
+  }
+  const text = value >= 100 ? String(Math.round(value)) : value.toFixed(1).replace(/\.0$/, "");
+  return `${text}${units[unit]}`;
 }
 
 /** Shared with transcript.ts (turn footer) and assistant-block.ts (thinking duration). */
