@@ -1,4 +1,4 @@
-import { blendFg } from "../motion.js";
+import { blend } from "../motion.js";
 const FLASH_MS = 400;
 const HOLD_MS = 120;
 // Redraws while fading; matches the turn status tick (chrome.ts), so the two never beat.
@@ -37,22 +37,10 @@ export function disposeFlash(state) {
     state.timer = undefined;
     state.until = 0;
 }
-/** The rail glyph for `state` right now: full tone while holding, then an ease-out toward
- * `borderMuted`. Only meaningful while `isFlashing(state)`. */
-export function flashRail(state, theme, now = Date.now()) {
+/** The color of `state`'s flash right now: full tone while holding, then an ease-out toward
+ * `borderMuted`. Only meaningful while `isFlashing(state)`. The turn spine paints its glyphs in it. */
+export function flashBlend(state, theme, now = Date.now()) {
     const faded = Math.max(0, now - state.startedAt - HOLD_MS) / (FLASH_MS - HOLD_MS);
-    return blendFg(theme, state.tone, "borderMuted", 1 - Math.exp(-4 * Math.min(1, faded)), "┃");
-}
-/**
- * Puts `rail` in column 0 of each line. Only lines that start with a plain, uncolored space are
- * touched -- that's the rail column a settled tool/thinking block leaves blank -- so an
- * already-colored running rail, or an image escape line, passes through untouched.
- */
-export function paintRail(lines, rail) {
-    return lines.map((line) => (line.startsWith(" ") ? rail + line.slice(1) : line));
-}
-/** Paints the fading rail for the 400ms `state` is flashing, otherwise returns `lines` unchanged. */
-export function paintFlashRail(lines, state, theme) {
-    return isFlashing(state) ? paintRail(lines, flashRail(state, theme)) : lines;
+    return blend(theme, state.tone, "borderMuted", 1 - Math.exp(-4 * Math.min(1, faded)));
 }
 //# sourceMappingURL=flash.js.map

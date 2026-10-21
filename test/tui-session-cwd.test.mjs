@@ -88,7 +88,8 @@ test("header, /trust's cwd, and !pwd all agree with the model's own tools at sta
   // !pwd (also session.sessionManager.getCwd()) agreed with the header.
   assert.match(marks.afterPwd.slice(marks.afterStartup.length), new RegExp(f.sub.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   // The model's own tool call (runtime.cwd, the buggy half) must agree with both of the above.
-  // The reply wraps at the body-text measure (76 columns), so the long path may span two rows.
-  const reply = marks.afterToolCall.slice(marks.afterPwd.length).replace(/\s+/g, "");
+  // The reply wraps at the body-text measure (76 columns), so the long path may span two rows, the
+  // second starting with the turn spine (`│`, `┃` while running).
+  const reply = marks.afterToolCall.slice(marks.afterPwd.length).replace(/[\s│┃]+/g, "");
   assert.ok(reply.includes(`TOOL-PWD=${f.sub}`), reply);
 });

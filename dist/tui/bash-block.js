@@ -1,11 +1,10 @@
 // User `!` / `!!` shell commands (docs/tui-design.md 4.2, 7). Behaviour mirrors Pi's
 // `handleBashCommand` (interactive-mode.js): emit `user_bash` so extensions can intercept, then
 // `session.executeBash`, which already records the result into session history and LLM context
-// (excluded when `excludeFromContext`). Epi draws its own grok-style frame instead of reusing Pi's
-// exported `BashExecutionComponent` (rail `┃` + `◆`, matching tools/block.ts).
+// (excluded when `excludeFromContext`). Epi draws its own frame instead of reusing Pi's exported
+// `BashExecutionComponent`, laid out like the model's bash call (tools/block.ts, tools/mutating.ts).
 import { keyText } from "@earendil-works/pi-coding-agent";
 import { errorText } from "./errors.js";
-import { motionTime, railGlyph } from "./motion.js";
 import { piTui } from "./pi-tui.js";
 import { failureRow, fitWithTail, formatToolDuration, shortenCommand, truncateOutputLines } from "./tools/common.js";
 // Matches tools/block.ts: a rail column, then 2 columns of padding before the `◆` bullet; output
@@ -24,6 +23,7 @@ export class UserBashBlock {
     command;
     excludeFromContext;
     onInspect;
+    spineRole = "bash";
     outputLines = [];
     status = "running";
     exitCode;
@@ -56,6 +56,9 @@ export class UserBashBlock {
         this.outputLines[this.outputLines.length - 1] += parts[0] ?? "";
         this.outputLines.push(...parts.slice(1));
     }
+    get spineRunning() {
+        return this.status === "running";
+    }
     setComplete(exitCode, cancelled) {
         this.exitCode = exitCode;
         this.status = cancelled ? "cancelled" : exitCode === undefined || exitCode !== 0 ? "error" : "done";
@@ -72,24 +75,22 @@ export class UserBashBlock {
      * cancelled, or when the command failed. */
     render(width) {
         const running = this.status === "running";
-        const t = motionTime();
-        const rail = (row) => (running ? railGlyph(this.theme, row, t) : " ");
         const marker = this.theme.fg(this.status === "error" ? "error" : "bashMode", this.excludeFromContext ? "!!" : "$");
         const { text, extraLines } = shortenCommand(this.command, undefined);
         const extra = extraLines > 0 ? this.theme.fg("dim", ` · +${extraLines} lines`) : "";
         const time = this.status === "done" && this.durationMs !== undefined ? `  ${this.theme.fg("dim", formatToolDuration(this.durationMs))}` : "";
-        const callPrefix = `${rail(0)}${" ".repeat(CALL_PREFIX - 1)}${marker} `;
+        const callPrefix = `${" ".repeat(CALL_PREFIX)}${marker} `;
         const body = fitWithTail(this.theme.fg("toolOutput", text), extra + time, Math.max(1, width - piTui.visibleWidth(callPrefix)), this.theme.fg("dim", "…"));
         const callLine = callPrefix + body;
         const lines = this.lines();
         // While running, show the live tail (matches tools/mutating.ts bashRenderers' `isPartial` case);
         // once finished, apply the fixed head/ellipsis/tail rule instead.
         const shown = running ? lines.slice(-3) : truncateBashOutput(lines);
-        const bodyPrefix = (row) => `${rail(row)}${" ".repeat(RESULT_PREFIX - 1)}`;
-        const rows = shown.map((entry, index) => bodyPrefix(index + 1) + this.theme.fg("toolOutput", entry));
+        const bodyPrefix = " ".repeat(RESULT_PREFIX);
+        const rows = shown.map((entry) => bodyPrefix + this.theme.fg("toolOutput", entry));
         const status = this.statusText();
         if (status !== undefined)
-            rows.push(bodyPrefix(shown.length + 1) + status);
+            rows.push(bodyPrefix + status);
         return [callLine, ...rows].map((line) => piTui.truncateToWidth(line, width));
     }
     statusText() {

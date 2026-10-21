@@ -10,9 +10,10 @@ import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { fit, formatDuration, markPromptZone, splitPromptZone } from "./chrome.js";
 import { rewritePiText } from "../pi-output.js";
 import { CONTENT_COLUMN, MeasuredMarkdown } from "./markdown-layout.js";
-import { breathe, motionTime, railGlyph } from "./motion.js";
+import { breathe, motionTime } from "./motion.js";
 import { piTui } from "./pi-tui.js";
-import { createFlashState, disposeFlash, paintFlashRail, startFlash } from "./tools/flash.js";
+import { dispatchToRows } from "./rows.js";
+import { createFlashState, disposeFlash, isFlashing, startFlash } from "./tools/flash.js";
 // The content column (R3): expanded thinking and the error lines start where the reply text does.
 const CONTENT_PAD = CONTENT_COLUMN;
 // The `∴` sits in the marker column, like a tool's `◆` (docs/tui-transcript-layout-design.md R3).
@@ -70,7 +71,9 @@ class ThinkingBlock {
     constructor(theme, text, active, timing, expanded, onToggle, transformers, 
     // The whole message's streaming state, which Pi hands to the thinking transformers too -- an
     // earlier, finished run of a still-streaming message gets `true`, as in Pi.
-    isStreaming, flash) {
+    isStreaming, 
+    /** Lights this run's stretch of the turn spine once it ends (AssistantBlock.spineFlash). */
+    flash) {
         this.theme = theme;
         this.text = text;
         this.active = active;
@@ -126,14 +129,7 @@ class ThinkingBlock {
         return this.body;
     }
     render(width) {
-        // The rail column is the blank first column of `pad`: a pulse runs down it while thinking
-        // (docs/tui-motion-design.md M4), and it flashes once when the run ends.
-        const lines = this.renderLines(width);
-        if (this.active) {
-            const t = motionTime();
-            return lines.map((line, row) => (line.startsWith(" ") ? railGlyph(this.theme, row, t) + line.slice(1) : line));
-        }
-        return paintFlashRail(lines, this.flash, this.theme);
+        return this.renderLines(width);
     }
     /** Only the header row (the `∴ 2.1s` / `Thinking…` line) toggles -- clicking into an
      * expanded block's body shouldn't collapse it back out from under a text selection. */
@@ -151,7 +147,11 @@ export class AssistantBlock {
     theme;
     transformers;
     requestRender;
+    spineRole = "trunk";
     container = new piTui.Container();
+    /** Each child's rows in the last render, for click routing and the spine's flash rows. */
+    rows = [];
+    rowsWidth;
     lastMessage;
     lastStreaming = false;
     timing = new Map();
@@ -316,9 +316,16 @@ export class AssistantBlock {
             disposeFlash(flash);
     }
     render(width) {
-        // Each text run's AssistantMessageComponent marks its own OSC133 prompt zone; the block is
-        // marked once as a whole instead (below), so those markers are dropped here.
-        const rows = this.container.render(width).map((line) => splitPromptZone(line).rest);
+        const lines = [];
+        this.rows = this.container.children.map((component) => {
+            const rendered = component.render(width);
+            lines.push(...rendered);
+            return { component, height: rendered.length };
+        });
+        this.rowsWidth = width;
+        // Markers a child may carry (an OSC133 prompt zone) are dropped: the block is marked once as a
+        // whole instead (below).
+        const rows = lines.map((line) => splitPromptZone(line).rest);
         if (!rows.some((line) => piTui.visibleWidth(line) > 0))
             return rows;
         // Pi's rule (assistant-message.js render): a message with tool calls is not a prompt zone, so
@@ -327,7 +334,20 @@ export class AssistantBlock {
         return hasToolCalls ? rows : markPromptZone(rows);
     }
     handleMouse(event) {
-        return this.container.handleMouse(event);
+        if (this.rowsWidth !== event.width)
+            this.render(event.width);
+        return dispatchToRows(this.rows, event);
+    }
+    /** A thinking run that just ended flashes its rows' stretch of the turn spine (docs/tui-motion-
+     * design.md M6); `row` counts the rows of the last render. */
+    spineFlash(row) {
+        let top = 0;
+        for (const { component, height } of this.rows) {
+            if (row < top + height)
+                return component instanceof ThinkingBlock && isFlashing(component.flash) ? component.flash : undefined;
+            top += height;
+        }
+        return undefined;
     }
     invalidate() {
         this.container.invalidate();

@@ -9,7 +9,7 @@ import { createExtensionUIContext } from "../dist/tui/ext-host.js";
 import { blendFg, FrameTicker, pulseRule, railGlyph } from "../dist/tui/motion.js";
 import { piTui } from "../dist/tui/pi-tui.js";
 import { createEpiTheme } from "../dist/tui/theme.js";
-import { createFlashState, disposeFlash, flashRail, isFlashing, startFlash } from "../dist/tui/tools/flash.js";
+import { createFlashState, disposeFlash, flashBlend, isFlashing, startFlash } from "../dist/tui/tools/flash.js";
 import { verbGroupLine } from "../dist/tui/tools/group.js";
 
 const theme = createEpiTheme("dark");
@@ -117,11 +117,11 @@ test("ui.setWorkingIndicator: custom frames verbatim, [] hides it, undefined res
 
 // ── M5: running group line ───────────────────────────────────────────────────
 
-test("a running group's rail pulses and its ◈ breathes; a settled group has neither", () => {
+test("a running group's ◈ breathes (the turn spine beside it pulses); a settled group's doesn't", () => {
   const running = [{ groupKind: "read", status: "running" }, { groupKind: "read", status: "done" }];
   const first = verbGroupLine(running, theme, 80, 0);
   const later = verbGroupLine(running, theme, 80, 0.5);
-  assert.match(plain(first), /^┃  ◈ Reading… · 1 completed$/);
+  assert.match(plain(first), /^ {3}◈ Reading… · 1 completed$/);
   assert.notEqual(first, later, "the running line changes over time");
   const settled = [{ groupKind: "read", status: "done" }, { groupKind: "read", status: "done" }];
   assert.equal(verbGroupLine(settled, theme, 80, 0), verbGroupLine(settled, theme, 80, 0.5));
@@ -135,14 +135,15 @@ test("completion flash: full tone for 120ms, then fades toward borderMuted, gone
   startFlash(state, "success", () => {});
   try {
     const start = state.startedAt;
-    const full = theme.fg("success", "┃");
-    assert.equal(flashRail(state, theme, start), full);
-    assert.equal(flashRail(state, theme, start + 119), full);
-    const mid = flashRail(state, theme, start + 250);
-    const late = flashRail(state, theme, start + 390);
+    const paint = (now) => flashBlend(state, theme, now).paint("│");
+    const full = theme.fg("success", "│");
+    assert.equal(paint(start), full);
+    assert.equal(paint(start + 119), full);
+    const mid = paint(start + 250);
+    const late = paint(start + 390);
     assert.notEqual(mid, full);
     assert.notEqual(late, mid);
-    assert.equal(plain(late), "┃");
+    assert.equal(plain(late), "│");
     assert.equal(isFlashing(state, start + 399), true);
     assert.equal(isFlashing(state, start + 400), false);
   } finally {

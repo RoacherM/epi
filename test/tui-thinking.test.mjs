@@ -122,8 +122,6 @@ test("expanded thinking renders markdown and lines up with the answer text", (t)
     const { screens } = runApp(t, [fixture("faux-thinking-markdown.mjs")], [
       ["waitReady"], ["type", "go"], ["key", "enter"],
       ["waitFor", "Worked for", { screen: true }],
-      // The thinking rail's completion flash (D24) paints column 0 for 400ms; measure after it.
-      ["waitGone", "┃", { timeoutMs: 2000 }],
       ["key", "ctrl+t"], ["waitFor", "doThing", { screen: true }], ["screen", "expanded"],
       ["key", "ctrl+d"],
     ], { columns });
@@ -134,7 +132,8 @@ test("expanded thinking renders markdown and lines up with the answer text", (t)
     const columnsOf = texts.map((text) => {
       const row = rows.find((candidate) => candidate.includes(text));
       assert.ok(row !== undefined, `expected "${text}" on screen at ${columns} columns:\n${screen}`);
-      return row.search(/\S/);
+      // Where the text itself starts: the turn spine (src/tui/spine.ts) draws in column 1 of every row.
+      return row.indexOf(text);
     });
     assert.deepEqual(columnsOf, texts.map(() => columnsOf.at(-1)), `thinking rows must start in the answer's column at ${columns} columns:\n${screen}`);
   }

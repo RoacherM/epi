@@ -1,7 +1,9 @@
 import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
-import { breathe, motionTime, railGlyph } from "../motion.js";
+import { breathe, motionTime } from "../motion.js";
 import { piTui } from "../pi-tui.js";
-import { createFlashState, disposeFlash, flashRail, isFlashing, paintFlashRail, paintRail, startFlash } from "./flash.js";
+import { dispatchToRows } from "../rows.js";
+import { paintSpine, spineMember } from "../spine.js";
+import { createFlashState, disposeFlash, isFlashing, startFlash } from "./flash.js";
 const GROUP_KINDS = new Set(["read", "grep", "find", "ls"]);
 /** Only a built-in read/grep/find/ls tool groups; an extension overriding one of these names (or any
  * other extension tool) never does (docs/tui-design.md 4.2: "Only built-in read-only tools group"). */
@@ -37,16 +39,15 @@ const RUN_LABEL = "Reading…";
  */
 export class ToolEntry extends ToolExecutionComponent {
     hostUi;
-    theme;
     groupKind;
+    spineRole = "tool";
     status = "running";
     expandedFlag = false;
     flash = createFlashState();
     started = false;
-    constructor(toolName, toolCallId, args, renderers, hostUi, cwd, theme, groupKind, options) {
+    constructor(toolName, toolCallId, args, renderers, hostUi, cwd, groupKind, options) {
         super(toolName, toolCallId, args, options, renderers, hostUi, cwd);
         this.hostUi = hostUi;
-        this.theme = theme;
         this.groupKind = groupKind;
     }
     markExecutionStarted() {
@@ -71,8 +72,12 @@ export class ToolEntry extends ToolExecutionComponent {
         this.expandedFlag = expanded;
         super.setExpanded(expanded);
     }
-    render(width) {
-        return paintFlashRail(super.render(width), this.flash, this.theme);
+    /** The completion flash lights the whole block's stretch of the turn spine (src/tui/spine.ts). */
+    spineFlash() {
+        return isFlashing(this.flash) ? this.flash : undefined;
+    }
+    get spineRunning() {
+        return this.status === "running";
     }
     /** Cleared on `Transcript.reset()` so a stale flash timer never fires after this entry is gone. */
     dispose() {
@@ -116,8 +121,8 @@ function summarize(members) {
     return { running, completed, failed, breakdown };
 }
 /** Pure text+layout for the collapsed group line, split out from `GroupedMessages` so widths
- * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the rail
- * pulses and the `◈` breathes (docs/tui-motion-design.md M5), both read at `t` seconds. */
+ * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the `◈`
+ * breathes (docs/tui-motion-design.md M5), read at `t` seconds; the turn spine beside it pulses. */
 export function verbGroupLine(members, theme, width, t = motionTime()) {
     const { running, failed, completed, breakdown } = summarize(members);
     const anyRunning = running > 0;
@@ -125,8 +130,7 @@ export function verbGroupLine(members, theme, width, t = motionTime()) {
     let text = anyRunning ? `${RUN_LABEL} · ${completed} completed` : breakdown;
     if (anyFailed)
         text += ` ${theme.fg("error", `· ${failed} failed`)}`;
-    const rail = anyRunning ? railGlyph(theme, 0, t) : " ";
-    const lead = `${rail}${" ".repeat(PREFIX - 1)}`;
+    const lead = " ".repeat(PREFIX);
     const bullet = anyRunning
         ? breathe(theme, "accent", "thinkingHigh", t, "◈ ")
         : theme.fg(anyFailed ? "error" : "muted", "◈ ");
@@ -137,23 +141,6 @@ export function verbGroupLine(members, theme, width, t = motionTime()) {
  * for the "N more" and "fold" affordances, which have no rail of their own to draw. */
 function leadLine(theme, text) {
     return " ".repeat(PREFIX) + theme.fg("muted", text);
-}
-/** Mirrors pi-tui's own (unexported) `dispatchMouseEvent`: normalizes a child's result so a nested
- * Container's own dispatch result (already carrying `target`) passes through unchanged. */
-function dispatchToChild(component, event) {
-    const result = component.handleMouse?.(event);
-    if (!result)
-        return undefined;
-    if ("target" in result)
-        return result;
-    if (!result.handled && !result.capture && !result.focus)
-        return undefined;
-    return {
-        ...result,
-        handled: true,
-        ...(result.focus ? { focusTarget: component } : {}),
-        target: { component, originX: event.screenX - event.x, originY: event.screenY - event.y, width: event.width, height: event.height },
-    };
 }
 function isGroupable(component) {
     return component instanceof ToolEntry && component.groupKind !== undefined;
@@ -192,6 +179,7 @@ export class GroupedMessages {
     messages;
     tui;
     theme;
+    turnRunning;
     mouseLayout;
     toolsExpanded = false;
     // Both keyed by a run's first member: stable across renders because runs only grow at the tail
@@ -199,10 +187,13 @@ export class GroupedMessages {
     // identifies "this run" for as long as it exists.
     unfolded = new Set();
     revealed = new Set();
-    constructor(messages, tui, theme) {
+    constructor(messages, tui, theme, 
+    /** A turn is in progress: its spine is live (src/tui/spine.ts). */
+    turnRunning = () => false) {
         this.messages = messages;
         this.tui = tui;
         this.theme = theme;
+        this.turnRunning = turnRunning;
     }
     invalidate() {
         this.messages.invalidate();
@@ -219,8 +210,7 @@ export class GroupedMessages {
         this.revealed.clear();
     }
     render(width) {
-        const out = [];
-        const rows = [];
+        const placed = [];
         const children = this.messages.children;
         let i = 0;
         while (i < children.length) {
@@ -249,40 +239,31 @@ export class GroupedMessages {
                 if (members.length > 1) {
                     const anchor = members[0];
                     if (!this.toolsExpanded && !this.unfolded.has(anchor)) {
-                        const lines = this.renderSummaryLine(members, width);
-                        out.push(...lines);
-                        rows.push({ component: clickTarget(() => { this.unfolded.add(anchor); this.tui.requestRender(); }), height: lines.length });
+                        placed.push(this.summaryLine(anchor, members, width));
                     }
                     else {
-                        this.renderUnfolded(anchor, members, width, out, rows);
+                        this.renderUnfolded(anchor, members, width, placed);
                     }
                     i = lastIndex + 1;
                     continue;
                 }
             }
             const rendered = first.render(width);
-            if (rendered.length > 0) {
-                out.push(...rendered);
-                rows.push({ component: first, height: rendered.length });
-            }
+            if (rendered.length > 0)
+                placed.push(place(first, rendered));
             i += 1;
         }
-        this.mouseLayout = { width, rows };
-        return out;
+        joinToolRuns(placed);
+        paintSpine(this.theme, placed, width, this.turnRunning());
+        this.mouseLayout = { width, rows: placed.map(({ component, lines, skipped }) => ({ component, height: lines.length, skipped })) };
+        return placed.flatMap((block) => block.lines);
     }
     handleMouse(event) {
         if (event.y < 0 || event.y >= event.height)
             return undefined;
         if (this.mouseLayout?.width !== event.width)
             this.render(event.width);
-        let y = 0;
-        for (const { component, height } of this.mouseLayout.rows) {
-            if (event.y >= y && event.y < y + height) {
-                return dispatchToChild(component, { ...event, y: event.y - y, height });
-            }
-            y += height;
-        }
-        return undefined;
+        return dispatchToRows(this.mouseLayout.rows, event);
     }
     /**
      * Individual blocks again. Under `Ctrl+O` every member shows, uncapped (the user asked to see
@@ -291,51 +272,72 @@ export class GroupedMessages {
      * "N more" that reveals the rest; a "fold" line folds this one run back (Ctrl+O stays the only way
      * to fold *and* unfold everything at once).
      */
-    renderUnfolded(anchor, members, width, out, rows) {
+    renderUnfolded(anchor, members, width, placed) {
         const capped = !this.toolsExpanded && !this.revealed.has(anchor) && members.length > MAX_UNFOLDED_MEMBERS;
         const visible = capped ? members.slice(-MAX_UNFOLDED_MEMBERS) : members;
         if (capped) {
             const hidden = members.length - visible.length;
-            const moreLine = leadLine(this.theme, `◈ ${hidden} more`);
-            out.push(moreLine);
-            rows.push({ component: clickTarget(() => { this.revealed.add(anchor); this.tui.requestRender(); }), height: 1 });
+            const reveal = clickTarget(() => { this.revealed.add(anchor); this.tui.requestRender(); });
+            placed.push({ component: reveal, lines: [leadLine(this.theme, `◈ ${hidden} more`)], skipped: 0, member: TRUNK, toolish: true });
         }
-        for (const member of visible) {
-            const rendered = member.render(width);
-            out.push(...rendered);
-            rows.push({ component: member, height: rendered.length });
-        }
+        for (const member of visible)
+            placed.push(place(member, member.render(width)));
         if (!this.toolsExpanded) {
-            const foldLine = leadLine(this.theme, "◈ fold");
-            out.push(foldLine);
-            rows.push({
-                component: clickTarget(() => {
-                    this.unfolded.delete(anchor);
-                    this.revealed.delete(anchor);
-                    this.tui.requestRender();
-                }),
-                height: 1,
+            const fold = clickTarget(() => {
+                this.unfolded.delete(anchor);
+                this.revealed.delete(anchor);
+                this.tui.requestRender();
             });
+            placed.push({ component: fold, lines: [leadLine(this.theme, "◈ fold")], skipped: 0, member: TRUNK, toolish: true });
         }
     }
     /**
-     * The merged line has no group-level flash timer of its own: once every member has settled, it
-     * paints its rail in whichever tone a still-flashing member is showing (error wins over success),
-     * which is exactly the 400ms window each member already tracks on its own `ToolEntry.flash` (and
-     * fades the same way, read from that member's own state). This
-     * needs no "did a render happen between running and settled" observation -- pi-tui's own render
-     * throttle can (and in the real app, does) coalesce a fast run's frames so no such render ever
-     * happens, which a wall-clock read of `isFlashing()` doesn't care about.
+     * The merged line has no group-level flash timer of its own: once every member has settled, its
+     * spine branch flashes in whichever tone a still-flashing member is showing (error wins over
+     * success), which is exactly the 400ms window each member already tracks on its own
+     * `ToolEntry.flash` (and fades the same way, read from that member's own state). This needs no
+     * "did a render happen between running and settled" observation -- pi-tui's own render throttle
+     * can (and in the real app, does) coalesce a fast run's frames so no such render ever happens,
+     * which a wall-clock read of `isFlashing()` doesn't care about.
      */
-    renderSummaryLine(members, width) {
-        const line = verbGroupLine(members, this.theme, width);
-        if (members.some((member) => member.status === "running"))
-            return ["", line];
-        const flashing = members.filter((member) => isFlashing(member.flash));
-        const shown = flashing.find((member) => member.flash.tone === "error") ?? flashing[0];
-        if (shown === undefined)
-            return ["", line];
-        return ["", ...paintRail([line], flashRail(shown.flash, this.theme))];
+    summaryLine(anchor, members, width) {
+        const running = members.some((member) => member.status === "running");
+        const flash = () => {
+            if (running)
+                return undefined;
+            const flashing = members.filter((member) => isFlashing(member.flash));
+            return (flashing.find((member) => member.flash.tone === "error") ?? flashing[0])?.flash;
+        };
+        const unfold = clickTarget(() => { this.unfolded.add(anchor); this.tui.requestRender(); });
+        return {
+            component: unfold,
+            lines: ["", verbGroupLine(members, this.theme, width)],
+            skipped: 0,
+            member: { spineRole: "tool", spineRunning: running, spineFlash: flash },
+            toolish: true,
+        };
+    }
+}
+const TRUNK = { spineRole: "trunk" };
+function place(component, lines) {
+    const member = component instanceof piTui.Spacer ? "spacer" : spineMember(component);
+    return { component, lines: [...lines], skipped: 0, member, toolish: component instanceof ToolEntry };
+}
+/**
+ * Consecutive tool rows sit together with no blank row between them (docs/tui-transcript-layout-
+ * design.md R4). That blank row is the one Pi's ToolExecutionComponent puts first in its own render
+ * (and the group line copies): it is left out here, and a click on the block is handed on one row
+ * lower, where Pi's own handleMouse expects it (pi-internals row `tool-exec-leading-blank`).
+ */
+function joinToolRuns(placed) {
+    let previousToolish = false;
+    for (const block of placed) {
+        if (block.toolish && previousToolish && block.lines[0] === "") {
+            block.lines.shift();
+            block.skipped = 1;
+        }
+        if (block.lines.length > 0)
+            previousToolish = block.toolish;
     }
 }
 //# sourceMappingURL=group.js.map

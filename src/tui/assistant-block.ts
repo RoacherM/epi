@@ -13,9 +13,11 @@ import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-wo
 import { fit, formatDuration, markPromptZone, splitPromptZone } from "./chrome.js";
 import { rewritePiText } from "../pi-output.js";
 import { CONTENT_COLUMN, MeasuredMarkdown } from "./markdown-layout.js";
-import { breathe, motionTime, railGlyph } from "./motion.js";
+import { breathe, motionTime } from "./motion.js";
 import { piTui } from "./pi-tui.js";
-import { createFlashState, disposeFlash, type FlashState, paintFlashRail, startFlash } from "./tools/flash.js";
+import { type ChildRows, dispatchToRows } from "./rows.js";
+import type { SpineMember } from "./spine.js";
+import { createFlashState, disposeFlash, type FlashState, isFlashing, startFlash } from "./tools/flash.js";
 
 type ContentPart = AssistantMessage["content"][number];
 
@@ -84,7 +86,8 @@ class ThinkingBlock implements Component {
     // The whole message's streaming state, which Pi hands to the thinking transformers too -- an
     // earlier, finished run of a still-streaming message gets `true`, as in Pi.
     private readonly isStreaming: boolean,
-    private readonly flash: FlashState,
+    /** Lights this run's stretch of the turn spine once it ends (AssistantBlock.spineFlash). */
+    readonly flash: FlashState,
   ) {}
 
   private renderLines(width: number): string[] {
@@ -134,14 +137,7 @@ class ThinkingBlock implements Component {
   }
 
   render(width: number): string[] {
-    // The rail column is the blank first column of `pad`: a pulse runs down it while thinking
-    // (docs/tui-motion-design.md M4), and it flashes once when the run ends.
-    const lines = this.renderLines(width);
-    if (this.active) {
-      const t = motionTime();
-      return lines.map((line, row) => (line.startsWith(" ") ? railGlyph(this.theme, row, t) + line.slice(1) : line));
-    }
-    return paintFlashRail(lines, this.flash, this.theme);
+    return this.renderLines(width);
   }
 
   /** Only the header row (the `∴ 2.1s` / `Thinking…` line) toggles -- clicking into an
@@ -157,8 +153,12 @@ class ThinkingBlock implements Component {
   }
 }
 
-export class AssistantBlock implements Component {
+export class AssistantBlock implements Component, SpineMember {
+  readonly spineRole = "trunk";
   private readonly container = new piTui.Container();
+  /** Each child's rows in the last render, for click routing and the spine's flash rows. */
+  private rows: ChildRows[] = [];
+  private rowsWidth: number | undefined;
   private lastMessage: AssistantMessage | undefined;
   private lastStreaming = false;
   private readonly timing = new Map<number, ThinkingTiming>();
@@ -322,9 +322,16 @@ export class AssistantBlock implements Component {
   }
 
   render(width: number): string[] {
-    // Each text run's AssistantMessageComponent marks its own OSC133 prompt zone; the block is
-    // marked once as a whole instead (below), so those markers are dropped here.
-    const rows = this.container.render(width).map((line) => splitPromptZone(line).rest);
+    const lines: string[] = [];
+    this.rows = this.container.children.map((component) => {
+      const rendered = component.render(width);
+      lines.push(...rendered);
+      return { component, height: rendered.length };
+    });
+    this.rowsWidth = width;
+    // Markers a child may carry (an OSC133 prompt zone) are dropped: the block is marked once as a
+    // whole instead (below).
+    const rows = lines.map((line) => splitPromptZone(line).rest);
     if (!rows.some((line) => piTui.visibleWidth(line) > 0)) return rows;
     // Pi's rule (assistant-message.js render): a message with tool calls is not a prompt zone, so
     // Ctrl+Up/Down step over a turn's intermediate tool-calling messages to its final answer.
@@ -333,7 +340,19 @@ export class AssistantBlock implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    return this.container.handleMouse(event);
+    if (this.rowsWidth !== event.width) this.render(event.width);
+    return dispatchToRows(this.rows, event);
+  }
+
+  /** A thinking run that just ended flashes its rows' stretch of the turn spine (docs/tui-motion-
+   * design.md M6); `row` counts the rows of the last render. */
+  spineFlash(row: number): FlashState | undefined {
+    let top = 0;
+    for (const { component, height } of this.rows) {
+      if (row < top + height) return component instanceof ThinkingBlock && isFlashing(component.flash) ? component.flash : undefined;
+      top += height;
+    }
+    return undefined;
   }
 
   invalidate(): void {

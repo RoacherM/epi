@@ -2,6 +2,7 @@ import { type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import type { InspectTarget } from "./buffer/inspector.js";
 import type { CommandHost } from "./command-host.js";
+import type { SpineMember } from "./spine.js";
 interface FinishedBashMessage {
     command: string;
     output: string;
@@ -14,11 +15,12 @@ interface FinishedBashMessage {
  * included, `toolOutput` (the model's bash block paints it `muted`; both kept, 8.4).
  */
 export declare function truncateBashOutput(lines: string[]): string[];
-export declare class UserBashBlock implements Component {
+export declare class UserBashBlock implements Component, SpineMember {
     private readonly theme;
     private readonly command;
     private readonly excludeFromContext;
     private readonly onInspect?;
+    readonly spineRole = "bash";
     private outputLines;
     private status;
     private exitCode;
@@ -29,6 +31,7 @@ export declare class UserBashBlock implements Component {
     /** Replays a finished `bashExecution` session message after /new, /resume or /reload. */
     static fromMessage(theme: Theme, message: FinishedBashMessage, onInspect?: (target: InspectTarget) => void): UserBashBlock;
     appendOutput(chunk: string): void;
+    get spineRunning(): boolean;
     setComplete(exitCode: number | undefined, cancelled: boolean): void;
     /** The output as lines, without the single trailing newline most commands leave. */
     private lines;

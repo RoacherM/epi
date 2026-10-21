@@ -1,4 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { type Blend } from "../motion.js";
 export interface FlashState {
     startedAt: number;
     until: number;
@@ -13,15 +14,7 @@ export declare function startFlash(state: FlashState, tone: "success" | "error",
 export declare function isFlashing(state: FlashState, now?: number): boolean;
 /** Cleared on dispose/reset so a stale timer never fires after its component is gone. */
 export declare function disposeFlash(state: FlashState): void;
-/** The rail glyph for `state` right now: full tone while holding, then an ease-out toward
- * `borderMuted`. Only meaningful while `isFlashing(state)`. */
-export declare function flashRail(state: FlashState, theme: Theme, now?: number): string;
-/**
- * Puts `rail` in column 0 of each line. Only lines that start with a plain, uncolored space are
- * touched -- that's the rail column a settled tool/thinking block leaves blank -- so an
- * already-colored running rail, or an image escape line, passes through untouched.
- */
-export declare function paintRail(lines: string[], rail: string): string[];
-/** Paints the fading rail for the 400ms `state` is flashing, otherwise returns `lines` unchanged. */
-export declare function paintFlashRail(lines: string[], state: FlashState, theme: Theme): string[];
+/** The color of `state`'s flash right now: full tone while holding, then an ease-out toward
+ * `borderMuted`. Only meaningful while `isFlashing(state)`. The turn spine paints its glyphs in it. */
+export declare function flashBlend(state: FlashState, theme: Theme, now?: number): Blend;
 //# sourceMappingURL=flash.d.ts.map

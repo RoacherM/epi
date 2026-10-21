@@ -47,10 +47,6 @@ const text = (value, extra = {}) => ({ content: [{ type: "text", text: value }],
 const collapsed = { expanded: false, isPartial: false };
 const expanded = { expanded: true, isPartial: false };
 const numbered = (n, prefix = "line") => Array.from({ length: n }, (_, i) => `${prefix} ${i + 1}`);
-// A running rail's `┃` changes color as its pulse moves (docs/tui-motion-design.md M4; the colors
-// are checked in test/tui-motion.test.mjs): snapshots compare it as one token.
-const RAIL = "<rail>";
-const railed = (lines) => lines.map((line) => line.replace(/^\x1b\[38;(?:2;\d+;\d+;\d+|5;\d+)m┃\x1b\[39m/, RAIL));
 
 // ── read ─────────────────────────────────────────────────────────────────────
 
@@ -352,8 +348,9 @@ test("snapshot: bash tool call and results", () => {
 test("snapshot: tool block frame around a built-in renderer", () => {
   const framed = toolBlock("bash", bashRenderers);
   const call = out("make");
-  assert.deepEqual(railed(framed.renderCall({ command: "make" }, theme, ctx({ isPartial: true })).render(80)), [
-    `${RAIL}  ${fg("bashMode", "$ ")}${call}`,
+  // The running pulse is the turn spine's (src/tui/spine.ts), not the block's.
+  assert.deepEqual(framed.renderCall({ command: "make" }, theme, ctx({ isPartial: true })).render(80), [
+    `   ${fg("bashMode", "$ ")}${call}`,
   ]);
   assert.deepEqual(framed.renderCall({ command: "make" }, theme, ctx()).render(80), [`   ${fg("bashMode", "$ ")}${call}`]);
   assert.deepEqual(framed.renderCall({ command: "make" }, theme, ctx({ isError: true })).render(80), [`   ${fg("error", "$ ")}${call}`]);
@@ -363,8 +360,8 @@ test("snapshot: tool block frame around a built-in renderer", () => {
     `     ${fg("toolOutput", "a")}`,
     `     ${fg("toolOutput", "b")}`,
   ]);
-  assert.deepEqual(railed(framed.renderResult(text("a"), { expanded: false, isPartial: true }, theme, ctx({ isPartial: true })).render(80)), [
-    `${RAIL}    ${fg("toolOutput", "a")}`,
+  assert.deepEqual(framed.renderResult(text("a"), { expanded: false, isPartial: true }, theme, ctx({ isPartial: true })).render(80), [
+    `     ${fg("toolOutput", "a")}`,
   ]);
 });
 
@@ -415,13 +412,12 @@ test("snapshot: user bash block", () => {
   const outRow = (line) => `     ${fg("toolOutput", line)}`;
   const running = new UserBashBlock(theme, "seq 1 9", false);
   running.appendOutput(`${numbered(4).join("\n")}\n`);
-  const rail = RAIL;
-  assert.deepEqual(railed(running.render(80)), [
-    `${rail}  ${fg("bashMode", "$")} ${out("seq 1 9")}`,
-    `${rail}    ${fg("toolOutput", "line 2")}`,
-    `${rail}    ${fg("toolOutput", "line 3")}`,
-    `${rail}    ${fg("toolOutput", "line 4")}`,
-    `${rail}    ${fg("muted", `Running… (${keyText("app.interrupt")} to cancel)`)}`,
+  assert.deepEqual(running.render(80), [
+    `   ${fg("bashMode", "$")} ${out("seq 1 9")}`,
+    outRow("line 2"),
+    outRow("line 3"),
+    outRow("line 4"),
+    `     ${fg("muted", `Running… (${keyText("app.interrupt")} to cancel)`)}`,
   ]);
 
   const lines = numbered(20);

@@ -4,7 +4,7 @@ import { CustomMessageComponent, getMarkdownTheme, } from "@earendil-works/pi-co
 import { AssistantBlock } from "./assistant-block.js";
 import { UserBashBlock } from "./bash-block.js";
 import { BlockInspectorOverlay } from "./buffer/inspector.js";
-import { formatDuration, messageText, UserMessageBlock } from "./chrome.js";
+import { fit, formatDuration, messageText, UserMessageBlock } from "./chrome.js";
 import { writeClipboardText } from "./clipboard.js";
 import { rewritePiText } from "../pi-output.js";
 import { imageLabelNumbers } from "./paste-chips.js";
@@ -12,8 +12,21 @@ import { piTui } from "./pi-tui.js";
 import { toolBlock } from "./tools/block.js";
 import { asGroupKind, GroupedMessages, ToolEntry } from "./tools/group.js";
 import { builtInToolRenderers } from "./tools/index.js";
-// grok block layout: a 1-column rail plus 2 columns of padding before block content.
-const CONTENT_PAD = 3;
+/** `Worked for 12.3s` / `Stopped after 4.0s` under a settled turn, dim. It starts in column 4, so
+ * the turn spine closes into it: `╰─ Worked for 12.3s` (src/tui/spine.ts). */
+class TurnFooter {
+    theme;
+    label;
+    spineRole = "footer";
+    constructor(theme, label) {
+        this.theme = theme;
+        this.label = label;
+    }
+    render(width) {
+        return [fit(`    ${this.theme.fg("dim", this.label)}`, width)];
+    }
+    invalidate() { }
+}
 export class Transcript {
     tui;
     theme;
@@ -64,7 +77,7 @@ export class Transcript {
         this.tui = tui;
         this.theme = theme;
         this.session = session;
-        this.groupedMessages = new GroupedMessages(this.messages, this.tui, this.theme);
+        this.groupedMessages = new GroupedMessages(this.messages, this.tui, this.theme, () => this.turnStartedAt !== undefined);
         this.root.addChild({
             render: (width) => (this.messageCount === 0 ? this.header.render(width) : []),
             invalidate: () => this.header.invalidate(),
@@ -368,7 +381,7 @@ export class Transcript {
         this.finishedReply = undefined;
         this.toolBatch = undefined;
         const label = aborted ? "Stopped after" : "Worked for";
-        this.add(new piTui.Text(this.theme.fg("muted", `${label} ${formatDuration(duration)}`), CONTENT_PAD, 0), true, false);
+        this.add(new TurnFooter(this.theme, `${label} ${formatDuration(duration)}`), true, false);
     }
     addFinishedMessage(message) {
         switch (message.role) {
@@ -423,7 +436,7 @@ export class Transcript {
         const isBuiltIn = this.session.getAllTools().find((tool) => tool.name === toolName)?.sourceInfo.source === "builtin";
         const base = (isBuiltIn ? builtInToolRenderers[toolName] : undefined) ?? definition;
         const renderers = toolBlock(toolName, this.session.extensionRunner.resolveToolRenderers(toolName, () => base), (target) => this.inspect(target));
-        const component = new ToolEntry(toolName, toolCallId, args ?? {}, renderers, this.tui, this.session.sessionManager.getCwd(), this.theme, asGroupKind(toolName, isBuiltIn));
+        const component = new ToolEntry(toolName, toolCallId, args ?? {}, renderers, this.tui, this.session.sessionManager.getCwd(), asGroupKind(toolName, isBuiltIn));
         component.setExpanded(this.toolsExpanded);
         this.tools.set(toolCallId, component);
         // Pi's tool component starts with its own blank row.

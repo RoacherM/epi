@@ -205,7 +205,7 @@ test("a finished thinking block collapses to one '∴ Ns' line", async () => {
   const rendered = stripAnsi(transcript.root.render(80).join("\n"));
   assert.doesNotMatch(rendered, /Thinking…/);
   assert.doesNotMatch(rendered, /reasoning about it/, "collapsed by default");
-  assert.match(rendered, /^   ∴ \d+\.\ds$/m, "one dim `∴ <duration>` row in the marker column");
+  assert.match(rendered, /^ │ ∴ \d+\.\ds$/m, "one dim `∴ <duration>` row in the marker column, beside the turn spine");
   assert.doesNotMatch(rendered, /Thought/);
   const [, seconds] = /∴ (\d+\.\d)s/.exec(rendered);
   assert.ok(Number(seconds) >= 0 && Number(seconds) < 2, `expected a plausible (~0.03s) duration, got ${seconds}s`);
@@ -416,7 +416,7 @@ test("a replayed message ending in thinking renders as finished, not stuck strea
   assert.doesNotMatch(rendered, /Thinking…/, "a replayed, already-finished message must not show the live streaming view");
   assert.doesNotMatch(rendered, /∴/, "no text follows the thinking, so no `∴` row");
   transcript.setThinkingExpanded(true);
-  assert.match(stripAnsi(transcript.root.render(80).join("\n")), /^   ∴ thought$/m, "no duration -- none was ever recorded");
+  assert.match(stripAnsi(transcript.root.render(80).join("\n")), /^ │ ∴ thought$/m, "no duration -- none was ever recorded");
 });
 
 // docs/tui-transcript-layout-design.md §7.2-4: `∴` heads the text it led to. A collapsed run that
@@ -620,7 +620,8 @@ test("expanded thinking renders markdown in the answer's column at every width",
     const column = (needle) => {
       const line = lines.find((candidate) => candidate.includes(needle));
       assert.ok(line !== undefined, `expected "${needle}" at width ${width}:\n${text}`);
-      return line.search(/\S/);
+      // Where the text starts, not the turn spine in column 1.
+      return line.indexOf(needle);
     };
     const answer = column("ANSWER");
     for (const needle of ["Bold lead", "- item one", "see code()"]) {
@@ -629,11 +630,11 @@ test("expanded thinking renders markdown in the answer's column at every width",
   }
 });
 
-// Dogfood D24 (docs/tui-design.md 4.2 "完成闪烁"): a thinking run that ends live flashes its rail
-// once in `success` for 400ms, like a tool; replayed history never does.
-test("a thinking run flashes its rail in success color when it ends, then clears", async () => {
+// Dogfood D24 (docs/tui-design.md 4.2 "完成闪烁"): a thinking run that ends live flashes its stretch
+// of the turn spine once in `success` for 400ms, like a tool; replayed history never does.
+test("a thinking run flashes its spine in success color when it ends, then clears", async () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
-  const successBar = theme.fg("success", "┃");
+  const successBar = theme.fg("success", "│");
   const thinking = assistantMessage([{ type: "thinking", thinking: "reasoning about it" }]);
   transcript.handle({ type: "message_start", message: thinking });
   transcript.handle({ type: "message_update", message: thinking, assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: thinking } });
@@ -643,7 +644,7 @@ test("a thinking run flashes its rail in success color when it ends, then clears
   transcript.handle({ type: "message_update", message: answering, assistantMessageEvent: { type: "text_start", contentIndex: 1, partial: answering } });
   const justAfter = transcript.root.render(80);
   const header = justAfter.find((line) => stripAnsi(line).includes("∴"));
-  assert.ok(header?.startsWith(successBar), `the thinking rail must flash right after it ends: ${JSON.stringify(header)}`);
+  assert.ok(header?.startsWith(` ${successBar}`), `the thinking's spine must flash right after it ends: ${JSON.stringify(header)}`);
   transcript.handle({ type: "message_end", message: answering });
   await new Promise((resolve) => setTimeout(resolve, 500));
   assert.ok(!transcript.root.render(80).join("\n").includes(successBar), "the flash must clear itself after 400ms");
@@ -653,7 +654,7 @@ test("a replayed thinking run never flashes", () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   const message = assistantMessage([{ type: "thinking", thinking: "old reasoning" }, { type: "text", text: "old answer" }]);
   transcript.reset({ ...stubSession(), messages: [message] });
-  assert.ok(!transcript.root.render(80).join("\n").includes(theme.fg("success", "┃")));
+  assert.ok(!transcript.root.render(80).join("\n").includes(theme.fg("success", "│")));
 });
 
 // Dogfood D23: a user message after a reply that ended with no tool calls (a queued follow-up, or a

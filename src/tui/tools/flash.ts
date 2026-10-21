@@ -1,10 +1,10 @@
 // Completion flash (docs/tui-design.md 4.2 M4 "完成闪烁", docs/tui-motion-design.md M6): when a tool
-// or thinking block finishes, its rail lights up in `success` (or `error` if it failed), holds for
-// 120ms, then eases out toward `borderMuted` and is gone at 400ms. Shared by tool blocks
-// (tools/group.ts) and thinking blocks (assistant-block.ts).
+// or thinking block finishes, its stretch of the turn spine (src/tui/spine.ts) lights up in `success`
+// (or `error` if it failed), holds for 120ms, then eases out toward `borderMuted` and is gone at
+// 400ms. The state lives on tool blocks (tools/group.ts) and thinking blocks (assistant-block.ts).
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
-import { blendFg } from "../motion.js";
+import { blend, type Blend } from "../motion.js";
 
 const FLASH_MS = 400;
 const HOLD_MS = 120;
@@ -54,23 +54,9 @@ export function disposeFlash(state: FlashState): void {
   state.until = 0;
 }
 
-/** The rail glyph for `state` right now: full tone while holding, then an ease-out toward
- * `borderMuted`. Only meaningful while `isFlashing(state)`. */
-export function flashRail(state: FlashState, theme: Theme, now = Date.now()): string {
+/** The color of `state`'s flash right now: full tone while holding, then an ease-out toward
+ * `borderMuted`. Only meaningful while `isFlashing(state)`. The turn spine paints its glyphs in it. */
+export function flashBlend(state: FlashState, theme: Theme, now = Date.now()): Blend {
   const faded = Math.max(0, now - state.startedAt - HOLD_MS) / (FLASH_MS - HOLD_MS);
-  return blendFg(theme, state.tone, "borderMuted", 1 - Math.exp(-4 * Math.min(1, faded)), "┃");
-}
-
-/**
- * Puts `rail` in column 0 of each line. Only lines that start with a plain, uncolored space are
- * touched -- that's the rail column a settled tool/thinking block leaves blank -- so an
- * already-colored running rail, or an image escape line, passes through untouched.
- */
-export function paintRail(lines: string[], rail: string): string[] {
-  return lines.map((line) => (line.startsWith(" ") ? rail + line.slice(1) : line));
-}
-
-/** Paints the fading rail for the 400ms `state` is flashing, otherwise returns `lines` unchanged. */
-export function paintFlashRail(lines: string[], state: FlashState, theme: Theme): string[] {
-  return isFlashing(state) ? paintRail(lines, flashRail(state, theme)) : lines;
+  return blend(theme, state.tone, "borderMuted", 1 - Math.exp(-4 * Math.min(1, faded)));
 }

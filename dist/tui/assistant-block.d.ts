@@ -1,11 +1,17 @@
 import { type MarkdownTransformer, type Theme } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-export declare class AssistantBlock implements Component {
+import type { SpineMember } from "./spine.js";
+import { type FlashState } from "./tools/flash.js";
+export declare class AssistantBlock implements Component, SpineMember {
     private readonly theme;
     private readonly transformers;
     private readonly requestRender;
+    readonly spineRole = "trunk";
     private readonly container;
+    /** Each child's rows in the last render, for click routing and the spine's flash rows. */
+    private rows;
+    private rowsWidth;
     private lastMessage;
     private lastStreaming;
     private readonly timing;
@@ -39,6 +45,9 @@ export declare class AssistantBlock implements Component {
     dispose(): void;
     render(width: number): string[];
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
+    /** A thinking run that just ended flashes its rows' stretch of the turn spine (docs/tui-motion-
+     * design.md M6); `row` counts the rows of the last render. */
+    spineFlash(row: number): FlashState | undefined;
     invalidate(): void;
 }
 //# sourceMappingURL=assistant-block.d.ts.map

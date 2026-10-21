@@ -837,6 +837,23 @@ const registry = [
     },
   },
   {
+    id: "tool-exec-leading-blank",
+    async check() {
+      const { ToolExecutionComponent, initTheme } = await import("@earendil-works/pi-coding-agent");
+      initTheme("dark");
+      const clicks = [];
+      const callRows = { render: () => ["CALL"], invalidate() {}, handleMouse: (event) => { clicks.push(event.y); return { handled: true }; } };
+      const definition = { renderShell: "self", renderCall: () => callRows, renderResult: () => ({ render: () => ["RESULT"], invalidate() {} }) };
+      const component = new ToolExecutionComponent("t", "c1", {}, {}, definition, { requestRender() {} }, "/tmp");
+      component.updateResult({ content: [{ type: "text", text: "x" }], isError: false }, false);
+      assert.deepEqual(component.render(40), ["", "CALL", "RESULT"], "a self-shell tool block no longer starts with one blank row");
+      const click = { type: "click", button: "left", x: 0, y: 1, screenX: 0, screenY: 1, width: 40, height: 3, shift: false, alt: false, ctrl: false };
+      assert.ok(component.handleMouse(click)?.handled);
+      assert.equal(component.handleMouse({ ...click, y: 0, screenY: 0 }), undefined, "a click on the blank row is no longer ignored");
+      assert.deepEqual(clicks, [0], "handleMouse no longer hands a click on to its rows one row up (y - 1)");
+    },
+  },
+  {
     id: "pi-tui-marked",
     async check() {
       const { createRequire } = await import("node:module");

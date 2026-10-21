@@ -200,12 +200,13 @@ function renderContext(overrides) {
   };
 }
 
-test("tool blocks show a rail while running, then a bullet, and indent results under the call", () => {
+// The running pulse is the turn spine's (src/tui/spine.ts): a block leaves its first columns blank.
+test("tool blocks put a marker before the call and indent results under it", () => {
   const framed = toolBlock("bash", bashRenderers);
   assert.equal(framed.renderShell, "self");
   const args = { command: "npm test" };
   const running = plain(framed.renderCall(args, theme, renderContext({ args, isPartial: true })).render(80)[0]);
-  assert.equal(running, "┃  $ npm test");
+  assert.equal(running, "   $ npm test");
   const done = plain(framed.renderCall(args, theme, renderContext({ args, durationMs: 1500 })).render(80)[0]);
   assert.equal(done, "   $ npm test  1.5s");
   const result = framed.renderResult({ content: [{ type: "text", text: "ok" }] }, { expanded: false, isPartial: false }, theme, renderContext({ args }));
