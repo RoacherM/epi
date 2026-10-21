@@ -36,6 +36,14 @@ Epi 是基于 Pi SDK 的可定制终端编程助手。自有 grok 风格 TUI，�
 
 ## 最近更新
 
+**0.1.21：工具块全文悬浮窗，统一的 Vim 移动键，克制的动效**
+
+- **看工具块的完整输出**：`Ctrl+O` 展开后，单击 `read`、`bash`、`grep`/`find`/`ls`、`write`、`edit` 和 `!cmd` 块里的 `… N more lines`，在屏幕中间打开悬浮窗看全部内容：行号、`/` 搜索、`:120` 跳行、`w` 换行、`y` 复制，`q` / Esc 关闭。Pi 的 `read` 截断提示不再当成文件的一行，改写在标题里（`lines 1–955 of 1098 · 50.0KB limit`）。用法见 [命令行 · 看工具块的完整输出](docs/guide/cli.md#看工具块的完整输出)。
+- **移动键统一（行为变化）**：悬浮窗、`/preview`、`/review`、`/trace` 用同一套键：`j`/`k` 可带数字（`10j`），**`gg` 到顶**（单个 `g` 不再到顶），`G` 到底，`120G` 跳到第 120 行，`b` / PageUp 上翻。例外：`/trace` 详情里数字仍是切栏目，`/preview` 文件列表里空格仍是标记。
+- **动效**：启动页的 logo 流光和分割线脉冲只播约 4 秒开场就静止；运行中的工具、思考和 `!cmd` 块左侧竖轨有一道颜色脉冲往下走；完成时的绿色/红色闪烁改为 400ms 内淡出。状态行仍是原来的盲文 spinner。扩展可以用 `ctx.ui.setWorkingIndicator` 换掉它（以前会提示不支持）。
+- 窄到 12 列时启动页的标题不再超出边框。
+- 模型看到的内容没有变化（`model-snapshot` 无差异）。开发者：只读查看组件拆成了可复用的模块，组合方式见 [tui-buffer-components.md](docs/tui-buffer-components.md)。
+
 **0.1.20：修复安装（0.1.19 装不上）**
 
 0.1.19 全局安装后启动会报 `@earendil-works/pi-codemode` 缺少 `MCP_TYPESCRIPT_PREAMBLE`：npm 11 在全局安装 tarball 时忽略了包里的 `npm-shrinkwrap.json`，把 Pi 的传递依赖从 1.1.0 升到了不兼容的 1.3.0。0.1.20 把 Pi 的**全部传递依赖也在 `package.json` 里精确钉到 1.1.0**，并加了一个测试防再发。用 `epi update` 升到 0.1.20 即可；已装坏的 0.1.19 请重装或升级。
