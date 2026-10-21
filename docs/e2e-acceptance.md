@@ -15,7 +15,7 @@
 
 ## 2. 怎么跑
 
-- **Herdr 路线**（主控可以自动走）：`P=<pane> source scripts/dev/herdr.sh`，用 `startepi` / `say` / `key` / `scr` 操作。粘贴图片时用 `EPI_TEST_CLIPBOARD_FILE=<png>` 启动，不碰真实剪贴板。Herdr 发不出的原始按键序列用 `herdr pane send-text $'…'`。
+- **Orca 路线**（主控可以自动走，2026-10-21 起取代 Herdr 路线，操作见 [dev-workflow.md](dev-workflow.md) 第 4 节）。以下 Herdr 路线仅作历史记录：`P=<pane> source scripts/dev/herdr.sh`，用 `startepi` / `say` / `key` / `scr` 操作。粘贴图片时用 `EPI_TEST_CLIPBOARD_FILE=<png>` 启动，不碰真实剪贴板。Herdr 发不出的原始按键序列用 `herdr pane send-text $'…'`。
 - **Ghostty 路线**（标 🖐 的条目必须在这里跑）：直接在 Ghostty 窗口运行工具版。Ghostty 会发送 kitty 键盘协议的按下 + 松开事件，会渲染图片预览，还会读写真实剪贴板，这些 Herdr 都模拟不全。主控在 Herdr 里用 `send-text $'\e[118;5u'`（按下）加 `$'\e[118;5:3u'`（松开）可以近似，但最终以 Ghostty 为准。
 - **测试项目**：`scratchpad` 下建一个目录，放 `.epi/epi.json`（声明 `epi:mcp`）和 `.epi/mcp.json`（两个测试服务：`test/fixtures/mcp-server.mjs`，一个默认曝光，一个 `"exposure": "direct"`）。
 - **模型**：`--provider magpie --model claude/claude-sonnet-5-5 --thinking high`。

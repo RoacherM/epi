@@ -34,7 +34,7 @@
 | 修复前失败 | 在临时副本里跑：`git archive <修复前的提交> \| tar -x -C <dir>`，链好 `node_modules`，放进新测试，在禁网沙箱里跑 | 新测试在修复前失败、修复后通过。**不用 `git stash`**（所有 worktree 共用一个 stash 栈） |
 | 模型可见内容 | `node scripts/model-snapshot.mjs --diff test/snapshots/model-visible.json` | 预期之外的变化要在报告里说明；变了就要考虑重跑 benchmark 基线 |
 | 不改行为的重构 | 改动前后各跑一遍受影响的命令（`--help`、子命令、`-p` 配假模型、`--dry-run` 等），比对 stdout、stderr、退出码 | 逐字节一致 |
-| TUI 改动 | Herdr 里用真实终端、真实模型走一遍（[e2e-acceptance.md](e2e-acceptance.md) 对应条目） | 按清单 |
+| TUI 改动 | Orca 里用真实终端、真实模型走一遍（操作见 [dev-workflow.md](dev-workflow.md) 第 4 节，清单见 [e2e-acceptance.md](e2e-acceptance.md) 对应条目） | 按清单 |
 
 ## 4. 审查清单
 
