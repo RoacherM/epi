@@ -3,18 +3,18 @@
 // dim `∴ 2.1s`. Pi's `AssistantMessageComponent` can't do this: `hideThinkingBlock` /
 // `hiddenThinkingLabel` are one flag and one static string for the *whole* component, but a message
 // can hold several thinking runs, each needing its own duration and its own click-to-expand state.
-// So thinking is rendered here, from scratch; plain text and tool-call bookkeeping (markdown,
-// transformers, the aborted/error/length footer) still go through Pi's real component -- that part
-// isn't broken, just reused per text run instead of once for the whole message.
-import { AssistantMessageComponent, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+// So thinking is rendered here, from scratch. Text runs go through `MeasuredMarkdown` (body text at a
+// reading measure, code blocks at the full width, docs/tui-transcript-layout-design.md §4-F), built
+// the way Pi's component builds its per-part `Markdown`: trimmed text, the assistant transformers.
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { fit, formatDuration, markPromptZone, splitPromptZone } from "./chrome.js";
 import { rewritePiText } from "../pi-output.js";
+import { CONTENT_COLUMN, MeasuredMarkdown } from "./markdown-layout.js";
 import { breathe, motionTime, railGlyph } from "./motion.js";
 import { piTui } from "./pi-tui.js";
 import { createFlashState, disposeFlash, paintFlashRail, startFlash } from "./tools/flash.js";
-// Matches transcript.ts's CONTENT_PAD: a 1-column rail plus 2 columns of padding, so thinking lines
-// up under the assistant text next to it.
-const CONTENT_PAD = 3;
+// The content column (R3): expanded thinking and the error lines start where the reply text does.
+const CONTENT_PAD = CONTENT_COLUMN;
 // The `∴` sits in the marker column, like a tool's `◆` (docs/tui-transcript-layout-design.md R3).
 const MARKER_PAD = 3;
 const STREAMING_TAIL_LINES = 3;
@@ -253,7 +253,6 @@ export class AssistantBlock {
      * a text run with no text (tool calls only), or a collapsed thinking run that no text follows. */
     piece(segments, segmentIndex) {
         const segment = segments[segmentIndex]; // in range: called with an index of `segments`
-        const message = this.lastMessage; // set by updateContent before any rebuild
         if (segment.kind === "thinking") {
             const text = segment.parts.map((part) => part.thinking.trim()).filter((part) => part !== "").join("\n\n");
             if (text === "")
@@ -276,26 +275,17 @@ export class AssistantBlock {
             };
             return new ThinkingBlock(this.theme, text, active, timing, expanded, toggle, this.transformers, this.lastStreaming, this.flash(segment.startIndex));
         }
-        if (!segment.parts.some((part) => part.type === "text" && part.text.trim() !== ""))
+        // A text/tool-call run: one `MeasuredMarkdown` per non-blank text part, stacked with no gap, as
+        // Pi's AssistantMessageComponent stacks its `Markdown`s (tool calls draw nothing here). The
+        // message's real stopReason (aborted/error/length) is handled once, in rebuild(), not per run.
+        const transform = (markdown, availableWidth) => applyTransformers(markdown, "assistant", this.lastStreaming, availableWidth, this.transformers);
+        const texts = segment.parts.flatMap((part) => (part.type === "text" && part.text.trim() !== "" ? [part.text.trim()] : []));
+        if (texts.length === 0)
             return undefined;
-        // A text/tool-call run: Pi's own component, fed only this run's `content` and a neutral
-        // `stopReason` -- the real stopReason (aborted/error/length) is handled once, below, for the
-        // whole message, not per run (Pi's version only ever had one run to worry about). Constructed
-        // with no initial message so it doesn't render once with the wrong (default `false`)
-        // isStreaming before this updateContent call gives it the real one.
-        const synthetic = { ...message, content: segment.parts, stopReason: "stop" };
-        const component = new AssistantMessageComponent(undefined, false, getMarkdownTheme(), undefined, CONTENT_PAD, this.transformers);
-        component.updateContent(synthetic, this.lastStreaming);
-        return {
-            // Pi's component always opens with a blank spacer row; rebuild() places the blank rows itself.
-            // `visibleWidth`, not `.trim()`: Pi also prepends a zero-width OSC133 marker to this exact row.
-            render: (width) => {
-                const rendered = component.render(width);
-                return piTui.visibleWidth(rendered[0] ?? "") > 0 ? rendered : rendered.slice(1);
-            },
-            invalidate: () => component.invalidate(),
-            handleMouse: (mouseEvent) => component.handleMouse(mouseEvent),
-        };
+        const stack = new piTui.Container();
+        for (const text of texts)
+            stack.addChild(new MeasuredMarkdown(this.theme, text, transform));
+        return stack;
     }
     /** Whether text (not a tool call) comes right after thinking segment `index`. While the message
      * streams, an empty text part counts too, so the `∴` row doesn't blink out for the moment between

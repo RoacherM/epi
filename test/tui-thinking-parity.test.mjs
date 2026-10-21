@@ -70,15 +70,16 @@ test("expanded thinking renders byte-for-byte like Pi's AssistantMessageComponen
     const innerWidth = piTui.visibleWidth(body[0] ?? "");
     assert.ok(body.every((line) => piTui.visibleWidth(line) === innerWidth), `body rows must share one width at ${width}`);
 
-    const pi = new AssistantMessageComponent(undefined, false, getMarkdownTheme(), undefined, 3, [transformer]);
+    // Padded to the content column (5), where the reply text starts too (docs/tui-transcript-layout-design.md R3).
+    const pi = new AssistantMessageComponent(undefined, false, getMarkdownTheme(), undefined, 5, [transformer]);
     pi.updateContent(message, false);
     // Drop Pi's leading spacer row; nothing follows the thinking, so there is no trailing one.
     const expected = pi.render(innerWidth).map(stripOsc).slice(1);
 
     const text = body.join("\n");
     assert.ok(text.includes(thinkingColor), `thinking body must use the thinkingText colour at width ${width}`);
-    // Markdown's content width: the inner width minus 3 columns of padding on each side.
-    assert.match(text.replace(/\x1b\[[0-9;]*m/g, ""), new RegExp(`Injected W=${innerWidth - 6}\\b`),
+    // Markdown's content width: the inner width minus 5 columns of padding on each side.
+    assert.match(text.replace(/\x1b\[[0-9;]*m/g, ""), new RegExp(`Injected W=${innerWidth - 10}\\b`),
       `the transformer must run with Markdown's content width at width ${width}`);
     assert.deepEqual(body, expected, `expanded thinking differs from Pi's at width ${width}`);
   }

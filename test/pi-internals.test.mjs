@@ -837,6 +837,49 @@ const registry = [
     },
   },
   {
+    id: "pi-tui-marked",
+    async check() {
+      const { createRequire } = await import("node:module");
+      const piEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
+      const piTuiEntry = createRequire(piEntry).resolve("@earendil-works/pi-tui");
+      const markdownPath = join(dirname(piTuiEntry), "components", "markdown.js");
+      assert.match(readFileSync(markdownPath, "utf8"), /^import \{[^}]*\bMarked\b[^}]*\} from "marked";$/m, `${markdownPath} no longer parses with the "marked" package`);
+      const { Lexer } = await import(pathToFileURL(createRequire(piTuiEntry).resolve("marked")).href);
+      const source = "Intro\n\n- a\n  ```js\n  x\n  ```\n\n```ts title\ncode\n```\n\n| a |\n|---|\n| 1 |\n\nend";
+      const tokens = Lexer.lex(source);
+      assert.equal(tokens.map((token) => token.raw).join(""), source, "top-level token raws no longer add up to the source");
+      assert.deepEqual(tokens.filter((token) => token.type !== "space").map((token) => token.type), ["paragraph", "list", "code", "table", "paragraph"]);
+      assert.equal(tokens.find((token) => token.type === "code").lang, "ts title");
+    },
+  },
+  {
+    id: "markdown-codeblock-border",
+    async check() {
+      const { getMarkdownTheme, initTheme } = await import("@earendil-works/pi-coding-agent");
+      const { piTui } = await import(pathToFileURL(join(root, "dist", "tui", "pi-tui.js")).href);
+      initTheme("dark");
+      const seen = [];
+      const plain = (text) => text;
+      const theme = { ...getMarkdownTheme(), listBullet: plain, codeBlock: plain, highlightCode: undefined, codeBlockBorder: (text) => { seen.push(text); return text.length > 3 ? "LONGFENCELABEL" : "C"; } };
+      const rows = new piTui.Markdown("- a\n  ```ts\n  x\n  ```", 0, 0, theme).render(10).map((row) => row.trimEnd());
+      assert.deepEqual(seen, ["```ts", "```"], "codeBlockBorder no longer receives the fence text");
+      // The fence row is wrapped like any other: a label longer than the row spills onto the next one.
+      assert.deepEqual(rows, ["- a", "  LONGFENC", "  ELABEL", "    x", "  C"]);
+    },
+  },
+  {
+    id: "markdown-list-bullet",
+    async check() {
+      const { getMarkdownTheme, initTheme } = await import("@earendil-works/pi-coding-agent");
+      const { piTui } = await import(pathToFileURL(join(root, "dist", "tui", "pi-tui.js")).href);
+      initTheme("dark");
+      const seen = [];
+      const theme = { ...getMarkdownTheme(), listBullet: (marker) => { seen.push(marker); return marker; } };
+      new piTui.Markdown("- a\n* b\n\n1. c\n2. d\n\n- [x] e", 0, 0, theme).render(40);
+      assert.deepEqual(seen, ["- ", "- ", "1. ", "2. ", "- [x] "], "listBullet no longer receives Pi's own list markers");
+    },
+  },
+  {
     id: "edit-diff-format",
     async check() {
       const { generateDiffString } = await import("@earendil-works/pi-coding-agent");
