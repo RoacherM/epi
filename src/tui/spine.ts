@@ -142,16 +142,18 @@ function paintRow(context: PaintContext, line: string, glyph: Glyph, member: Spi
   return overlay(line, branch.paint("├─"), 2);
 }
 
-/** Rows a block's image keeps for itself: the image's line and the empty rows after it, which
- * pi-tui reserves for the image's height (and searches back through to draw an image whose first
- * row has scrolled off) -- they must stay empty. */
+/** Rows a block's image keeps for itself: the image's line and the empty rows next to it, which
+ * pi-tui reserves for the image's height -- after the line for Kitty (pi-tui searches back through
+ * them to draw an image whose first row has scrolled off), before it for iTerm2 (the line moves the
+ * cursor up over them to draw). They must stay empty and must never change between frames. */
 function imageRows(lines: readonly string[]): Set<number> {
   const rows = new Set<number>();
-  let inImage = false;
+  const empty = (row: number) => row >= 0 && row < lines.length && plain(lines[row]!) === "" && !IMAGE.test(lines[row]!);
   lines.forEach((line, row) => {
-    if (IMAGE.test(line)) inImage = true;
-    else if (plain(line) !== "") inImage = false;
-    if (inImage) rows.add(row);
+    if (!IMAGE.test(line)) return;
+    rows.add(row);
+    for (let above = row - 1; empty(above); above -= 1) rows.add(above);
+    for (let below = row + 1; empty(below); below += 1) rows.add(below);
   });
   return rows;
 }

@@ -135,7 +135,7 @@
 | W9 | 主题色 | 日间 `mdCodeBlock` 定为 `#5c6b77`，还没对截图定稿 |
 | W2/W7/W8 | `src/tui/spine.ts` + `GroupedMessages` 重写为 `Placed` 布局 | 回合 = 声明了 `spineRole` 的块的连续段（白名单），单独的 `!cmd` 不画脊柱。**动效只在运行中回合的末端 8 行（tip）**，其上各行已与沉淀后完全相同：pi-tui 主屏渲染器遇到屏外行变化会整屏重绘（清 scrollback），整条脊柱一起脉冲在超过一屏的回合上每帧触发（terminal-progress 测试超时暴露）。运行中工具的 `├─` 常亮（静态色，不逐帧变）。`AssistantBlock` 改为自己记录子块行范围（逐行闪烁与点击分派共用，`src/tui/rows.ts`）。`Worked for` 改为 `TurnFooter`（dim、第 4 列起），由脊柱画 `╰─`。回放仍没有 footer，脊柱止于最后一行 |
 
-合并前审查第 1 轮（`epi -p` 审查会话，NOT ACCEPTABLE，6 条，均 CONFIRMED，已全部修复并各加回归测试）：图片保留行被画上脊柱，导致半滚出屏幕的图片消失（脊柱跳过图片行及其后的空保留行）；完成闪烁与运行中分支在 tip 之外变色（闪烁、分支高亮也只在 tip 内，闪烁只在最新回合的 tip）；转换器改写的代码段在改宽度或 invalidate 后不更新（缓存按源文本 `setText`）；回放后发新消息时上一回合被当成活回合（回合之后出现非回合块即不再活）；错误结果仍显示部分结果留下的摘要（出错时不显示摘要）；两个无用导出。
+合并前审查第 1 轮（`epi -p` 审查会话，NOT ACCEPTABLE，6 条，均 CONFIRMED，已全部修复并各加回归测试）：图片保留行被画上脊柱，导致半滚出屏幕的图片消失（脊柱跳过图片行及其后的空保留行）；完成闪烁与运行中分支在 tip 之外变色（闪烁、分支高亮也只在 tip 内，闪烁只在最新回合的 tip）；转换器改写的代码段在改宽度或 invalidate 后不更新（缓存按源文本 `setText`）；回放后发新消息时上一回合被当成活回合（回合之后出现非回合块即不再活）；错误结果仍显示部分结果留下的摘要（出错时不显示摘要）；两个无用导出。第 2 轮（NOT ACCEPTABLE，1 条 CONFIRMED）：iTerm2 图片的保留空行在图片行**之前**（光标上移后绘制），第 1 轮只保护了 Kitty 的后置空行——现在图片行前后相邻的空行都不画，回归测试覆盖两种协议和动画下一帧。
 
 pi-internals 新登记：`tool-exec-leading-blank`、`pi-tui-marked`、`markdown-codeblock-border`、`markdown-list-bullet`（§4 的 `tool-exec-durationms` 不需要，见 W1）。
 

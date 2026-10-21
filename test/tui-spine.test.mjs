@@ -281,31 +281,43 @@ test("a new prompt after a replay doesn't wake the replayed turn's spine", () =>
   assert.equal(after[row], before[row]);
 });
 
-test("an image's rows in a tool result stay empty for pi-tui to draw it", async (t) => {
-  const { ToolEntry, GroupedMessages } = await import("../dist/tui/tools/group.js");
-  const caps = piTui.getCapabilities();
-  piTui.setCapabilities({ ...caps, images: "kitty" });
-  t.after(() => piTui.setCapabilities(caps));
-  // A 320x320 PNG header is enough for pi-tui to size the image.
-  const png = Buffer.alloc(33);
-  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]).copy(png);
-  png.writeUInt32BE(320, 16);
-  png.writeUInt32BE(320, 20);
-  const entry = new ToolEntry("image", "img", {}, {
-    renderShell: "self",
-    renderCall: () => ({ render: () => ["   ◆ image"], invalidate() {} }),
-    renderResult: () => ({ render: () => [], invalidate() {} }),
-  }, { requestRender() {} }, "/w", undefined);
-  entry.updateResult({ content: [{ type: "image", mimeType: "image/png", data: png.toString("base64") }], isError: false });
-  const messages = new piTui.Container();
-  messages.addChild(entry);
-  messages.addChild({ spineRole: "trunk", render: () => ["     next answer"], invalidate() {} });
-  const original = messages.render(80);
-  const painted = new GroupedMessages(messages, { requestRender() {} }, theme).render(80);
-  const anchor = original.findIndex((row) => row.includes("\x1b_G"));
-  assert.ok(anchor > 0 && original[anchor + 1] === "", "the image reserves empty rows after its first");
-  for (let row = anchor; row < painted.length && original[row] !== "     next answer"; row += 1) {
-    if (original[row] === "" || row === anchor) assert.equal(painted[row], original[row], `image row ${row} untouched`);
-  }
-  assert.ok(painted.some((row) => strip(row) === " │   next answer"), "the turn's text after the image still gets the spine");
-});
+for (const protocol of ["kitty", "iterm2"]) {
+  // Kitty reserves the empty rows after the image's line, iTerm2 the rows before it.
+  test(`an image's rows (${protocol}) stay empty for pi-tui to draw it, frame after frame`, async (t) => {
+    const { ToolEntry, GroupedMessages } = await import("../dist/tui/tools/group.js");
+    const caps = piTui.getCapabilities();
+    piTui.setCapabilities({ ...caps, images: protocol });
+    const realNow = Date.now;
+    let now = 10_000;
+    Date.now = () => now;
+    t.after(() => { piTui.setCapabilities(caps); Date.now = realNow; });
+    // A 320x320 PNG header is enough for pi-tui to size the image.
+    const png = Buffer.alloc(33);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]).copy(png);
+    png.writeUInt32BE(320, 16);
+    png.writeUInt32BE(320, 20);
+    const entry = new ToolEntry("image", "img", {}, {
+      renderShell: "self",
+      renderCall: () => ({ render: () => ["   ◆ image"], invalidate() {} }),
+      renderResult: () => ({ render: () => [], invalidate() {} }),
+    }, { requestRender() {} }, "/w", undefined);
+    entry.updateResult({ content: [{ type: "image", mimeType: "image/png", data: png.toString("base64") }], isError: false });
+    t.after(() => entry.dispose());
+    const messages = new piTui.Container();
+    messages.addChild(entry);
+    messages.addChild({ spineRole: "trunk", render: () => ["     next answer"], invalidate() {} });
+    const group = new GroupedMessages(messages, { requestRender() {} }, theme, () => true);
+    const original = messages.render(80);
+    const image = original.findIndex((row) => row.includes("\x1b_G") || row.includes("\x1b]1337;File="));
+    const reserved = original.flatMap((row, index) => (row === "" && Math.abs(index - image) < 40 ? [index] : []));
+    assert.ok(image > 0 && reserved.length > 5, "the image reserves empty rows");
+    const first = group.render(80);
+    now += 200;
+    const second = group.render(80);
+    for (const row of [image, ...reserved]) {
+      assert.equal(first[row], original[row], `image row ${row} untouched`);
+      assert.equal(second[row], original[row], `image row ${row} untouched a frame later`);
+    }
+    assert.ok(first.some((row) => /^ \S+next answer|[│┃]   next answer/.test(strip(row))), "the turn's text after the image still gets the spine");
+  });
+}
