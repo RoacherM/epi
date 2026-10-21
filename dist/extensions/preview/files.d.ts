@@ -1,7 +1,5 @@
-/** Text that is safe to draw: the terminal must never interpret what a file is called or contains.
- * ESC becomes a visible mark; other C0 and C1 controls (a lone U+009B is CSI to some terminals),
- * line breaks and bidi overrides are removed. Tabs are left to the caller. */
-export declare function printable(text: string): string;
+import { printable } from "../../tui/buffer/search.js";
+export { printable };
 export interface Entry {
     /** The name on disk, for file operations. */
     name: string;

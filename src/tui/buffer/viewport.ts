@@ -1,0 +1,176 @@
+// A scrolling, searchable view over lines of already-styled text (docs/tui-buffer-components.md):
+// line-number gutter, optional wrapping, and TextNavigation's keys (motions, `/`, `n`/`N`, `:N`).
+// It draws only the body rows and reports the position; the host draws the frame around them.
+import { piTui } from "../pi-tui.js";
+import { type NavigationTarget, TextNavigation } from "./navigation.js";
+
+const { truncateToWidth, visibleWidth, wrapTextWithAnsi } = piTui;
+
+export interface BufferContent {
+  /** Styled lines, one per logical line. */
+  lines: readonly string[];
+  /** Number shown for lines[0] in the gutter; no gutter when undefined (text that carries its own
+   * numbers, such as a diff). `:N` and `NG` count from it either way. */
+  firstLineNumber?: number;
+}
+
+export interface BufferStyle {
+  gutter(text: string): string;
+  separator(text: string): string;
+  match(text: string): string;
+}
+
+/** What one key did, for the host: close the view, copy its text, or just redraw. */
+export type BufferInputResult = "close" | "yank" | "handled" | "ignored";
+
+interface Row {
+  text: string;
+  /** Index of the logical line this row belongs to. */
+  line: number;
+  continuation: boolean;
+}
+
+export class BufferViewport {
+  scrollTop = 0;
+  wrap = false;
+  readonly navigation: TextNavigation;
+  private height = 1;
+  private rowsCache: { width: number; wrap: boolean; rows: Row[] } | undefined;
+  private lastRows: Row[] = [];
+  private renderedWidth: number | undefined;
+
+  constructor(
+    private readonly content: BufferContent,
+    private readonly style: BufferStyle,
+  ) {
+    const target: NavigationTarget = {
+      rows: () => this.lastRows.map((row) => row.text),
+      top: () => this.scrollTop,
+      setTop: (row) => {
+        this.scrollTop = row;
+      },
+      maxTop: () => this.maxScroll,
+      page: () => this.height,
+      goToLine: (line) => ({ row: this.rowOfLine(line - this.firstLineNumber) }),
+    };
+    this.navigation = new TextNavigation(target);
+  }
+
+  get mode(): "NORMAL" | "SEARCH" | "COMMAND" {
+    const prompt = this.navigation.prompt;
+    if (prompt === undefined) return "NORMAL";
+    return prompt.kind === "/" ? "SEARCH" : "COMMAND";
+  }
+
+  get lineCount(): number {
+    return this.content.lines.length;
+  }
+
+  private get firstLineNumber(): number {
+    return this.content.firstLineNumber ?? 1;
+  }
+
+  /** The logical-line range on screen, 1-based in the content's own numbering. */
+  visibleLines(): { first: number; last: number } {
+    const top = this.lastRows[this.scrollTop];
+    const bottom = this.lastRows[Math.min(this.lastRows.length, this.scrollTop + this.height) - 1];
+    return {
+      first: (top?.line ?? 0) + this.firstLineNumber,
+      last: (bottom?.line ?? 0) + this.firstLineNumber,
+    };
+  }
+
+  get rowCount(): number {
+    return this.lastRows.length;
+  }
+
+  /** Rows the content takes at `width` (wrapping counts), before any render. */
+  measure(width: number): number {
+    return this.rows(width).length;
+  }
+
+  get maxScroll(): number {
+    return Math.max(0, this.lastRows.length - this.height);
+  }
+
+  handleInput(data: string): BufferInputResult {
+    const result = this.navigation.handle(data);
+    if (result.kind === "taken") return "handled";
+    if (data === "w") {
+      this.toggleWrap();
+      return "handled";
+    }
+    if (data === "y") return "yank";
+    if (data === "q" || piTui.matchesKey(data, "escape")) return "close";
+    return "ignored";
+  }
+
+  /** Mouse wheel: `delta` rows, positive down. */
+  wheel(delta: number): void {
+    this.navigation.scrollTo(this.scrollTop + delta);
+  }
+
+  /**
+   * `height` body rows at `width` columns. Records both for the next key, so paging and the
+   * position readout match what was drawn.
+   */
+  render(width: number, height: number): string[] {
+    this.height = Math.max(1, height);
+    this.renderedWidth = width;
+    const rows = this.rows(width);
+    this.lastRows = rows;
+    this.scrollTo(this.scrollTop);
+    const gutterWidth = this.gutterWidth();
+    const textWidth = Math.max(1, width - (gutterWidth === 0 ? 0 : gutterWidth + 3));
+    const shown = rows.slice(this.scrollTop, this.scrollTop + this.height).map((row) => {
+      const text = truncateToWidth(this.navigation.highlight(row.text, this.style.match), textWidth, "…");
+      if (gutterWidth === 0) return text;
+      const number = row.continuation ? " ".repeat(gutterWidth) : String(row.line + this.firstLineNumber).padStart(gutterWidth);
+      return `${this.style.gutter(number)} ${this.style.separator(row.continuation ? "┆" : "│")} ${text}`;
+    });
+    while (shown.length < this.height) shown.push("");
+    return shown;
+  }
+
+  private gutterWidth(): number {
+    if (this.content.firstLineNumber === undefined) return 0;
+    return Math.max(3, String(this.firstLineNumber + this.content.lines.length - 1).length);
+  }
+
+  private rows(width: number): Row[] {
+    const cached = this.rowsCache;
+    if (cached?.width === width && cached.wrap === this.wrap) return cached.rows;
+    const gutterWidth = this.gutterWidth();
+    const textWidth = Math.max(1, width - (gutterWidth === 0 ? 0 : gutterWidth + 3));
+    const rows: Row[] = [];
+    this.content.lines.forEach((text, line) => {
+      if (!this.wrap || visibleWidth(text) <= textWidth) {
+        rows.push({ text, line, continuation: false });
+        return;
+      }
+      wrapTextWithAnsi(text, textWidth).forEach((part, index) => rows.push({ text: part, line, continuation: index > 0 }));
+    });
+    this.rowsCache = { width, wrap: this.wrap, rows };
+    return rows;
+  }
+
+  private scrollTo(row: number): void {
+    this.scrollTop = Math.max(0, Math.min(this.maxScroll, Math.round(row)));
+  }
+
+  /** The first row of logical line `line` (0-based), clamped to the content. */
+  private rowOfLine(line: number): number {
+    const clamped = Math.max(0, Math.min(this.content.lines.length - 1, line));
+    const row = this.lastRows.findIndex((candidate) => candidate.line === clamped);
+    return row < 0 ? clamped : row;
+  }
+
+  private toggleWrap(): void {
+    const topLine = this.lastRows[this.scrollTop]?.line ?? 0;
+    this.wrap = !this.wrap;
+    this.navigation.status = { text: `wrap ${this.wrap ? "on" : "off"}`, tone: "info" };
+    // Rebuild the rows now (not at the next render) so the same logical line stays at the top.
+    if (this.renderedWidth !== undefined) this.lastRows = this.rows(this.renderedWidth);
+    this.navigation.scrollTo(this.rowOfLine(topLine));
+  }
+}

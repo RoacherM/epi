@@ -1,12 +1,12 @@
 # Epi 开发流程
 
-2026-09-30 起执行；2026-10-01 起改由 epi 在 Herdr 里自己开发自己；2026-10-06 起流程全 epi 化：主控、审查、终审、阅读都是 epi 会话、用 epi 内部已配置的模型，不再依赖 Claude Code / Fable（decisions.md WF1）。流程见 [dev-workflow-herdr.md](dev-workflow-herdr.md)，代码规范、合并前检查和审查清单见 [code-quality.md](code-quality.md)。本文第 1–2 节是当前流程的摘要（完整版以 dev-workflow-herdr.md 第 1–3 节为准）；第 3 节是任务说明的写法，第 4 节是 Herdr 实测的操作，第 5–6 节是不可违反的约定和仓库文件约定。记录的是开发 Epi 时实际在用、并和用户确认过的做法。产品层面的约定见 [development.md](development.md)，关键决策见 [decisions.md](decisions.md)。
+2026-09-30 起执行；2026-10-01 起改由 epi 在 Herdr 里自己开发自己；2026-10-06 起流程全 epi 化：主控、审查、终审、阅读都是 epi 会话、用 epi 内部已配置的模型，不再依赖 Claude Code / Fable（decisions.md WF1）。流程见 [dev-workflow-herdr.md](dev-workflow-herdr.md)，代码规范、合并前检查和审查清单见 [code-quality.md](code-quality.md)。本文第 1–2 节是当前流程的摘要（完整版以 dev-workflow-herdr.md 第 1–3 节为准）；第 3 节是任务说明的写法，第 4 节是 Orca 实测的操作，第 5–6 节是不可违反的约定和仓库文件约定。记录的是开发 Epi 时实际在用、并和用户确认过的做法。产品层面的约定见 [development.md](development.md)，关键决策见 [decisions.md](decisions.md)。
 
 ## 1. 角色分工
 
 | 角色 | 谁 | 做什么 |
 |---|---|---|
-| 主控 | epi 主会话 | 和用户讨论需求、写设计文档、拆任务、审查和验证每个任务、合并、在 Herdr 里实测、向用户汇报 |
+| 主控 | epi 主会话 | 和用户讨论需求、写设计文档、拆任务、审查和验证每个任务、合并、在 Orca 里实测、向用户汇报 |
 | 顾问 | `epi -p` 派出的独立只读会话（epi 内部模型；主控把背景材料写成文件交给它，它看不到主控会话） | 定计划之前、同样的问题第二次出现、宣布完成或合并之前给意见，见 [dev-workflow-herdr.md](dev-workflow-herdr.md) 第 2 节 |
 | 编码 | Herdr 里的 epi（magpie opus-5.5，high），见 [code-quality.md](code-quality.md) 第 1 节 | 在独立 git worktree 里实现一个边界清楚的任务，自带测试，提交后交回 |
 | 终审 | `epi -p` 派出的只读审查会话（epi 内部模型） | 大节点审查，主控打审查包 |
@@ -22,7 +22,7 @@
   → subagent 在独立 worktree 实现（见第 3 节）
   → 主控审查和验证（code-quality.md 第 3、4 节）──不通过──▶ 退回原作者修改
   → 通过 → 问顾问 → 主控合并（--no-ff），跑完整测试
-  → Herdr 实测：真实终端 + 真实模型（第 4 节）
+  → Orca 实测：真实终端 + 真实模型（第 4 节）
   → 更新质量记录，向用户汇报：做了什么、怎么验证的、文件在哪、还没做什么
 ```
 
@@ -49,17 +49,18 @@
 6. **边界**：同时在跑的其他任务改哪些文件，本任务尽量不碰。
 7. **交付**：在 worktree 里提交（附 `Co-Authored-By`），报告分支、提交、每项的原因和修法、测试数、没验证的地方。
 
-## 4. 在 Herdr 里实测
+## 4. 在 Orca 里实测
 
-自动测试之外，每批改动合并后都在 Herdr 的 pane 里用真实终端、真实模型走一遍。
+2026-10-21 起用 Orca 实测，不再用 Herdr（用户确认："后续无须在 herdr 中测试，目前主力是用 orca"）。自动测试之外，每批改动合并后都在 Orca 的终端里用真实终端、真实模型走一遍。命令以 `orca skills get orca-cli` 输出的版本匹配指南为准。
 
-- 先确认在 Herdr 里（`HERDR_ENV=1`），用 `herdr pane list --workspace "$HERDR_WORKSPACE_ID"` 找到给测试用的 pane（按 JSON 里的 `pane_id`，不按位置猜）；没有就 `herdr pane split --current --no-focus` 开一个。同一个 tab 里用户自己的会话不要碰。
-- 启动：`herdr pane run <pane> "node dist/cli.js"`（先 `npm run build`），等 `herdr pane wait-output <pane> --match commands`。
-- 操作：`herdr pane send-text` 输入文字、`herdr pane send-keys` 发按键（PageUp 这类没有名字的键，用 `send-text $'\e[5~'` 发原始序列）；看画面用 `herdr pane read <pane> --source visible`。
-- 安全：发 Ctrl+D 之前先用 `herdr pane process-info --pane <pane>` 确认前台还是 `node`，否则会关掉 shell 连同 pane；启动前也要确认前台是 shell，不然命令会被当成消息发给模型。退出要等运行时清理完（可能超过 2 秒）。
+- 开测试终端：`orca terminal create --worktree active --title epi-smoke --json`，记下返回的 `handle`。用户自己的终端不要碰，测完 `orca terminal close --terminal <handle> --json` 关掉。
+- 启动：`orca terminal send --terminal <handle> --text "node dist/cli.js" --enter --json`（先 `npm run build`；启动前确认前台是 shell，不然命令会被当成消息发给模型）。
+- 操作：`--text` 不加 `--enter` 发单个按键或原始序列（`$'\x0f'` 是 Ctrl+O，`$'\x1b'` 是 Esc，`$'\x1b[5~'` 是 PageUp）；鼠标点击发 SGR 序列 `$'\x1b[<0;<列+1>;<行+1>M\x1b[<0;<列+1>;<行+1>m'`。
+- 看画面：`orca terminal read --terminal <handle> --json`，取 `result.terminal.tail`。`tail` 会去掉空行，算点击坐标时按布局补回（顶部空行、头栏、空行、每块之间的空行）。
+- 安全：Ctrl+D（`$'\x04'`）之前确认前台还是 epi；退出要等运行时清理完（可能超过 2 秒）。
 - 剪贴板：测粘贴时 `pbpaste` 备份、`pbcopy` 测试、测完放回；图片等非文字内容备份不了，要先告诉用户。
-- 对照 grok：另开一个 pane 输入 `agent` 启动 grok-build。Herdr 的 `send-text` 不会被 grok 当成"粘贴"，测粘贴要用 `pbcopy` + Ctrl+V。grok 的行为（实测）写进设计文档时注明"实测"。
-- 画面重影一类问题，先用 `script` 录下 Epi 的原始输出，在 pyte 里回放；回放正常就是终端（Herdr）的问题，不是 Epi 的。
+- 对照 grok：另开一个终端输入 `agent` 启动 grok-build，行为（实测）写进设计文档时注明"实测"。
+- 画面重影一类问题，先用 `script` 录下 Epi 的原始输出，在 pyte 里回放；回放正常就是终端的问题，不是 Epi 的。
 
 ## 5. 不可违反的约定
 

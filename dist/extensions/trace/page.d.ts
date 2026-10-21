@@ -33,6 +33,8 @@ export declare class TracePage {
     /** `waterfall`: bar positioned on the visible time axis; `duration`: bar length by duration. */
     private readonly finder;
     private prompt;
+    private readonly listMotions;
+    private readonly detailMotions;
     private message;
     private cache;
     private readonly unsubscribe;
@@ -46,9 +48,13 @@ export declare class TracePage {
     handleInput(data: string): void;
     private close;
     private moveCursor;
+    /** The shared motion keys on the step list: `gg` stops following, `G` follows the latest. */
+    private moveList;
     private listKeys;
     private openDetail;
     private detailKeys;
+    /** The shared motion keys on the detail pane: they scroll it. */
+    private moveDetail;
     private submit;
     private findNext;
     private bodyHeight;

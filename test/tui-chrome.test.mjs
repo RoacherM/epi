@@ -94,7 +94,9 @@ test("turn status shows nothing when idle and hides the phase timer below 60 col
   const now = Date.now();
   turn = { startedAt: now - 2400, phaseStartedAt: now - 1000, activity: "Waiting for response…", outputTokens: 2260, committedOutput: 0, estimated: false };
   // The right side carries the whole-turn average speed since 2026-10-06 (docs/statusbar-design.md).
-  assert.match(plain(status.render(80)[0]), /^. Waiting for response… 1\.\ds +2\.\ds ⇣2\.3k · 9\d\d tok\/s \[stop\]$/);
+  // The indicator is the one-column braille spinner at every width (docs/tui-motion-design.md M3).
+  assert.match(plain(status.render(80)[0]), /^[⠋⠙⠹⠸⠼⠴⠦⠧] Waiting for response… 1\.\ds +2\.\ds ⇣2\.3k · 9\d\d tok\/s \[stop\]$/);
+  assert.match(plain(status.render(50)[0]), /^[⠋⠙⠹⠸⠼⠴⠦⠧] Waiting for response…/);
   assert.doesNotMatch(plain(status.render(50)[0]), /Waiting for response… \d/);
   assertFits(status);
   turn = undefined;

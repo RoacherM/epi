@@ -24,6 +24,23 @@ epi --model openai/gpt-4o-mini
 
 交互启动时，Epi 启动页会直接显示 `Epi on Pi` 身份、Manifest 状态、核心 JSON 配置方法和 `/epi`、`/login` 等入口。每次 Agent 运行还会把同一份 runtime identity 注入模型上下文：当前 `EPI_HOME`/`agentDir`、Manifest 来源以及实际加载的 Rules、Skills 和 Extensions 都可核验；上游 Pi 文档中的 ambient 资源目录不会被误认为当前能力。
 
+
+### 看工具块的完整输出
+
+对话区里的工具块会截短：`read` 只显示头尾几行，`bash` 显示前 2 行和后 3 行，`grep`/`find`/`ls` 显示前 10 行，`write` 显示前 10 行。按 `Ctrl+O` 展开以后，单击 `… N more lines`（`bash` 是 `… +N lines`、`edit` 是 `… N unchanged lines`）这一行，会在屏幕中间打开一个悬浮窗显示全部内容。`!cmd` 的输出也一样。
+
+| 键 | 作用 |
+|---|---|
+| `j` / `k`（可带数字）、`Ctrl+D` / `Ctrl+U`、空格 / `b`、滚轮 | 滚动 |
+| `gg` / `G`、数字加 `G` | 到头 / 到尾、到第 N 行（`read` 按文件里的行号） |
+| `/` 文字，回车；`n` / `N` | 搜索；下一个、上一个 |
+| `:` 行号，回车 | 跳到这一行 |
+| `w` | 自动换行开关 |
+| `y` | 复制全部内容 |
+| `q`、Esc、单击右上角 `[× Esc]` | 关闭（在 `/`、`:` 输入时 Esc 只退出输入） |
+
+悬浮窗显示的是这次工具调用返回的内容。Pi 的 `read` 一次最多返回 2000 行或 50KB，超出的部分在 agent 下一次 `read` 的块里打开；标题里会写 `lines 1–955 of 1098 · 50.0KB limit`。换会话（`/new`、`/resume`、`/reload`）时悬浮窗自动关闭。只读，不能编辑。
+
 ## 参数
 
 `epi --help` 打印 Epi 自己维护的完整参数表（`src/args.ts` 的 `EPI_FLAG_TABLE`，同一张表驱动解析、校验和帮助文本），不附带任何其他命令行的帮助。已声明 Extension 通过 `pi.registerFlag` 注册的长参数也受支持，并列在帮助的 `Extension options` 中；无人注册的长参数在扩展加载后报错，未知短参数直接报错。资源加载参数仍受下面的 Manifest 限制。

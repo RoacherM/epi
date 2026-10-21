@@ -1,5 +1,6 @@
 import { type AgentSession, type AgentSessionEvent, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, Container, TUI } from "@earendil-works/pi-tui";
+import { type InspectTarget } from "./buffer/inspector.js";
 export declare class Transcript {
     private readonly tui;
     private readonly theme;
@@ -17,6 +18,9 @@ export declare class Transcript {
     private streaming;
     private toolsExpanded;
     private thinkingExpanded;
+    /** The open block inspector, at most one (docs/tui-buffer-overlay-design.md §4): opening
+     * another replaces it, and reset() (/new, /resume, /reload, /tree) closes it. */
+    private inspector;
     /** Set on the *first* `agent_start` of a prompt run (item 2's `Worked for Ns` footer), read and
      * cleared on `agent_settled` -- this process's own clock, not anything from the event stream,
      * since none of these events carry a timestamp. Not reset on a later `agent_start`: `agent.
@@ -46,6 +50,10 @@ export declare class Transcript {
     constructor(tui: TUI, theme: Theme, session: AgentSession);
     /** New session after /new, /resume, /reload: clear and replay its history. */
     reset(session: AgentSession): void;
+    /** Shows `target` in the floating inspector, replacing one already open; it has the keyboard
+     * until closed, then focus goes back to whatever had it. */
+    inspect(target: InspectTarget): void;
+    closeInspector(): void;
     /** The highest `[Image #N]` label in this session's user messages: those shown, and those
      * handed to the session but not shown yet (queued, steered, or still on the way). The editor
      * numbers its next chip above it (D11). */

@@ -31,6 +31,8 @@ export declare class ChangesList implements PageView {
     private scope;
     private cursor;
     private scroll;
+    private height;
+    private readonly motions;
     constructor(ledger: ChangeLedger, theme: Theme, cwd: string);
     private selected;
     handleInput(data: string): ViewAction;
@@ -44,21 +46,22 @@ export declare class DiffView implements PageView {
     private readonly cwd;
     private scroll;
     private wrap;
-    private readonly finder;
-    private prompt;
     /** "]" or "[" typed, waiting for the "c" of ]c / [c. */
     private pending;
-    private message;
     private cache;
     private height;
+    /** Motions, `/` `n` `N` and `:N`; searches the diff text, not the gutters or fold markers. */
+    private readonly nav;
     constructor(ledger: ChangeLedger, theme: Theme, path: string, scope: Scope, cwd: string);
     get busy(): boolean;
     dispose(): void;
     /** What the file was before, in this view's scope; the session's when the turn no longer has it. */
     private before;
     handleInput(data: string): ViewAction;
-    private submit;
-    private findNext;
+    /** `:N` and `NG`: the first shown row at or after line N of the file as it is now. */
+    private lineRow;
+    /** The rows as searched: folded-line markers are not text of the file. */
+    private searchableRows;
     private jumpToChange;
     private styleRow;
     private layout;

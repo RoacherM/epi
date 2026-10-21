@@ -97,8 +97,9 @@ test("Ctrl+L does not stack a second model selector while one is already open", 
   ]);
   assert.match(marks.opened1, /Enter to select/);
   // The second Ctrl+L reached the already-open selector (which has no binding for it) instead of
-  // the app, so nothing changed and a single Esc is enough to fully close it.
-  assert.equal(marks.opened1, marks.opened2);
+  // the app, so no second selector drew and a single Esc is enough to fully close it. (Not a
+  // byte-for-byte comparison: the welcome page's intro may still be redrawing behind it.)
+  assert.doesNotMatch(marks.opened2.slice(marks.opened1.length), /Enter to select|Only showing models/);
   assert.doesNotMatch(marks.closed.slice(marks.opened2.length), /Enter to select/);
   assert.match(out, /EXIT=0/);
 });

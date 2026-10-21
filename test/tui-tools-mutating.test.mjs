@@ -382,9 +382,16 @@ test("write: new file collapsed shows line count, expanded shows first 10 lines"
     context,
   );
   const linesExpanded = resExpanded.render(80);
-  assert.equal(linesExpanded.length, 10);
+  // The first 10 lines, then a row counting the rest (it opens the whole file in the inspector).
+  assert.equal(linesExpanded.length, 11);
   assert.ok(linesExpanded[0].includes(" 1 export const val1 = 1;"));
   assert.ok(linesExpanded[9].includes("10 export const val10 = 10;"));
+  assert.ok(linesExpanded[10].includes("… 15 more lines"));
+  const target = resExpanded.inspectTargetAt(10);
+  assert.equal(target.title, "write new-file.ts");
+  assert.equal(target.lines.length, 25);
+  assert.equal(target.text, content);
+  assert.equal(resExpanded.inspectTargetAt(9), undefined);
   assert.ok(linesExpanded[0].includes(fg("toolDiffAdded")));
 });
 
@@ -441,7 +448,7 @@ test("real tools execution against temporary files fed to mutating renderers", a
 
   const writeExpanded = writeRenderers.renderResult(writeRes, { expanded: true, isPartial: false }, theme, writeContext);
   const writeExpLines = writeExpanded.render(80);
-  assert.equal(writeExpLines.length, 10);
+  assert.equal(writeExpLines.length, 11);
   assert.ok(writeExpLines[0].includes(" 1 line 1"));
   assert.ok(writeExpLines[9].includes("10 line 10"));
 

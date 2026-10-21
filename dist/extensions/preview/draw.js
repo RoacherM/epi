@@ -31,18 +31,6 @@ function imageIndent(base64, mimeType, width, height, dimensions) {
     const columns = Math.min(width, Math.ceil((size.widthPx * scale) / cell.widthPx));
     return Math.max(0, Math.floor((width - columns) / 2));
 }
-/** Rows of a vertical scrollbar; blank when everything fits. */
-export function scrollbar(theme, total, visible, offset, height) {
-    if (total <= visible)
-        return Array(height).fill(" ");
-    const size = Math.max(1, Math.round((height * visible) / total));
-    const start = Math.round(((height - size) * offset) / Math.max(1, total - visible));
-    return Array.from({ length: height }, (_, row) => row >= start && row < start + size ? theme.fg("accent", "┃") : theme.fg("dim", "│"));
-}
-export function scrollFromBar(row, height, total, visible) {
-    const ratio = Math.max(0, Math.min(1, row / Math.max(1, height - 1)));
-    return Math.round(ratio * Math.max(0, total - visible));
-}
 export function centered(text, width, height) {
     const lines = Array(height).fill(" ".repeat(Math.max(0, width)));
     const pad = Math.max(0, Math.floor((width - visibleWidth(text)) / 2));

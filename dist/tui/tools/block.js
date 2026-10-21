@@ -1,5 +1,6 @@
+import { motionTime, railGlyph } from "../motion.js";
 import { piTui } from "../pi-tui.js";
-import { textContent } from "./common.js";
+import { LinesComponent, textContent } from "./common.js";
 // Rail column, then padding so `◆` lines up with assistant text (transcript CONTENT_PAD = 3).
 const CALL_PREFIX = 3;
 // Result rows start under the call text, after `◆ `.
@@ -16,19 +17,37 @@ class Railed {
     theme;
     tone;
     isCall;
-    constructor(inner, theme, tone, isCall) {
+    onInspect;
+    constructor(inner, theme, tone, isCall, onInspect) {
         this.inner = inner;
         this.theme = theme;
         this.tone = tone;
         this.isCall = isCall;
+        this.onInspect = onInspect;
+    }
+    /** A left click on a row the renderer marked inspectable (`… N more lines`) opens the inspector;
+     * anywhere else falls through to Pi's own click-to-expand. */
+    handleMouse(event) {
+        if (event.type !== "click" || event.button !== "left" || this.onInspect === undefined)
+            return undefined;
+        if (!(this.inner instanceof LinesComponent))
+            return undefined;
+        const target = this.inner.inspectTargetAt(event.y);
+        if (target === undefined)
+            return undefined;
+        this.onInspect(target);
+        return { handled: true };
     }
     render(width) {
         const prefix = this.isCall ? CALL_PREFIX : RESULT_PREFIX;
-        const rail = this.tone === "running" ? this.theme.fg("accent", "┃") : " ";
+        const t = motionTime();
+        // The result's rows continue the call line's pulse, one row further down.
+        const firstRow = this.isCall ? 0 : 1;
+        const rail = (index) => (this.tone === "running" ? railGlyph(this.theme, firstRow + index, t) : " ");
         const bullet = this.theme.fg(this.tone === "error" ? "error" : this.tone === "running" ? "accent" : "muted", "◆ ");
         const contentWidth = Math.max(1, width - prefix - (this.isCall ? 2 : 0));
         return this.inner.render(contentWidth).map((line, index) => {
-            const lead = `${rail}${" ".repeat(prefix - 1)}`;
+            const lead = `${rail(index)}${" ".repeat(prefix - 1)}`;
             if (!this.isCall)
                 return lead + line;
             return lead + (index === 0 ? bullet : "  ") + line;
@@ -70,9 +89,9 @@ function fallbackResult(result, expanded, theme) {
 }
 /**
  * Frames any tool's renderers in a grok block. A definition that draws its own frame
- * (`renderShell: "self"`) is left alone.
+ * (`renderShell: "self"`) is left alone. `onInspect` receives clicks on inspectable rows.
  */
-export function toolBlock(toolName, renderers) {
+export function toolBlock(toolName, renderers, onInspect) {
     if (renderers !== undefined && "renderShell" in renderers && renderers.renderShell === "self")
         return renderers;
     const { renderCall, renderResult } = (renderers ?? {});
@@ -81,11 +100,11 @@ export function toolBlock(toolName, renderers) {
         renderShell: "self",
         renderCall(args, theme, context) {
             const inner = renderCall?.(args, theme, unwrap(context)) ?? fallbackCall(toolName, theme);
-            return new Railed(inner, theme, toneOf(context), true);
+            return new Railed(inner, theme, toneOf(context), true, onInspect);
         },
         renderResult(result, options, theme, context) {
             const inner = renderResult?.(result, options, theme, unwrap(context)) ?? fallbackResult(result, options.expanded, theme);
-            return new Railed(inner, theme, toneOf(context), false);
+            return new Railed(inner, theme, toneOf(context), false, onInspect);
         },
     };
     return framed;

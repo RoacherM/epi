@@ -1,7 +1,17 @@
-// Search (/, n, N) and go to line (:) for the views that show lines of text: the diff and the
-// full-file viewer. Both work on the rows as drawn, so wrapped and rendered text is found as seen.
-import { piTui } from "../../tui/pi-tui.js";
+// Search (/, n, N) and go to line (:) for the views that show lines of text: /preview's diff and
+// file viewer, /review, /trace, and the block inspector (docs/tui-buffer-overlay-design.md §2). All
+// work on the rows as drawn, so wrapped and rendered text is found as seen.
+import { piTui } from "../pi-tui.js";
 const { matchesKey, stripTerminalSequences } = piTui;
+/** Text that is safe to draw: the terminal must never interpret what a file is called or contains,
+ * or what was typed into a prompt. ESC becomes a visible mark; other C0 and C1 controls (a lone
+ * U+009B is CSI to some terminals), line breaks and bidi overrides are removed. Tabs are left to
+ * the caller. */
+export function printable(text) {
+    return text
+        .replace(/\x1b/g, "␛")
+        .replace(/[\x00-\x08\x0a-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, "");
+}
 /** The one-line input at the bottom while typing a search or a line number. */
 export class LinePrompt {
     kind;

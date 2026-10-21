@@ -207,7 +207,17 @@ export class UserMessageBlock implements Component {
 // ── turn status row ───────────────────────────────────────────────────────────
 
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+// Spinner frame interval, also for an extension's custom frames that don't set one.
 const SPINNER_MS = 133;
+// docs/tui-motion-design.md §3.2: one tick for the status row and every running rail it redraws.
+const MOTION_TICK_MS = 80;
+
+/** Pi's WorkingIndicatorOptions (ui.setWorkingIndicator): custom frames drawn verbatim, `[]` hides
+ * the indicator. Undefined means Epi's built-in braille spinner. */
+export interface WorkingIndicator {
+  frames?: string[];
+  intervalMs?: number;
+}
 
 export interface TurnState {
   startedAt: number;
@@ -223,6 +233,7 @@ export interface TurnState {
 /** `⠧ Waiting for response… 2.4s ····· 2.4s ⇣2.3k [stop]`; zero rows when idle. */
 export class TurnStatus implements Component {
   private timer: NodeJS.Timeout | undefined;
+  private indicator: WorkingIndicator | undefined;
 
   constructor(
     private readonly theme: Theme,
@@ -230,17 +241,32 @@ export class TurnStatus implements Component {
     private readonly requestRender: () => void,
   ) {}
 
+  /** `ui.setWorkingIndicator`; undefined restores the built-in. */
+  setIndicator(indicator: WorkingIndicator | undefined): void {
+    this.indicator = indicator;
+  }
+
+  /** The indicator glyphs followed by their separating space, or "" when hidden. */
+  private indicatorText(now: number): string {
+    const custom = this.indicator?.frames;
+    if (custom !== undefined) {
+      if (custom.length === 0) return "";
+      const interval = this.indicator?.intervalMs !== undefined && this.indicator.intervalMs > 0 ? this.indicator.intervalMs : SPINNER_MS;
+      return `${custom[Math.floor(now / interval) % custom.length] ?? ""} `;
+    }
+    return `${this.theme.fg("accent", SPINNER[Math.floor(now / SPINNER_MS) % SPINNER.length] ?? "")} `;
+  }
+
   render(width: number): string[] {
     const turn = this.state();
     if (turn === undefined) {
       this.stop();
       return [];
     }
-    this.timer ??= setInterval(this.requestRender, SPINNER_MS).unref();
+    this.timer ??= setInterval(this.requestRender, MOTION_TICK_MS).unref();
     const now = Date.now();
-    const frame = SPINNER[Math.floor(now / SPINNER_MS) % SPINNER.length] ?? SPINNER[0];
     const phase = width >= 60 ? ` ${this.theme.fg("muted", formatDuration(now - turn.phaseStartedAt))}` : "";
-    const left = `${this.theme.fg("accent", frame ?? "")} ${this.theme.fg("text", turn.activity)}${phase}`;
+    const left = `${this.indicatorText(now)}${this.theme.fg("text", turn.activity)}${phase}`;
     const totalOutput = turn.committedOutput + turn.outputTokens;
     const tokens = totalOutput > 0 ? ` ${turn.estimated ? "~" : ""}⇣${formatTokens(totalOutput).toLowerCase()}` : "";
     const elapsedMs = now - turn.startedAt;

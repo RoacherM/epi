@@ -1,6 +1,8 @@
 import { piTui } from "../../tui/pi-tui.js";
-import { pad, scrollbar } from "../preview/draw.js";
-import { Finder, LinePrompt } from "../preview/search.js";
+import { pad } from "../preview/draw.js";
+import { scrollbar } from "../../tui/buffer/scrollbar.js";
+import { applyMotion, MotionKeys } from "../../tui/buffer/motion-keys.js";
+import { Finder, LinePrompt } from "../../tui/buffer/search.js";
 import { contentLines, formatClock, formatDuration, formatOffset, safeJson, usageLines } from "./format.js";
 import { foldTimeline } from "./fold.js";
 import { projectTrace } from "./project.js";
@@ -21,6 +23,9 @@ export class TracePage {
     /** `waterfall`: bar positioned on the visible time axis; `duration`: bar length by duration. */
     finder = new Finder();
     prompt;
+    listMotions = new MotionKeys();
+    // 1-5 pick a detail tab, so the detail pane takes no counts.
+    detailMotions = new MotionKeys({ counts: false });
     message = "";
     cache;
     unsubscribe;
@@ -60,6 +65,20 @@ export class TracePage {
             return;
         }
         const summary = this.summary();
+        const inDetail = this.focus === "detail" && this.detailOpen;
+        const keys = (inDetail ? this.detailMotions : this.listMotions).handle(data);
+        if (keys.kind === "pending") {
+            this.options.tui.requestRender();
+            return;
+        }
+        if (keys.kind === "motion") {
+            if (inDetail)
+                this.moveDetail(keys.motion, summary);
+            else
+                this.moveList(keys.motion, summary);
+            this.options.tui.requestRender();
+            return;
+        }
         if (data === "/") {
             this.prompt = new LinePrompt("/");
             this.options.tui.requestRender();
@@ -87,7 +106,7 @@ export class TracePage {
         if (this.focus === "detail" && this.detailOpen)
             this.detailKeys(data, summary);
         else
-            this.listKeys(data, summary);
+            this.listKeys(data);
         this.options.tui.requestRender();
     }
     close() {
@@ -102,29 +121,23 @@ export class TracePage {
         this.follow = this.cursor === count - 1;
         this.detailScroll = 0;
     }
-    listKeys(data, summary) {
-        const page = this.bodyHeight() - 1;
-        if (data === "j" || matchesKey(data, "down"))
-            this.moveCursor(1, summary);
-        else if (data === "k" || matchesKey(data, "up"))
-            this.moveCursor(-1, summary);
-        else if (data === "g") {
+    /** The shared motion keys on the step list: `gg` stops following, `G` follows the latest. */
+    moveList(motion, summary) {
+        if (motion.kind === "top") {
             this.cursor = 0;
             this.follow = false;
+            return;
         }
-        else if (data === "G") {
+        if (motion.kind === "bottom") {
             this.follow = true;
             this.cursor = Math.max(0, summary.steps.length - 1);
+            return;
         }
-        else if (data === " " || matchesKey(data, "pageDown"))
-            this.moveCursor(Math.max(1, page), summary);
-        else if (data === "b" || matchesKey(data, "pageUp"))
-            this.moveCursor(-Math.max(1, page), summary);
-        else if (matchesKey(data, "ctrl+d"))
-            this.moveCursor(Math.floor(page / 2), summary);
-        else if (matchesKey(data, "ctrl+u"))
-            this.moveCursor(-Math.floor(page / 2), summary);
-        else if (matchesKey(data, "return") || data === "l" || matchesKey(data, "right") || matchesKey(data, "tab"))
+        const page = Math.max(1, this.bodyHeight() - 1);
+        this.moveCursor(applyMotion(motion, this.cursor, page, summary.steps.length - 1) - this.cursor, summary);
+    }
+    listKeys(data) {
+        if (matchesKey(data, "return") || data === "l" || matchesKey(data, "right") || matchesKey(data, "tab"))
             this.openDetail();
     }
     openDetail() {
@@ -137,7 +150,6 @@ export class TracePage {
     }
     detailKeys(data, summary) {
         const rows = this.detailRows(this.section, summary, this.detailWidth()).length;
-        const page = Math.max(1, this.bodyHeight() - 1);
         if (data === "h" || matchesKey(data, "left"))
             this.section = (this.section + SECTIONS.length - 1) % SECTIONS.length;
         else if (data === "l" || matchesKey(data, "right"))
@@ -146,23 +158,13 @@ export class TracePage {
             this.focus = "list";
         else if (data >= "1" && data <= "5")
             this.section = Number(data) - 1;
-        else if (data === "j" || matchesKey(data, "down"))
-            this.detailScroll += 1;
-        else if (data === "k" || matchesKey(data, "up"))
-            this.detailScroll -= 1;
-        else if (data === " " || matchesKey(data, "pageDown"))
-            this.detailScroll += page;
-        else if (data === "b" || matchesKey(data, "pageUp"))
-            this.detailScroll -= page;
-        else if (matchesKey(data, "ctrl+d"))
-            this.detailScroll += Math.floor(page / 2);
-        else if (matchesKey(data, "ctrl+u"))
-            this.detailScroll -= Math.floor(page / 2);
-        else if (data === "g")
-            this.detailScroll = 0;
-        else if (data === "G")
-            this.detailScroll = Math.max(0, rows - this.bodyHeight());
         this.detailScroll = Math.max(0, Math.min(this.detailScroll, Math.max(0, rows - this.bodyHeight())));
+    }
+    /** The shared motion keys on the detail pane: they scroll it. */
+    moveDetail(motion, summary) {
+        const rows = this.detailRows(this.section, summary, this.detailWidth()).length;
+        const page = Math.max(1, this.bodyHeight() - 1);
+        this.detailScroll = applyMotion(motion, this.detailScroll, page, Math.max(0, rows - this.bodyHeight()));
     }
     submit(prompt) {
         if (prompt.kind === "/") {
@@ -597,9 +599,9 @@ export class TracePage {
         if (this.prompt)
             return `${this.prompt.kind}${this.prompt.text}▏`;
         if (this.focus === "detail" && this.detailOpen) {
-            return "←/→ section · 1-5 · j/k scroll · / search · n/N · Tab list · Esc back";
+            return "←/→ section · 1-5 · j/k scroll · gg/G ends · / search · n/N · Tab list · Esc back";
         }
-        return "j/k select · Enter detail · / search · G latest · Esc close";
+        return "j/k select · gg/G first/latest · Enter detail · / search · Esc close";
     }
     handleMouse(event) {
         const geometry = this.geometry;

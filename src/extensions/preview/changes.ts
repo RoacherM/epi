@@ -6,11 +6,13 @@ import { relative } from "node:path";
 import { getLanguageFromPath, highlightCode, type Theme } from "@earendil-works/pi-coding-agent";
 
 import { piTui } from "../../tui/pi-tui.js";
-import { centered, pad, scrollbar } from "./draw.js";
+import { scrollbar } from "../../tui/buffer/scrollbar.js";
+import { centered, pad } from "./draw.js";
 import { type DiffRow, diffTexts, displayLines, type FileDiff } from "./diff.js";
 import { MAX_TEXT_BYTES, printable } from "./files.js";
 import type { Change, ChangeLedger, Scope, Snapshot } from "./ledger.js";
-import { Finder, LinePrompt } from "./search.js";
+import { applyMotion, MotionKeys } from "../../tui/buffer/motion-keys.js";
+import { TextNavigation } from "../../tui/buffer/navigation.js";
 import { lastScroll, type ViewFrame } from "./view.js";
 
 const { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } = piTui;
@@ -112,6 +114,8 @@ export class ChangesList implements PageView {
   private scope: Scope = "session";
   private cursor = 0;
   private scroll = 0;
+  private height = 1;
+  private readonly motions = new MotionKeys();
 
   constructor(
     private readonly ledger: ChangeLedger,
@@ -125,12 +129,14 @@ export class ChangesList implements PageView {
 
   handleInput(data: string): ViewAction {
     const count = changedFiles(this.ledger, this.scope).length;
+    const keys = this.motions.handle(data);
+    if (keys.kind === "pending") return undefined;
+    if (keys.kind === "motion") {
+      this.cursor = applyMotion(keys.motion, this.cursor, Math.max(1, this.height - 1), count - 1);
+      return undefined;
+    }
     if (matchesKey(data, "escape") || data === "q") return { kind: "back" };
-    if (data === "j" || matchesKey(data, "down")) this.cursor = Math.min(count - 1, this.cursor + 1);
-    else if (data === "k" || matchesKey(data, "up")) this.cursor = Math.max(0, this.cursor - 1);
-    else if (data === "g") this.cursor = 0;
-    else if (data === "G") this.cursor = Math.max(0, count - 1);
-    else if (data === "t") {
+    if (data === "t") {
       this.scope = this.scope === "session" ? "turn" : "session";
       this.cursor = 0;
     } else if (data === "i") {
@@ -146,9 +152,10 @@ export class ChangesList implements PageView {
   render(width: number, height: number): ViewFrame {
     const th = this.theme;
     const changes = changedFiles(this.ledger, this.scope);
+    this.height = height;
     this.cursor = Math.max(0, Math.min(this.cursor, changes.length - 1));
     const title = `${th.fg("accent", "changes")} ${th.fg("dim", `· ${SCOPE_LABEL[this.scope]} · ${changes.length} file${changes.length === 1 ? "" : "s"}`)}`;
-    const hints = "j/k move · enter diff · t session/turn · i insert · tab files · q close";
+    const hints = "j/k move · gg/G ends · enter diff · t session/turn · i insert · tab files · q close";
     if (changes.length === 0) {
       const text = `The agent has not changed a file in ${SCOPE_LABEL[this.scope]}.`;
       return { title, body: centered(th.fg("dim", text), width, height), status: ` ${th.fg("dim", hints)}` };
@@ -188,13 +195,12 @@ interface DisplayRows {
 export class DiffView implements PageView {
   private scroll: number;
   private wrap = true;
-  private readonly finder = new Finder();
-  private prompt: LinePrompt | undefined;
   /** "]" or "[" typed, waiting for the "c" of ]c / [c. */
   private pending: "]" | "[" | undefined;
-  private message = "";
   private cache: DisplayRows | undefined;
   private height = 0;
+  /** Motions, `/` `n` `N` and `:N`; searches the diff text, not the gutters or fold markers. */
+  private readonly nav: TextNavigation;
 
   constructor(
     private readonly ledger: ChangeLedger,
@@ -204,10 +210,20 @@ export class DiffView implements PageView {
     private readonly cwd: string,
   ) {
     this.scroll = lastScroll.get(`diff:${path}`) ?? 0;
+    this.nav = new TextNavigation({
+      rows: () => this.searchableRows(),
+      top: () => this.scroll,
+      setTop: (row) => {
+        this.scroll = row;
+      },
+      maxTop: () => Math.max(0, (this.cache?.contents.length ?? 0) - this.height),
+      page: () => Math.max(1, this.height - 1),
+      goToLine: (line) => this.lineRow(line),
+    });
   }
 
   get busy(): boolean {
-    return this.prompt !== undefined;
+    return this.nav.prompt !== undefined;
   }
 
   dispose(): void {
@@ -221,77 +237,53 @@ export class DiffView implements PageView {
   }
 
   handleInput(data: string): ViewAction {
-    if (this.prompt) {
-      const done = this.prompt.handleInput(data);
-      if (done === "submit") this.submit(this.prompt);
-      if (done !== undefined) this.prompt = undefined;
-      return undefined;
-    }
-    this.message = "";
-    if (this.pending) {
+    if (this.nav.prompt === undefined && this.pending) {
       const direction = this.pending;
       this.pending = undefined;
+      this.nav.status = undefined;
       if (data === "c") this.jumpToChange(direction === "[");
       return undefined;
     }
-    const page = Math.max(1, this.height - 1);
+    if (this.nav.handle(data).kind === "taken") return undefined;
     if (matchesKey(data, "escape") || data === "q" || data === "h" || matchesKey(data, "left")) return { kind: "back" };
     if (data === "]" || data === "[") this.pending = data;
-    else if (data === "/" || data === ":") this.prompt = new LinePrompt(data);
-    else if (data === "n" || data === "N") this.findNext(data === "N", this.scroll);
     else if (data === "d") return { kind: "file", path: this.path };
     else if (data === "i") return { kind: "insert", paths: [this.path] };
     else if (data === "w") this.wrap = !this.wrap;
-    else if (data === "j" || matchesKey(data, "down")) this.scroll += 1;
-    else if (data === "k" || matchesKey(data, "up")) this.scroll -= 1;
-    else if (data === " " || matchesKey(data, "pageDown") || matchesKey(data, "ctrl+f")) this.scroll += page;
-    else if (data === "b" || matchesKey(data, "pageUp") || matchesKey(data, "ctrl+b")) this.scroll -= page;
-    else if (matchesKey(data, "ctrl+d")) this.scroll += Math.floor(page / 2);
-    else if (matchesKey(data, "ctrl+u")) this.scroll -= Math.floor(page / 2);
-    else if (data === "g") this.scroll = 0;
-    else if (data === "G") this.scroll = Number.MAX_SAFE_INTEGER;
     return undefined;
   }
 
-  private submit(prompt: LinePrompt): void {
-    if (prompt.kind === "/") {
-      this.finder.query = prompt.text;
-      this.findNext(false, this.scroll - 1);
-      return;
-    }
-    const line = Number.parseInt(prompt.text, 10);
+  /** `:N` and `NG`: the first shown row at or after line N of the file as it is now. */
+  private lineRow(line: number): { row: number } | { error: string } | undefined {
     const cache = this.cache;
-    if (!Number.isFinite(line) || line < 1) {
-      this.message = `not a line number: ${printable(prompt.text)}`;
-      return;
-    }
-    if (!cache || cache.comparison.kind !== "diff") return;
-    // The first shown row at or after that line of the file as it is now.
+    if (!cache || cache.comparison.kind !== "diff") return undefined;
     const rows = cache.comparison.diff.rows;
     const index = rows.findIndex((row) => row.newNo !== undefined && row.newNo >= line);
-    if (index < 0) this.message = `line ${line} is not in a shown part of the diff`;
-    else this.scroll = cache.firstRow[index]!;
+    if (index < 0) return { error: `line ${line} is not in a shown part of the diff` };
+    return { row: cache.firstRow[index]! };
   }
 
-  private findNext(backwards: boolean, from: number): void {
-    if (this.finder.query === "") return;
+  /** The rows as searched: folded-line markers are not text of the file. */
+  private searchableRows(): string[] {
     const cache = this.cache;
-    // Folded-line markers are not text of the file.
-    const searchable = cache ? cache.contents.map((content, at) => (cache.comparison.kind === "diff" && cache.comparison.diff.rows[cache.rowOf[at]!]?.kind === "gap" ? "" : content)) : [];
-    const row = this.finder.next(searchable, from, backwards);
-    if (row === undefined) this.message = `not found: ${printable(this.finder.query)}`;
-    else this.scroll = row;
+    if (!cache) return [];
+    return cache.contents.map((content, at) => (cache.comparison.kind === "diff" && cache.comparison.diff.rows[cache.rowOf[at]!]?.kind === "gap" ? "" : content));
   }
 
   private jumpToChange(backwards: boolean): void {
     const cache = this.cache;
     if (!cache || cache.comparison.kind !== "diff") return;
     const starts = cache.comparison.diff.changeStarts.map((index) => cache.firstRow[index]!);
+    // On the last page every later change is already on screen and the top cannot move: that is
+    // "no change below" too, not a jump that silently goes nowhere.
+    // The top as it shows: a restored or pre-render scroll may still be past the end.
+    const maxTop = Math.max(0, cache.contents.length - this.height);
+    const top = Math.min(this.scroll, maxTop);
     const target = backwards
-      ? [...starts].reverse().find((row) => row < this.scroll)
-      : starts.find((row) => row > this.scroll);
-    if (target === undefined) this.message = backwards ? "no change above" : "no change below";
-    else this.scroll = target;
+      ? [...starts].reverse().find((row) => row < top)
+      : starts.find((row) => row > top && Math.min(row, maxTop) > top);
+    if (target === undefined) this.nav.status = { text: backwards ? "no change above" : "no change below", tone: "error" };
+    else this.nav.scrollTo(target);
   }
 
   private styleRow(row: DiffRow, highlighted: string[] | undefined): string {
@@ -362,7 +354,7 @@ export class DiffView implements PageView {
     const th = this.theme;
     const cache = this.layout(width - 1);
     const name = th.fg("accent", displayPath(this.cwd, this.path));
-    const hints = "j/k scroll · ]c [c changes · / search · : line · d file · w wrap · i insert · q back";
+    const hints = "j/k scroll · gg/G ends · ]c [c changes · / search · : line · d file · w wrap · i insert · q back";
     if (cache.comparison.kind === "note") {
       return {
         title: name,
@@ -380,7 +372,7 @@ export class DiffView implements PageView {
       if (row >= total) return " ".repeat(width);
       const isGap = cache.comparison.kind === "diff" && cache.comparison.diff.rows[cache.rowOf[row]!]?.kind === "gap";
       const content = cache.contents[row] ?? "";
-      return pad((cache.gutters[row] ?? "") + (isGap ? content : this.finder.highlight(content, invert)), width - 1) + bar[at];
+      return pad((cache.gutters[row] ?? "") + (isGap ? content : this.nav.highlight(content, invert)), width - 1) + bar[at];
     });
     const label = status === "new" ? "new file" : status === "deleted" ? "deleted" : SCOPE_LABEL[this.scope];
     return {
@@ -392,9 +384,10 @@ export class DiffView implements PageView {
 
   private statusLine(hints: string, position: string): string {
     const th = this.theme;
-    if (this.prompt) return ` ${th.fg("accent", `${this.prompt.kind}${printable(this.prompt.text)}▏`)}`;
+    const { prompt, status } = this.nav;
+    if (prompt) return ` ${th.fg("accent", `${prompt.kind}${printable(prompt.text)}▏`)}`;
     if (this.pending) return ` ${th.fg("accent", `${this.pending}`)}${th.fg("dim", "  c: next or previous change")}`;
-    const left = this.message ? th.fg("warning", this.message) : th.fg("dim", hints);
+    const left = status?.tone === "error" ? th.fg("warning", status.text) : th.fg("dim", hints);
     return ` ${left}  ${th.fg("accent", position)}`;
   }
 }

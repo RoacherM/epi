@@ -5,6 +5,7 @@
 // exported `BashExecutionComponent` (rail `┃` + `◆`, matching tools/block.ts).
 import { keyText } from "@earendil-works/pi-coding-agent";
 import { errorText } from "./errors.js";
+import { motionTime, railGlyph } from "./motion.js";
 import { piTui } from "./pi-tui.js";
 import { truncateOutputLines } from "./tools/common.js";
 // Matches tools/block.ts: a rail column, then 2 columns of padding before the `◆` bullet; output
@@ -22,17 +23,21 @@ export class UserBashBlock {
     theme;
     command;
     excludeFromContext;
+    onInspect;
     outputLines = [];
     status = "running";
     exitCode;
-    constructor(theme, command, excludeFromContext) {
+    constructor(theme, command, excludeFromContext, 
+    // Opens the full output from the `… +N lines` row of a finished, truncated block.
+    onInspect) {
         this.theme = theme;
         this.command = command;
         this.excludeFromContext = excludeFromContext;
+        this.onInspect = onInspect;
     }
     /** Replays a finished `bashExecution` session message after /new, /resume or /reload. */
-    static fromMessage(theme, message) {
-        const block = new UserBashBlock(theme, message.command, message.excludeFromContext ?? false);
+    static fromMessage(theme, message, onInspect) {
+        const block = new UserBashBlock(theme, message.command, message.excludeFromContext ?? false, onInspect);
         if (message.output)
             block.appendOutput(message.output);
         block.setComplete(message.exitCode, message.cancelled);
@@ -51,29 +56,53 @@ export class UserBashBlock {
         this.exitCode = exitCode;
         this.status = cancelled ? "cancelled" : exitCode === undefined || exitCode !== 0 ? "error" : "done";
     }
+    /** The output as lines, without the single trailing newline most commands leave. */
+    lines() {
+        const text = this.outputLines.join("\n").replace(/\n$/, "");
+        return text === "" ? [] : text.split("\n");
+    }
     render(width) {
         const running = this.status === "running";
-        const rail = running ? this.theme.fg("accent", "┃") : " ";
+        const t = motionTime();
+        const rail = (row) => (running ? railGlyph(this.theme, row, t) : " ");
         const bulletTone = running ? "accent" : this.status === "error" ? "error" : "muted";
         const bullet = this.theme.fg(bulletTone, "◆ ");
         const verb = this.excludeFromContext ? "!!" : "$";
-        const callLine = `${rail}${" ".repeat(CALL_PREFIX - 1)}${bullet}${this.theme.fg("bashMode", this.theme.bold(`${verb} ${this.command}`))}`;
-        // Drop the single trailing newline most commands leave, so it doesn't render as a blank row.
-        const text = this.outputLines.join("\n").replace(/\n$/, "");
-        const lines = text === "" ? [] : text.split("\n");
+        const callLine = `${rail(0)}${" ".repeat(CALL_PREFIX - 1)}${bullet}${this.theme.fg("bashMode", this.theme.bold(`${verb} ${this.command}`))}`;
+        const lines = this.lines();
         // While running, show the live tail (matches tools/mutating.ts bashRenderers' `isPartial` case);
         // once finished, apply the fixed head/ellipsis/tail rule instead.
         const shown = running ? lines.slice(-3) : truncateBashOutput(lines);
-        const bodyPrefix = `${rail}${" ".repeat(RESULT_PREFIX - 1)}`;
-        const body = shown.map((entry) => bodyPrefix + this.theme.fg("toolOutput", entry));
+        const bodyPrefix = (row) => `${rail(row)}${" ".repeat(RESULT_PREFIX - 1)}`;
+        const body = shown.map((entry, index) => bodyPrefix(index + 1) + this.theme.fg("toolOutput", entry));
+        const statusRow = shown.length + 1;
         const statusLine = running
-            ? `${bodyPrefix}${this.theme.fg("muted", `Running… (${keyText("app.interrupt")} to cancel)`)}`
+            ? `${bodyPrefix(statusRow)}${this.theme.fg("muted", `Running… (${keyText("app.interrupt")} to cancel)`)}`
             : this.status === "cancelled"
-                ? `${bodyPrefix}${this.theme.fg("warning", "(cancelled)")}`
+                ? `${bodyPrefix(statusRow)}${this.theme.fg("warning", "(cancelled)")}`
                 : this.status === "error"
-                    ? `${bodyPrefix}${this.theme.fg("error", this.exitCode === undefined ? "failed" : `exit ${this.exitCode}`)}`
-                    : `${bodyPrefix}${this.theme.fg("muted", "exit 0")}`;
+                    ? `${bodyPrefix(statusRow)}${this.theme.fg("error", this.exitCode === undefined ? "failed" : `exit ${this.exitCode}`)}`
+                    : `${bodyPrefix(statusRow)}${this.theme.fg("muted", "exit 0")}`;
         return [callLine, ...body, statusLine].map((line) => piTui.truncateToWidth(line, width));
+    }
+    /** The `… +N lines` row (the call line, then two output rows above it) opens the full output. */
+    handleMouse(event) {
+        if (event.type !== "click" || event.button !== "left" || this.onInspect === undefined)
+            return undefined;
+        if (this.status === "running" || event.y !== 3)
+            return undefined;
+        const lines = this.lines();
+        if (truncateBashOutput(lines).length === lines.length)
+            return undefined;
+        const exit = this.status === "cancelled" ? "cancelled" : this.exitCode === undefined ? "failed" : `exit ${this.exitCode}`;
+        this.onInspect({
+            title: `${this.excludeFromContext ? "!!" : "$"} ${this.command}`,
+            subtitle: `${lines.length} lines · ${exit}`,
+            lines: lines.map((line) => this.theme.fg("toolOutput", line)),
+            firstLineNumber: 1,
+            text: lines.join("\n"),
+        });
+        return { handled: true };
     }
     invalidate() { }
 }
@@ -108,7 +137,7 @@ export async function runUserBash(host, text) {
         // The extension runner already reported the error; no local fallback (matches Pi).
         return true;
     }
-    const block = new UserBashBlock(host.theme, command, excludeFromContext);
+    const block = new UserBashBlock(host.theme, command, excludeFromContext, (target) => host.inspect(target));
     host.addBlock(block);
     if (eventResult?.result) {
         const result = eventResult.result;
