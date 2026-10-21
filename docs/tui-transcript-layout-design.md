@@ -1,6 +1,6 @@
 # 对话区排版与视觉层级设计
 
-日期：2026-10-21 起草；状态：**已确认（V-S 脊柱 + 动画），实现方案见 [tui-transcript-layout-implementation.md](tui-transcript-layout-implementation.md)**。
+日期：2026-10-21 起草；状态：**已确认（V-S 脊柱 + 动画），已实现（W0–W9），实现方案与差异见 [tui-transcript-layout-implementation.md](tui-transcript-layout-implementation.md)**。
 依据：用户 0.1.21 实际使用截图（"整体的布局不是特别的优雅，尤其是视觉层面……比如输出的排版"），以及下文列出的代码位置。基线设计见 [tui-design.md](tui-design.md)、[tui-theme.md](tui-theme.md)。
 
 **设计稿（先看这个）**：`reports/transcript-layout-prototype.html`，由 `node scripts/probes/transcript-layout-prototype.mjs` 生成。同一段真实会话（0.1.21 发布当天的 session 切片，fixture 在 `scripts/probes/fixtures/transcript-layout-session.json`）渲染两遍：「现状」帧是 dist 真实组件（`AssistantBlock` / `UserMessageBlock` / `toolBlock` + 内置渲染器）的输出，「提案」帧是 §4 规则的可执行实现的输出。不是手绘稿。本文 §3 的文本 mock 从渲染结果誊录。

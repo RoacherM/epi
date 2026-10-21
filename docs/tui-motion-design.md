@@ -118,5 +118,6 @@
 | M3 状态行 | 保留原有单字符盲文 spinner（`⠋⠙⠹…`，accent，133ms 一帧），所有宽度相同；`ui.setWorkingIndicator` 已打通（自定义帧原样绘制、`[]` 隐藏、`undefined` 恢复），会话失效时复位 | **不做 comet 等新指示器**：用户实测 6 列 comet 后认为从左到右扫动"不够优雅克制"，试过原地呼吸的 `●` 后，确认更喜欢原来的盲文 spinner（2026-10-21）。状态行右侧（耗时、tokens、速度、`[stop]`）和输入框右下的模型标签保持静态文字。刷新节拍由 133ms 改为 80ms（驱动运行中竖轨），spinner 帧仍按 133ms 取；扩展自定义 `intervalMs` 按 80ms 节拍取整 |
 | M4/M5 运行中竖轨 | 工具块、`!cmd` 块、流式 Thinking、只读分组：`┃` 颜色随脉冲沿行下移（accent ↔ thinkingHigh），分组 `◈` 呼吸；共用 TurnStatus 80ms 节拍，不另开定时器 | **字形固定为 `┃`，不在 `│`/`┃` 间切换**：e2e 测试与用户都以「`┃` 消失」判断块已结束；没有活动回合时（单独的 `!cmd`）竖轨不动画 |
 | M6 完成闪烁 | 前 120ms 满色，之后指数 ease-out 向 `borderMuted`，400ms 消失；80ms 步进重绘，定时器 `unref` | 无 |
+| M4/M6 并入回合脊柱（2026-10-21，[对话区排版](tui-transcript-layout-implementation.md) W8） | 各块不再自画第 0 列竖轨：脉冲改由 `src/tui/spine.ts` 画在第 1 列的回合脊柱上（`railBlend` 取色），运行中工具的 `├─` 常亮，完成闪烁照亮该块那一段脊柱（`flashBlend`，字形 `│`/`├─`） | **只有运行中回合的末端 8 行（tip）在动**，其上的行已是沉淀后的样子：pi-tui 主屏渲染只能改写屏内行，屏外行一变就整屏重绘（清空 scrollback 重写全部历史），整条脊柱一起动在超过一屏的回合上每帧都会这样（terminal-progress 测试因此超时）。单独的 `!cmd` 没有脊柱，也就没有脉冲（只有 `Running…` 文案） |
 | 测试 | `test/tui-motion.test.mjs`（新）、`test/startup-page.test.mjs`（12/40/44/80/88/108/120 列、帧文本与静态页一致、256 色、开场收敛、自停机） | 12 列时标题原本就溢出（静态页既有问题），已一并修正 |
 

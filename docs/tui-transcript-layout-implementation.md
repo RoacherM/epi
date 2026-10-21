@@ -1,6 +1,6 @@
 # 对话区排版实现（V-S 脊柱 · 动画）
 
-日期：2026-10-21；状态：**已确认方向，待拆票据开工**。
+日期：2026-10-21；状态：**W0–W9 已实现**（分支 `feat/tui-transcript-spine`，与本文的差异见 §7），待 Orca 实测与合并前审查。
 设计依据：[tui-transcript-layout-design.md](tui-transcript-layout-design.md)（问题清单、R1–R5 排版系统、两轮 argon 评审）；视觉验收基准：`reports/transcript-layout-prototype.html`（`scripts/probes/transcript-layout-prototype.mjs` 生成，含 V-S 静态帧与 85 帧动画「一个回合的一生」）。
 
 用户已确认：V-S 回合脊柱 + 简约动画风格（2026-10-21："我靠 这个太优雅了……做成简约的动画风格"）。
@@ -121,3 +121,20 @@
 | Markdown 分段破坏扩展 transformer 预期 | transformer 逐段调用 + 文档注明；若社区转换器出问题，`/settings` 行宽设"不限"即回退单段渲染 |
 | 脊柱与极端内容（图片行、自定义扩展消息）叠加 | W7 白名单制：只有已知的回合内块型才叠脊柱，未知组件不叠 |
 | 快照测试大面积更新掩盖真实回归 | 每个 W 独立提交、独立快照更新，review 按 W 粒度进行 |
+
+## 7. 实现记录（主控定）
+
+| W | 提交 | 与上文的差异及理由 |
+|---|---|---|
+| W0 | `formatTokens` 进位到 M/B（`999_999` → `1M`） | 无 |
+| W1 | `toolEnded` 透传 `durationMs` | **不需要 per-entry cell**：Pi 的 `ToolExecutionComponent.getRenderContext` 已把 `result.durationMs` 作为公开字段 `context.durationMs` 交给渲染器（Pi 自己的 interactive-mode.js 也是 `updateResult({ ...event.result, isError, durationMs })`），只要实时路径不丢它。都是公开 API，**不登记** `tool-exec-durationms` |
+| W3 | `CallLine`（`tools/common.ts`）：标记位 + 截断的主体 + 永不截断的暗色尾部 | 结果端只知道的摘要（`· 120 lines`、`· +3 −1`）经公开的 `context.state.callSummary` 交给调用行：`CallLine` 在 render 时才读尾部，那时 Pi 的 `updateDisplay()` 已跑过结果渲染器。调用行动词/路径一律 `toolOutput`、去掉 bold，read 的范围 `muted`；bash 失败行为 `✗ exit N · 输出末行`，超时/中止写原因（`✗ timed out after 30 seconds`）；`!cmd` 同规格（只有实时运行计时，回放没有耗时） |
+| W4 | `∴` 行 | **眉题规则在 `AssistantBlock` 里执行**，不在 W7：一条消息内「思考段之后、下一个工具调用之前有没有正文」在消息内就能判断（正文在下一条消息里时中间必有工具调用）。流式时空的 text 部分也算正文，免得 `text_start` 到首个 delta 之间 `∴` 闪掉。被隐藏的思考让整条消息渲染 0 行，`GroupedMessages` 会桥接它：两侧的只读工具现在合并成一组（Ctrl+T 展开思考后又分开）。展开态与流式尾行的内容列随 W6 移到第 5 列（D22 对齐测试要求与正文同列），思考对拍测试改为 padding 5 比较 |
+| W5 | 去掉回复时钟 | 无 |
+| W6 | `MeasuredMarkdown`（`src/tui/markdown-layout.ts`） | 顶层代码块**直接绘制**（取 `token.lang` 首词做高亮与标签、`wrapTextWithAnsi` 全宽折行、复刻 Pi 的未闭合围栏裁剪），不再经 Pi `Markdown` + `codeBlockBorder` 后处理；`codeBlockBorder` 覆盖只管嵌在列表/引用里的代码块（返回 `""` 或语言名）。代码块空行也保留竖轨。转换器把代码段变成别的 markdown 时（如图表），按全宽 markdown 画。跨段的引用式链接定义（`[x]: url` 在代码块另一侧）会失效，LLM 输出里少见，接受。**`/settings` 的"正文行宽"项未做**：Epi 还没有存放自有显示设置的地方（Pi 的 SettingsManager 无通用键值），measure 先作为构造参数（默认 76，`Infinity` = 不限），设置项另立任务 |
+| W9 | 主题色 | 日间 `mdCodeBlock` 定为 `#5c6b77`，还没对截图定稿 |
+| W2/W7/W8 | `src/tui/spine.ts` + `GroupedMessages` 重写为 `Placed` 布局 | 回合 = 声明了 `spineRole` 的块的连续段（白名单），单独的 `!cmd` 不画脊柱。**动效只在运行中回合的末端 8 行（tip）**，其上各行已与沉淀后完全相同：pi-tui 主屏渲染器遇到屏外行变化会整屏重绘（清 scrollback），整条脊柱一起脉冲在超过一屏的回合上每帧触发（terminal-progress 测试超时暴露）。运行中工具的 `├─` 常亮（静态色，不逐帧变）。`AssistantBlock` 改为自己记录子块行范围（逐行闪烁与点击分派共用，`src/tui/rows.ts`）。`Worked for` 改为 `TurnFooter`（dim、第 4 列起），由脊柱画 `╰─`。回放仍没有 footer，脊柱止于最后一行 |
+
+pi-internals 新登记：`tool-exec-leading-blank`、`pi-tui-marked`、`markdown-codeblock-border`、`markdown-list-bullet`（§4 的 `tool-exec-durationms` 不需要，见 W1）。
+
+验证：完整测试 1203/1203（禁网沙箱）；`model-snapshot --diff` 无变化；`scripts/probes/transcript-layout-prototype.mjs` 仍可跑。**未做**：Orca 真实终端 + 真实模型逐帧核对动画（日夜两主题）、`/settings` 行宽项、合并前审查。
