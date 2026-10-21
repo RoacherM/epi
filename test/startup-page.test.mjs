@@ -237,20 +237,24 @@ test("the welcome page shimmers and pulses: frames differ over time", () => {
 
 // docs/tui-motion-design.md §3.1: the blend follows the theme's color mode.
 test("animated colors are 24-bit in truecolor and indexed in 256-color mode", () => {
-  piTui.setCapabilityOverrides({ trueColor: false });
-  let indexed;
-  try {
-    indexed = createEpiTheme("dark");
-  } finally {
-    piTui.setCapabilityOverrides({});
-    piTui.resetCapabilitiesCache();
-  }
+  // Both modes pinned: the default depends on the terminal running the tests (CI is not truecolor).
+  const themeIn = (trueColor) => {
+    piTui.setCapabilityOverrides({ trueColor });
+    try {
+      return createEpiTheme("dark");
+    } finally {
+      piTui.setCapabilityOverrides({});
+      piTui.resetCapabilitiesCache();
+    }
+  };
+  const indexed = themeIn(false);
   assert.equal(indexed.getColorMode(), "256color");
   const frame = renderAnimatedEpiStartupPage(identity, indexed, 120, {}, 0.9).join("\n");
   assert.doesNotMatch(frame, /\x1b\[38;2;/);
   assert.match(frame, /\x1b\[38;5;\d+m/);
-  const truecolor = renderAnimatedEpiStartupPage(identity, createEpiTheme("dark"), 120, {}, 0.9).join("\n");
-  assert.match(truecolor, /\x1b\[38;2;/);
+  const full = themeIn(true);
+  assert.equal(full.getColorMode(), "truecolor");
+  assert.match(renderAnimatedEpiStartupPage(identity, full, 120, {}, 0.9).join("\n"), /\x1b\[38;2;/);
 });
 
 // docs/tui-motion-design.md §3.2: the timer runs while the transcript draws the page and stops
