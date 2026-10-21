@@ -31,6 +31,49 @@ agent 每次调用 `write` 或 `edit` 工具、工具还没执行时，preview �
 - 账在工具执行前记，所以编辑失败或没改出差别的文件也在账上；列表只列和"之前"确实不同的文件。
 - 一轮按 `agent_start` 计。Pi 的自动重试会再发一次 `agent_start`，扩展分不出来（`agent_end` 的 `willRetry` 只给 Pi 自己的监听者），所以重试算新的一轮。
 
+账是怎么记、怎么用的（`preview.ts` 订阅 Pi 的事件，`ledger.ts` 存快照，视图打开时才和磁盘比较）：
+
+```text
+┌──────┐ ┌────┐             ┌────────┐        ┌──────┐    ┌──────┐
+│ 用户 │ │ Pi │             │ 变更账 │        │ 磁盘 │    │ 视图 │
+└───┬──┘ └──┬─┘             └────┬───┘        └───┬──┘    └───┬──┘
+    │       │                    │                │           │
+    │发消息 │                    │                │           │
+    ├──────▶│                    │                │           │
+    │       │                    │                │           │
+    │       │    agent_start     │                │           │
+    │       ├───────────────────▶│                │           │
+    │       │                    │                │           │
+    │       │tool_call（执行前） │                │           │
+    │       ├───────────────────▶│                │           │
+    │       │                    │                │           │
+    │       │                    │   读当前内容   │           │
+    │       │                    ├───────────────▶│           │
+    │       │                    │                │           │
+    │       │                    ├╌╌╮             │           │
+    │       │                    │  │ 记首次快照  │           │
+    │       │                    │◄╌╯             │           │
+    │       │                    │                │           │
+    │       │             工具写文件              │           │
+    │       ├────────────────────────────────────▶│           │
+    │       │                    │                │           │
+    │       │                /preview             │           │
+    ├────────────────────────────────────────────────────────▶│
+    │       │                    │                │           │
+    │       │                    │       changes(scope)       │
+    │       │                    │◄───────────────────────────┤
+    │       │                    │                │           │
+    │       │                    │                │读当前内容 │
+    │       │                    │                │◄──────────┤
+    │       │                    │                │           │
+    │       │            列出有差别的文件         │           │
+    │◄╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+    │       │                    │                │           │
+┌───┴──┐ ┌──┴─┐             ┌────┴───┐        ┌───┴──┐    ┌───┴──┐
+│ 用户 │ │ Pi │             │ 变更账 │        │ 磁盘 │    │ 视图 │
+└──────┘ └────┘             └────────┘        └──────┘    └──────┘
+```
+
 ## 3. 界面
 
 整页（占满终端），Esc 一层层退出，最外层 Esc 回到对话，停在原来的位置。
@@ -44,9 +87,28 @@ agent 每次调用 `write` 或 `edit` 工具、工具还没执行时，preview �
 
 最下面一行常驻 agent 的状态：`● agent running` 或 `○ agent idle`，以及本轮改了几个文件。
 
+下面的画面都是真实运行截下来的（92×14 终端，测试用的假模型改了 `app.ts` 两处、新建了 `notes.md`；`test/fixtures/faux-edit-tool.mjs`）。
+
 ### 3.1 改动列表
 
-每行：路径、`+增 -删`、`new` 标记（新文件）。`t` 在"本次会话"和"上一轮"之间切换。
+每行：状态（`M` 改动、`A` 新文件、`D` 删除）、路径、`+增 -删`。`t` 在"本次会话"和"上一轮"之间切换。
+
+```text
+╭──────────────────────────────────────────────────────────────────────────────────────────╮
+│  preview  changes · this session · 2 files                                               │
+│ M  app.ts                                                                          +3 -2 │
+│ A  notes.md                                                                        +3 -0 │
+│                                                                                          │
+│                                                                                          │
+│                                                                                          │
+│                                                                                          │
+│                                                                                          │
+│                                                                                          │
+│                                                                                          │
+│ j/k move · gg/G ends · enter diff · t session/turn · i insert · tab files · q close  1/2 │
+╰──────────────────────────────────────────────────────────────────────────────────────────╯
+ ○ agent idle · 2 files changed this session
+```
 
 ### 3.2 diff
 
@@ -54,15 +116,75 @@ agent 每次调用 `write` 或 `edit` 工具、工具还没执行时，preview �
 - 增删的行用 diff 的颜色，行内具体改动的词反显（两行合起来超过 2000 个字符时不做：逐词比较没有上限，长行会卡住界面）；上下文行有语法高亮。
 - `]c` / `[c` 跳到下一段、上一段改动；`d` 打开完整文件。
 
+```text
+╭──────────────────────────────────────────────────────────────────────────────────────────╮
+│  preview  app.ts this session · +3 -2                                                    │
+│       ⋯ 1 unchanged line                                                                ┃│
+│ 2  2   const value2 = 2;                                                                ┃│
+│ 3  3   const value3 = 3;                                                                ┃│
+│ 4  4   const value4 = 4;                                                                ┃│
+│ 5    - export function getSession() { return readToken(); }                             ││
+│    5 + export function getSession() { return readTokenSync(); }                         ││
+│ 6  6   const value6 = 6;                                                                ││
+│ 7  7   const value7 = 7;                                                                ││
+│ 8  8   const value8 = 8;                                                                ││
+│ j/k scroll · gg/G ends · ]c [c changes · / search · : line · d file · w wrap · i insert …│
+╰──────────────────────────────────────────────────────────────────────────────────────────╯
+ ○ agent idle · 2 files changed this session
+```
+
+左边两列是旧、新行号；`⋯ N unchanged lines` 是折起来的上下文（不是文件里的字，搜索不会命中它）；右边一列是滚动条。
+
 ### 3.3 搜索和跳转（diff 和完整文件里都有）
 
 - `/` 输入要找的文字，回车；`n` / `N` 下一个、上一个；匹配处反显。
 - `:` 输入行号，回车跳过去（diff 里按新文件的行号）。
 - 每个文件记住上次看到的位置，在同一次 Epi 运行里有效。
+- 移动键和别的页面一样（`j/k`、计数、`gg`/`G`、翻页，见 [tui-buffer-components.md](tui-buffer-components.md)）。
+
+完整文件（diff 里按 `d`，或在文件浏览里按 Enter）：
+
+```text
+╭──────────────────────────────────────────────────────────────────────────────────────────╮
+│  preview  app.ts 41 lines · 842B                                                         │
+│ 1 const value1 = 1;                                                                     ┃│
+│ 2 const value2 = 2;                                                                     ┃│
+│ 3 const value3 = 3;                                                                     ││
+│ 4 const value4 = 4;                                                                     ││
+│ 5 export function getSession() { return readTokenSync(); }                              ││
+│ 6 const value6 = 6;                                                                     ││
+│ 7 const value7 = 7;                                                                     ││
+│ 8 const value8 = 8;                                                                     ││
+│ 9 const value9 = 9;                                                                     ││
+│ j/k scroll · / search · : line · gg/G ends · w wrap off · i insert · q back  1-9/41 0%   │
+╰──────────────────────────────────────────────────────────────────────────────────────────╯
+ ○ agent idle · 2 files changed this session
+```
 
 ### 3.4 实时
 
 页面开着时 agent 继续改文件：改动列表和打开的 diff 在下一次重绘时更新。
+
+### 3.5 文件浏览（0.1 的三栏浏览器）
+
+左栏是上一级目录，中栏是当前目录，右栏预览选中的文件；最下一行是选中文件的权限、大小、时间。`Space` 标记、`i` 把选中或标记的文件以 `@路径` 插进输入框、`/` 过滤。
+
+```text
+╭──────────────────────────────────────────────────────────────────────────────────────────╮
+│  preview  ~/project                                                                      │
+│ ▸ home/        │ · app.ts                842B │ 1 const value1 = 1;                     ┃│
+│ ▸ project/     │ · notes.md               30B │ 2 const value2 = 2;                     ┃│
+│                │                              │ 3 const value3 = 3;                     ││
+│                │                              │ 4 const value4 = 4;                     ││
+│                │                              │ 5 export function getSession() { return…││
+│                │                              │ 6 const value6 = 6;                     ││
+│                │                              │ 7 const value7 = 7;                     ││
+│                │                              │ 8 const value8 = 8;                     ││
+│                │                              │ 9 const value9 = 9;                     ││
+│ -rw-r--r--  842B  2026-10-21 18:25 enter view · i insert · space mark · / filter · . hid…│
+╰──────────────────────────────────────────────────────────────────────────────────────────╯
+ ○ agent idle · 2 files changed this session
+```
 
 ## 4. 实现
 
@@ -70,9 +192,28 @@ agent 每次调用 `write` 或 `edit` 工具、工具还没执行时，preview �
 |---|---|
 | `preview/ledger.ts` | 变更账：监听 `tool_call` 和 `agent_start`，存快照，给出改动列表 |
 | `preview/diff.ts` | 用 Pi 自带的 `diff` 包（`structuredPatch`、`diffWordsWithSpace`）算出带行号的 diff 行 |
-| `preview/search.ts` | 搜索和行号输入，diff 和完整文件共用 |
+| `src/tui/buffer/search.ts` | 搜索和行号输入，diff、完整文件、`/review`、`/trace` 和工具块悬浮窗共用 |
 | `preview/changes.ts` | 改动列表和 diff 视图 |
 | `preview/page.ts` | 整页：在"改动"和"文件"之间切换，底部状态行 |
+
+模块之间的依赖（上层用下层，不反过来；`/review` 和播放面板也在同一个扩展里）：
+
+```text
+入口   preview.ts   注册 /preview /review，订阅 tool_call / agent_start / agent_end / session_shutdown，
+                    对外的播放器频道 epi/preview/player/v1
+         │
+页面   page.ts  /preview 整页：改动 ⇄ 文件 两个标签、底部 agent 状态
+       ├── changes.ts   改动列表、单文件 diff
+       └── view.ts      文件浏览、完整文件、图片和视频
+       review-page.ts   /review 连续审查页
+       ├── source.ts    审查来源：变更账 / git 未暂存 / git 已暂存
+       └── notes.ts     批注（锚定内容哈希，刷新时判断是否过期）
+         │
+数据   ledger.ts 变更账 · diff.ts · files.ts（读目录和文本） · git.ts
+       media.ts 图片与视频 · player-pane.ts 播放面板 · draw.ts 定宽、图片
+         │
+共享   src/tui/buffer/  motion-keys · navigation · search · scrollbar（tui-buffer-components.md）
+```
 
 只用 Pi 的扩展接口，不碰内核，模型看到的内容不变。
 
@@ -88,13 +229,51 @@ agent 每次调用 `write` 或 `edit` 工具、工具还没执行时，preview �
 
 ### 5.2 怎么拿到
 
+```ts
+const request: { player?: PreviewPlayerApi } = {};
+pi.events.emit("epi/preview/player/v1", request);   // emit 返回时 request.player 已经填好
+const pane = await request.player?.createPane(source, { tui, theme, hint });
 ```
-其他扩展                                preview
-  request = {}
-  pi.events.emit("epi/preview/player/v1", request) ──▶ 监听方：request.player = api
-  （emit 返回时 request.player 已经填好）
-  pane = await request.player.createPane(source, { tui, theme, hint })
+
+```text
+┌──────────┐   ┌───────────┐  ┌─────────┐   ┌──────┐
+│ 其他扩展 │   │ pi.events │  │ preview │   │ 面板 │
+└─────┬────┘   └─────┬─────┘  └────┬────┘   └───┬──┘
+      │              │             │            │
+      │emit(request) │             │            │
+      ├─────────────▶│             │            │
+      │              │             │            │
+      │              │  同步调用   │            │
+      │              ├────────────▶│            │
+      │              │             │            │
+      │       request.player       │            │
+      │◄╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤            │
+      │              │             │            │
+      │        createPane()        │            │
+      ├───────────────────────────▶│            │
+      │              │             │            │
+      │              │             │按需 import │
+      │              │             ├───────────▶│
+      │              │             │            │
+      │         PlayerPane         │            │
+      │◄╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤            │
+      │              │             │            │
+── loop 每帧 ────────────────────────────────────────
+      │              │             │            │
+      │             render / input │            │
+      ├────────────────────────────────────────▶│
+      │              │             │            │
+── end ──────────────────────────────────────────────
+      │              │             │            │
+      │              │ dispose()   │            │
+      ├────────────────────────────────────────▶│
+      │              │             │            │
+┌─────┴────┐   ┌─────┴─────┐  ┌────┴────┐   ┌───┴──┐
+│ 其他扩展 │   │ pi.events │  │ preview │   │ 面板 │
+└──────────┘   └───────────┘  └─────────┘   └──────┘
 ```
+
+preview 在自己的 `session_shutdown` 时回收还没回收的面板（见 5.3）。
 
 - Pi 的 `pi.events.emit` 同步调用每个监听方（Node 的 EventEmitter），所以 `emit` 返回时请求对象已经填好。`src/hook-events.ts` 的 `epi/hooks/task/v1` 已经这样用；这依赖 Pi 的实现，登记在 pi-internals.md。
 - 什么时候拿：用到时再拿（例如按下"播放"时），不在扩展加载时拿，所以和扩展的加载顺序无关。
