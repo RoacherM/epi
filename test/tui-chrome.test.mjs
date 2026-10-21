@@ -205,11 +205,13 @@ test("tool blocks show a rail while running, then a bullet, and indent results u
   assert.equal(framed.renderShell, "self");
   const args = { command: "npm test" };
   const running = plain(framed.renderCall(args, theme, renderContext({ args, isPartial: true })).render(80)[0]);
-  assert.equal(running, "┃  ◆ $ npm test");
-  const done = plain(framed.renderCall(args, theme, renderContext({ args })).render(80)[0]);
-  assert.equal(done, "   ◆ $ npm test");
+  assert.equal(running, "┃  $ npm test");
+  const done = plain(framed.renderCall(args, theme, renderContext({ args, durationMs: 1500 })).render(80)[0]);
+  assert.equal(done, "   $ npm test  1.5s");
   const result = framed.renderResult({ content: [{ type: "text", text: "ok" }] }, { expanded: false, isPartial: false }, theme, renderContext({ args }));
-  assert.equal(plain(result.render(80)[0]), "     exit 0");
+  assert.deepEqual(result.render(80), [], "success takes no row");
+  const failed = framed.renderResult({ content: [{ type: "text", text: "boom\n\nCommand exited with code 1" }] }, { expanded: false, isPartial: false }, theme, renderContext({ args, isError: true }));
+  assert.equal(plain(failed.render(80)[0]), "     ✗ exit 1 · boom");
   assertFits(framed.renderCall({ command: "x".repeat(200) }, theme, renderContext({})));
 });
 

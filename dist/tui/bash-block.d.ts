@@ -22,6 +22,9 @@ export declare class UserBashBlock implements Component {
     private outputLines;
     private status;
     private exitCode;
+    /** Live runs only: a replayed `bashExecution` message has no duration, so it shows none. */
+    private startedAt;
+    private durationMs;
     constructor(theme: Theme, command: string, excludeFromContext: boolean, onInspect?: ((target: InspectTarget) => void) | undefined);
     /** Replays a finished `bashExecution` session message after /new, /resume or /reload. */
     static fromMessage(theme: Theme, message: FinishedBashMessage, onInspect?: (target: InspectTarget) => void): UserBashBlock;
@@ -29,7 +32,11 @@ export declare class UserBashBlock implements Component {
     setComplete(exitCode: number | undefined, cancelled: boolean): void;
     /** The output as lines, without the single trailing newline most commands leave. */
     private lines;
+    /** Same layout as a model's bash call (tools/mutating.ts): the marker, the shortened command and
+     * a tail that is never cut; output rows under it; a status row only while running, when
+     * cancelled, or when the command failed. */
     render(width: number): string[];
+    private statusText;
     /** The `… +N lines` row (the call line, then two output rows above it) opens the full output. */
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
     invalidate(): void;

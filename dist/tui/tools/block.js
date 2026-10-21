@@ -1,6 +1,6 @@
 import { motionTime, railGlyph } from "../motion.js";
 import { piTui } from "../pi-tui.js";
-import { LinesComponent, textContent } from "./common.js";
+import { CallLine, LinesComponent, textContent } from "./common.js";
 // Rail column, then padding so `◆` lines up with assistant text (transcript CONTENT_PAD = 3).
 const CALL_PREFIX = 3;
 // Result rows start under the call text, after `◆ `.
@@ -44,7 +44,7 @@ class Railed {
         // The result's rows continue the call line's pulse, one row further down.
         const firstRow = this.isCall ? 0 : 1;
         const rail = (index) => (this.tone === "running" ? railGlyph(this.theme, firstRow + index, t) : " ");
-        const bullet = this.theme.fg(this.tone === "error" ? "error" : this.tone === "running" ? "accent" : "muted", "◆ ");
+        const bullet = this.marker();
         const contentWidth = Math.max(1, width - prefix - (this.isCall ? 2 : 0));
         return this.inner.render(contentWidth).map((line, index) => {
             const lead = `${rail(index)}${" ".repeat(prefix - 1)}`;
@@ -52,6 +52,12 @@ class Railed {
                 return lead + line;
             return lead + (index === 0 ? bullet : "  ") + line;
         });
+    }
+    /** `$` stays the shell's amber unless the command failed; `◆` follows the tool's state. */
+    marker() {
+        if (this.inner instanceof CallLine && this.inner.marker === "$")
+            return this.theme.fg(this.tone === "error" ? "error" : "bashMode", "$ ");
+        return this.theme.fg(this.tone === "error" ? "error" : this.tone === "running" ? "accent" : "muted", "◆ ");
     }
     invalidate() {
         this.inner.invalidate();

@@ -6,24 +6,22 @@ import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 
 import type { InspectTarget } from "../buffer/inspector.js";
-import { isErrorResult, LinesComponent, textContent, truncateOutputLines } from "./common.js";
+import { CallLine, failureRow, isErrorResult, LinesComponent, setCallSummary, shortenCommand, textContent, truncateOutputLines } from "./common.js";
 import type { ToolRenderContext, ToolRenderers } from "./types.js";
 
-function parseBashOutput(rawText: string, isError: boolean): { exitCode: number; lines: string[] } {
+/** Bash output without Pi's trailing status paragraph, and that status as a short label (`exit 2`,
+ * `timed out after 30 seconds`); `failure` is undefined for a command that succeeded. */
+function parseBashOutput(rawText: string, isError: boolean): { failure: string | undefined; exitLabel: string; lines: string[] } {
   let text = rawText.replace(/\r\n/g, "\n");
-  let exitCode = isError ? 1 : 0;
+  let failure = isError ? "failed" : undefined;
 
   // Pi's bash tool appends status as the trailing paragraph on failure or termination.
   const statusMatch = text.match(
     /(?:^|\n\n)(Command exited with code (\d+)|Command terminated without an exit code|Command timed out after [^\n]+|Command aborted)$/,
   );
 
-  if (statusMatch && statusMatch.index !== undefined) {
-    if (statusMatch[2] !== undefined) {
-      exitCode = parseInt(statusMatch[2], 10);
-    } else {
-      exitCode = 1;
-    }
+  if (statusMatch && statusMatch.index !== undefined && statusMatch[1] !== undefined) {
+    failure = statusMatch[2] !== undefined ? `exit ${statusMatch[2]}` : statusMatch[1].replace(/^Command /, "");
     text = text.slice(0, statusMatch.index);
   }
 
@@ -33,7 +31,13 @@ function parseBashOutput(rawText: string, isError: boolean): { exitCode: number;
 
   text = text.trimEnd();
   const lines = text.length > 0 ? text.split("\n") : [];
-  return { exitCode, lines };
+  return { failure, exitLabel: failure ?? "exit 0", lines };
+}
+
+/** `✗ exit 1 · <last output line>`: the status and the line most likely to say why. */
+function bashFailureRow(theme: Theme, failure: string, lines: string[]): string {
+  const last = lines.findLast((line) => line.trim() !== "")?.trim();
+  return failureRow(theme, last === undefined ? failure : `${failure} · ${last}`);
 }
 
 /** The file an edit/write call targets, relative to the cwd; "" when the call names none. */
@@ -44,9 +48,10 @@ function callPath(args: any, context?: ToolRenderContext): string {
   return cwd ? relative(cwd, resolve(cwd, rawPath)) : rawPath;
 }
 
-function formatCallLine(verb: string, args: any, theme: Theme, context?: ToolRenderContext): string {
+function callLine(verb: string, args: any, theme: Theme, context: ToolRenderContext, extra = ""): CallLine {
   const relPath = callPath(args, context);
-  return relPath ? `${theme.bold(verb)} ${relPath}` : theme.bold(verb);
+  const body = theme.fg("toolOutput", relPath ? `${verb} ${relPath}` : verb);
+  return new CallLine("◆", theme, body, context, extra);
 }
 
 /** The inspector's title for an edit/write block: the call line, unstyled. */
@@ -245,11 +250,12 @@ function renderDiffExpanded(items: FormattedItem[], theme: Theme): string[] {
   });
 }
 
-/** edit and write errors: the first line collapsed, the whole text expanded, painted once as `error`. */
+/** edit and write errors: `✗` and the first line collapsed, the whole text expanded. */
 function renderError(result: AgentToolResult<any>, expanded: boolean, theme: Theme): Component {
   const errorText = textContent(result) || "Error";
-  const firstLine = errorText.split("\n")[0] ?? "Error";
-  return new LinesComponent(expanded ? theme.fg("error", errorText) : theme.fg("error", firstLine));
+  const [firstLine = "Error", ...rest] = errorText.split("\n");
+  if (!expanded) return new LinesComponent(failureRow(theme, firstLine));
+  return new LinesComponent([failureRow(theme, firstLine), ...rest.map((line) => theme.fg("error", line))]);
 }
 
 function renderUnifiedDiffResult(
@@ -266,10 +272,9 @@ function renderUnifiedDiffResult(
   const diffStr = details?.diff ?? "";
   const parsed = parseDiffString(diffStr);
 
-  if (!options.expanded) {
-    const summary = formatDiffSummary(parsed.additions, parsed.removals, theme);
-    return new LinesComponent(summary);
-  }
+  // The `+3 −1` sits on the call line; collapsed, a successful edit takes no row of its own.
+  setCallSummary(context, formatDiffSummary(parsed.additions, parsed.removals, theme));
+  if (!options.expanded) return new LinesComponent([]);
 
   const items = collapseDiffContext(parsed.lines, parsed.trailingSkipped);
   const lines = renderDiffExpanded(items, theme);
@@ -291,14 +296,12 @@ function renderWriteNewFileResult(
   theme: Theme,
   title: string,
 ): Component {
-  const clean = contentStr.replace(/\r\n/g, "\n").replace(/\n$/, "");
-  const lines = clean.length > 0 ? clean.split("\n") : [];
+  const lines = writtenLines(contentStr);
+  const clean = lines.join("\n");
   const lineCount = lines.length;
 
-  if (!options.expanded) {
-    const label = `${lineCount} ${lineCount === 1 ? "line" : "lines"}`;
-    return new LinesComponent(theme.fg("muted", label));
-  }
+  // The line count sits on the call line (writeRenderers.renderCall).
+  if (!options.expanded) return new LinesComponent([]);
 
   const displayLines = lines.slice(0, 10);
   const gutterWidth = Math.max(String(displayLines.length).length, 2);
@@ -319,46 +322,51 @@ function renderWriteNewFileResult(
   return new LinesComponent(rendered, { rows: [displayLines.length], target });
 }
 
+/** The file's lines as written, without the final newline most files end with. */
+function writtenLines(content: string): string[] {
+  const clean = content.replace(/\r\n/g, "\n").replace(/\n$/, "");
+  return clean.length > 0 ? clean.split("\n") : [];
+}
+
 export const bashRenderers: ToolRenderers = {
-  renderCall(args, theme) {
+  renderCall(args, theme, context) {
     const fullCommand = typeof args?.command === "string" ? args.command : "";
-    const firstLine = fullCommand.split("\n")[0] ?? "";
-    return new LinesComponent(`$ ${theme.fg("bashMode", firstLine)}`);
+    const { text, extraLines } = shortenCommand(fullCommand, context.cwd);
+    const extra = extraLines > 0 ? theme.fg("dim", `+${extraLines} lines`) : "";
+    return new CallLine("$", theme, theme.fg("toolOutput", text), context, extra);
   },
   renderResult(result, options, theme, context) {
-    const { exitCode, lines } = parseBashOutput(textContent(result), isErrorResult(result, context));
+    const { failure, exitLabel, lines } = parseBashOutput(textContent(result), isErrorResult(result, context));
 
     if (options.isPartial) {
       const partialLines = lines.length <= 3 ? lines : lines.slice(-3);
       return new LinesComponent(partialLines.map((l) => theme.fg("toolOutput", l)));
     }
 
-    if (!options.expanded) {
-      const statusText = exitCode === 0
-        ? theme.fg("muted", "exit 0")
-        : theme.fg("error", `exit ${exitCode}`);
-      return new LinesComponent(statusText);
-    }
+    // Success is the normal case and takes no row (docs/tui-transcript-layout-design.md R4): the
+    // call line's run time says it finished. Only a failure gets a row, collapsed or not.
+    const failureRows = failure === undefined ? [] : [bashFailureRow(theme, failure, lines)];
+    if (!options.expanded) return new LinesComponent(failureRows);
 
     const painted = lines.map((l) => theme.fg("toolOutput", l));
     const shown = truncateOutputLines(painted, (text) => theme.fg("muted", text));
-    if (shown.length === painted.length) return new LinesComponent(shown);
+    if (shown.length === painted.length) return new LinesComponent([...shown, ...failureRows]);
     // truncateOutputLines's ellipsis row (index 2) opens every line of the output.
     const command = typeof context.args?.command === "string" ? context.args.command : "";
     const target: InspectTarget = {
       title: `$ ${command.split("\n")[0] ?? ""}`,
-      subtitle: `${lines.length} lines · exit ${exitCode}`,
+      subtitle: `${lines.length} lines · ${exitLabel}`,
       lines: painted,
       firstLineNumber: 1,
       text: lines.join("\n"),
     };
-    return new LinesComponent(shown, { rows: [2], target });
+    return new LinesComponent([...shown, ...failureRows], { rows: [2], target });
   },
 };
 
 export const editRenderers: ToolRenderers = {
   renderCall(args, theme, context) {
-    return new LinesComponent(formatCallLine("edit", args, theme, context));
+    return callLine("edit", args, theme, context);
   },
   renderResult(result, options, theme, context) {
     return renderUnifiedDiffResult(result, options, theme, context);
@@ -367,7 +375,9 @@ export const editRenderers: ToolRenderers = {
 
 export const writeRenderers: ToolRenderers = {
   renderCall(args, theme, context) {
-    return new LinesComponent(formatCallLine("write", args, theme, context));
+    const count = typeof args?.content === "string" ? writtenLines(args.content).length : undefined;
+    const extra = count === undefined ? "" : theme.fg("dim", `${count} ${count === 1 ? "line" : "lines"}`);
+    return callLine("write", args, theme, context, extra);
   },
   renderResult(result, options, theme, context) {
     if (isErrorResult(result, context)) {

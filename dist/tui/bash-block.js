@@ -7,7 +7,7 @@ import { keyText } from "@earendil-works/pi-coding-agent";
 import { errorText } from "./errors.js";
 import { motionTime, railGlyph } from "./motion.js";
 import { piTui } from "./pi-tui.js";
-import { truncateOutputLines } from "./tools/common.js";
+import { failureRow, fitWithTail, formatToolDuration, shortenCommand, truncateOutputLines } from "./tools/common.js";
 // Matches tools/block.ts: a rail column, then 2 columns of padding before the `◆` bullet; output
 // lines sit two columns further in, under the bullet's text.
 const CALL_PREFIX = 3;
@@ -27,6 +27,9 @@ export class UserBashBlock {
     outputLines = [];
     status = "running";
     exitCode;
+    /** Live runs only: a replayed `bashExecution` message has no duration, so it shows none. */
+    startedAt = Date.now();
+    durationMs;
     constructor(theme, command, excludeFromContext, 
     // Opens the full output from the `… +N lines` row of a finished, truncated block.
     onInspect) {
@@ -38,6 +41,7 @@ export class UserBashBlock {
     /** Replays a finished `bashExecution` session message after /new, /resume or /reload. */
     static fromMessage(theme, message, onInspect) {
         const block = new UserBashBlock(theme, message.command, message.excludeFromContext ?? false, onInspect);
+        block.startedAt = undefined;
         if (message.output)
             block.appendOutput(message.output);
         block.setComplete(message.exitCode, message.cancelled);
@@ -55,35 +59,47 @@ export class UserBashBlock {
     setComplete(exitCode, cancelled) {
         this.exitCode = exitCode;
         this.status = cancelled ? "cancelled" : exitCode === undefined || exitCode !== 0 ? "error" : "done";
+        if (this.startedAt !== undefined)
+            this.durationMs = Date.now() - this.startedAt;
     }
     /** The output as lines, without the single trailing newline most commands leave. */
     lines() {
         const text = this.outputLines.join("\n").replace(/\n$/, "");
         return text === "" ? [] : text.split("\n");
     }
+    /** Same layout as a model's bash call (tools/mutating.ts): the marker, the shortened command and
+     * a tail that is never cut; output rows under it; a status row only while running, when
+     * cancelled, or when the command failed. */
     render(width) {
         const running = this.status === "running";
         const t = motionTime();
         const rail = (row) => (running ? railGlyph(this.theme, row, t) : " ");
-        const bulletTone = running ? "accent" : this.status === "error" ? "error" : "muted";
-        const bullet = this.theme.fg(bulletTone, "◆ ");
-        const verb = this.excludeFromContext ? "!!" : "$";
-        const callLine = `${rail(0)}${" ".repeat(CALL_PREFIX - 1)}${bullet}${this.theme.fg("bashMode", this.theme.bold(`${verb} ${this.command}`))}`;
+        const marker = this.theme.fg(this.status === "error" ? "error" : "bashMode", this.excludeFromContext ? "!!" : "$");
+        const { text, extraLines } = shortenCommand(this.command, undefined);
+        const extra = extraLines > 0 ? this.theme.fg("dim", ` · +${extraLines} lines`) : "";
+        const time = this.status === "done" && this.durationMs !== undefined ? `  ${this.theme.fg("dim", formatToolDuration(this.durationMs))}` : "";
+        const callPrefix = `${rail(0)}${" ".repeat(CALL_PREFIX - 1)}${marker} `;
+        const body = fitWithTail(this.theme.fg("toolOutput", text), extra + time, Math.max(1, width - piTui.visibleWidth(callPrefix)), this.theme.fg("dim", "…"));
+        const callLine = callPrefix + body;
         const lines = this.lines();
         // While running, show the live tail (matches tools/mutating.ts bashRenderers' `isPartial` case);
         // once finished, apply the fixed head/ellipsis/tail rule instead.
         const shown = running ? lines.slice(-3) : truncateBashOutput(lines);
         const bodyPrefix = (row) => `${rail(row)}${" ".repeat(RESULT_PREFIX - 1)}`;
-        const body = shown.map((entry, index) => bodyPrefix(index + 1) + this.theme.fg("toolOutput", entry));
-        const statusRow = shown.length + 1;
-        const statusLine = running
-            ? `${bodyPrefix(statusRow)}${this.theme.fg("muted", `Running… (${keyText("app.interrupt")} to cancel)`)}`
-            : this.status === "cancelled"
-                ? `${bodyPrefix(statusRow)}${this.theme.fg("warning", "(cancelled)")}`
-                : this.status === "error"
-                    ? `${bodyPrefix(statusRow)}${this.theme.fg("error", this.exitCode === undefined ? "failed" : `exit ${this.exitCode}`)}`
-                    : `${bodyPrefix(statusRow)}${this.theme.fg("muted", "exit 0")}`;
-        return [callLine, ...body, statusLine].map((line) => piTui.truncateToWidth(line, width));
+        const rows = shown.map((entry, index) => bodyPrefix(index + 1) + this.theme.fg("toolOutput", entry));
+        const status = this.statusText();
+        if (status !== undefined)
+            rows.push(bodyPrefix(shown.length + 1) + status);
+        return [callLine, ...rows].map((line) => piTui.truncateToWidth(line, width));
+    }
+    statusText() {
+        if (this.status === "running")
+            return this.theme.fg("muted", `Running… (${keyText("app.interrupt")} to cancel)`);
+        if (this.status === "cancelled")
+            return this.theme.fg("warning", "(cancelled)");
+        if (this.status === "error")
+            return failureRow(this.theme, this.exitCode === undefined ? "failed" : `exit ${this.exitCode}`);
+        return undefined;
     }
     /** The `… +N lines` row (the call line, then two output rows above it) opens the full output. */
     handleMouse(event) {

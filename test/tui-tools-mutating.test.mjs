@@ -18,8 +18,9 @@ import {
 const theme = createEpiTheme("dark");
 // The theme picks truecolor or 256-color codes from the terminal, so compare against its own codes.
 const fg = (color) => theme.getFgAnsi(color);
+const strip = (text) => text.replace(/\x1b\[[0-9;]*m/g, "");
 
-function assertWidths(component, widths = [40, 80, 120]) {
+function assertWidths(component, widths = [40, 80, 120, 230]) {
   for (const width of widths) {
     const lines = component.render(width);
     for (const line of lines) {
@@ -148,44 +149,79 @@ test("every rendered line fits widths 40, 80, and 120 including CJK paths", () =
   assertWidths(writeResExpanded);
 });
 
-test("bash: call line formats $ <command> with bashMode and first line only", () => {
+test("bash: call line shows the first line in the tool-output tone, then a dim `· +N lines` tail", () => {
   const component = bashRenderers.renderCall(
     { command: "npm test -- --watch\necho second line\nexit 0" },
     theme,
     {},
   );
+  assert.equal(component.marker, "$", "tools/block.ts paints the `$` marker in bashMode");
   const lines = component.render(120);
   assert.equal(lines.length, 1);
-  assert.match(lines[0], /^\$ /);
-  assert.ok(lines[0].includes("npm test -- --watch"));
+  assert.equal(strip(lines[0]), "npm test -- --watch · +2 lines");
   assert.ok(!lines[0].includes("second line"));
-  assert.ok(lines[0].includes(fg("bashMode")));
+  assert.ok(lines[0].startsWith(fg("toolOutput")));
+  assert.ok(lines[0].includes(`${fg("dim")}+2 lines`));
 });
 
-test("bash: collapsed result shows exit status only", () => {
+test("bash: a long first line is cut before the tail, which always shows whole", () => {
+  const component = bashRenderers.renderCall({ command: `${"x".repeat(200)}\nsecond` }, theme, { durationMs: 2100, state: {} });
+  for (const width of [40, 80, 120, 230]) {
+    const [line] = component.render(width);
+    assert.ok(piTui.visibleWidth(line) <= width);
+    assert.match(strip(line), width < 230 ? /x… · \+1 lines  2\.1s$/ : /^x{200} · \+1 lines  2\.1s$/, `width ${width}: ${strip(line)}`);
+  }
+});
+
+test("bash: the call line drops `cd <cwd> &&`, writes home as ~, and adds the run time once finished", () => {
+  const home = process.env.HOME;
+  const cwd = `${home}/proj`;
+  const call = (command, context) => strip(bashRenderers.renderCall({ command }, theme, { cwd, state: {}, ...context }).render(200)[0]);
+  assert.equal(call(`cd ${cwd} && npm test`), "npm test");
+  assert.equal(call(`cd "${cwd}"; npm test`), "npm test");
+  assert.equal(call(`cd ~/proj && ls ${home}/other`), "ls ~/other");
+  assert.equal(call(`cd ${cwd}/sub && make`), `cd ~/proj/sub && make`, "only the session's own cwd is left out");
+  assert.equal(call("npm test", { durationMs: 30 }), "npm test  30ms");
+  assert.equal(call("npm test", { durationMs: 140_500 }), "npm test  2m20s");
+  assert.equal(call("npm test", { durationMs: 30, isError: true }), "npm test", "a failure's row says what happened instead");
+  assert.equal(call("npm test", { durationMs: 30, isPartial: true }), "npm test");
+});
+
+test("bash: a successful collapsed result takes no row; a failure is one ✗ row with the last output line", () => {
   const res0 = bashRenderers.renderResult(
     { content: [{ type: "text", text: "stdout line 1\nstdout line 2\n" }] },
     { expanded: false, isPartial: false },
     theme,
     { isError: false },
   );
-  const lines0 = res0.render(80);
-  assert.equal(lines0.length, 1);
-  assert.ok(lines0[0].includes("exit 0"));
-  assert.ok(lines0[0].includes(fg("muted")));
-  assert.ok(!lines0[0].includes("stdout"));
+  assert.deepEqual(res0.render(80), []);
 
   const resFail = bashRenderers.renderResult(
-    { content: [{ type: "text", text: "some error\n\nCommand exited with code 127" }] },
+    { content: [{ type: "text", text: "first\nsome error\n\nCommand exited with code 127" }] },
     { expanded: false, isPartial: false },
     theme,
     { isError: true },
   );
   const linesFail = resFail.render(80);
   assert.equal(linesFail.length, 1);
-  assert.ok(linesFail[0].includes("exit 127"));
+  assert.equal(strip(linesFail[0]), "✗ exit 127 · some error");
   assert.ok(linesFail[0].includes(fg("error")));
-  assert.ok(!linesFail[0].includes("some error"));
+
+  const timedOut = bashRenderers.renderResult(
+    { content: [{ type: "text", text: "Command timed out after 30 seconds" }] },
+    { expanded: false, isPartial: false },
+    theme,
+    { isError: true },
+  );
+  assert.deepEqual(timedOut.render(80).map(strip), ["✗ timed out after 30 seconds"]);
+
+  const expandedFail = bashRenderers.renderResult(
+    { content: [{ type: "text", text: "one\ntwo\n\nCommand exited with code 2" }] },
+    { expanded: true, isPartial: false },
+    theme,
+    { isError: true },
+  );
+  assert.deepEqual(expandedFail.render(80).map(strip), ["one", "two", "✗ exit 2 · two"]);
 });
 
 test("bash: program output containing 'exit 3' on successful command does not misread exit code", () => {
@@ -196,10 +232,7 @@ test("bash: program output containing 'exit 3' on successful command does not mi
     theme,
     { isError: false },
   );
-  const collapsedLines = resCollapsed.render(80);
-  assert.equal(collapsedLines.length, 1);
-  assert.ok(collapsedLines[0].includes("exit 0"));
-  assert.ok(!collapsedLines[0].includes("exit 3"));
+  assert.deepEqual(resCollapsed.render(80), [], "a successful command takes no row, whatever its output says");
 
   const resExpanded = bashRenderers.renderResult(
     { content: [{ type: "text", text: outputWithExit }] },
@@ -292,18 +325,20 @@ test("edit: collapsed result shows summary +N −M without +/- symbol columns", 
     "+ 13 x12",
     "  5 e",
   ].join("\n");
+  const context = { cwd: "/w", state: {} };
   const res = editRenderers.renderResult(
     { details: { diff: diffText }, content: [] },
     { expanded: false, isPartial: false },
     theme,
-    {},
+    context,
   );
-  const lines = res.render(80);
-  assert.equal(lines.length, 1);
-  assert.ok(lines[0].includes("+12"));
-  assert.ok(lines[0].includes("−3"));
-  assert.ok(lines[0].includes(fg("toolDiffAdded")));
-  assert.ok(lines[0].includes(fg("toolDiffRemoved")));
+  assert.deepEqual(res.render(80), [], "collapsed, a successful edit takes no row");
+  // The summary goes on the call line instead (W3).
+  const call = editRenderers.renderCall({ path: "/w/a.ts" }, theme, { ...context, durationMs: 12 });
+  const [line] = call.render(80);
+  assert.equal(strip(line), "edit a.ts · +12 −3  12ms");
+  assert.ok(line.includes(fg("toolDiffAdded")));
+  assert.ok(line.includes(fg("toolDiffRemoved")));
 });
 
 test("edit: expanded result has no +/- column, line-number gutter, 3 context lines, and collapsed runs", () => {
@@ -362,7 +397,7 @@ test("write: call line shows verb and cwd-relative path", () => {
 
 test("write: new file collapsed shows line count, expanded shows first 10 lines", () => {
   const content = Array.from({ length: 25 }, (_, i) => `export const val${i + 1} = ${i + 1};`).join("\n");
-  const context = { args: { path: "new-file.ts", content } };
+  const context = { cwd: "/w", args: { path: "new-file.ts", content } };
 
   const resCollapsed = writeRenderers.renderResult(
     { content: [{ type: "text", text: "Successfully wrote to new-file.ts" }] },
@@ -370,10 +405,9 @@ test("write: new file collapsed shows line count, expanded shows first 10 lines"
     theme,
     context,
   );
-  const linesCollapsed = resCollapsed.render(80);
-  assert.equal(linesCollapsed.length, 1);
-  assert.ok(linesCollapsed[0].includes("25 lines"));
-  assert.ok(linesCollapsed[0].includes(fg("muted")));
+  assert.deepEqual(resCollapsed.render(80), [], "collapsed, the line count is on the call line instead");
+  const [callLine] = writeRenderers.renderCall(context.args, theme, { cwd: "/w" }).render(80);
+  assert.equal(strip(callLine), "write new-file.ts · 25 lines");
 
   const resExpanded = writeRenderers.renderResult(
     { content: [{ type: "text", text: "Successfully wrote to new-file.ts" }] },
@@ -415,9 +449,7 @@ test("real tools execution against temporary files fed to mutating renderers", a
   assert.ok(bashExpandedLines[5].includes("zeta"));
 
   const bashCollapsed = bashRenderers.renderResult(bashSuccess, { expanded: false, isPartial: false }, theme, context);
-  const bashCollapsedLines = bashCollapsed.render(80);
-  assert.equal(bashCollapsedLines.length, 1);
-  assert.ok(bashCollapsedLines[0].includes("exit 0"));
+  assert.deepEqual(bashCollapsed.render(80), []);
 
   // Real bash failure
   let bashFailResult;
@@ -432,7 +464,7 @@ test("real tools execution against temporary files fed to mutating renderers", a
   assert.ok(bashFailResult);
   assert.equal(bashFailResult.isError, true);
   const bashFailCollapsed = bashRenderers.renderResult(bashFailResult, { expanded: false, isPartial: false }, theme, { ...context, isError: true });
-  assert.ok(bashFailCollapsed.render(80)[0].includes("exit 5"));
+  assert.equal(strip(bashFailCollapsed.render(80)[0]), "✗ exit 5");
 
   // 2. Real write tool execution
   const write = createWriteTool(tmp);
@@ -444,7 +476,8 @@ test("real tools execution against temporary files fed to mutating renderers", a
   const writeContext = { ...context, args: { path: "test-file.txt", content: initialContent } };
 
   const writeCollapsed = writeRenderers.renderResult(writeRes, { expanded: false, isPartial: false }, theme, writeContext);
-  assert.ok(writeCollapsed.render(80)[0].includes("30 lines"));
+  assert.deepEqual(writeCollapsed.render(80), []);
+  assert.match(strip(writeRenderers.renderCall(writeContext.args, theme, writeContext).render(80)[0]), /^write test-file\.txt · 30 lines$/);
 
   const writeExpanded = writeRenderers.renderResult(writeRes, { expanded: true, isPartial: false }, theme, writeContext);
   const writeExpLines = writeExpanded.render(80);
@@ -458,13 +491,11 @@ test("real tools execution against temporary files fed to mutating renderers", a
     path: "test-file.txt",
     edits: [{ oldText: "line 15\n", newText: "line fifteen\nline fifteen-b\n" }],
   });
-  const editContext = { ...context, args: { path: "test-file.txt" } };
+  const editContext = { ...context, args: { path: "test-file.txt" }, state: {} };
 
   const editCollapsed = editRenderers.renderResult(editRes, { expanded: false, isPartial: false }, theme, editContext);
-  const editCollLines = editCollapsed.render(80);
-  assert.equal(editCollLines.length, 1);
-  assert.ok(editCollLines[0].includes("+2"));
-  assert.ok(editCollLines[0].includes("−1"));
+  assert.deepEqual(editCollapsed.render(80), []);
+  assert.equal(strip(editRenderers.renderCall(editContext.args, theme, editContext).render(80)[0]), "edit test-file.txt · +2 −1");
 
   const editExpanded = editRenderers.renderResult(editRes, { expanded: true, isPartial: false }, theme, editContext);
   const editExpLines = editExpanded.render(80);
