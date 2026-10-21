@@ -281,9 +281,26 @@ test("a new prompt after a replay doesn't wake the replayed turn's spine", () =>
   assert.equal(after[row], before[row]);
 });
 
+// A 320x320 PNG header is enough for pi-tui to size an image.
+function pngData() {
+  const png = Buffer.alloc(33);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]).copy(png);
+  png.writeUInt32BE(320, 16);
+  png.writeUInt32BE(320, 20);
+  return png.toString("base64");
+}
+const IMAGE_LINE = /\x1b_G|\x1b\]1337;File=/;
+
+/** The rows pi-tui's Image keeps for itself around its sequence line: Kitty the rows after it, iTerm2
+ * the rows before it (components/image.js). */
+function footprint(protocol, lines, imageHeight) {
+  const anchor = lines.findIndex((row) => IMAGE_LINE.test(row));
+  const first = protocol === "kitty" ? anchor : anchor - imageHeight + 1;
+  return Array.from({ length: imageHeight }, (_, index) => first + index);
+}
+
 for (const protocol of ["kitty", "iterm2"]) {
-  // Kitty reserves the empty rows after the image's line, iTerm2 the rows before it.
-  test(`an image's rows (${protocol}) stay empty for pi-tui to draw it, frame after frame`, async (t) => {
+  test(`an image's own rows (${protocol}) stay as drawn, frame after frame; the spacer before it keeps the spine`, async (t) => {
     const { ToolEntry, GroupedMessages } = await import("../dist/tui/tools/group.js");
     const caps = piTui.getCapabilities();
     piTui.setCapabilities({ ...caps, images: protocol });
@@ -291,33 +308,54 @@ for (const protocol of ["kitty", "iterm2"]) {
     let now = 10_000;
     Date.now = () => now;
     t.after(() => { piTui.setCapabilities(caps); Date.now = realNow; });
-    // A 320x320 PNG header is enough for pi-tui to size the image.
-    const png = Buffer.alloc(33);
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]).copy(png);
-    png.writeUInt32BE(320, 16);
-    png.writeUInt32BE(320, 20);
+    const data = pngData();
+    const imageHeight = new piTui.Image(data, "image/png", { fallbackColor: (text) => text }, { maxWidthCells: 60 }).render(80).length;
     const entry = new ToolEntry("image", "img", {}, {
       renderShell: "self",
       renderCall: () => ({ render: () => ["   ◆ image"], invalidate() {} }),
       renderResult: () => ({ render: () => [], invalidate() {} }),
     }, { requestRender() {} }, "/w", undefined);
-    entry.updateResult({ content: [{ type: "image", mimeType: "image/png", data: png.toString("base64") }], isError: false });
+    entry.updateResult({ content: [{ type: "image", mimeType: "image/png", data }], isError: false });
     t.after(() => entry.dispose());
     const messages = new piTui.Container();
     messages.addChild(entry);
     messages.addChild({ spineRole: "trunk", render: () => ["     next answer"], invalidate() {} });
     const group = new GroupedMessages(messages, { requestRender() {} }, theme, () => true);
     const original = messages.render(80);
-    const image = original.findIndex((row) => row.includes("\x1b_G") || row.includes("\x1b]1337;File="));
-    const reserved = original.flatMap((row, index) => (row === "" && Math.abs(index - image) < 40 ? [index] : []));
-    assert.ok(image > 0 && reserved.length > 5, "the image reserves empty rows");
+    const rows = footprint(protocol, original, imageHeight);
+    assert.ok(imageHeight > 5 && rows[0] > 1, `the image reserves rows (${imageHeight})`);
     const first = group.render(80);
     now += 200;
     const second = group.render(80);
-    for (const row of [image, ...reserved]) {
+    for (const row of rows) {
       assert.equal(first[row], original[row], `image row ${row} untouched`);
       assert.equal(second[row], original[row], `image row ${row} untouched a frame later`);
     }
-    assert.ok(first.some((row) => /^ \S+next answer|[│┃]   next answer/.test(strip(row))), "the turn's text after the image still gets the spine");
+    assert.equal(original[rows[0] - 1], "", "pi-tui's spacer row before the image");
+    assert.match(strip(first[rows[0] - 1]), /^ [│┃]$/, "the spacer before the image is not part of it: it keeps the spine");
+  });
+
+  test(`an image a transformer puts in a reply (${protocol}) keeps its padded rows`, (t) => {
+    const caps = piTui.getCapabilities();
+    piTui.setCapabilities({ ...caps, images: protocol });
+    const realNow = Date.now;
+    let now = 10_000;
+    Date.now = () => now;
+    t.after(() => { piTui.setCapabilities(caps); Date.now = realNow; });
+    const image = new piTui.Image(pngData(), "image/png", { fallbackColor: (text) => text }, { maxHeightCells: 2 }).render(80);
+    assert.equal(image.length, 2);
+    const session = { ...stubSession(), extensionRunner: { ...stubSession().extensionRunner, getMarkdownTransformers: () => [() => `before\n\n${image.join("\n")}\n\nafter`] } };
+    const t3 = new Transcript({ requestRender() {} }, theme, session);
+    t3.handle({ type: "agent_start" });
+    t3.handle({ type: "message_start", message: user("go") });
+    reply(t3, [{ type: "text", text: "placeholder" }]);
+    const first = t3.root.render(80);
+    now += 200;
+    const second = t3.root.render(80);
+    const anchor = first.findIndex((row) => IMAGE_LINE.test(row));
+    const reserved = protocol === "kitty" ? anchor + 1 : anchor - 1;
+    assert.equal(strip(first[reserved]).trim(), "", "the image's reserved row is drawn blank (padded by Markdown)");
+    assert.ok(!/[│┃]/.test(strip(first[reserved])), "the reserved row gets no spine");
+    assert.equal(second[reserved], first[reserved], "and doesn't change a frame later");
   });
 }

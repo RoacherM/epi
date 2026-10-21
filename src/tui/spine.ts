@@ -52,6 +52,8 @@ const TIP_ROWS = 8;
 const ESCAPES = /\x1b\[[0-9;]*m|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 // pi-tui's image lines (terminal-image.js isImageLine, not exported): Kitty and iTerm2 sequences.
 const IMAGE = /\x1b_G|\x1b\]1337;File=/;
+const KITTY_PARAMS = /\x1b_G([^;]*);/;
+const ITERM2_MOVE_UP = /(?:\x1b\[(\d+)A)?\x1b\]1337;File=/;
 // Prompt-zone markers (OSC 133) only: an image line's own escape sequence is not a margin to draw in.
 const LEADING_OSC = /^(?:\x1b\]133;[^\x07\x1b]*(?:\x07|\x1b\\))*/;
 
@@ -142,18 +144,27 @@ function paintRow(context: PaintContext, line: string, glyph: Glyph, member: Spi
   return overlay(line, branch.paint("├─"), 2);
 }
 
-/** Rows a block's image keeps for itself: the image's line and the empty rows next to it, which
- * pi-tui reserves for the image's height -- after the line for Kitty (pi-tui searches back through
- * them to draw an image whose first row has scrolled off), before it for iTerm2 (the line moves the
- * cursor up over them to draw). They must stay empty and must never change between frames. */
+/** Rows a block's image keeps for itself, as pi-tui's Image lays it out (components/image.js): Kitty
+ * puts its sequence on the first row (its `r=` parameter is the height) and keeps the rows after it,
+ * which pi-tui searches back through to draw an image whose first row has scrolled off; iTerm2 keeps
+ * the rows before its last row, which moves the cursor up over them (`ESC[<n>A`) to draw. Those rows
+ * must stay as the block drew them (empty, or padded with spaces inside Markdown) on every frame:
+ * pi-tui patching one would erase part of the image without drawing it again. */
 function imageRows(lines: readonly string[]): Set<number> {
   const rows = new Set<number>();
-  const empty = (row: number) => row >= 0 && row < lines.length && plain(lines[row]!) === "" && !IMAGE.test(lines[row]!);
+  const reserved = (row: number) => row >= 0 && row < lines.length && !IMAGE.test(lines[row]!) && plain(lines[row]!).trim() === "";
   lines.forEach((line, row) => {
-    if (!IMAGE.test(line)) return;
+    const kitty = KITTY_PARAMS.exec(line);
+    const iterm = kitty === null ? ITERM2_MOVE_UP.exec(line) : null;
+    if (kitty === null && iterm === null) return;
     rows.add(row);
-    for (let above = row - 1; empty(above); above -= 1) rows.add(above);
-    for (let below = row + 1; empty(below); below += 1) rows.add(below);
+    if (kitty !== null) {
+      const height = Number(/(?:^|,)r=(\d+)/.exec(kitty[1]!)?.[1] ?? 1);
+      for (let below = row + 1; below < row + height && reserved(below); below += 1) rows.add(below);
+    } else {
+      const above = Number(iterm![1] ?? 0);
+      for (let up = row - 1; up >= row - above && reserved(up); up -= 1) rows.add(up);
+    }
   });
   return rows;
 }
