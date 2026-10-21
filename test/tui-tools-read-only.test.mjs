@@ -279,3 +279,16 @@ test("renderers handle error results gracefully", () => {
 
   assert.deepEqual(collapsed.render(80).map(strip), ["✗ Error: ENOENT: no such file or directory"]);
 });
+
+test("a failed result drops the summary an earlier partial result left on the call line", async () => {
+  const { ToolEntry } = await import("../dist/tui/tools/group.js");
+  const { toolBlock } = await import("../dist/tui/tools/block.js");
+  const entry = new ToolEntry("read", "r", { path: "a.txt" }, toolBlock("read", readRenderers), { requestRender() {} }, "/w", "read");
+  entry.updateResult({ content: [{ type: "text", text: "one\ntwo" }], isError: false }, true);
+  entry.render(80);
+  entry.updateResult({ content: [{ type: "text", text: "Permission denied" }], isError: true });
+  const rows = entry.render(80).map(strip);
+  assert.ok(rows.some((row) => row.includes("✗ Permission denied")), rows.join("\n"));
+  assert.ok(!rows.join("\n").includes("2 lines"), rows.join("\n"));
+  entry.dispose();
+});

@@ -91,3 +91,13 @@ test("every row fits 40, 80, 120 and 230 columns", () => {
     for (const row of render(text, width)) assert.ok(piTui.visibleWidth(row) <= width, `width ${width}: ${JSON.stringify(strip(row))}`);
   }
 });
+
+test("a transformer's rewrite of a code block follows the width and invalidate()", () => {
+  let revision = 1;
+  const markdown = new MeasuredMarkdown(theme, "```mermaid\ngraph\n```", (_, width) => `diagram width=${width} revision=${revision}`);
+  assert.match(markdown.render(80).map(strip).join("\n"), /width=75 revision=1/);
+  assert.match(markdown.render(120).map(strip).join("\n"), /width=115 revision=1/);
+  revision = 2;
+  markdown.invalidate();
+  assert.match(markdown.render(120).map(strip).join("\n"), /width=115 revision=2/);
+});

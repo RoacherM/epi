@@ -12,7 +12,7 @@ export interface ChildRows {
 
 /** Mirrors pi-tui's own (unexported) `dispatchMouseEvent`: normalizes a child's result so a nested
  * Container's own dispatch result (already carrying `target`) passes through unchanged. */
-export function dispatchToChild(component: Component, event: TuiMouseEvent): TuiMouseEventResult | undefined {
+function dispatchToChild(component: Component, event: TuiMouseEvent): TuiMouseEventResult | undefined {
   const result = component.handleMouse?.(event);
   if (!result) return undefined;
   if ("target" in result) return result;

@@ -29,7 +29,7 @@ const { Lexer } = (await import(pathToFileURL(createRequire(piTuiEntry).resolve(
 };
 
 /** Columns of body text per row (Bringhurst's 45–75 characters; WCAG 1.4.8 asks for ≤ 80). */
-export const DEFAULT_MEASURE = 76;
+const DEFAULT_MEASURE = 76;
 /** The content column: body text and code start here, under a tool's call text (R3). */
 export const CONTENT_COLUMN = 5;
 // The code rail sits in the marker column, like a tool's `◆`.
@@ -119,7 +119,7 @@ function proseTheme(): MarkdownTheme {
 export class MeasuredMarkdown implements Component {
   private readonly segments: Segment[];
   private readonly markdownTheme = proseTheme();
-  private readonly prose = new Map<number, InstanceType<typeof piTui.Markdown>>();
+  private readonly prose = new Map<number, { markdown: InstanceType<typeof piTui.Markdown>; source: string }>();
   private cache: { width: number; rows: string[] } | undefined;
 
   constructor(
@@ -133,7 +133,7 @@ export class MeasuredMarkdown implements Component {
 
   invalidate(): void {
     this.cache = undefined;
-    for (const markdown of this.prose.values()) markdown.invalidate();
+    for (const { markdown } of this.prose.values()) markdown.invalidate();
   }
 
   render(width: number): string[] {
@@ -162,13 +162,19 @@ export class MeasuredMarkdown implements Component {
     return this.codeRows(token, isLast ? trimPartialClosingFence(token) : (token.text ?? ""), codeWidth);
   }
 
-  /** The segment's Pi `Markdown`, kept across renders so its own per-width cache is reused. */
+  /** The segment's Pi `Markdown`, kept across renders so its own per-width cache is reused. A code
+   * segment a transformer rewrote passes its new text each render (it may differ per width). */
   private markdown(index: number, source: string, transform = true): InstanceType<typeof piTui.Markdown> {
-    let markdown = this.prose.get(index);
-    if (markdown === undefined) {
-      markdown = new piTui.Markdown(source, CONTENT_COLUMN, 0, this.markdownTheme, undefined, transform ? { transform: this.transform } : {});
-      this.prose.set(index, markdown);
+    const kept = this.prose.get(index);
+    if (kept !== undefined) {
+      if (kept.source !== source) {
+        kept.markdown.setText(source);
+        kept.source = source;
+      }
+      return kept.markdown;
     }
+    const markdown = new piTui.Markdown(source, CONTENT_COLUMN, 0, this.markdownTheme, undefined, transform ? { transform: this.transform } : {});
+    this.prose.set(index, { markdown, source });
     return markdown;
   }
 

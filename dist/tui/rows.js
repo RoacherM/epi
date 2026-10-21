@@ -1,6 +1,6 @@
 /** Mirrors pi-tui's own (unexported) `dispatchMouseEvent`: normalizes a child's result so a nested
  * Container's own dispatch result (already carrying `target`) passes through unchanged. */
-export function dispatchToChild(component, event) {
+function dispatchToChild(component, event) {
     const result = component.handleMouse?.(event);
     if (!result)
         return undefined;

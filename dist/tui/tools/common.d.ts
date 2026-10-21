@@ -58,7 +58,8 @@ export declare class CallLine implements Component {
     private readonly context;
     private readonly extra;
     constructor(marker: CallMarker, theme: Theme, body: string, context: Pick<ToolRenderContext, "state" | "durationMs" | "isError" | "isPartial">, extra?: string);
-    /** The tail as it reads right now: `extra`, the result's summary, then the run time. */
+    /** The tail as it reads right now: `extra`, the result's summary, then the run time. A failed
+     * result's own row says what happened, so a summary left by an earlier (partial) result is dropped. */
     tail(): string;
     invalidate(): void;
     render(width: number): string[];

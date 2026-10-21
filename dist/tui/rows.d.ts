@@ -6,9 +6,6 @@ export interface ChildRows {
     height: number;
     skipped?: number;
 }
-/** Mirrors pi-tui's own (unexported) `dispatchMouseEvent`: normalizes a child's result so a nested
- * Container's own dispatch result (already carrying `target`) passes through unchanged. */
-export declare function dispatchToChild(component: Component, event: TuiMouseEvent): TuiMouseEventResult | undefined;
 /** Hands `event` to the child whose rows contain it, in that child's own row coordinates. */
 export declare function dispatchToRows(rows: readonly ChildRows[], event: TuiMouseEvent): TuiMouseEventResult | undefined;
 //# sourceMappingURL=rows.d.ts.map

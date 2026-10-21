@@ -14,7 +14,7 @@ const piEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
 const piTuiEntry = createRequire(piEntry).resolve("@earendil-works/pi-tui");
 const { Lexer } = (await import(pathToFileURL(createRequire(piTuiEntry).resolve("marked")).href));
 /** Columns of body text per row (Bringhurst's 45–75 characters; WCAG 1.4.8 asks for ≤ 80). */
-export const DEFAULT_MEASURE = 76;
+const DEFAULT_MEASURE = 76;
 /** The content column: body text and code start here, under a tool's call text (R3). */
 export const CONTENT_COLUMN = 5;
 // The code rail sits in the marker column, like a tool's `◆`.
@@ -108,7 +108,7 @@ export class MeasuredMarkdown {
     }
     invalidate() {
         this.cache = undefined;
-        for (const markdown of this.prose.values())
+        for (const { markdown } of this.prose.values())
             markdown.invalidate();
     }
     render(width) {
@@ -141,13 +141,19 @@ export class MeasuredMarkdown {
         const isLast = index === this.segments.length - 1;
         return this.codeRows(token, isLast ? trimPartialClosingFence(token) : (token.text ?? ""), codeWidth);
     }
-    /** The segment's Pi `Markdown`, kept across renders so its own per-width cache is reused. */
+    /** The segment's Pi `Markdown`, kept across renders so its own per-width cache is reused. A code
+     * segment a transformer rewrote passes its new text each render (it may differ per width). */
     markdown(index, source, transform = true) {
-        let markdown = this.prose.get(index);
-        if (markdown === undefined) {
-            markdown = new piTui.Markdown(source, CONTENT_COLUMN, 0, this.markdownTheme, undefined, transform ? { transform: this.transform } : {});
-            this.prose.set(index, markdown);
+        const kept = this.prose.get(index);
+        if (kept !== undefined) {
+            if (kept.source !== source) {
+                kept.markdown.setText(source);
+                kept.source = source;
+            }
+            return kept.markdown;
         }
+        const markdown = new piTui.Markdown(source, CONTENT_COLUMN, 0, this.markdownTheme, undefined, transform ? { transform: this.transform } : {});
+        this.prose.set(index, { markdown, source });
         return markdown;
     }
     /** A code block without its fence rows: an optional dim language label, then the code, every row

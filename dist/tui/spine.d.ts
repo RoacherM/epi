@@ -19,7 +19,8 @@ export interface SpineBlock {
 }
 /**
  * Paints the spine into `blocks`' lines in place. `running`: a turn is in progress, so the last turn
- * that has no footer yet is live. Narrower than 4 columns there is no room for it.
+ * is live if it has no footer yet and nothing outside a turn (the new prompt's user message) came
+ * after it. Narrower than 4 columns there is no room for it.
  */
 export declare function paintSpine(theme: Theme, blocks: SpineBlock[], width: number, running: boolean, now?: number): void;
 //# sourceMappingURL=spine.d.ts.map

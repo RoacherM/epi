@@ -222,3 +222,90 @@ test("every row fits 40, 80, 120 and 230 columns, live and settled", () => {
   t.handle({ type: "agent_settled" });
   check();
 });
+
+// Review findings (.dev/milestones/transcript-spine/review.md): nothing above the tip moves, not a
+// tall tool's completion flash nor its branch going from running to done.
+async function tallTool() {
+  const { ToolEntry, GroupedMessages } = await import("../dist/tui/tools/group.js");
+  const rowsOf = (rows) => ({ render: () => rows, invalidate() {} });
+  const entry = new ToolEntry("extension", "c", {}, {
+    renderShell: "self",
+    renderCall: () => rowsOf(["   ◆ custom"]),
+    renderResult: () => rowsOf(Array.from({ length: 40 }, (_, i) => `     output ${i}`)),
+  }, { requestRender() {} }, "/w", undefined);
+  entry.markExecutionStarted();
+  const messages = new piTui.Container();
+  messages.addChild(entry);
+  return { entry, group: new GroupedMessages(messages, { requestRender() {} }, theme, () => true) };
+}
+
+test("a tall tool's completion flash and branch change only inside the tip", async (t) => {
+  const realNow = Date.now;
+  let now = 10_000;
+  Date.now = () => now;
+  const { entry, group } = await tallTool();
+  t.after(() => { entry.dispose(); Date.now = realNow; });
+  const result = { content: [{ type: "text", text: "ok" }], isError: false };
+  entry.updateResult(result, true);
+  const running = group.render(80);
+  entry.updateResult(result);
+  const flashStart = group.render(80);
+  now += 200;
+  const flashLater = group.render(80);
+  now += 500;
+  const settled = group.render(80);
+  for (const frame of [flashStart, flashLater, settled]) assert.deepEqual(frame.slice(0, -8), running.slice(0, -8));
+  assert.notDeepEqual(flashStart.slice(-8), running.slice(-8), "the flash shows inside the tip");
+
+  // And pi-tui's main-screen renderer never needs a full redraw for it.
+  const writes = [];
+  const screen = new piTui.TuiMainScreen({ columns: 80, rows: 12, write: (data) => writes.push(data), hideCursor() {}, showCursor() {} }, false);
+  screen.addChild(group);
+  now -= 700;
+  screen.renderNow();
+  const redraws = screen.fullRedraws;
+  now += 200;
+  screen.renderNow();
+  assert.equal(screen.fullRedraws, redraws);
+  assert.ok(!writes.slice(1).some((data) => data.includes("\x1b[3J")));
+});
+
+test("a new prompt after a replay doesn't wake the replayed turn's spine", () => {
+  const t = transcript();
+  t.reset(stubSession([user("old"), assistant([{ type: "text", text: "PREVIOUS ANSWER" }])]));
+  const before = t.root.render(80);
+  t.handle({ type: "agent_start" });
+  t.handle({ type: "message_start", message: user("new prompt") });
+  const after = t.root.render(80);
+  const row = before.findIndex((line) => line.includes("PREVIOUS ANSWER"));
+  assert.equal(after[row], before[row]);
+});
+
+test("an image's rows in a tool result stay empty for pi-tui to draw it", async (t) => {
+  const { ToolEntry, GroupedMessages } = await import("../dist/tui/tools/group.js");
+  const caps = piTui.getCapabilities();
+  piTui.setCapabilities({ ...caps, images: "kitty" });
+  t.after(() => piTui.setCapabilities(caps));
+  // A 320x320 PNG header is enough for pi-tui to size the image.
+  const png = Buffer.alloc(33);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]).copy(png);
+  png.writeUInt32BE(320, 16);
+  png.writeUInt32BE(320, 20);
+  const entry = new ToolEntry("image", "img", {}, {
+    renderShell: "self",
+    renderCall: () => ({ render: () => ["   ◆ image"], invalidate() {} }),
+    renderResult: () => ({ render: () => [], invalidate() {} }),
+  }, { requestRender() {} }, "/w", undefined);
+  entry.updateResult({ content: [{ type: "image", mimeType: "image/png", data: png.toString("base64") }], isError: false });
+  const messages = new piTui.Container();
+  messages.addChild(entry);
+  messages.addChild({ spineRole: "trunk", render: () => ["     next answer"], invalidate() {} });
+  const original = messages.render(80);
+  const painted = new GroupedMessages(messages, { requestRender() {} }, theme).render(80);
+  const anchor = original.findIndex((row) => row.includes("\x1b_G"));
+  assert.ok(anchor > 0 && original[anchor + 1] === "", "the image reserves empty rows after its first");
+  for (let row = anchor; row < painted.length && original[row] !== "     next answer"; row += 1) {
+    if (original[row] === "" || row === anchor) assert.equal(painted[row], original[row], `image row ${row} untouched`);
+  }
+  assert.ok(painted.some((row) => strip(row) === " │   next answer"), "the turn's text after the image still gets the spine");
+});

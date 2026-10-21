@@ -98,9 +98,10 @@ export class CallLine {
         this.context = context;
         this.extra = extra;
     }
-    /** The tail as it reads right now: `extra`, the result's summary, then the run time. */
+    /** The tail as it reads right now: `extra`, the result's summary, then the run time. A failed
+     * result's own row says what happened, so a summary left by an earlier (partial) result is dropped. */
     tail() {
-        const summary = typeof this.context.state?.callSummary === "string" ? this.context.state.callSummary : "";
+        const summary = typeof this.context.state?.callSummary === "string" && !this.context.isError ? this.context.state.callSummary : "";
         const parts = [this.extra, summary].filter((part) => part !== "");
         const dot = parts.map((part) => `${this.theme.fg("dim", " · ")}${part}`).join("");
         const { durationMs, isError, isPartial } = this.context;

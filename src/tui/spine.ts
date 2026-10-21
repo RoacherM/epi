@@ -8,7 +8,8 @@
 // Only the tip moves, never the whole turn: pi-tui's main-screen renderer can only patch rows still
 // on screen, and a changed row that has scrolled off forces a full redraw (scrollback cleared and
 // everything written again) -- every frame, for an animated spine on a turn taller than the screen.
-// Rows above the tip look exactly as they will once the turn settles, so settling doesn't touch them.
+// So the pulse, a running tool's lit branch and the completion flash all stay inside the tip; rows
+// above it look exactly as they will once the turn settles, so settling doesn't touch them either.
 //
 // Painted at render time over the rows the transcript's blocks drew, like tools/group.ts's grouping,
 // so a /resume replay gets the same spine as a live run. Only glyphs in columns 1-2 change, never a
@@ -49,6 +50,8 @@ type Glyph = "trunk" | "branch" | "fail" | "close";
 const TIP_ROWS = 8;
 
 const ESCAPES = /\x1b\[[0-9;]*m|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+// pi-tui's image lines (terminal-image.js isImageLine, not exported): Kitty and iTerm2 sequences.
+const IMAGE = /\x1b_G|\x1b\]1337;File=/;
 // Prompt-zone markers (OSC 133) only: an image line's own escape sequence is not a margin to draw in.
 const LEADING_OSC = /^(?:\x1b\]133;[^\x07\x1b]*(?:\x07|\x1b\\))*/;
 
@@ -64,6 +67,8 @@ interface Turn {
   blocks: number[];
   strong: boolean;
   closed: boolean;
+  /** Something that isn't part of a turn (a user message, a notice) came after it: it can't be live. */
+  cut: boolean;
 }
 
 /** Consecutive turn blocks (spacers and empty blocks between them included), cut at anything that
@@ -73,6 +78,7 @@ function findTurns(blocks: readonly SpineBlock[]): Turn[] {
   let current: Turn | undefined;
   blocks.forEach(({ lines, member }, index) => {
     if (member === undefined) {
+      if (lines.length > 0) for (const turn of turns) turn.cut = true;
       current = undefined;
       return;
     }
@@ -80,7 +86,7 @@ function findTurns(blocks: readonly SpineBlock[]): Turn[] {
       current?.blocks.push(index);
       return;
     }
-    current ??= turns[turns.push({ blocks: [], strong: false, closed: false }) - 1];
+    current ??= turns[turns.push({ blocks: [], strong: false, closed: false, cut: false }) - 1];
     current!.blocks.push(index);
     if (member.spineRole !== "bash") current!.strong = true;
     if (member.spineRole === "footer") {
@@ -122,21 +128,36 @@ interface PaintContext {
   now: number;
 }
 
-/** One spine cell. `flash`: the block's completion flash color, if one runs; `tip`: the row is in a
- * live turn's animated tip; `running`: the turn is live (a running tool's branch lights up). */
-function paintRow(context: PaintContext, line: string, glyph: Glyph, member: SpineMember, cell: { flash: Blend | undefined; tip: boolean; running: boolean; row: number }): string {
+/** One spine cell. `pulse`: the row is in a live turn's tip; `flash`: the block's completion flash
+ * color, if one runs (only ever inside the last turn's tip). */
+function paintRow(context: PaintContext, line: string, glyph: Glyph, member: SpineMember, cell: { flash: Blend | undefined; pulse: boolean; row: number }): string {
   const { theme, t } = context;
   if (glyph === "fail") return overlay(line, theme.fg("error", "├─"), 2);
-  const pulsing = cell.flash === undefined && cell.tip;
+  const pulsing = cell.flash === undefined && cell.pulse;
   const tone = cell.flash ?? (pulsing ? railBlend(theme, cell.row, t) : blend(theme, "borderMuted", "borderMuted", 0));
   if (glyph === "trunk") return overlay(line, tone.paint(pulsing ? "┃" : "│"), 1);
   if (glyph === "close") return overlay(line, tone.paint("╰─"), 2);
   // A running tool's branch holds steady between accent and thinkingHigh while the tip pulses past.
-  const branch = cell.flash === undefined && cell.running && member.spineRunning ? blend(theme, "accent", "thinkingHigh", 0.5) : tone;
+  const branch = pulsing && member.spineRunning ? blend(theme, "accent", "thinkingHigh", 0.5) : tone;
   return overlay(line, branch.paint("├─"), 2);
 }
 
-function paintTurn(context: PaintContext, blocks: SpineBlock[], turn: Turn, live: boolean): void {
+/** Rows a block's image keeps for itself: the image's line and the empty rows after it, which
+ * pi-tui reserves for the image's height (and searches back through to draw an image whose first
+ * row has scrolled off) -- they must stay empty. */
+function imageRows(lines: readonly string[]): Set<number> {
+  const rows = new Set<number>();
+  let inImage = false;
+  lines.forEach((line, row) => {
+    if (IMAGE.test(line)) inImage = true;
+    else if (plain(line) !== "") inImage = false;
+    if (inImage) rows.add(row);
+  });
+  return rows;
+}
+
+/** `tipped`: the newest turn, whose last rows may move (flashes; the pulse too while `live`). */
+function paintTurn(context: PaintContext, blocks: SpineBlock[], turn: Turn, tipped: boolean, live: boolean): void {
   const rows: Row[] = turn.blocks.flatMap((block) => blocks[block]!.lines.map((_, row) => ({ block, row })));
   const first = rows.findIndex(({ block, row }) => !isBlank(blocks[block]!.lines[row]!));
   if (first === -1) return;
@@ -146,25 +167,32 @@ function paintTurn(context: PaintContext, blocks: SpineBlock[], turn: Turn, live
   for (const { block, row } of rows.slice(first, last + 1)) {
     if (!firstContentRow.has(block) && !isBlank(blocks[block]!.lines[row]!)) firstContentRow.set(block, row);
   }
-  const tipStart = live ? Math.max(0, last - first + 1 - TIP_ROWS) : Infinity;
+  const tipStart = tipped ? Math.max(0, last - first + 1 - TIP_ROWS) : Infinity;
+  const images = new Map(turn.blocks.map((block) => [block, imageRows(blocks[block]!.lines)]));
   rows.slice(first, last + 1).forEach((position, index) => {
     const { block, row } = position;
     const placed = blocks[block]!;
+    if (images.get(block)!.has(row)) return;
     const member = placed.member === "spacer" ? { spineRole: "trunk" as const } : (placed.member as SpineMember);
     const glyph = placed.member === "spacer" ? "trunk" : glyphFor(blocks, position, firstContentRow.get(block) ?? -1);
-    const flashState = member.spineFlash?.(row);
+    const tip = index >= tipStart;
+    const flashState = tip ? member.spineFlash?.(row) : undefined;
     const flash = flashState !== undefined && isFlashing(flashState, context.now) ? flashBlend(flashState, context.theme, context.now) : undefined;
-    placed.lines[row] = paintRow(context, placed.lines[row]!, glyph, member, { flash, tip: index >= tipStart, running: live, row: index });
+    placed.lines[row] = paintRow(context, placed.lines[row]!, glyph, member, { flash, pulse: tip && live, row: index });
   });
 }
 
 /**
  * Paints the spine into `blocks`' lines in place. `running`: a turn is in progress, so the last turn
- * that has no footer yet is live. Narrower than 4 columns there is no room for it.
+ * is live if it has no footer yet and nothing outside a turn (the new prompt's user message) came
+ * after it. Narrower than 4 columns there is no room for it.
  */
 export function paintSpine(theme: Theme, blocks: SpineBlock[], width: number, running: boolean, now = Date.now()): void {
   if (width < 4) return;
   const turns = findTurns(blocks);
   const context: PaintContext = { theme, t: motionTime(now), now };
-  turns.forEach((turn, index) => paintTurn(context, blocks, turn, running && !turn.closed && index === turns.length - 1));
+  turns.forEach((turn, index) => {
+    const tipped = !turn.cut && index === turns.length - 1;
+    paintTurn(context, blocks, turn, tipped, tipped && running && !turn.closed);
+  });
 }
