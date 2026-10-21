@@ -137,4 +137,4 @@
 
 pi-internals 新登记：`tool-exec-leading-blank`、`pi-tui-marked`、`markdown-codeblock-border`、`markdown-list-bullet`（§4 的 `tool-exec-durationms` 不需要，见 W1）。
 
-验证：完整测试 1203/1203（禁网沙箱）；`model-snapshot --diff` 无变化；`scripts/probes/transcript-layout-prototype.mjs` 仍可跑。**未做**：Orca 真实终端 + 真实模型逐帧核对动画（日夜两主题）、`/settings` 行宽项、合并前审查。
+验证：完整测试 1203/1203（禁网沙箱）；`model-snapshot --diff` 无变化；`scripts/probes/transcript-layout-prototype.mjs` 仍可跑。Orca 实测（2026-10-21，夜间主题，GPT-6 Astra，一个 ls/read/git log/false 的只读回合）：静态布局与 HTML 稿 V-S 帧一致（连排 `├─`、红色失败分支、`│ │ ts` 代码块、`•` 列表、`╰─ Worked for`）；流式时 tip 为 `┃`；Ctrl+O 展开/收起正常；逐行点击三个相邻（已裁空行的）工具行，各自展开/收起的都是被点的那一个。**未做**：逐帧对照 85 帧分镜（Orca 读屏只有文本，颜色与脉冲靠 `test/tui-spine.test.mjs`、`test/tui-motion.test.mjs` 断言）、日间主题实测与 `mdCodeBlock` 定稿、`/settings` 行宽项、合并前审查。
