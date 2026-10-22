@@ -7,6 +7,7 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { renderMermaid } from "./mermaid.js";
 import { piTui } from "./pi-tui.js";
 // The marked copy pi-tui parses with (pi-internals row `pi-tui-marked`: a dependency of pi-tui, not of
 // Epi), so a segment boundary falls where Pi's own Markdown sees a block boundary.
@@ -56,6 +57,19 @@ function trimPartialClosingFence(token) {
     if (!marker || !lastLine || lastLine.length >= marker.length || lastLine !== marker[0].repeat(lastLine.length))
         return text;
     return text.slice(0, -lastLine.length).replace(/\n$/, "");
+}
+/** A code block's language: the first word of its info string. */
+function codeLanguage(token) {
+    return (token.lang ?? "").trim().split(/\s/)[0] ?? "";
+}
+/** Whether a code block's closing fence has arrived; one still streaming has none yet. */
+function fenceClosed(token) {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(token.raw)?.[1];
+    const lines = token.raw.replace(/\n+$/, "").split("\n");
+    if (!marker || lines.length < 2)
+        return false;
+    const last = lines[lines.length - 1].trim();
+    return last.length >= marker.length && last === marker[0].repeat(last.length);
 }
 const ANSI = /\x1b\[[0-9;]*m|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 function isBlank(line) {
@@ -139,7 +153,23 @@ export class MeasuredMarkdown {
         if (token === undefined)
             return this.markdown(index, transformed, false).render(width);
         const isLast = index === this.segments.length - 1;
+        // A mermaid block is drawn once its closing fence is in (docs/mermaid-design.md §4.4): half a
+        // diagram would jump about while it streams.
+        if (codeLanguage(token).toLowerCase() === "mermaid" && fenceClosed(token))
+            return this.mermaidRows(token, codeWidth);
         return this.codeRows(token, isLast ? trimPartialClosingFence(token) : (token.text ?? ""), codeWidth);
+    }
+    /** A mermaid block as box art behind the code rail, under a dim `mermaid` label; its source, with
+     * the label saying why, when it can't be drawn or doesn't fit (docs/mermaid-design.md §4.3). */
+    mermaidRows(token, codeWidth) {
+        const drawn = renderMermaid(this.theme, token.text ?? "", codeWidth);
+        const note = drawn.note === undefined ? "" : ` · ${drawn.note}`;
+        if (drawn.kind === "source")
+            return this.codeRows(token, token.text ?? "", codeWidth, `mermaid${note}`);
+        return [this.rail() + piTui.truncateToWidth(this.theme.fg("mdCodeBlockBorder", `mermaid${note}`), codeWidth), ...drawn.rows.map((row) => this.rail() + row)];
+    }
+    rail() {
+        return `${" ".repeat(CODE_RAIL_COLUMN)}${this.theme.fg("borderMuted", "│")}${" ".repeat(CONTENT_COLUMN - CODE_RAIL_COLUMN - 1)}`;
     }
     /** The segment's Pi `Markdown`, kept across renders so its own per-width cache is reused. A code
      * segment a transformer rewrote passes its new text each render (it may differ per width). */
@@ -158,11 +188,12 @@ export class MeasuredMarkdown {
     }
     /** A code block without its fence rows: an optional dim language label, then the code, every row
      * behind a `│` rail in the marker column and wrapped (not cut) at the full width. */
-    codeRows(token, code, codeWidth) {
-        const lang = (token.lang ?? "").trim().split(/\s/)[0] ?? "";
-        const rail = `${" ".repeat(CODE_RAIL_COLUMN)}${this.theme.fg("borderMuted", "│")}${" ".repeat(CONTENT_COLUMN - CODE_RAIL_COLUMN - 1)}`;
+    codeRows(token, code, codeWidth, label) {
+        const lang = codeLanguage(token);
+        const rail = this.rail();
         const highlighted = this.markdownTheme.highlightCode?.(code, lang || undefined) ?? code.split("\n").map((line) => this.markdownTheme.codeBlock(line));
-        const rows = UNLABELLED.has(lang) ? [] : [rail + piTui.truncateToWidth(this.theme.fg("mdCodeBlockBorder", lang), codeWidth)];
+        const shown = label ?? (UNLABELLED.has(lang) ? undefined : lang);
+        const rows = shown === undefined ? [] : [rail + piTui.truncateToWidth(this.theme.fg("mdCodeBlockBorder", shown), codeWidth)];
         for (const line of highlighted) {
             for (const piece of piTui.wrapTextWithAnsi(line, codeWidth))
                 rows.push(rail + piece);

@@ -28,6 +28,10 @@ export declare class MeasuredMarkdown implements Component {
     invalidate(): void;
     render(width: number): string[];
     private renderSegment;
+    /** A mermaid block as box art behind the code rail, under a dim `mermaid` label; its source, with
+     * the label saying why, when it can't be drawn or doesn't fit (docs/mermaid-design.md §4.3). */
+    private mermaidRows;
+    private rail;
     /** The segment's Pi `Markdown`, kept across renders so its own per-width cache is reused. A code
      * segment a transformer rewrote passes its new text each render (it may differ per width). */
     private markdown;

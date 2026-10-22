@@ -41,6 +41,15 @@ epi --model openai/gpt-4o-mini
 
 悬浮窗显示的是这次工具调用返回的内容。Pi 的 `read` 一次最多返回 2000 行或 50KB，超出的部分在 agent 下一次 `read` 的块里打开；标题里会写 `lines 1–955 of 1098 · 50.0KB limit`。换会话（`/new`、`/resume`、`/reload`）时悬浮窗自动关闭。只读，不能编辑。
 
+### Mermaid 图表
+
+回复里的 ```` ```mermaid ```` 代码块会直接画成框线图（设计见 [mermaid-design.md](../mermaid-design.md)）。支持 flowchart/graph、sequence、state、class、ER、pie、mindmap、timeline 和 gitGraph。只改显示：模型看到的、复制出来的仍是 Mermaid 源码。
+
+- 代码块闭合以后才画，输出过程中先显示源码。
+- 流程图横着放不下时，自动换成竖排，标签写 `mermaid · re-laid out top-down`。
+- 画不出来（不支持的图、语法错误、太宽）时显示源码，标签写明原因，例如 `mermaid · gantt is not supported: showing source`。
+- 嵌在列表或引用里的 mermaid 代码块不画，照常显示源码。
+
 ## 参数
 
 `epi --help` 打印 Epi 自己维护的完整参数表（`src/args.ts` 的 `EPI_FLAG_TABLE`，同一张表驱动解析、校验和帮助文本），不附带任何其他命令行的帮助。已声明 Extension 通过 `pi.registerFlag` 注册的长参数也受支持，并列在帮助的 `Extension options` 中；无人注册的长参数在扩展加载后报错，未知短参数直接报错。资源加载参数仍受下面的 Manifest 限制。
