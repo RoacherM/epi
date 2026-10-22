@@ -27,6 +27,8 @@ palette = [
     (92, 92, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255),
 ]
 BLOCKS = {"█": (0, 2), "▀": (0, 1), "▄": (1, 2)}  # covered halves of the cell, top to bottom
+# Left eighth blocks (the duration bar): how many eighths of the cell's width, from the left.
+EIGHTHS = {"▏": 1, "▎": 2, "▍": 3, "▌": 4, "▋": 5, "▊": 6, "▉": 7}
 # Box drawing: which arms leave the cell's center (up, down, left, right), and the stroke weight.
 # Terminals draw these edge to edge; the font's glyphs stop short, which breaks the turn spine and
 # table borders into dashes between rows.
@@ -95,6 +97,9 @@ def render(cells):
             if text in BLOCKS:
                 top, bottom = BLOCKS[text]
                 draw.rectangle((x, y + ch * top // 2, x + cw - 1, y + ch * bottom // 2 - 1), fill=fg)
+                continue
+            if text in EIGHTHS:
+                draw.rectangle((x, y, x + cw * EIGHTHS[text] // 8 - 1, y + ch - 1), fill=fg)
                 continue
             if text in BOX:
                 draw_box(draw, text, x, y, fg)
