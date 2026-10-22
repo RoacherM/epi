@@ -7,6 +7,7 @@ import { createHooksInlineExtension } from "./hooks.js";
 import { createTaskInlineExtension } from "./task.js";
 import { createEpiRuntimeExtensions } from "./runtime.js";
 import { createEpiMcpExtension, loadNativeMcpConfig } from "./mcp.js";
+import { createWebInlineExtension } from "./web.js";
 /** Built-ins are on by default (decision H3/K4), so a broken mcp.json, hooks.json or agent file can
  * now stop a run whose user never asked for that capability: say how to turn it off as well. */
 function withDisableHint(extension, assembly, build) {
@@ -60,6 +61,9 @@ export function buildInlineExtensions(assembly, epiHome, runtimeIdentity, resolv
                     extensions.push({ name: "tool-search", factory: createToolSearchExtension() });
                     break;
                 }
+                case "epi:web":
+                    extensions.push(createWebInlineExtension({ epiHome }));
+                    break;
                 case "epi:hooks": {
                     const effective = resolveEffectiveHooks({
                         globalConfigPath: join(epiHome, "hooks.json"),

@@ -223,7 +223,9 @@ function assemblyRows(identity, theme, width, motion) {
         heading("CONFIGURE", theme),
         theme.fg("mdCode", identity.manifests.global.path),
         `${theme.fg("mdCode", "/epi")} inspect · ${theme.fg("mdCode", "/login")} authenticate`,
-        `${theme.fg("mdCode", "/trust")} project manifest`,
+        resources.inlineExtensions.some((extension) => extension.name === "epi:web")
+            ? `${theme.fg("mdCode", "/trust")} project · ${theme.fg("mdCode", "/web")} web search`
+            : `${theme.fg("mdCode", "/trust")} project manifest`,
         `${theme.fg("dim", "/reload Rules + Skills · restart Extensions")}`,
     ];
 }

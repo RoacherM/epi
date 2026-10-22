@@ -21,7 +21,7 @@ const fakeTty = new URL("./fixtures/fake-tty.mjs", import.meta.url).pathname;
 const fauxEcho = new URL("./fixtures/faux-echo.mjs", import.meta.url).pathname;
 const todoRogue = new URL("./fixtures/todo-rogue.mjs", import.meta.url).pathname;
 const mcpRogue = new URL("./fixtures/mcp-duplicate-rogue.mjs", import.meta.url).pathname;
-const BUILT_INS = ["epi:task", "epi:mcp", "epi:hooks"];
+const BUILT_INS = ["epi:task", "epi:mcp", "epi:hooks", "epi:web"];
 
 function createFixture(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "epi-builtin-defaults-")));
@@ -93,7 +93,7 @@ function builtExtensionNames(fixture, assembly) {
   return buildInlineExtensions(assembly, fixture.epiHome, identity).map((extension) => extension.name);
 }
 
-test("no Manifest: epi:task, epi:mcp and epi:hooks are all built, with source \"default\"", (t) => {
+test("no Manifest: epi:task, epi:mcp, epi:hooks and epi:web are all built, with source \"default\"", (t) => {
   const fixture = createFixture(t);
   const assembly = assemble(fixture, { noProject: true });
 
@@ -107,6 +107,7 @@ test("no Manifest: epi:task, epi:mcp and epi:hooks are all built, with source \"
     "codemode",
     "tool-search",
     "epi:hooks",
+    "epi:web",
     "epi:system-prompt",
   ]);
 });
@@ -132,6 +133,7 @@ test("declared built-ins keep their declaration order and provenance; undeclared
     { name: "epi:hooks", source: "global", declaredIn: fixture.globalManifest },
     { name: "epi:task", source: "default" },
     { name: "epi:mcp", source: "default" },
+    { name: "epi:web", source: "default" },
   ]);
 });
 
@@ -162,7 +164,7 @@ test("\"disable\" in a trusted project Manifest turns the built-in off, even whe
 
   const output = dryRun(fixture, ["--approve"]);
   assert.equal(output.projectManifest.loaded, true);
-  assert.deepEqual(output.inlineExtensions, [{ name: "epi:mcp", source: "default" }]);
+  assert.deepEqual(output.inlineExtensions, [{ name: "epi:mcp", source: "default" }, { name: "epi:web", source: "default" }]);
   // Union of both files, one entry per file that lists a name, global first.
   assert.deepEqual(output.disabledExtensions, [
     { name: "epi:hooks", source: "global", declaredIn: fixture.globalManifest },
@@ -293,6 +295,7 @@ test("no mcp.json and no hooks.json: default epi:mcp and epi:hooks start without
   assert.equal(run.stderr, "");
   assert.equal(existsSync(join(fixture.epiHome, "mcp.json")), false);
   assert.equal(existsSync(join(fixture.epiHome, "hooks.json")), false);
+  assert.equal(existsSync(join(fixture.epiHome, "web.json")), false, "epi:web writes nothing until /web");
 });
 
 test("epi list shows each built-in's state and the file that disabled it", (t) => {
@@ -302,7 +305,7 @@ test("epi list shows each built-in's state and the file that disabled it", (t) =
   const result = runCli(fixture, ["list"], fixture.home);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^ {2}disable {3}epi:hooks \(built-in\)$/m);
-  assert.match(result.stdout, /^Built-in capabilities:\n {2}epi:task {2}on\n {2}epi:mcp {3}on\n {2}epi:hooks off \(disabled in .*epi\.json\)$/m);
+  assert.match(result.stdout, /^Built-in capabilities:\n {2}epi:task {2}on\n {2}epi:mcp {3}on\n {2}epi:hooks off \(disabled in .*epi\.json\)\n {2}epi:web {3}on$/m);
 });
 
 test("epi remove of a built-in says it stays on and how to disable it, or that it is already off", (t) => {

@@ -20,18 +20,19 @@ export const BUILT_IN_EXTENSIONS: Readonly<Record<BuiltInExtensionName, true>> =
   "epi:task": true,
   "epi:mcp": true,
   "epi:hooks": true,
+  "epi:web": true,
 };
 
 /** Built-in capabilities in the order they load when no Manifest names them (decision H3/K4: on
  * by default, turned off with `"disable"`). */
-export const BUILT_IN_EXTENSION_NAMES: readonly BuiltInExtensionName[] = ["epi:task", "epi:mcp", "epi:hooks"];
+export const BUILT_IN_EXTENSION_NAMES: readonly BuiltInExtensionName[] = ["epi:task", "epi:mcp", "epi:hooks", "epi:web"];
 
 export type ResourceSource = "global" | "project";
 /** `"default"`: a built-in no Manifest lists in `"extensions"`, on because built-ins are on by
  * default; it has no `declaredIn`. */
 export type InlineExtensionSource = ResourceSource | "default";
 export type ResourceKind = "rule" | "skill" | "extension";
-export type BuiltInExtensionName = "epi:task" | "epi:mcp" | "epi:hooks";
+export type BuiltInExtensionName = "epi:task" | "epi:mcp" | "epi:hooks" | "epi:web";
 /** Which fixed auto-discovery directory a skill root came from (docs/decisions.md S1); undefined
  * for a skill declared explicitly in a Manifest. */
 export type DiscoveredSkillProvenance = "agents" | "epi" | "project";

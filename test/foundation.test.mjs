@@ -274,7 +274,7 @@ test("dry-run is JSON-only and does not create EPI_HOME", (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, "");
   assert.equal(existsSync(epiHome), false);
-  const defaultBuiltIns = ["epi:task", "epi:mcp", "epi:hooks"].map((name) => ({ name, source: "default" }));
+  const defaultBuiltIns = ["epi:task", "epi:mcp", "epi:hooks", "epi:web"].map((name) => ({ name, source: "default" }));
   assert.deepEqual(JSON.parse(result.stdout), {
     epiVersion: EPI_VERSION,
     piVersion: PI_VERSION,

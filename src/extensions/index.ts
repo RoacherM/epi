@@ -15,6 +15,7 @@ import { createTaskInlineExtension } from "./task.js";
 import { createEpiRuntimeExtensions } from "./runtime.js";
 import type { EpiRuntimeIdentity } from "../runtime-identity.js";
 import { createEpiMcpExtension, loadNativeMcpConfig } from "./mcp.js";
+import { createWebInlineExtension } from "./web.js";
 import type { UpdateCheckOptions } from "./runtime.js";
 
 /** Built-ins are on by default (decision H3/K4), so a broken mcp.json, hooks.json or agent file can
@@ -86,6 +87,9 @@ export function buildInlineExtensions(
           extensions.push({ name: "tool-search", factory: createToolSearchExtension() });
           break;
         }
+        case "epi:web":
+          extensions.push(createWebInlineExtension({ epiHome }));
+          break;
         case "epi:hooks": {
           const effective = resolveEffectiveHooks({
             globalConfigPath: join(epiHome, "hooks.json"),

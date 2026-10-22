@@ -192,7 +192,7 @@ export function renderEpiRuntimePrompt(
     "When asked which skills, rules, or extensions are available, answer from this inventory. Epi loads skills only from the Manifest and three fixed roots (tagged `discovered` in `skillRoots`). Do not scan ~/.pi, ~/.claude, ~/.codex, project .pi, or project .agents directories to infer loaded resources; ~/.agents/skills contents are loaded only if they appear in `loadedSkills`.",
     "If the user explicitly asks to inspect an arbitrary directory, you may inspect it, but describe discovered files as files—not as loaded Epi resources.",
     "Manifest-relative resource paths resolve from the directory containing the declaring epi.json. The Epi agentDir stores Pi auth, settings, sessions, and model catalog state; it is not an ambient skills root.",
-    "The Manifest input schema is exactly `{ \"version\": 1, \"rules\": [], \"skills\": [], \"extensions\": [], \"disable\": [] }`; the built-ins epi:task, epi:mcp and epi:hooks are on unless listed in `disable`. Inventory fields such as `skillRoots` and `declaredResources` are report-only and must not be written to epi.json.",
+    "The Manifest input schema is exactly `{ \"version\": 1, \"rules\": [], \"skills\": [], \"extensions\": [], \"disable\": [] }`; the built-ins epi:task, epi:mcp, epi:hooks and epi:web are on unless listed in `disable`. Inventory fields such as `skillRoots` and `declaredResources` are report-only and must not be written to epi.json.",
     "After Manifest edits, `/reload` re-resolves Rules and Skills. Extension selection or configuration changes require restarting Epi.",
     "<epi_runtime_inventory>",
     JSON.stringify(report, null, 2),
