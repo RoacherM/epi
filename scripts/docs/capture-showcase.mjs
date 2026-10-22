@@ -39,15 +39,18 @@ async function main(version) {
     mkdirSync(join(home, ".epi", "pi"), { recursive: true });
     writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [scenarioFile(version)] }));
     const capture = join(temp, "capture.json");
-    const run = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
-      cwd,
-      // Deliberately allowlisted: no credentials, user config, or NODE_OPTIONS.
-      env: {
+    // Deliberately allowlisted: no credentials, user config, or NODE_OPTIONS. A scenario may add (a
+    // demo key for a fake search API on localhost) or drop (null) entries, never pass real ones.
+    const env = Object.fromEntries(Object.entries({
         PATH: dirname(process.execPath) + ":/usr/bin:/bin",
         HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1", EPI_DISABLE_UPDATE_CHECK: "1",
         TERM: "xterm-256color", COLORTERM: "truecolor", COLORFGBG: "15;0",
         EPI_SHOWCASE_RECORD: JSON.stringify({ version, cwd, out: capture }),
-      },
+        ...(scenario.env ?? {}),
+      }).filter(([, value]) => value !== null));
+    const run = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+      cwd,
+      env,
       encoding: "utf8", stdio: ["ignore", "inherit", "inherit"], timeout: 120_000,
     });
     assert.equal(run.status, 0, run.error?.message ?? "recording failed (see above)");
@@ -120,7 +123,8 @@ async function record({ version, cwd, out }) {
     setTitle() {}, setProgress() {},
   };
 
-  const prepared = prepareEpiRun(["--no-project", "--offline", "--thinking", "medium"]);
+  // --offline unless the scenario talks to a local fake service (it unsets EPI_OFFLINE in its env).
+  const prepared = prepareEpiRun(["--no-project", ...(process.env.EPI_OFFLINE ? ["--offline"] : []), "--thinking", "medium"]);
   const theme = installEpiTheme(prepared.agentDir, "dark");
   const runtime = await createRuntimeFromPrepared(prepared, cwd);
   // Ready once the first model refresh settles (tui-harness.mjs's waitReady).
@@ -207,7 +211,12 @@ async function record({ version, cwd, out }) {
 
   while (!ready) await sleep(10);
   await sleep(60);
-  await scenario.play(driver);
+  const stopService = await scenario.service?.();
+  try {
+    await scenario.play(driver);
+  } finally {
+    await stopService?.();
+  }
   sampling = false;
   await sampler;
   writeFileSync(out, JSON.stringify({ columns, rows, frames, times, marks, stills }));
