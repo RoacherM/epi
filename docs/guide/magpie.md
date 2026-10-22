@@ -10,10 +10,10 @@ Epi 自带 `magpie` provider，不需要创建扩展、安装包，或在 Manife
 
 ```bash
 epi --list-models magpie
-epi --provider magpie --model 'claude/claude-opus-5-5'
+epi --provider magpie --model 'devin/claude-opus-5-5'
 ```
 
-也可以在 `/model` 中搜索 `magpie`。模型 ID 保留 Magpie 返回的 provider 前缀：Epi 的完整模型名是 `magpie/claude/claude-opus-5-5`，发给 Magpie 的仍是 `claude/claude-opus-5-5`。
+也可以在 `/model` 中搜索 `magpie`。模型 ID 保留 Magpie 返回的上游前缀：Epi 的完整模型名是 `magpie/devin/claude-opus-5-5`，发给 Magpie 的仍是 `devin/claude-opus-5-5`。
 
 Epi 固定连接本机网关 `http://127.0.0.1:3425`。从源码验证未发布的改动时，将上述 `epi` 换成 `node dist/cli.js`；全局安装的旧版本不会因工作区构建自动更新。
 
@@ -45,7 +45,7 @@ Epi 通过 `/v1/models` 获取模型列表，不会后台轮询、启动 Magpie 
 
 Magpie 新增或删除模型后，下一次查询同步列表。
 
-命令行指定 Magpie 模型最好带 `magpie/` 前缀或 `--provider magpie`。只写 `--model claude/claude-opus-5-5` 也能用：Pi 的模型匹配能在目录里找到这个 ID。
+命令行指定 Magpie 模型最好带 `magpie/` 前缀或 `--provider magpie`。只写 `--model devin/claude-opus-5-5` 也能用：Pi 的模型匹配能在目录里找到这个 ID。
 
 协议选择顺序：
 

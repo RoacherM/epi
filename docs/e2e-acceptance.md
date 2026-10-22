@@ -2,23 +2,23 @@
 
 状态：2026-09-30 第一版（用户要求："沉淀一套端到端的测试文档和预期结果"）。
 
-自动测试（`npm test`）用的是假模型和模拟终端，查不出真实终端里的问题。今天的两个 P1 都是这样漏掉的：Ghostty 的按键松开事件（D7），点击图片标签后快捷键失效（D8）。本清单是人（或主控通过 Herdr）用真实终端、真实模型逐条走的验收步骤，每条写明预期结果。
+自动测试（`npm test`）用的是假模型和模拟终端，查不出真实终端里的问题。今天的两个 P1 都是这样漏掉的：Ghostty 的按键松开事件（D7），点击图片标签后快捷键失效（D8）。本清单是人（或主控通过 Orca）用真实终端、真实模型逐条走的验收步骤，每条写明预期结果。
 
 ## 1. 什么时候跑
 
 | 时机 | 跑哪些 |
 |---|---|
-| 升级工具版之前（[dev-workflow-herdr.md](dev-workflow-herdr.md) 第 4 节） | 标 ★ 的冒烟条目 |
+| 每次任务合并后（[dev-workflow.md](dev-workflow.md) 第 3.1 节 N5、第 5 节） | 标 ★ 的冒烟条目 |
 | 大节点审查前（打审查包时附上结果） | 全部 |
 | Pi 内核升级后 | 全部 |
 | 修了某一块的 bug | 那一块的全部条目 |
 
 ## 2. 怎么跑
 
-- **Orca 路线**（主控可以自动走，2026-10-21 起取代 Herdr 路线，操作见 [dev-workflow.md](dev-workflow.md) 第 4 节）。以下 Herdr 路线仅作历史记录：`P=<pane> source scripts/dev/herdr.sh`，用 `startepi` / `say` / `key` / `scr` 操作。粘贴图片时用 `EPI_TEST_CLIPBOARD_FILE=<png>` 启动，不碰真实剪贴板。Herdr 发不出的原始按键序列用 `herdr pane send-text $'…'`。
-- **Ghostty 路线**（标 🖐 的条目必须在这里跑）：直接在 Ghostty 窗口运行工具版。Ghostty 会发送 kitty 键盘协议的按下 + 松开事件，会渲染图片预览，还会读写真实剪贴板，这些 Herdr 都模拟不全。主控在 Herdr 里用 `send-text $'\e[118;5u'`（按下）加 `$'\e[118;5:3u'`（松开）可以近似，但最终以 Ghostty 为准。
+- **Orca 路线**（主控可以自动走，2026-10-21 起启用，操作见 [dev-workflow.md](dev-workflow.md) 第 5 节）：用 `orca terminal create / send / read / close` 在独立测试终端里启动 `node dist/cli.js` 并发送按键、鼠标序列和读取画面；粘贴图片时用 `EPI_TEST_CLIPBOARD_FILE=<png>` 启动，不碰真实剪贴板。
+- **Ghostty 路线**（标 🖐 的条目必须在这里跑）：直接在 Ghostty 窗口运行 `node dist/cli.js`。Ghostty 会发送 kitty 键盘协议的按下 + 松开事件，会渲染图片预览，还会读写真实剪贴板。主控在 Orca 终端里用 `orca terminal send --text $'\x1b[118;5u\x1b[118;5:3u'`（按下 + 松开）可以近似，但最终以 Ghostty 为准。
 - **测试项目**：`scratchpad` 下建一个目录，放 `.epi/epi.json`（声明 `epi:mcp`）和 `.epi/mcp.json`（两个测试服务：`test/fixtures/mcp-server.mjs`，一个默认曝光，一个 `"exposure": "direct"`）。
-- **模型**：`--provider magpie --model claude/claude-sonnet-5-5 --thinking high`。
+- **模型**：`--provider magpie --model devin/claude-sonnet-5-5 --thinking high`（或按 `epi --list-models` 的 `magpie` 段选可用的 sonnet/opus 模型）。
 - **记录**：每次跑完写 `.dev/e2e/<日期>-<版本>.md`，每条一行：编号、通过/失败、失败时的现象和画面。失败的条目记进 [dogfood-issues.md](dogfood-issues.md)。
 
 ## 3. 验收条目
@@ -109,5 +109,5 @@
 
 | 编号 | 现象 | 状态 |
 |---|---|---|
-| D9 | Pi 0.99 会把图片缩放说明（`[Image: original WxH, displayed at …]`）追加到发给模型的文字里，Epi 的用户消息块把它原样显示出来，看起来像多了一行乱码 | 待定：建议界面上隐藏这类说明，模型照常收到 |
+| D9 | Pi 0.99 会把图片缩放说明（`[Image: original WxH, displayed at …]`）追加到发给模型的文字里，Epi 的用户消息块把它原样显示出来，看起来像多了一行乱码 | 已修（决策 T3 / D11，合并 e1d545c） |
 | D10 | 已接：`/hotkeys` 列出切换模型（默认没绑键）、上一条/下一条提示、对话区搜索（2026-10-02 完整验收时确认，按键本身没逐个按） | 已修 |
