@@ -1,6 +1,7 @@
 // Pieces shared by the built-in tool renderers, the tool block fallback and the `!cmd` block.
 import { homedir } from "node:os";
 import { formatDuration } from "../chrome.js";
+import { DEFAULT_MEASURE } from "../measure.js";
 import { piTui } from "../pi-tui.js";
 /**
  * Lines cut to the viewport width. Entries may hold several rows separated by "\n". A single string
@@ -77,6 +78,42 @@ export function fitWithTail(body, tail, width, ellipsis) {
         return piTui.truncateToWidth(body, Math.max(0, width), ellipsis);
     return piTui.truncateToWidth(body, width - tailWidth, ellipsis) + tail;
 }
+// A duration bar (docs/tui-one-column-design.md §2.2): four cells, one decade each -- 10ms–100ms,
+// 100ms–1s, 1s–10s, 10s–100s -- filled in eighths at the log position. Tool run times span four or
+// five decades; on a linear scale everything but the slowest would be a sliver.
+export const BAR_CELLS = 4;
+const EIGHTHS = ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
+// From here the bar is full and can't tell lengths apart, so the time follows it as a number.
+const BAR_FULL_MS = 100_000;
+// Below this many columns for the whole call row there is no room for a column: the time stays a
+// number at the end of the body, as in 0.1.22.
+const MIN_COLUMN_FOR_BAR = 16;
+/** `ms` as a bar: dim filled cells, then `·` for the empty ones; with the time after a full bar. */
+export function durationBar(theme, ms) {
+    const position = Math.min(BAR_CELLS, Math.max(0, Math.log10(Math.max(ms, 1) / 10)));
+    const full = Math.floor(position);
+    const eighths = Math.round((position - full) * 8);
+    let filled = "█".repeat(full) + (full < BAR_CELLS && eighths > 0 ? EIGHTHS[eighths - 1] : "");
+    if (filled === "")
+        filled = "▏";
+    const bar = theme.fg("dim", filled) + theme.fg("borderMuted", "·".repeat(BAR_CELLS - [...filled].length));
+    return ms >= BAR_FULL_MS ? `${bar} ${theme.fg("dim", formatDuration(ms))}` : bar;
+}
+/**
+ * A call row in the turn's one column (docs/tui-one-column-design.md §2.1): `body` and its `tail`
+ * (`· +36 lines`, `· +3 −1`; never cut) fill the column up to the bar, and the bar starts at the same
+ * column on every row -- the measure's right edge less its cells -- so a group of calls lines its
+ * bars up. A number after a full bar runs past the edge when the line has room, and otherwise moves
+ * the bar left. `width` is the row's width after the marker; `bar` "" draws no bar.
+ */
+export function fitCallRow(body, tail, bar, width, ellipsis, fallbackTime = "") {
+    const column = Math.min(width, DEFAULT_MEASURE);
+    if (bar === "" || column < MIN_COLUMN_FOR_BAR)
+        return fitWithTail(body, tail + fallbackTime, column, ellipsis);
+    const start = Math.max(0, Math.min(column - BAR_CELLS, width - piTui.visibleWidth(bar)));
+    const left = fitWithTail(body, tail, Math.max(1, start - 1), ellipsis);
+    return left + " ".repeat(Math.max(1, start - piTui.visibleWidth(left))) + bar;
+}
 /**
  * A built-in tool's one-row call line (docs/tui-transcript-layout-implementation.md W3): the body
  * (`read src/a.ts`, the command) cut to fit, then a dim tail that is never cut -- a summary the
@@ -98,19 +135,39 @@ export class CallLine {
         this.context = context;
         this.extra = extra;
     }
-    /** The tail as it reads right now: `extra`, the result's summary, then the run time. A failed
-     * result's own row says what happened, so a summary left by an earlier (partial) result is dropped. */
+    /** The tail as it reads right now: `extra`, then the result's summary. A failed result's own row
+     * says what happened, so a summary left by an earlier (partial) result is dropped. */
     tail() {
         const summary = typeof this.context.state?.callSummary === "string" && !this.context.isError ? this.context.state.callSummary : "";
         const parts = [this.extra, summary].filter((part) => part !== "");
-        const dot = parts.map((part) => `${this.theme.fg("dim", " · ")}${part}`).join("");
-        const { durationMs, isError, isPartial } = this.context;
-        const time = durationMs !== undefined && !isError && !isPartial ? `  ${this.theme.fg("dim", formatToolDuration(durationMs))}` : "";
-        return dot + time;
+        return parts.map((part) => `${this.theme.fg("dim", " · ")}${part}`).join("");
+    }
+    /** How long the tool has run: the final time, or while it runs the time since it started (kept in
+     * the renderer's state, which Pi keeps per call). A failure draws none, as in 0.1.22. */
+    elapsed() {
+        const { durationMs, isError, isPartial, executionStarted, state } = this.context;
+        if (isError)
+            return undefined;
+        if (!isPartial)
+            return durationMs;
+        if (!executionStarted || state === undefined || state === null)
+            return undefined;
+        state.startedAt ??= Date.now();
+        return Date.now() - state.startedAt;
+    }
+    /** The bar for the time so far, with the exact time after it when expanded (Ctrl+O). */
+    bar() {
+        const ms = this.elapsed();
+        if (ms === undefined)
+            return "";
+        const exact = this.context.expanded && ms < 100_000 ? ` ${this.theme.fg("dim", formatToolDuration(ms))}` : "";
+        return durationBar(this.theme, ms) + exact;
     }
     invalidate() { }
     render(width) {
-        return [fitWithTail(this.body, this.tail(), width, this.theme.fg("dim", "…"))];
+        const ms = this.elapsed();
+        const fallback = ms !== undefined && !this.context.isPartial ? `  ${this.theme.fg("dim", formatToolDuration(ms))}` : "";
+        return [fitCallRow(this.body, this.tail(), this.bar(), width, this.theme.fg("dim", "…"), fallback)];
     }
 }
 /** A result renderer's summary for the call line's tail (see `CallLine`). */

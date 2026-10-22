@@ -5,6 +5,7 @@ import type { AgentToolResult, ToolRenderers as PiToolRenderers, Theme, ToolDefi
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
 import type { InspectTarget } from "../buffer/inspector.js";
+import { DEFAULT_MEASURE } from "../measure.js";
 import { piTui } from "../pi-tui.js";
 import { CallLine, LinesComponent, textContent } from "./common.js";
 import type { ToolRenderContext, ToolRenderers } from "./types.js";
@@ -54,7 +55,9 @@ class Railed implements Component {
     const contentWidth = Math.max(1, width - prefix - (this.isCall ? 2 : 0));
     const lead = " ".repeat(prefix);
     return this.inner.render(contentWidth).map((line, index) => {
-      if (!this.isCall) return lead + line;
+      // A failure row (`✗ exit 1 · …`) is part of the turn's column; output rows are data and keep the
+      // full width (docs/tui-one-column-design.md §2.1).
+      if (!this.isCall) return lead + (isFailureRow(line) ? piTui.truncateToWidth(line, Math.min(contentWidth, DEFAULT_MEASURE), "…") : line);
       return lead + (index === 0 ? bullet : "  ") + line;
     });
   }
@@ -68,6 +71,11 @@ class Railed implements Component {
   invalidate(): void {
     this.inner.invalidate();
   }
+}
+
+// tools/common.ts failureRow(): the row starts with `✗ ` (src/tui/spine.ts reads it the same way).
+function isFailureRow(line: string): boolean {
+  return line.replace(/\x1b\[[0-9;]*m/g, "").startsWith("✗ ");
 }
 
 /** Renderers that reuse their last component see their own component, not the frame around it. */

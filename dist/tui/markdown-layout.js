@@ -7,16 +7,14 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { CONTENT_COLUMN, DEFAULT_MEASURE } from "./measure.js";
 import { piTui } from "./pi-tui.js";
 // The marked copy pi-tui parses with (pi-internals row `pi-tui-marked`: a dependency of pi-tui, not of
 // Epi), so a segment boundary falls where Pi's own Markdown sees a block boundary.
 const piEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
 const piTuiEntry = createRequire(piEntry).resolve("@earendil-works/pi-tui");
 const { Lexer } = (await import(pathToFileURL(createRequire(piTuiEntry).resolve("marked")).href));
-/** Columns of body text per row (Bringhurst's 45–75 characters; WCAG 1.4.8 asks for ≤ 80). */
-const DEFAULT_MEASURE = 76;
-/** The content column: body text and code start here, under a tool's call text (R3). */
-export const CONTENT_COLUMN = 5;
+export { CONTENT_COLUMN };
 // The code rail sits in the marker column, like a tool's `◆`.
 const CODE_RAIL_COLUMN = 3;
 // Languages whose label says nothing; a bare fence gets none either.

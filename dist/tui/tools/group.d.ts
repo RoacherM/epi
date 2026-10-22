@@ -2,8 +2,8 @@ import type { Theme, ToolExecutionOptions } from "@earendil-works/pi-coding-agen
 import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import type { Component, Container, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { type SpineMember } from "../spine.js";
-import type { ToolRenderers } from "./types.js";
 import { type FlashState } from "./flash.js";
+import type { ToolRenderers } from "./types.js";
 export type GroupKind = "read" | "grep" | "find" | "ls";
 /** Only a built-in read/grep/find/ls tool groups; an extension overriding one of these names (or any
  * other extension tool) never does (docs/tui-design.md 4.2: "Only built-in read-only tools group"). */
@@ -24,6 +24,8 @@ export declare class ToolEntry extends ToolExecutionComponent implements SpineMe
     status: Status;
     expandedFlag: boolean;
     readonly flash: FlashState;
+    /** The final result's run time, for the group row's bar. */
+    durationMs: number | undefined;
     private started;
     constructor(toolName: string, toolCallId: string, args: unknown, renderers: ToolRenderers | undefined, hostUi: TUI, cwd: string, groupKind: GroupKind | undefined, options?: ToolExecutionOptions);
     markExecutionStarted(): void;
@@ -48,6 +50,8 @@ export declare class ToolEntry extends ToolExecutionComponent implements SpineMe
 interface MemberLike {
     groupKind: GroupKind | undefined;
     status: Status;
+    /** The final run time, when the result recorded one. */
+    durationMs?: number | undefined;
 }
 /** Pure text+layout for the collapsed group line, split out from `GroupedMessages` so widths
  * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the `◈`

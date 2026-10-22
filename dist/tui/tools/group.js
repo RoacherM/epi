@@ -3,6 +3,7 @@ import { breathe, motionTime } from "../motion.js";
 import { piTui } from "../pi-tui.js";
 import { dispatchToRows } from "../rows.js";
 import { paintSpine, spineMember } from "../spine.js";
+import { durationBar, fitCallRow } from "./common.js";
 import { createFlashState, disposeFlash, isFlashing, startFlash } from "./flash.js";
 const GROUP_KINDS = new Set(["read", "grep", "find", "ls"]);
 /** Only a built-in read/grep/find/ls tool groups; an extension overriding one of these names (or any
@@ -44,6 +45,8 @@ export class ToolEntry extends ToolExecutionComponent {
     status = "running";
     expandedFlag = false;
     flash = createFlashState();
+    /** The final result's run time, for the group row's bar. */
+    durationMs;
     started = false;
     constructor(toolName, toolCallId, args, renderers, hostUi, cwd, groupKind, options) {
         super(toolName, toolCallId, args, options, renderers, hostUi, cwd);
@@ -56,6 +59,8 @@ export class ToolEntry extends ToolExecutionComponent {
     }
     updateResult(result, isPartial = false) {
         super.updateResult(result, isPartial);
+        if (!isPartial)
+            this.durationMs = result.durationMs;
         if (isPartial) {
             this.status = "running";
             return;
@@ -135,7 +140,12 @@ export function verbGroupLine(members, theme, width, t = motionTime()) {
         ? breathe(theme, "accent", "thinkingHigh", t, "◈ ")
         : theme.fg(anyFailed ? "error" : "muted", "◈ ");
     const contentWidth = Math.max(1, width - PREFIX - 2);
-    return lead + bullet + piTui.truncateToWidth(text, contentWidth);
+    // The group's bar is the sum of its members' times, in the same column as single calls
+    // (docs/tui-one-column-design.md §2.2); none while one runs or when a time is missing.
+    const times = members.map((member) => member.durationMs);
+    const total = !anyRunning && times.every((ms) => ms !== undefined) ? times.reduce((sum, ms) => sum + ms, 0) : undefined;
+    const bar = total === undefined ? "" : durationBar(theme, total);
+    return lead + bullet + fitCallRow(text, "", bar, contentWidth, "…");
 }
 /** A muted `◈ ...` line laid out with the same 3-column lead as every other line (rail + padding),
  * for the "N more" and "fold" affordances, which have no rail of their own to draw. */
