@@ -93,6 +93,7 @@ epi <参数>
 | `epi:task` | 默认开，Manifest `"disable"` 可关 | 工具 `task`、`task_status`、`task_wait`、`task_cancel`、`todo`；子任务在独立进程 `src/worker.ts` 里跑 | `agents/` 目录 | 本文 §12，[guide/task.md](guide/task.md) |
 | `epi:mcp` | 默认开，可关 | 把 Epi 的 `mcp.json` 交给 Pi 的原生 MCP；`/mcp` 面板；随它加载 `codemode` 和 `tool-search` 两个内联扩展 | `mcp.json` | [mcp-design.md](mcp-design.md) |
 | `epi:hooks` | 默认开，可关 | 在会话事件上运行用户配置的 handler（命令、提示词、agent），可以拦截或改写 | `hooks.json` | 本文 §14，[guide/hooks.md](guide/hooks.md) |
+| `epi:web` | 默认开，可关 | 工具 `web_search`、`web_fetch`（只在至少一个检索源可用时注册）；`/web` 面板；交互模式下没有检索源时第一次发消息前问一次。有自己的版本号 | `web.json`、`web-auth.json` | [web-search-design.md](web-search-design.md)，[guide/web.md](guide/web.md) |
 | Magpie provider | 总是，不进 Manifest，不能关 | 模型 provider `magpie`：本机网关的模型目录和四种协议 | 只有 API key（`/login`） | [magpie-design.md](magpie-design.md) |
 | `epi:preview` | 只在交互模式，不进 Manifest，不能关 | `/preview [路径]`：三栏文件浏览加查看器（文本、Markdown、二进制、图片、视频）。只注册一个命令，模型看不到。有自己的版本号 | 无（视频要本机有 ffmpeg） | [guide/preview.md](guide/preview.md) |
 | 关闭的 stdout 保护 | 只在 print/json | 读 stdout 的一方提前关掉管道时安静结束 | 无 | `src/closed-stdout.ts`（D54） |
@@ -262,11 +263,11 @@ interface EpiManifestV1 {
   rules?: string[];
   skills?: string[];
   extensions?: string[];
-  disable?: Array<"epi:task" | "epi:mcp" | "epi:hooks">;
+  disable?: Array<"epi:task" | "epi:mcp" | "epi:hooks" | "epi:web">;
 }
 ```
 
-`disable`（决策 H3/K4）：只接受三个内置名字，其他值（包括 `epi:runtime`、第三方 source）是配置错误，报错带上文件路径。同一个文件里同一个名字既在 `extensions` 又在 `disable` 是配置错误。内置能力仍可写在 `extensions` 里（旧配置有效），但已经多余：没写也是开启的。
+`disable`（决策 H3/K4）：只接受四个内置名字，其他值（包括 `epi:runtime`、第三方 source）是配置错误，报错带上文件路径。同一个文件里同一个名字既在 `extensions` 又在 `disable` 是配置错误。内置能力仍可写在 `extensions` 里（旧配置有效），但已经多余：没写也是开启的。
 
 Extension source scheme：
 
@@ -274,6 +275,7 @@ Extension source scheme：
 epi:task               -> 包内 createTaskExtension(config)
 epi:mcp                -> 包内 createEpiMcpExtension(source)，接 Pi 原生 createMcpExtension（现状见 §13）
 epi:hooks              -> 包内 createHooksExtension(config)
+epi:web                -> 包内 createWebInlineExtension({ epiHome })（docs/web-search-design.md）
 npm:<package>          -> 交给 Pi package resolver 的临时显式 source
 git:<owner>/<repo>     -> 交给 Pi package resolver 的临时显式 source
 ./local-extension.js   -> 相对当前 Manifest 解析后的 absolute path
@@ -500,12 +502,12 @@ interface ResolvedAssembly {
   skills: ResolvedResource[];
   externalExtensions: ResolvedResource[];
   inlineExtensions: Array<{
-    name: "epi:task" | "epi:mcp" | "epi:hooks";
+    name: "epi:task" | "epi:mcp" | "epi:hooks" | "epi:web";
     source: "global" | "project" | "default"; // "default": 没有 Manifest 列出，默认开启
     declaredIn?: string;                        // "default" 时没有
   }>;
   disabledExtensions: Array<{                   // 每个列出它的文件一条，全局在前
-    name: "epi:task" | "epi:mcp" | "epi:hooks";
+    name: "epi:task" | "epi:mcp" | "epi:hooks" | "epi:web";
     source: "global" | "project";
     declaredIn: string;
   }>;

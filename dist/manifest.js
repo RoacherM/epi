@@ -12,10 +12,11 @@ export const BUILT_IN_EXTENSIONS = {
     "epi:task": true,
     "epi:mcp": true,
     "epi:hooks": true,
+    "epi:web": true,
 };
 /** Built-in capabilities in the order they load when no Manifest names them (decision H3/K4: on
  * by default, turned off with `"disable"`). */
-export const BUILT_IN_EXTENSION_NAMES = ["epi:task", "epi:mcp", "epi:hooks"];
+export const BUILT_IN_EXTENSION_NAMES = ["epi:task", "epi:mcp", "epi:hooks", "epi:web"];
 function isJsonObject(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }

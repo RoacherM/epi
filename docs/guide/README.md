@@ -14,6 +14,7 @@
 | [Task](task.md) | `epi:task`：隔离子进程里的子任务与 Agent profile |
 | [MCP](mcp.md) | `epi:mcp`：`mcp.json`、codemode、`epi mcp` |
 | [Hooks](hooks.md) | `epi:hooks`：事件、决策、handler 类型 |
+| [网页检索](web.md) | `epi:web`：DeepSeek 与 Exa 混合检索、日期过滤、`/web` 配置、MCP 检索源 |
 | [Benchmark adapter](benchmark.md) | 外部评测用的 trial adapter |
 
 ## 内建能力一览
@@ -26,5 +27,6 @@
 | `epi:task` | `task`、`task_status`、`task_wait`、`task_cancel`、`todo`：在隔离的子进程里跑子任务，Agent profile 放在 `agents/*.md` | [Task](task.md) |
 | `epi:mcp` | 读 `mcp.json` 接入 MCP 服务，使用锁定 Pi 的原生 MCP 支持；`epi mcp` 管理 | [MCP](mcp.md) |
 | `epi:hooks` | 读 `hooks.json`，在会话、提示、工具调用等事件上运行 command/http/prompt/agent handler | [Hooks](hooks.md) |
+| `epi:web` | `web_search`、`web_fetch`：同时查所有配置了的检索源（DeepSeek、Exa、MCP 检索工具），合并去重、每条带日期；没有配置时模型看不到这两个工具 | [网页检索](web.md) |
 
 

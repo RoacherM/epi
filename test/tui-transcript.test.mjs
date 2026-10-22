@@ -184,9 +184,9 @@ test("thinking streams as 'Thinking…' plus only the last 3 lines while it grow
   assert.match(rendered, /thought line 5/);
 });
 
-// M4 item 3, finished state: collapses to one `∴ Ns` line with a plausible duration
+// M4 item 3, finished state: collapses to one `◇ Ns` line with a plausible duration
 // (measured from the first thinking event to the last, per docs/tui-design.md 4.2).
-test("a finished thinking block collapses to one '∴ Ns' line", async () => {
+test("a finished thinking block collapses to one '◇ Ns' line", async () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   const message = assistantMessage([{ type: "thinking", thinking: "reasoning about it" }, { type: "text", text: "the answer" }]);
   transcript.handle({ type: "message_start", message });
@@ -205,9 +205,9 @@ test("a finished thinking block collapses to one '∴ Ns' line", async () => {
   const rendered = stripAnsi(transcript.root.render(80).join("\n"));
   assert.doesNotMatch(rendered, /Thinking…/);
   assert.doesNotMatch(rendered, /reasoning about it/, "collapsed by default");
-  assert.match(rendered, /^ │ ∴ \d+\.\ds$/m, "one dim `∴ <duration>` row in the marker column, beside the turn spine");
+  assert.match(rendered, /^ │ ◇ \d+\.\ds$/m, "one dim `◇ <duration>` row in the marker column, beside the turn spine");
   assert.doesNotMatch(rendered, /Thought/);
-  const [, seconds] = /∴ (\d+\.\d)s/.exec(rendered);
+  const [, seconds] = /◇ (\d+\.\d)s/.exec(rendered);
   assert.ok(Number(seconds) >= 0 && Number(seconds) < 2, `expected a plausible (~0.03s) duration, got ${seconds}s`);
   assert.match(rendered, /the answer/);
 });
@@ -233,8 +233,8 @@ test("setThinkingExpanded expands every thinking block; a click on one header to
   assert.match(rendered, /reason B/);
 
   const lines = transcript.root.render(80);
-  const headerA = lines.findIndex((line) => stripAnsi(line).includes("∴"));
-  assert.ok(headerA >= 0, "expected an expanded '∴' header line");
+  const headerA = lines.findIndex((line) => stripAnsi(line).includes("◇"));
+  assert.ok(headerA >= 0, "expected an expanded '◇' header line");
   const click = {
     type: "click", button: "left", clickCount: 1,
     x: 5, y: headerA, screenX: 5, screenY: headerA, width: 80, height: lines.length,
@@ -406,7 +406,7 @@ test("assistant messages with thinking fit widths 40, 80, and 120", () => {
 // process) ending in thinking must render as finished, not stuck showing the live "Thinking…" tail
 // forever -- AssistantBlock's `streaming` flag has to actually reach it, not default to true
 // regardless of what Transcript.assistant() was called with. No text follows it, so its collapsed
-// `∴` row is left out; expanded, its header reads `∴ thought`, not a misleading `0.0s`: no
+// `◇` row is left out; expanded, its header reads `◇ thought`, not a misleading `0.0s`: no
 // thinking_start/delta/end ever reached this process for a replayed message.
 test("a replayed message ending in thinking renders as finished, not stuck streaming", () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
@@ -414,12 +414,12 @@ test("a replayed message ending in thinking renders as finished, not stuck strea
   transcript.reset({ ...stubSession(), messages: [message] });
   const rendered = stripAnsi(transcript.root.render(80).join("\n"));
   assert.doesNotMatch(rendered, /Thinking…/, "a replayed, already-finished message must not show the live streaming view");
-  assert.doesNotMatch(rendered, /∴/, "no text follows the thinking, so no `∴` row");
+  assert.doesNotMatch(rendered, /◇/, "no text follows the thinking, so no `◇` row");
   transcript.setThinkingExpanded(true);
-  assert.match(stripAnsi(transcript.root.render(80).join("\n")), /^ │ ∴ thought$/m, "no duration -- none was ever recorded");
+  assert.match(stripAnsi(transcript.root.render(80).join("\n")), /^ │ ◇ thought$/m, "no duration -- none was ever recorded");
 });
 
-// docs/tui-transcript-layout-design.md §7.2-4: `∴` heads the text it led to. A collapsed run that
+// docs/tui-transcript-layout-design.md §7.2-4: `◇` heads the text it led to. A collapsed run that
 // tool calls (or nothing) follow draws no row; one that text follows does; Ctrl+T shows every run.
 test("a collapsed thinking row shows only above text, not above tool calls", () => {
   const session = { ...stubSession(), getToolDefinition: () => undefined, getAllTools: () => [] };
@@ -430,9 +430,9 @@ test("a collapsed thinking row shows only above text, not above tool calls", () 
   ];
   transcript.reset({ ...session, messages: steps });
   const lines = transcript.root.render(80).map(stripAnsi);
-  assert.equal(lines.filter((line) => line.includes("∴")).length, 1, lines.join("\n"));
-  const header = lines.findIndex((line) => line.includes("∴"));
-  assert.match(lines[header + 1], /the answer/, "the one `∴` row heads the answer");
+  assert.equal(lines.filter((line) => line.includes("◇")).length, 1, lines.join("\n"));
+  const header = lines.findIndex((line) => line.includes("◇"));
+  assert.match(lines[header + 1], /the answer/, "the one `◇` row heads the answer");
   transcript.setThinkingExpanded(true);
   const expanded = stripAnsi(transcript.root.render(80).join("\n"));
   assert.match(expanded, /plan A/);
@@ -462,7 +462,7 @@ test("thinking followed by text has no blank row between the header and the text
   transcript.handle({ type: "message_start", message });
   transcript.handle({ type: "message_end", message });
   const lines = transcript.root.render(80).map(stripAnsi);
-  const headerIndex = lines.findIndex((line) => line.includes("∴"));
+  const headerIndex = lines.findIndex((line) => line.includes("◇"));
   const answerIndex = lines.findIndex((line) => line.includes("the answer"));
   assert.ok(headerIndex >= 0 && answerIndex > headerIndex);
   assert.equal(answerIndex, headerIndex + 1, "expected the text to sit directly under the thinking header");
@@ -541,7 +541,7 @@ test("expanded thinking's transformers get the message's streaming state, like P
     assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "ans", partial: message },
   });
   const streaming = stripAnsi(transcript.root.render(80).join("\n"));
-  assert.match(streaming, /∴[\s\S]*early/, `the earlier run must be expanded:\n${streaming}`);
+  assert.match(streaming, /◇[\s\S]*early/, `the earlier run must be expanded:\n${streaming}`);
   assert.deepEqual([...new Set(calls)], [true], "while the message streams");
   calls = [];
   transcript.handle({ type: "message_end", message });
@@ -550,9 +550,9 @@ test("expanded thinking's transformers get the message's streaming state, like P
 });
 
 // Regression (from when a clock narrowed the inner width): a click is dispatched against the same row
-// heights the block was drawn with, so it lands on the `∴` row even after an earlier text segment
+// heights the block was drawn with, so it lands on the `◇` row even after an earlier text segment
 // that wraps.
-test("clicking the '∴' row still works when an earlier text segment wraps", () => {
+test("clicking the '◇' row still works when an earlier text segment wraps", () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   const width = 60;
   // Long enough to wrap to a different number of rows at `width` (60) than at the narrower
@@ -566,8 +566,8 @@ test("clicking the '∴' row still works when an earlier text segment wraps", ()
   transcript.handle({ type: "message_start", message });
   transcript.handle({ type: "message_end", message });
   const lines = transcript.root.render(width).map(stripAnsi);
-  const y = lines.findIndex((line) => line.includes("∴"));
-  assert.ok(y >= 0, "expected a '∴' header row");
+  const y = lines.findIndex((line) => line.includes("◇"));
+  assert.ok(y >= 0, "expected a '◇' header row");
   const click = {
     type: "click", button: "left", clickCount: 1,
     x: 5, y, screenX: 5, screenY: y, width, height: lines.length,
@@ -643,10 +643,13 @@ test("a thinking run flashes its spine in success color when it ends, then clear
   const answering = assistantMessage([{ type: "thinking", thinking: "reasoning about it" }, { type: "text", text: "the answer" }]);
   transcript.handle({ type: "message_update", message: answering, assistantMessageEvent: { type: "text_start", contentIndex: 1, partial: answering } });
   const justAfter = transcript.root.render(80);
-  const header = justAfter.find((line) => stripAnsi(line).includes("∴"));
-  assert.ok(header?.startsWith(` ${successBar}`), `the thinking's spine must flash right after it ends: ${JSON.stringify(header)}`);
+  // Right after it ends its marker shakes (× + × +, docs/tui-glyphs-design.md §3) before settling on ◇.
+  const header = justAfter.find((line) => /^ . [×+] \d+\.\ds/.test(stripAnsi(line)));
+  assert.ok(header?.startsWith(` ${successBar}`), `the thinking's spine must flash right after it ends: ${JSON.stringify(justAfter.map(stripAnsi))}`);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.ok(transcript.root.render(80).some((line) => /^ . ◇ \d+\.\ds/.test(stripAnsi(line))), "then it settles on ◇");
   transcript.handle({ type: "message_end", message: answering });
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  await new Promise((resolve) => setTimeout(resolve, 100));
   assert.ok(!transcript.root.render(80).join("\n").includes(successBar), "the flash must clear itself after 400ms");
 });
 

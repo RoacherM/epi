@@ -1,13 +1,19 @@
 import { type MarkdownTransformer, type Theme } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import type { SpineMember } from "./spine.js";
+import type { ClockGated, SpineMember } from "./spine.js";
 import { type FlashState } from "./tools/flash.js";
-export declare class AssistantBlock implements Component, SpineMember {
+export declare class AssistantBlock implements Component, SpineMember, ClockGated {
     private readonly theme;
     private readonly transformers;
     private readonly requestRender;
     readonly spineRole = "trunk";
+    /** The thinking marker turns with the clock: outside the transcript's tip it holds still at the time
+     * it last showed inside it (spine.ts ClockGated). */
+    clockLive: boolean;
+    /** The live `Thinking…` row in the last render, if one is: it is what turns with the clock. */
+    clockRow: number | undefined;
+    private shownAt;
     private readonly container;
     /** Each child's rows in the last render, for click routing and the spine's flash rows. */
     private rows;
@@ -37,13 +43,14 @@ export declare class AssistantBlock implements Component, SpineMember {
      * a text run with no text (tool calls only), or a collapsed thinking run that no text follows. */
     private piece;
     /** Whether text (not a tool call) comes right after thinking segment `index`. While the message
-     * streams, an empty text part counts too, so the `∴` row doesn't blink out for the moment between
+     * streams, an empty text part counts too, so the `◇` row doesn't blink out for the moment between
      * `text_start` and the first delta. */
     private textFollows;
     private flash;
     /** Drops pending flash timers when the transcript is cleared (/new, /resume, /reload). */
     dispose(): void;
     render(width: number): string[];
+    private draw;
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
     /** A thinking run that just ended flashes its rows' stretch of the turn spine (docs/tui-motion-
      * design.md M6); `row` counts the rows of the last render. */

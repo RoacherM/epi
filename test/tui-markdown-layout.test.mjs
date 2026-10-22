@@ -28,13 +28,15 @@ test("only top-level code blocks and tables split; ones inside a list or a quote
   assert.match(segments[0].source, /2\. two[\s\S]*> q/, "the list (with its code) and the quote stay in one prose segment");
 });
 
-test("body text wraps at 76 columns from the content column; code and tables use the full width", () => {
+test("body text wraps at the terminal's width (0.1.24: no 76-column measure); code and tables too", () => {
   const code = `const value = ${"x".repeat(150)};`;
   const text = `${LONG}\n\n\`\`\`ts\n${code}\n\`\`\`\n\n| ${"h".repeat(100)} |\n|---|\n| 1 |`;
   const rows = plainRows(text, 230);
   const prose = rows.filter((row) => /^ {5}\S/.test(row) && !row.includes("─") && !row.includes("│"));
-  assert.ok(prose.length > 1, "the paragraph wraps");
-  for (const row of prose) assert.ok(row.length - 5 <= 76, `body row wider than the measure: ${JSON.stringify(row)}`);
+  for (const row of prose) assert.ok(row.length <= 230, `body row wider than the terminal: ${JSON.stringify(row)}`);
+  const narrow = plainRows(LONG, 80).filter((row) => row.trim() !== "");
+  assert.ok(narrow.length > 1, "the paragraph wraps at the terminal's width");
+  assert.ok(narrow.some((row) => row.length > 70), "rows use the width they have");
   assert.ok(rows.some((row) => row.includes(code)), "the code line is not wrapped at the measure");
   assert.ok(rows.some((row) => row.includes("h".repeat(100))), "the table keeps its full width");
   assert.ok(plainRows(LONG, 230, identity, Infinity).length === 1, "an unlimited measure leaves the paragraph on one row");
@@ -80,7 +82,7 @@ test("each segment goes through the transformers on its own, a code block at the
     return markdown.replace("```mermaid\ngraph\n```", "DIAGRAM **drawn**");
   };
   const rows = plainRows("Look:\n\n```mermaid\ngraph\n```\n\nDone.", 120, transform);
-  assert.deepEqual(calls.map(([, width]) => width), [76, 115, 76]);
+  assert.deepEqual(calls.map(([, width]) => width), [110, 115, 110]);
   assert.equal(calls[1][0], "```mermaid\ngraph\n```");
   assert.deepEqual(rows, ["     Look:", "", "     DIAGRAM drawn", "", "     Done."], "a transformer that turns code into other markdown is drawn as markdown");
 });

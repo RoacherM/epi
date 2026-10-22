@@ -48,7 +48,7 @@ export declare class UserMessageBlock implements Component {
     invalidate(): void;
 }
 /** Pi's WorkingIndicatorOptions (ui.setWorkingIndicator): custom frames drawn verbatim, `[]` hides
- * the indicator. Undefined means Epi's built-in braille spinner. */
+ * the indicator. Undefined means Epi's built-in rotating x (docs/tui-glyphs-design.md §7). */
 export interface WorkingIndicator {
     frames?: string[];
     intervalMs?: number;
@@ -63,7 +63,7 @@ export interface TurnState {
     committedOutput: number;
     estimated: boolean;
 }
-/** `⠧ Waiting for response… 2.4s ····· 2.4s ⇣2.3k [stop]`; zero rows when idle. */
+/** `× Waiting for response… 2.4s ····· 2.4s ⇣2.3k [stop]`; zero rows when idle. */
 export declare class TurnStatus implements Component {
     private readonly theme;
     private readonly state;
@@ -181,9 +181,5 @@ export interface QueuedMessagesState {
     steering: readonly string[];
     followUp: readonly string[];
 }
-/**
- * Messages queued while a turn runs (4.1 排队区), between the turn status row and the prompt.
- * At most 3 lines: Pi's `Steering:` / `Follow-up:` lines, plus an Alt+Up hint if there is room.
- */
 export declare function queuedMessagesBar(theme: Theme, state: () => QueuedMessagesState): Component;
 //# sourceMappingURL=chrome.d.ts.map

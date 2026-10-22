@@ -26,13 +26,16 @@ export declare class ToolEntry extends ToolExecutionComponent implements SpineMe
     readonly flash: FlashState;
     /** The final result's run time, for the group row's bar. */
     durationMs: number | undefined;
+    /** When it finished, if it was seen running: the group row's marker shakes then (glyphs.ts). */
+    endedAt: number | undefined;
     clockLive: boolean;
     private shownAt;
     private started;
     constructor(toolName: string, toolCallId: string, args: unknown, renderers: ToolRenderers | undefined, hostUi: TUI, cwd: string, groupKind: GroupKind | undefined, options?: ToolExecutionOptions);
     markExecutionStarted(): void;
-    /** Running with its call row outside the transcript's tip: drawn at the time it last showed inside
-     * it, so the duration bar holds still while the rest redraws as usual (spine.ts ClockGated). */
+    /** With its call row outside the transcript's tip: drawn at the time it last showed inside it, so
+     * the duration bar and the rotating marker hold still and a landing shake doesn't play, while the
+     * rest redraws as usual (spine.ts ClockGated). */
     render(width: number): string[];
     updateResult(result: {
         content: Array<{
@@ -57,11 +60,14 @@ interface MemberLike {
     status: Status;
     /** The final run time, when the result recorded one. */
     durationMs?: number | undefined;
+    /** When it finished, if it was seen running. */
+    endedAt?: number | undefined;
 }
 /** Pure text+layout for the collapsed group line, split out from `GroupedMessages` so widths
- * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the `◈`
- * breathes (docs/tui-motion-design.md M5), read at `t` seconds; the turn spine beside it pulses. */
-export declare function verbGroupLine(members: MemberLike[], theme: Theme, width: number, t?: number): string;
+ * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the marker is
+ * the rotating x, read at `now`; once all settled it shakes twice and becomes `◈`
+ * (docs/tui-glyphs-design.md §3). The turn spine beside it pulses. */
+export declare function verbGroupLine(members: MemberLike[], theme: Theme, width: number, now?: number): string;
 /**
  * Wraps `Transcript`'s `messages` container: folds consecutive collapsed built-in read-only tool
  * blocks into one line at render time. Swapped in for `this.messages` as `root`'s child; `add()`
@@ -89,6 +95,14 @@ export declare class GroupedMessages implements Component {
     private readonly revealed;
     private drawn;
     private inTip;
+    /** A folded run's row has no block of its own: it is tracked by its first member, and drawn at the
+     * time it last showed in the tip while outside it, like a ClockGated block. */
+    private readonly runShownAt;
+    /** Folded runs drawn while a member ran: only those shake as they settle (glyphs.ts). */
+    private readonly runShownRunning;
+    /** A folded run's own tip key, apart from its first member's: Ctrl+O switches between drawing the
+     * run as one row and as its members, and the two must not take each other's place in the tip. */
+    private readonly runKeys;
     constructor(messages: Container, tui: TUI, theme: Theme, 
     /** A turn is in progress: its spine is live (src/tui/spine.ts). */
     turnRunning?: () => boolean);
@@ -98,6 +112,12 @@ export declare class GroupedMessages implements Component {
     /** Cleared on `Transcript.reset()`: old runs' first members no longer resolve to anything on screen. */
     dispose(): void;
     render(width: number): string[];
+    /** Whether a block may move with the clock is judged from the last frame's layout. A block drawn
+     * live that this frame's layout put outside the tip (a long reply pushed it up as it finished) is
+     * drawn again held, so no frame changes a row outside the tip with the clock alone: a landing shake
+     * there would otherwise show for one frame. Only clock-driven cells differ, so the row count holds. */
+    private holdOutsideTip;
+    private hold;
     /** Which blocks this frame drew, and which have their clock row -- the first row with text, where
      * a call's duration bar is -- in the last TIP_ROWS rows. */
     private noteTip;

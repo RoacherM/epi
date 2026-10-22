@@ -65,15 +65,16 @@ test("a settled turn is one spine: trunk, branches, a red failure branch, closed
   const t = transcript();
   fullTurn(t);
   const rows = lines(t);
-  const start = rows.findIndex((row) => row.includes("∴"));
+  const start = rows.findIndex((row) => row.includes("◇"));
   // A call's time is a bar at the column's edge (docs/tui-one-column-design.md §2.2); the footer's a number.
   const BAR = / +[▏▎▍▌▋▊▉█][▏▎▍▌▋▊▉█·]{3}( \S+)?$/;
   assert.deepEqual(rows.slice(start).map((row) => row.replace(BAR, "  <t>").replace(/\d+(\.\d+)?(ms|s)$/, "<t>")), [
-    " │ ∴ thought",
+    " │ ◇ thought",
     " │   Checking.",
     " │",
     " ├─$ npm test  <t>",
-    " ├─$ false",
+    // A failed call settles on a red × (docs/tui-glyphs-design.md §3).
+    " ├─× false",
     " ├─  ✗ exit 1 · boom",
     " │",
     " │   Done.",
@@ -124,7 +125,7 @@ test("a replayed turn gets the same spine, ending at its last row (replay has no
   ]));
   const rows = lines(t);
   const start = rows.findIndex((row) => row.includes("$ ls"));
-  assert.deepEqual(rows.slice(start), [`${" ├─$ ls".padEnd(76)}▏···`, " │", " │   Listed."]);
+  assert.deepEqual(rows.slice(start), [`${" ├─$ ls".padEnd(76)}····`, " │", " │   Listed."]);
 });
 
 test("consecutive tool rows sit together, across messages and around a group line", () => {
@@ -171,7 +172,7 @@ test("while a turn runs only its tip pulses; rows above it already look settled"
   const heavy = spined.filter((row) => strip(row).startsWith(" ┃"));
   assert.ok(heavy.length > 0 && heavy.length <= 8, `the tip is at most 8 rows (got ${heavy.length})`);
   assert.ok(spined.slice(-heavy.length - 1).some((row) => strip(row).startsWith(" ├─")), "the running tool sits in the tip");
-  const branch = live.find((row) => strip(row).includes("$ sleep 9"));
+  const branch = live.find((row) => /[+×] sleep 9/.test(strip(row)));
   assert.ok(!branch.includes(theme.fg("borderMuted", "├─")), "a running tool's branch is lit");
 
   t.handle({ type: "tool_execution_end", toolName: "bash", toolCallId: "b1", result: { content: [{ type: "text", text: "" }] }, isError: false, durationMs: 9000 });
@@ -432,14 +433,14 @@ test("running duration bars move only inside the tip; rows above it hold still a
   const after = tr.root.render(120).map(strip);
   const changed = after.flatMap((row, index) => (row === before[index] ? [] : [index]));
   const tipStart = after.length - 8;
-  assert.ok(before.some((row) => /long build p1 +▏···/.test(row)), JSON.stringify(before.slice(0, 12)));
+  assert.ok(before.some((row) => /long build p1 +[▏·]···/.test(row)), JSON.stringify(before.slice(0, 12)));
   assert.deepEqual(changed.filter((index) => index < tipStart), [], `rows outside the tip changed: ${JSON.stringify(changed.map((index) => after[index]))}`);
 
   // An event (new output) still redraws a block outside the tip; only its clock is held.
   tr.handle({ type: "tool_execution_update", toolName: "bash", toolCallId: "p1", args: { command: "long build p1" }, partialResult: { content: [{ type: "text", text: "step 1" }] } });
   const updated = tr.root.render(120).map(strip);
   assert.ok(updated.some((row) => row.includes("step 1")), "the new output shows");
-  assert.ok(updated.some((row) => /long build p1 +▏···/.test(row)), "the bar still reads the time it last showed in the tip");
+  assert.ok(updated.some((row) => /long build p1 +[▏·]···/.test(row)), "the bar still reads the time it last showed in the tip");
 
   // pi-tui's main-screen renderer never needs a full redraw while only the clock runs.
   const screen = new piTui.TuiMainScreen({ columns: 120, rows: 12, write() {}, hideCursor() {}, showCursor() {} }, false);
@@ -475,7 +476,7 @@ for (const kind of ["tool", "user bash"]) {
     const before = tr.root.render(120).map(strip);
     now += 2_000;
     const after = tr.root.render(120).map(strip);
-    assert.ok(before.some((row) => /straddling build +▏···/.test(row)), JSON.stringify(before));
+    assert.ok(before.some((row) => /straddling build +[▏·]···/.test(row)), JSON.stringify(before));
     assert.deepEqual(after.slice(0, -8), before.slice(0, -8));
   });
 }
@@ -510,4 +511,53 @@ test("the first of eight running calls after reply text, on the tip's first row,
   const callRow = before.findIndex((row) => row.includes("edge-0"));
   assert.equal(callRow, before.length - 8, "the call is on the tip's first row");
   assert.match(after[callRow], /edge-0 +██▎·$/);
+});
+
+// Review 1 of 0.1.24 (.dev/milestones/0.1.24/review-1.md P2-1, P3-2): no row outside the tip may change
+// with the clock alone -- after Ctrl+O folds or unfolds a running run out there, or when a call that
+// just finished is pushed out of the tip in the same frame (its landing shake must not show there).
+for (const order of ["fold-then-expand", "expand-then-fold"]) {
+  test(`Ctrl+O (${order}) on running calls outside the tip: no full redraw while only the clock runs`, (t) => {
+    let now = 1_000_000;
+    t.mock.method(Date, "now", () => now);
+    const tr = transcript();
+    const screen = new piTui.TuiMainScreen({ columns: 80, rows: 12, write() {}, hideCursor() {}, showCursor() {} }, false);
+    screen.addChild(tr.root);
+    if (order === "expand-then-fold") tr.setToolsExpanded(true);
+    tr.handle({ type: "agent_start" });
+    tr.handle({ type: "message_start", message: user("go") });
+    const calls = [call("grep", "g1", { pattern: "foo" }), call("grep", "g2", { pattern: "bar" }), ...Array.from({ length: 16 }, (_, i) => call("bash", `b${i}`, { command: `make part${i}` }))];
+    const message = { ...assistant(calls), stopReason: "toolUse" };
+    tr.handle({ type: "message_start", message: { ...message, content: [] } });
+    tr.handle({ type: "message_end", message });
+    for (const c of calls) tr.handle({ type: "tool_execution_start", toolName: c.name, toolCallId: c.id, args: c.arguments });
+    for (let i = 0; i < 3; i += 1) { now += 80; screen.renderNow(); }
+    tr.setToolsExpanded(order === "fold-then-expand");
+    now += 80;
+    screen.renderNow();
+    const before = screen.fullRedraws;
+    for (let i = 0; i < 10; i += 1) { now += 320; screen.renderNow(); }
+    assert.equal(screen.fullRedraws - before, 0);
+  });
+}
+
+test("a call that finishes as a long reply pushes it out of the tip never shakes outside it", (t) => {
+  let now = 1_000_000;
+  t.mock.method(Date, "now", () => now);
+  const tr = transcript();
+  const screen = new piTui.TuiMainScreen({ columns: 80, rows: 12, write() {}, hideCursor() {}, showCursor() {} }, false);
+  screen.addChild(tr.root);
+  tr.handle({ type: "agent_start" });
+  tr.handle({ type: "message_start", message: user("go") });
+  runTool(tr, "bash", "b1", { args: { command: "npm test" }, finish: false });
+  for (let i = 0; i < 3; i += 1) { now += 80; screen.renderNow(); }
+  tr.handle({ type: "tool_execution_end", toolName: "bash", toolCallId: "b1", result: { content: [{ type: "text", text: "ok" }] }, isError: false, durationMs: 900 });
+  reply(tr, [{ type: "text", text: Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n\n") }]);
+  now += 80;
+  screen.renderNow();
+  const markers = [strip(tr.root.render(80).find((row) => strip(row).includes("npm test")))[3]];
+  const before = screen.fullRedraws;
+  for (let i = 0; i < 6; i += 1) { now += 80; screen.renderNow(); markers.push(strip(tr.root.render(80).find((row) => strip(row).includes("npm test")))[3]); }
+  assert.deepEqual([...new Set(markers)], ["$"], "settled at once outside the tip");
+  assert.equal(screen.fullRedraws - before, 0);
 });

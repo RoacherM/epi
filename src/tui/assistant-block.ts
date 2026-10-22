@@ -1,6 +1,6 @@
 // Assistant message rendering (docs/tui-design.md 4.2's "M4 视觉细节", docs/tui-transcript-layout-
-// design.md §4-A/B): thinking blocks that stream as `∴ Thinking…` + last 3 lines, then collapse to a
-// dim `∴ 2.1s`. Pi's `AssistantMessageComponent` can't do this: `hideThinkingBlock` /
+// design.md §4-A/B): thinking blocks that stream as `× Thinking…` (the rotating x, docs/tui-glyphs-
+// design.md) + last 3 lines, then collapse to a dim `◇ 2.1s`. Pi's `AssistantMessageComponent` can't do this: `hideThinkingBlock` /
 // `hiddenThinkingLabel` are one flag and one static string for the *whole* component, but a message
 // can hold several thinking runs, each needing its own duration and its own click-to-expand state.
 // So thinking is rendered here, from scratch. Text runs go through `MeasuredMarkdown` (body text at a
@@ -11,19 +11,20 @@ import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
 import { fit, formatDuration, markPromptZone, splitPromptZone } from "./chrome.js";
+import { drawAt } from "./clock.js";
+import { GLYPHS, paintMarker } from "./glyphs.js";
 import { rewritePiText } from "../pi-output.js";
 import { CONTENT_COLUMN, MeasuredMarkdown } from "./markdown-layout.js";
-import { breathe, motionTime } from "./motion.js";
 import { piTui } from "./pi-tui.js";
 import { type ChildRows, dispatchToRows } from "./rows.js";
-import type { SpineMember } from "./spine.js";
+import type { ClockGated, SpineMember } from "./spine.js";
 import { createFlashState, disposeFlash, type FlashState, isFlashing, startFlash } from "./tools/flash.js";
 
 type ContentPart = AssistantMessage["content"][number];
 
 // The content column (R3): expanded thinking and the error lines start where the reply text does.
 const CONTENT_PAD = CONTENT_COLUMN;
-// The `∴` sits in the marker column, like a tool's `◆` (docs/tui-transcript-layout-design.md R3).
+// The `◇` sits in the marker column, like a tool's `◆` (docs/tui-transcript-layout-design.md R3).
 const MARKER_PAD = 3;
 const STREAMING_TAIL_LINES = 3;
 
@@ -68,6 +69,8 @@ function splitSegments(content: readonly ContentPart[]): Segment[] {
 interface ThinkingTiming {
   startedAt: number | undefined;
   lastAt: number | undefined;
+  /** Drawn as the live `Thinking…` row: only then does its marker shake as it lands (glyphs.ts). */
+  shownActive?: boolean;
 }
 
 /** One collapsed/expanded/streaming thinking run, keyed by its first content-array index (stable
@@ -78,7 +81,7 @@ class ThinkingBlock implements Component {
   constructor(
     private readonly theme: Theme,
     private readonly text: string,
-    private readonly active: boolean,
+    readonly active: boolean,
     private readonly timing: ThinkingTiming,
     private readonly expanded: boolean,
     private readonly onToggle: () => void,
@@ -93,9 +96,10 @@ class ThinkingBlock implements Component {
   private renderLines(width: number): string[] {
     const pad = " ".repeat(MARKER_PAD);
     if (this.active) {
+      this.timing.shownActive = true;
       const bodyPad = " ".repeat(MARKER_PAD + 2);
       const contentWidth = Math.max(1, width - bodyPad.length);
-      const label = `${breathe(this.theme, "muted", "thinkingHigh", motionTime(), "∴")} ${this.theme.fg("muted", "Thinking…")}`;
+      const label = `${paintMarker(this.theme, { state: "running", glyph: GLYPHS.model, color: "dim" })} ${this.theme.fg("muted", "Thinking…")}`;
       const transformed = applyTransformers(this.text, "assistant-thinking", true, contentWidth, this.transformers);
       // Wrap first, *then* take the last 3 rows: a `fit()`/`truncateToWidth` per logical line (the
       // prior bug here) throws away everything past the terminal's width instead of carrying it to
@@ -110,12 +114,15 @@ class ThinkingBlock implements Component {
     // One dim row, no bold and no clock: thinking is the least informative line of a turn
     // (docs/tui-transcript-layout-design.md R2). Replayed history (docs/tui-design.md 4.2): no live
     // thinking_start/delta/end ever reached this block, so there's no real duration to show -- a
-    // bare `∴ thought` rather than a misleadingly precise (and always-zero) `0.0s`.
+    // bare `◇ thought` rather than a misleadingly precise (and always-zero) `0.0s`.
     const hasTiming = this.timing.startedAt !== undefined || this.timing.lastAt !== undefined;
     const label = hasTiming
       ? formatDuration((this.timing.lastAt ?? this.timing.startedAt ?? 0) - (this.timing.startedAt ?? this.timing.lastAt ?? 0))
       : "thought";
-    const header = fit(`${pad}${this.theme.fg("dim", "∴")} ${this.theme.fg("dim", label)}`, width);
+    // A run seen streaming shakes twice as it lands (its flash started then); a replayed one doesn't.
+    const endedAt = this.timing.shownActive === true && this.flash.startedAt > 0 ? this.flash.startedAt : undefined;
+    const marker = paintMarker(this.theme, { state: "done", glyph: GLYPHS.model, color: "dim", endedAt });
+    const header = fit(`${pad}${marker} ${this.theme.fg("dim", label)}`, width);
     if (!this.expanded) return [header];
     return [header, ...this.expandedBody().render(width)];
   }
@@ -140,7 +147,7 @@ class ThinkingBlock implements Component {
     return this.renderLines(width);
   }
 
-  /** Only the header row (the `∴ 2.1s` / `Thinking…` line) toggles -- clicking into an
+  /** Only the header row (the `◇ 2.1s` / `Thinking…` line) toggles -- clicking into an
    * expanded block's body shouldn't collapse it back out from under a text selection. */
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     if (event.type !== "click" || event.button !== "left" || event.y !== 0 || this.active) return undefined;
@@ -153,8 +160,14 @@ class ThinkingBlock implements Component {
   }
 }
 
-export class AssistantBlock implements Component, SpineMember {
+export class AssistantBlock implements Component, SpineMember, ClockGated {
   readonly spineRole = "trunk";
+  /** The thinking marker turns with the clock: outside the transcript's tip it holds still at the time
+   * it last showed inside it (spine.ts ClockGated). */
+  clockLive = true;
+  /** The live `Thinking…` row in the last render, if one is: it is what turns with the clock. */
+  clockRow: number | undefined;
+  private shownAt: number | undefined;
   private readonly container = new piTui.Container();
   /** Each child's rows in the last render, for click routing and the spine's flash rows. */
   private rows: ChildRows[] = [];
@@ -238,7 +251,7 @@ export class AssistantBlock implements Component, SpineMember {
     });
     // One blank row above the message's first visible row (under the user bubble or the previous
     // block), and one between a text run and a thinking run after it; a text run right after a
-    // thinking run sits flush under its `∴` (the M4 mock-up shows no gap there).
+    // thinking run sits flush under its `◇` (the M4 mock-up shows no gap there).
     pieces.forEach(({ kind, piece }, index) => {
       if (index === 0 || (kind === "thinking" && pieces[index - 1]?.kind === "content")) this.container.addChild(new piTui.Spacer(1));
       this.container.addChild(piece);
@@ -272,11 +285,15 @@ export class AssistantBlock implements Component, SpineMember {
       // 4.2: that toggle only applies "when the thinking block finishes").
       const active = this.lastStreaming && segmentIndex === segments.length - 1;
       const expanded = this.expandedOverride.get(segment.startIndex) ?? this.globalExpanded;
-      // `∴` heads the text it led to (docs/tui-transcript-layout-design.md §7.2-4): a collapsed run
-      // followed by tool calls, or by nothing, draws no row -- seven `∴` rows in one turn would cut
+      // `◇` heads the text it led to (docs/tui-transcript-layout-design.md §7.2-4): a collapsed run
+      // followed by tool calls, or by nothing, draws no row -- seven `◇` rows in one turn would cut
       // the story into pieces. Its time still counts in the turn's `Worked for`.
       if (!active && !expanded && !this.textFollows(segments, segmentIndex)) return undefined;
-      const timing = this.timing.get(segment.startIndex) ?? { startedAt: undefined, lastAt: undefined };
+      let timing = this.timing.get(segment.startIndex);
+      if (timing === undefined) {
+        timing = { startedAt: undefined, lastAt: undefined };
+        this.timing.set(segment.startIndex, timing);
+      }
       const toggle = () => {
         this.expandedOverride.set(segment.startIndex, !(this.expandedOverride.get(segment.startIndex) ?? this.globalExpanded));
         if (this.lastMessage !== undefined) this.rebuild(splitSegments(this.lastMessage.content));
@@ -295,7 +312,7 @@ export class AssistantBlock implements Component, SpineMember {
   }
 
   /** Whether text (not a tool call) comes right after thinking segment `index`. While the message
-   * streams, an empty text part counts too, so the `∴` row doesn't blink out for the moment between
+   * streams, an empty text part counts too, so the `◇` row doesn't blink out for the moment between
    * `text_start` and the first delta. */
   private textFollows(segments: readonly Segment[], index: number): boolean {
     const next = segments[index + 1];
@@ -322,8 +339,19 @@ export class AssistantBlock implements Component, SpineMember {
   }
 
   render(width: number): string[] {
+    if (this.clockLive) {
+      this.shownAt = Date.now();
+      return this.draw(width);
+    }
+    this.shownAt ??= Date.now();
+    return drawAt(this.shownAt, () => this.draw(width));
+  }
+
+  private draw(width: number): string[] {
     const lines: string[] = [];
+    this.clockRow = undefined;
     this.rows = this.container.children.map((component) => {
+      if (component instanceof ThinkingBlock && component.active) this.clockRow = lines.length;
       const rendered = component.render(width);
       lines.push(...rendered);
       return { component, height: rendered.length };

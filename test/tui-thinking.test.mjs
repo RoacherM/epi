@@ -42,7 +42,7 @@ const stripAnsi = (text) => text.replace(/\x1b\[[0-9;]*m/g, "");
 // *no longer* does, since old diff-rendered bytes can still sit in the log after the real screen
 // has moved on. That "no longer visible" half is covered instead, exactly, by the direct
 // Transcript.render() snapshots in test/tui-transcript.test.mjs; this test only checks presence.
-test("thinking streams 'Thinking…' while running, then settles as '∴ Ns'", (t) => {
+test("thinking streams 'Thinking…' while running, then settles as '◇ Ns'", (t) => {
   const { marks, output } = runApp(t, [fixture("faux-thinking.mjs")], [
     ["waitReady"], ["type", "go"], ["key", "enter"],
     ["wait", 300], ["mark", "midstream"],
@@ -52,7 +52,7 @@ test("thinking streams 'Thinking…' while running, then settles as '∴ Ns'", (
   assert.match(stripAnsi(marks.midstream), /Thinking…/);
 
   const settled = stripAnsi(marks.settled);
-  assert.match(settled, /∴ \d+\.\ds/);
+  assert.match(settled, /◇ \d+\.\ds/);
   assert.match(settled, /THINK-DONE/);
   assert.match(stripAnsi(output), /THINK-DONE/);
 });

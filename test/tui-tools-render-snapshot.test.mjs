@@ -32,7 +32,7 @@ const CWD = "/w";
 /** A call row with its duration bar at the column's edge (docs/tui-one-column-design.md §2.2): `width`
  * is what the call component renders into, so the bar starts 4 cells before min(width, 76). */
 function withBar(left, ms, width) {
-  return left + " ".repeat(Math.min(width, 76) - 4 - piTui.visibleWidth(left)) + durationBar(theme, ms);
+  return left + " ".repeat(width - 4 - piTui.visibleWidth(left)) + durationBar(theme, ms);
 }
 
 function ctx(overrides = {}) {
@@ -355,15 +355,17 @@ test("snapshot: bash tool call and results", () => {
 test("snapshot: tool block frame around a built-in renderer", () => {
   const framed = toolBlock("bash", bashRenderers);
   const call = out("make");
-  // The running pulse is the turn spine's (src/tui/spine.ts), not the block's.
+  // The running pulse is the turn spine's (src/tui/spine.ts), not the block's. The marker column is
+  // the rotating x while it runs (docs/tui-glyphs-design.md §3): `+` or `×` in accent.
   // Running: the time so far (well under 10ms here: the bar's first eighth).
-  assert.deepEqual(framed.renderCall({ command: "make" }, theme, ctx({ isPartial: true })).render(80), [
-    `   ${fg("bashMode", "$ ")}${withBar(call, 0, 75)}`,
-  ]);
-  assert.deepEqual(framed.renderCall({ command: "make" }, theme, ctx()).render(80), [`   ${fg("bashMode", "$ ")}${call}`]);
-  assert.deepEqual(framed.renderCall({ command: "make" }, theme, ctx({ isError: true })).render(80), [`   ${fg("error", "$ ")}${call}`]);
+  const [runningRow] = framed.renderCall({ command: "make" }, theme, ctx({ isPartial: true, executionStarted: true })).render(80);
+  assert.ok([fg("accent", "+"), fg("accent", "×")].some((x) => runningRow === `   ${x} ${withBar(call, 0, 75)}`), JSON.stringify(runningRow));
+  // Arguments still streaming: a dim `+`, not turning yet, and no clock until it starts.
+  assert.deepEqual(framed.renderCall({ command: "make" }, theme, ctx({ isPartial: true, executionStarted: false })).render(80), [`   ${fg("dim", "+")} ${call}`]);
+  assert.deepEqual(framed.renderCall({ command: "make" }, theme, ctx()).render(80), [`   ${fg("bashMode", "$")} ${call}`]);
+  assert.deepEqual(framed.renderCall({ command: "make" }, theme, ctx({ isError: true })).render(80), [`   ${fg("error", "×")} ${call}`]);
   const read = toolBlock("read", readRenderers);
-  assert.deepEqual(read.renderCall({ path: "a.ts" }, theme, ctx()).render(80), [`   ${fg("muted", "◆ ")}${out("read")} ${out("a.ts")}`]);
+  assert.deepEqual(read.renderCall({ path: "a.ts" }, theme, ctx()).render(80), [`   ${fg("muted", "◆")} ${out("read")} ${out("a.ts")}`]);
   assert.deepEqual(framed.renderResult(text("a\nb"), expanded, theme, ctx()).render(80), [
     `     ${fg("toolOutput", "a")}`,
     `     ${fg("toolOutput", "b")}`,
@@ -376,7 +378,7 @@ test("snapshot: tool block frame around a built-in renderer", () => {
 test("snapshot: tool block fallback for a tool without renderers", () => {
   const framed = toolBlock("mcp_thing", undefined);
   const call = framed.renderCall({}, theme, ctx()).render(40);
-  assert.deepEqual(call.map((line) => line.trimEnd()), [`   ${fg("muted", "◆ ")}${fg("toolTitle", b("mcp_thing"))}`]);
+  assert.deepEqual(call.map((line) => line.trimEnd()), [`   ${fg("muted", "◆")} ${fg("toolTitle", b("mcp_thing"))}`]);
 
   const lines = numbered(12);
   const output = text(`${lines.join("\n")}\n\n`);
@@ -422,10 +424,13 @@ test("snapshot: user bash block", () => {
   running.appendOutput(`${numbered(4).join("\n")}\n`);
   // The bar is the time since the block started: normalized, it depends on how fast this runs.
   const [runningCall, ...runningRest] = running.render(80);
-  assert.match(runningCall, new RegExp(`${fg("dim", "\u0000").split("\u0000")[0].replace(/\[/g, "\\[")}[▏▎▍▌]`));
+  assert.match(runningCall.replace(/\x1b\[[0-9;]*m/g, ""), /[▏▎▍▌·]···$/, "the time so far: under 10ms here, so `····`");
   assert.equal(piTui.visibleWidth(runningCall), 80, "the bar ends at the terminal's edge");
-  assert.deepEqual([runningCall.slice(0, runningCall.indexOf(" ".repeat(10))), ...runningRest], [
-    `   ${fg("bashMode", "$")} ${out("seq 1 9")}`,
+  // Running: the rotating x where `$` settles (docs/tui-glyphs-design.md §3).
+  const spin = runningCall.slice(3, runningCall.indexOf(" ", 3));
+  assert.ok([fg("accent", "+"), fg("accent", "×")].includes(spin), JSON.stringify(spin));
+  assert.deepEqual([runningCall.slice(0, runningCall.indexOf(" ".repeat(10))).replace(spin, "<x>"), ...runningRest], [
+    `   <x> ${out("seq 1 9")}`,
     outRow("line 2"),
     outRow("line 3"),
     outRow("line 4"),
@@ -447,9 +452,9 @@ test("snapshot: user bash block", () => {
   ]);
 
   const failed = UserBashBlock.fromMessage(theme, { command: "false", output: "", exitCode: 2, cancelled: false, excludeFromContext: true });
-  assert.deepEqual(failed.render(80), [`   ${fg("error", "!!")} ${out("false")}`, `     ${fg("error", "✗ exit 2")}`]);
+  assert.deepEqual(failed.render(80), [`   ${fg("error", "!×")} ${out("false")}`, `     ${fg("error", "✗ exit 2")}`]);
   const crashed = UserBashBlock.fromMessage(theme, { command: "x", output: "a\r\nb", exitCode: undefined, cancelled: false });
-  assert.deepEqual(crashed.render(80), [`   ${fg("error", "$")} ${out("x")}`, outRow("a"), outRow("b"), `     ${fg("error", "✗ failed")}`]);
+  assert.deepEqual(crashed.render(80), [`   ${fg("error", "×")} ${out("x")}`, outRow("a"), outRow("b"), `     ${fg("error", "✗ failed")}`]);
   const cancelled = UserBashBlock.fromMessage(theme, { command: "sleep 9", output: "", exitCode: undefined, cancelled: true });
   assert.deepEqual(cancelled.render(80), [`   ${fg("bashMode", "$")} ${out("sleep 9")}`, `     ${fg("warning", "(cancelled)")}`]);
 

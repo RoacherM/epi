@@ -10,13 +10,14 @@ import type { InspectTarget } from "./buffer/inspector.js";
 import type { CommandHost } from "./command-host.js";
 import { displayNow, drawAt } from "./clock.js";
 import { errorText } from "./errors.js";
+import { GLYPHS, paintMarker, renderThroughLanding, takePhase } from "./glyphs.js";
 import { TURN_COLUMNS } from "./measure.js";
 import { piTui } from "./pi-tui.js";
 import type { ClockGated, SpineMember } from "./spine.js";
 import { durationBar, failureRow, fitCallRow, formatToolDuration, shortenCommand, truncateOutputLines } from "./tools/common.js";
 
-// Matches tools/block.ts: a rail column, then 2 columns of padding before the `◆` bullet; output
-// lines sit two columns further in, under the bullet's text.
+// Matches tools/block.ts: a rail column, then 2 columns of padding before the marker (the rotating x
+// while it runs, then `$` or `!!`); output lines sit two columns further in, under the marker's text.
 const CALL_PREFIX = 3;
 const RESULT_PREFIX = CALL_PREFIX + 2;
 
@@ -49,6 +50,10 @@ export class UserBashBlock implements Component, SpineMember, ClockGated {
   /** Live runs only: a replayed `bashExecution` message has no duration, so it shows none. */
   private startedAt: number | undefined = Date.now();
   private durationMs: number | undefined;
+  /** When a run drawn while it ran ended: its marker shakes then (glyphs.ts). */
+  private endedAt: number | undefined;
+  private shownRunning = false;
+  private readonly phase = takePhase();
 
   constructor(
     private readonly theme: Theme,
@@ -56,6 +61,8 @@ export class UserBashBlock implements Component, SpineMember, ClockGated {
     private readonly excludeFromContext: boolean,
     // Opens the full output from the `… +N lines` row of a finished, truncated block.
     private readonly onInspect?: (target: InspectTarget) => void,
+    // Draws the landing shake when nothing else redraws (a `!cmd` alone has no turn status ticking).
+    private readonly requestRender?: () => void,
   ) {}
 
   /** Replays a finished `bashExecution` session message after /new, /resume or /reload. */
@@ -83,7 +90,11 @@ export class UserBashBlock implements Component, SpineMember, ClockGated {
   setComplete(exitCode: number | undefined, cancelled: boolean): void {
     this.exitCode = exitCode;
     this.status = cancelled ? "cancelled" : exitCode === undefined || exitCode !== 0 ? "error" : "done";
-    if (this.startedAt !== undefined) this.durationMs = Date.now() - this.startedAt;
+    if (this.startedAt === undefined) return;
+    this.durationMs = Date.now() - this.startedAt;
+    if (!this.shownRunning) return;
+    this.endedAt = Date.now();
+    if (this.requestRender !== undefined) renderThroughLanding(this.requestRender);
   }
 
   /** The output as lines, without the single trailing newline most commands leave. */
@@ -97,15 +108,29 @@ export class UserBashBlock implements Component, SpineMember, ClockGated {
    * cancelled, or when the command failed. */
   render(width: number): string[] {
     const running = this.status === "running";
-    if (this.clockLive || !running) {
+    if (this.clockLive) {
       this.shownAt = Date.now();
       return this.draw(width, running);
     }
+    this.shownAt ??= Date.now();
     return drawAt(this.shownAt, () => this.draw(width, running));
   }
 
+  /** `$` (`!!` for a `!!cmd`), the rotating x until then (glyphs.ts). */
+  private marker(running: boolean): string {
+    if (running) this.shownRunning = true;
+    return paintMarker(this.theme, {
+      state: running ? "running" : this.status === "error" ? "error" : "done",
+      glyph: this.excludeFromContext ? "!!" : GLYPHS.shell,
+      color: "bashMode",
+      endedAt: this.endedAt,
+      phase: this.phase,
+      lead: this.excludeFromContext ? "!" : "",
+    });
+  }
+
   private draw(width: number, running: boolean): string[] {
-    const marker = this.theme.fg(this.status === "error" ? "error" : "bashMode", this.excludeFromContext ? "!!" : "$");
+    const marker = this.marker(running);
     const { text, extraLines } = shortenCommand(this.command, undefined);
     const extra = extraLines > 0 ? this.theme.fg("dim", ` · +${extraLines} lines`) : "";
     // The same column and bar as a model's call row (docs/tui-one-column-design.md §2.2): the time so
@@ -188,7 +213,7 @@ export async function runUserBash(host: CommandHost, text: string): Promise<bool
     return true;
   }
 
-  const block = new UserBashBlock(host.theme, command, excludeFromContext, (target) => host.inspect(target));
+  const block = new UserBashBlock(host.theme, command, excludeFromContext, (target) => host.inspect(target), () => host.tui.requestRender());
   host.addBlock(block);
 
   if (eventResult?.result) {

@@ -216,7 +216,7 @@ test("running: shows Reading… · N completed while a member is still in flight
   assistantEnd(transcript, [toolCall("read", "c3")]);
   transcript.handle({ type: "tool_execution_start", toolName: "read", toolCallId: "c3", args: {} });
   const out = render(transcript);
-  assert.match(out, /◈ Reading… · 2 completed/);
+  assert.match(out, /[+×] Reading… · 2 completed/, "the marker turns while a member runs");
 });
 
 test("a failed read shows in error color and doesn't stop the group from forming", () => {
@@ -253,7 +253,7 @@ test("assistant text between tool calls splits the group; each side still groups
   assert.match(out, /Here is what those files contain\./);
 });
 
-// A thinking-only assistant turn (no text) draws no row while collapsed (`∴` only heads text,
+// A thinking-only assistant turn (no text) draws no row while collapsed (`◇` only heads text,
 // docs/tui-transcript-layout-design.md §7.2-4), so it no longer splits a run; GroupedMessages only
 // bridges a child that renders zero lines, so neither file needs the other's internals. Once Ctrl+T
 // shows the thinking, it renders a row and splits the run again.

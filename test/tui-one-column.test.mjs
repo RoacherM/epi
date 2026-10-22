@@ -23,9 +23,11 @@ const WIDTHS = [40, 80, 120, 230, 300];
 const context = (overrides = {}) => ({ state: {}, isError: false, isPartial: false, executionStarted: true, expanded: false, ...overrides });
 
 test("the bar: one decade per cell from 10ms, eighths inside a cell, the time after a full bar", () => {
-  assert.equal(bar(1), "▏···", "under 10ms: the thinnest mark");
-  assert.equal(bar(9), "▏···");
-  assert.equal(bar(10), "▏···");
+  // Under 10ms nothing is filled: a ▏ there joined the next fast call's into a vertical line.
+  assert.equal(bar(0), "····", "under 10ms: all but instant");
+  assert.equal(bar(1), "····");
+  assert.equal(bar(9), "····");
+  assert.equal(bar(10), "▏···", "from 10ms the thinnest mark");
   assert.equal(bar(30), "▌···");
   assert.equal(bar(100), "█···", "100ms fills the first cell");
   assert.equal(bar(1000), "██··");
@@ -61,23 +63,24 @@ test("bars line up: short and long calls put theirs at the same column, at every
     const starts = new Set(rows.map((row) => strip(row).search(/[▏▎▍▌▋▊▉█]/)));
     assert.equal(starts.size, 1, `width ${width}: ${JSON.stringify(rows.map(strip))}`);
     const [start] = starts;
-    if (width >= 81) assert.equal(start, 77, "the bar's last cell is the column's edge, column 81");
-    for (const row of rows) assert.ok(piTui.visibleWidth(row) <= Math.min(width, 81), `width ${width}: ${JSON.stringify(strip(row))}`);
+    // 0.1.24: the terminal's full width (user, 2026-10-22). The bar ends at the terminal's edge.
+    if (width >= 16) assert.equal(start, width - 4, "the bar's last cell is the terminal's last column");
+    for (const row of rows) assert.ok(piTui.visibleWidth(row) <= width, `width ${width}: ${JSON.stringify(strip(row))}`);
   }
 });
 
-test("a long command stops at the column, its tail (· +N lines) never cut", () => {
-  const line = new CallLine("$", theme, "x".repeat(300), context({ durationMs: 2100 }), theme.fg("dim", "+3 lines"));
+test("a long command stops at the terminal's edge, its tail (· +N lines) never cut", () => {
+  const line = new CallLine("$", theme, "x".repeat(400), context({ durationMs: 2100 }), theme.fg("dim", "+3 lines"));
   for (const width of [80, 230, 300]) {
     const [row] = line.render(width);
     assert.match(strip(row), /x… · \+3 lines +██▍·$/, `width ${width}`);
-    assert.ok(piTui.visibleWidth(row) <= 76, "the call component's share of the column");
+    assert.equal(piTui.visibleWidth(row), width, "the full width");
   }
 });
 
 test("a full bar's time runs past the edge when there is room, and moves the bar left when not", () => {
   const wide = fitCallRow({ body: "make", tail: "", bar: durationBar(theme, 140_500) }, 120, "…");
-  assert.equal(strip(wide), `${"make".padEnd(72)}████ 2m20s`);
+  assert.equal(strip(wide), `${"make".padEnd(110)}████ 2m20s`, "with a full width there is never room past the edge");
   const tight = fitCallRow({ body: "make", tail: "", bar: durationBar(theme, 140_500) }, 76, "…");
   assert.equal(piTui.visibleWidth(tight), 76);
   assert.match(strip(tight), /make +████ 2m20s$/);
@@ -105,22 +108,22 @@ test("running: the bar is the time so far; expanded adds the exact time; a failu
   assert.equal(strip(failed.render(80)[0]), "false");
 });
 
-test("a failure row ends at the column on a wide terminal; output rows keep the full width", () => {
+test("a failure row and output rows both use the full width", () => {
   const framed = toolBlock("bash", bashRenderers);
   const args = { command: "make" };
   const boom = `boom ${"z".repeat(300)}\n\nCommand exited with code 1`;
   const [failure] = framed.renderResult({ content: [{ type: "text", text: boom }] }, { expanded: false, isPartial: false }, theme, context({ args, isError: true })).render(300);
   assert.ok(strip(failure).startsWith("     ✗ exit 1 · boom"));
-  assert.ok(piTui.visibleWidth(failure) <= 81, `${piTui.visibleWidth(failure)} columns`);
+  assert.equal(piTui.visibleWidth(failure), 300, `${piTui.visibleWidth(failure)} columns`);
   const output = framed.renderResult({ content: [{ type: "text", text: "y".repeat(200) }] }, { expanded: true, isPartial: false }, theme, context({ args })).render(300);
   assert.ok(output.some((row) => strip(row).includes("y".repeat(200))), "expanded output is data: full width");
 });
 
-test("the user message bar spans the column, its clock at the column's right end", () => {
+test("the user message bar spans the full width, its clock at the right end", () => {
   const block = new UserMessageBlock(theme, "hello", new Date(2026, 9, 22, 10, 59));
   for (const width of [60, 81, 120, 300]) {
     const rows = block.render(width);
-    for (const row of rows) assert.equal(piTui.visibleWidth(row), Math.min(width, 81), `width ${width}`);
+    for (const row of rows) assert.equal(piTui.visibleWidth(row), width, `width ${width}`);
     const first = strip(rows[1]);
     assert.match(first, /10:59\s?AM  $/, `width ${width}: the clock ends 2 columns before the bar's end`);
   }
@@ -132,7 +135,7 @@ test("a read-only group row's bar is its members' total, in the same column", ()
     { groupKind: "read", status: "done", durationMs: 60 },
   ];
   const row = verbGroupLine(members, theme, 120);
-  assert.equal(strip(row).search(/[▏▎▍▌▋▊▉█]/), 77);
+  assert.equal(strip(row).search(/[▏▎▍▌▋▊▉█]/), 120 - 4);
   assert.match(strip(row), /Read 2 files +█···$/, "40ms + 60ms = 100ms");
   assert.doesNotMatch(strip(verbGroupLine([{ ...members[0], status: "running", durationMs: undefined }, members[1]], theme, 120)), /[▏▎▍▌▋▊▉█]/, "none while one runs");
 });
@@ -162,9 +165,7 @@ test("review 1 #3: output that starts with ✗ is data and keeps the full width;
   const failed = framed.renderResult({ content: [{ type: "text", text: `${ordinary}\n\nCommand exited with code 1` }] }, { expanded: true, isPartial: false }, theme, context({ args, isError: true })).render(300);
   assert.ok(failed.some((row) => strip(row).endsWith("END")), "a failed tool's own output keeps the full width too");
   const status = failed.find((row) => strip(row).startsWith("     ✗ exit 1"));
-  assert.ok(status !== undefined && piTui.visibleWidth(status) <= 81, "the failure row stops at the column");
-  const edit = editRenderers.renderResult({ content: [{ type: "text", text: `x${"y".repeat(200)}` }] }, { expanded: false, isPartial: false }, theme, context({ isError: true })).render(300);
-  assert.ok(piTui.visibleWidth(edit[0]) <= 76, "an edit failure row too");
+  assert.ok(status !== undefined && piTui.visibleWidth(status) <= 300, "the failure row fits the terminal");
 });
 
 test("review 1 #4: only a CommonMark closing fence closes a mermaid block", () => {

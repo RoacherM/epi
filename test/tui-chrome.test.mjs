@@ -100,9 +100,9 @@ test("turn status shows nothing when idle and hides the phase timer below 60 col
   const now = Date.now();
   turn = { startedAt: now - 2400, phaseStartedAt: now - 1000, activity: "Waiting for response…", outputTokens: 2260, committedOutput: 0, estimated: false };
   // The right side carries the whole-turn average speed since 2026-10-06 (docs/statusbar-design.md).
-  // The indicator is the one-column braille spinner at every width (docs/tui-motion-design.md M3).
-  assert.match(plain(status.render(80)[0]), /^[⠋⠙⠹⠸⠼⠴⠦⠧] Waiting for response… 1\.\ds +2\.\ds ⇣2\.3k · 9\d\d tok\/s \[stop\]$/);
-  assert.match(plain(status.render(50)[0]), /^[⠋⠙⠹⠸⠼⠴⠦⠧] Waiting for response…/);
+  // The indicator is the one-column rotating x at every width (docs/tui-glyphs-design.md §7).
+  assert.match(plain(status.render(80)[0]), /^[+×] Waiting for response… 1\.\ds +2\.\ds ⇣2\.3k · 9\d\d tok\/s \[stop\]$/);
+  assert.match(plain(status.render(50)[0]), /^[+×] Waiting for response…/);
   assert.doesNotMatch(plain(status.render(50)[0]), /Waiting for response… \d/);
   assertFits(status);
   turn = undefined;
@@ -208,7 +208,8 @@ test("tool blocks put a marker before the call and indent results under it", () 
   const running = plain(framed.renderCall(args, theme, renderContext({ args, isPartial: true })).render(80)[0]);
   // docs/tui-one-column-design.md §2.2: the time so far while it runs, the final time once done, as a
   // bar ending at the column's edge (80 columns: the terminal's edge).
-  assert.match(running, /^   \$ npm test +▏···$/);
+  // Running: the rotating x in the marker column, `+` or `×` (docs/tui-glyphs-design.md §3).
+  assert.match(running, /^   [+×] npm test +[▏·]···$/);
   const done = plain(framed.renderCall(args, theme, renderContext({ args, durationMs: 1500 })).render(80)[0]);
   assert.equal(done, `${"   $ npm test".padEnd(76)}██▏·`);
   const result = framed.renderResult({ content: [{ type: "text", text: "ok" }] }, { expanded: false, isPartial: false }, theme, renderContext({ args }));

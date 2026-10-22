@@ -90,11 +90,6 @@ export function railGlyph(theme: MotionTheme, row: number, t: number): string {
   return railBlend(theme, row, t).paint("┃");
 }
 
-/** A glyph breathing between `from` and `to` about once a second (a running group's `◈`). */
-export function breathe(theme: MotionTheme, from: ThemeColor, to: ThemeColor, t: number, text: string): string {
-  return blendFg(theme, from, to, 0.5 - 0.5 * Math.cos(t * Math.PI * 2), text);
-}
-
 /** Seconds on the shared motion clock. One clock keeps every rail and spinner in step. */
 export function motionTime(now = Date.now()): number {
   return now / 1000;

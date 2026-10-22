@@ -1,10 +1,12 @@
-// grok tool block frame (docs/tui-design.md 4.2): a marker before the call line (`$` for bash, `◆`
-// otherwise) and result rows indented under it. The running pulse is the turn spine's (src/tui/spine.ts).
-// Replaces Pi's background box (`renderShell: "self"`).
+// grok tool block frame (docs/tui-design.md 4.2): a marker before the call line and result rows
+// indented under it. The marker is the rotating x while the call runs, then `$` for shell commands and
+// `◆` for the rest (docs/tui-glyphs-design.md, src/tui/glyphs.ts). The running pulse is the turn
+// spine's (src/tui/spine.ts). Replaces Pi's background box (`renderShell: "self"`).
 import type { AgentToolResult, ToolRenderers as PiToolRenderers, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
 import type { InspectTarget } from "../buffer/inspector.js";
+import { GLYPHS, type MarkerState, paintMarker, takePhase } from "../glyphs.js";
 import { piTui } from "../pi-tui.js";
 import { CallLine, LinesComponent, textContent } from "./common.js";
 import type { ToolRenderContext, ToolRenderers } from "./types.js";
@@ -16,11 +18,30 @@ const RESULT_PREFIX = CALL_PREFIX + 2;
 // grok: web and MCP tool output shows at most 10 lines until expanded.
 const FALLBACK_LINES = 10;
 
-type Tone = "running" | "done" | "error";
-
-function toneOf(context: ToolRenderContext): Tone {
+/** What the marker column shows: `pending` while the arguments stream or the call waits its turn. */
+function markerStateOf(context: ToolRenderContext): MarkerState {
   if (context.isError === true) return "error";
-  return context.isPartial ? "running" : "done";
+  if (!context.isPartial) return "done";
+  return context.executionStarted ? "running" : "pending";
+}
+
+/** The call's marker timing, kept in Pi's per-call renderer state: a phase when it starts running, so
+ * calls side by side don't turn in step, and when it ended, for the landing shake. Only a call drawn
+ * while it ran shakes: one that finished between two frames (a 4ms read) or a replayed one was never
+ * seen turning, so it settles at once. */
+interface MarkerTiming {
+  markerPhase?: number;
+  markerShownRunning?: boolean;
+  markerEndedAt?: number;
+}
+
+function noteMarkerTiming(context: ToolRenderContext): MarkerTiming | undefined {
+  const state = context.state as MarkerTiming | undefined | null;
+  if (state === undefined || state === null || typeof state !== "object") return undefined;
+  const marker = markerStateOf(context);
+  if (marker === "running") state.markerPhase ??= takePhase();
+  else if ((marker === "done" || marker === "error") && state.markerShownRunning === true) state.markerEndedAt ??= Date.now();
+  return state;
 }
 
 /** Opens a block's full content in the inspector (Transcript.inspect). */
@@ -30,7 +51,8 @@ class Railed implements Component {
   constructor(
     readonly inner: Component,
     private readonly theme: Theme,
-    private readonly tone: Tone,
+    private readonly state: MarkerState,
+    private readonly timing: MarkerTiming | undefined,
     private readonly isCall: boolean,
     private readonly onInspect: OnInspect | undefined,
   ) {}
@@ -59,10 +81,19 @@ class Railed implements Component {
     });
   }
 
-  /** `$` stays the shell's amber unless the command failed; `◆` follows the tool's state. */
+  /** The rotating x while the call runs, then `$` in the shell's amber or a muted `◆`; a red `×` if
+   * it failed. Read at displayNow(), so a call held still outside the tip holds its marker too. */
   private marker(): string {
-    if (this.inner instanceof CallLine && this.inner.marker === "$") return this.theme.fg(this.tone === "error" ? "error" : "bashMode", "$ ");
-    return this.theme.fg(this.tone === "error" ? "error" : this.tone === "running" ? "accent" : "muted", "◆ ");
+    if (this.state === "running" && this.timing !== undefined) this.timing.markerShownRunning = true;
+    const shell = this.inner instanceof CallLine && this.inner.marker === GLYPHS.shell;
+    const glyph = paintMarker(this.theme, {
+      state: this.state,
+      glyph: shell ? GLYPHS.shell : GLYPHS.tool,
+      color: shell ? "bashMode" : "muted",
+      endedAt: this.timing?.markerEndedAt,
+      phase: this.timing?.markerPhase,
+    });
+    return `${glyph} `;
   }
 
   invalidate(): void {
@@ -115,11 +146,11 @@ export function toolBlock(
     renderShell: "self",
     renderCall(args, theme, context) {
       const inner = renderCall?.(args, theme, unwrap(context)) ?? fallbackCall(toolName, theme);
-      return new Railed(inner, theme, toneOf(context), true, onInspect);
+      return new Railed(inner, theme, markerStateOf(context), noteMarkerTiming(context), true, onInspect);
     },
     renderResult(result, options, theme, context) {
       const inner = renderResult?.(result, options, theme, unwrap(context)) ?? fallbackResult(result, options.expanded, theme);
-      return new Railed(inner, theme, toneOf(context), false, onInspect);
+      return new Railed(inner, theme, markerStateOf(context), undefined, false, onInspect);
     },
   };
   return framed;

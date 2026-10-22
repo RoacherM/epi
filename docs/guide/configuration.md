@@ -20,6 +20,8 @@ Epi 不调用 PATH 中的 `pi`，使用独立的 `~/.epi/pi` 运行目录，不�
 ├── agents/*.md          # epi:task 与 agent Hook 使用的 Agent profile
 ├── mcp.json             # epi:mcp 配置
 ├── hooks.json           # epi:hooks 配置
+├── web.json             # epi:web 检索源（只有全局，没有项目级）
+├── web-auth.json        # epi:web 检索源的 API key（0600，和模型服务商的 key 分开）
 └── pi/                  # Epi 独立的 Pi auth/settings/sessions/trust
 ```
 
@@ -58,10 +60,10 @@ Epi 不调用 PATH 中的 `pi`，使用独立的 `~/.epi/pi` 运行目录，不�
 - 只允许 `version`、`rules`、`skills`、`extensions`、`disable`；未知字段直接失败。
 - 相对文件路径相对声明它的 Manifest 解析，并转换为 canonical absolute path。
 - Global 资源先装配，可信 Project 资源后装配；相同 canonical path 去重。
-- 内建能力只有 `epi:task`、`epi:mcp`、`epi:hooks`，**默认开启**（没有 `epi.json` 或 Manifest 为空也一样）。要关掉某个，把它写进 `disable`；关掉的能力不读它的配置文件（`mcp.json`、`hooks.json`、`agents/`），也不启动子进程，工具和 handler 都不存在。
-- `disable` 只接受这三个名字，其他值是配置错误（报出是哪个文件）。全局和可信项目的 `disable` 取并集：任一文件关掉就是关掉，即使另一个文件在 `extensions` 里列了它（例如全局列了 `epi:task`、项目 `disable` 了它，结果是关）。未信任的项目不会被读取，它的 `disable` 也不生效。
+- 内建能力只有 `epi:task`、`epi:mcp`、`epi:hooks`、`epi:web`，**默认开启**（没有 `epi.json` 或 Manifest 为空也一样）。要关掉某个，把它写进 `disable`；关掉的能力不读它的配置文件（`mcp.json`、`hooks.json`、`agents/`、`web.json`），也不启动子进程，工具和 handler 都不存在。
+- `disable` 只接受这四个名字，其他值是配置错误（报出是哪个文件）。全局和可信项目的 `disable` 取并集：任一文件关掉就是关掉，即使另一个文件在 `extensions` 里列了它（例如全局列了 `epi:task`、项目 `disable` 了它，结果是关）。未信任的项目不会被读取，它的 `disable` 也不生效。
 - 在 `extensions` 里列内建能力仍然有效（旧配置不用改），只是多余；同一个文件里既在 `extensions` 又在 `disable` 列同一个名字是配置错误。
-- 默认开启的能力没有配置时没有可见变化：没有 `mcp.json`（或一个服务都没有）时 `epi:mcp` 不给模型加任何工具或提示词；没有 `hooks.json` 时 `epi:hooks` 什么都不做。`epi:task` 会给模型加上 `task`、`task_status` 等工具。
+- 默认开启的能力没有配置时没有可见变化：没有 `mcp.json`（或一个服务都没有）时 `epi:mcp` 不给模型加任何工具或提示词；没有 `hooks.json` 时 `epi:hooks` 什么都不做；没有配置检索源的 key 时 `epi:web` 不给模型加工具（只有 system prompt 里内建能力的列表多一个名字）。`epi:task` 会给模型加上 `task`、`task_status` 等工具。
 - 内建能力开启时，它的配置文件写错会让启动失败（状态码 `2`），报错会说明可以改正文件，或用 `disable` 关掉这个能力。
 - 外部 Extension 可使用本地路径、`npm:` 或 `git:` source；Epi 仍关闭 Pi 的 ambient discovery。
 

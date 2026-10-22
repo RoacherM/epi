@@ -114,14 +114,16 @@ const BAR_FULL_MS = 100_000;
 // number at the end of the body, as in 0.1.22.
 const MIN_COLUMN_FOR_BAR = 16;
 
-/** `ms` as a bar: dim filled cells, then `·` for the empty ones; with the time after a full bar. */
+/** `ms` as a bar: dim filled cells, then `·` for the empty ones; with the time after a full bar. Under
+ * 10ms nothing is filled (`····`, all but instant): a `▏` there, drawn full-height by terminals, lined
+ * up with the next fast call's into what read as a divider (docs/tui-one-column-design.md §2.2). */
 export function durationBar(theme: Theme, ms: number): string {
   const position = Math.min(BAR_CELLS, Math.max(0, Math.log10(Math.max(ms, 1) / 10)));
   const full = Math.floor(position);
   const eighths = Math.round((position - full) * 8);
   let filled = "█".repeat(full) + (full < BAR_CELLS && eighths > 0 ? EIGHTHS[eighths - 1] : "");
-  if (filled === "") filled = "▏";
-  const bar = theme.fg("dim", filled) + theme.fg("borderMuted", "·".repeat(BAR_CELLS - [...filled].length));
+  if (filled === "" && ms >= 10) filled = "▏";
+  const bar = (filled === "" ? "" : theme.fg("dim", filled)) + theme.fg("borderMuted", "·".repeat(BAR_CELLS - [...filled].length));
   return ms >= BAR_FULL_MS ? `${bar} ${theme.fg("dim", formatDuration(ms))}` : bar;
 }
 
@@ -149,8 +151,8 @@ export function fitCallRow({ body, tail, bar, fallbackTime = "" }: CallRowParts,
   return left + " ".repeat(Math.max(1, start - piTui.visibleWidth(left))) + bar;
 }
 
-/** The marker a call line puts in the marker column: `$` for shell commands, `◆` for the rest.
- * tools/block.ts paints it in the color of the tool's state. */
+/** The marker a call line puts in the marker column once it settles: `$` for shell commands, `◆` for
+ * the rest. tools/block.ts draws the rotating x until then (src/tui/glyphs.ts). */
 export type CallMarker = "$" | "◆";
 
 /**

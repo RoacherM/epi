@@ -37,6 +37,9 @@ const { builtInToolRenderers } = await import(join(ROOT, "dist/tui/tools/index.j
 const { UserMessageBlock, formatDuration } = await import(join(ROOT, "dist/tui/chrome.js"));
 const { getMarkdownTheme, Theme } = await import("@earendil-works/pi-coding-agent");
 const motion = await import(join(ROOT, "dist/tui/motion.js"));
+// 0.1.22 的思考行呼吸。0.1.24 起界面改成旋转的 x（docs/tui-glyphs-design.md），motion.ts 已去掉
+// breathe；这个原型是当时的设计基准，所以在这里保留一份，画面不变。
+const breathe = (theme, from, to, t, text) => motion.blendFg(theme, from, to, 0.5 - 0.5 * Math.cos(t * Math.PI * 2), text);
 
 const { visibleWidth, truncateToWidth } = piTui;
 
@@ -347,9 +350,9 @@ function renderSceneNext(scene, width, variant = "glyph") {
 }
 
 /** 运行中的一帧（spine 变体）：脊柱就是 M4 的流光轨——回合进行时脊柱是活的，
- * 高光脉冲沿脊柱下滑（accent → thinkingHigh），思考行呼吸。真实执行 src/tui/motion.ts 的 railGlyph/breathe。 */
+ * 高光脉冲沿脊柱下滑（accent → thinkingHigh），思考行呼吸。真实执行 src/tui/motion.ts 的 railGlyph（breathe 见文件开头）。 */
 function renderLiveFrame(width) {
-  const { railGlyph, breathe } = motion;
+  const { railGlyph } = motion;
   const t = 1.4; // 固定一帧
   const rows = [
     { text: `${LEAD}${breathe(themeNext, "muted", "thinkingHigh", t, "∴")} ${themeNext.fg("muted", "Thinking…")}` },
@@ -381,7 +384,7 @@ function flashGlyph(tone, glyph, elapsedMs) {
 }
 
 function renderStoryboardFrame(t) {
-  const { railGlyph, breathe } = motion;
+  const { railGlyph } = motion;
   const settled = t >= STORY.settleAt;
   const spine = (row) => (settled ? themeNext.fg("borderMuted", "│") : railGlyph(themeNext, row, t));
   const rows = [];

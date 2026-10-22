@@ -1,0 +1,1 @@
+{"version":3,"file":"web-panel.d.ts","sourceRoot":"","sources":["../../src/extensions/web-panel.ts"],"names":[],"mappings":"AAGA,OAAO,KAAK,EAAE,uBAAuB,EAAE,gBAAgB,EAAE,MAAM,iCAAiC,CAAC;AASjG,UAAU,eAAe;IACvB,OAAO,EAAE,MAAM,CAAC;IAChB,kFAAkF;IAClF,QAAQ,EAAE,MAAM,IAAI,CAAC;CACtB;AAiID,wBAAsB,WAAW,CAAC,GAAG,EAAE,uBAAuB,GAAG,gBAAgB,EAAE,OAAO,EAAE,eAAe,GAAG,OAAO,CAAC,IAAI,CAAC,CAO1H"}

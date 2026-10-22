@@ -7,7 +7,7 @@ export type ResourceSource = "global" | "project";
  * default; it has no `declaredIn`. */
 export type InlineExtensionSource = ResourceSource | "default";
 export type ResourceKind = "rule" | "skill" | "extension";
-export type BuiltInExtensionName = "epi:task" | "epi:mcp" | "epi:hooks";
+export type BuiltInExtensionName = "epi:task" | "epi:mcp" | "epi:hooks" | "epi:web";
 /** Which fixed auto-discovery directory a skill root came from (docs/decisions.md S1); undefined
  * for a skill declared explicitly in a Manifest. */
 export type DiscoveredSkillProvenance = "agents" | "epi" | "project";

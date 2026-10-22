@@ -93,15 +93,17 @@ const BAR_FULL_MS = 100_000;
 // Below this many columns for the whole call row there is no room for a column: the time stays a
 // number at the end of the body, as in 0.1.22.
 const MIN_COLUMN_FOR_BAR = 16;
-/** `ms` as a bar: dim filled cells, then `·` for the empty ones; with the time after a full bar. */
+/** `ms` as a bar: dim filled cells, then `·` for the empty ones; with the time after a full bar. Under
+ * 10ms nothing is filled (`····`, all but instant): a `▏` there, drawn full-height by terminals, lined
+ * up with the next fast call's into what read as a divider (docs/tui-one-column-design.md §2.2). */
 export function durationBar(theme, ms) {
     const position = Math.min(BAR_CELLS, Math.max(0, Math.log10(Math.max(ms, 1) / 10)));
     const full = Math.floor(position);
     const eighths = Math.round((position - full) * 8);
     let filled = "█".repeat(full) + (full < BAR_CELLS && eighths > 0 ? EIGHTHS[eighths - 1] : "");
-    if (filled === "")
+    if (filled === "" && ms >= 10)
         filled = "▏";
-    const bar = theme.fg("dim", filled) + theme.fg("borderMuted", "·".repeat(BAR_CELLS - [...filled].length));
+    const bar = (filled === "" ? "" : theme.fg("dim", filled)) + theme.fg("borderMuted", "·".repeat(BAR_CELLS - [...filled].length));
     return ms >= BAR_FULL_MS ? `${bar} ${theme.fg("dim", formatDuration(ms))}` : bar;
 }
 /**
