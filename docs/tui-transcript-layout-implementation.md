@@ -1,6 +1,6 @@
 # 对话区排版实现（V-S 脊柱 · 动画）
 
-日期：2026-10-21；状态：**W0–W9 已实现**（分支 `feat/tui-transcript-spine`，与本文的差异见 §7），待 Orca 实测与合并前审查。
+日期：2026-10-21；状态：**W0–W9 已实现**（分支 `feat/tui-transcript-spine`，与本文的差异见 §7），Orca 实测与合并前审查（5 轮）已完成。
 设计依据：[tui-transcript-layout-design.md](tui-transcript-layout-design.md)（问题清单、R1–R5 排版系统、两轮 argon 评审）；视觉验收基准：`reports/transcript-layout-prototype.html`（`scripts/probes/transcript-layout-prototype.mjs` 生成，含 V-S 静态帧与 85 帧动画「一个回合的一生」）。
 
 用户已确认：V-S 回合脊柱 + 简约动画风格（2026-10-21："我靠 这个太优雅了……做成简约的动画风格"）。
@@ -135,7 +135,7 @@
 | W9 | 主题色 | 日间 `mdCodeBlock` 定为 `#5c6b77`，还没对截图定稿 |
 | W2/W7/W8 | `src/tui/spine.ts` + `GroupedMessages` 重写为 `Placed` 布局 | 回合 = 声明了 `spineRole` 的块的连续段（白名单），单独的 `!cmd` 不画脊柱。**动效只在运行中回合的末端 8 行（tip）**，其上各行已与沉淀后完全相同：pi-tui 主屏渲染器遇到屏外行变化会整屏重绘（清 scrollback），整条脊柱一起脉冲在超过一屏的回合上每帧触发（terminal-progress 测试超时暴露）。运行中工具的 `├─` 常亮（静态色，不逐帧变）。`AssistantBlock` 改为自己记录子块行范围（逐行闪烁与点击分派共用，`src/tui/rows.ts`）。`Worked for` 改为 `TurnFooter`（dim、第 4 列起），由脊柱画 `╰─`。回放仍没有 footer，脊柱止于最后一行 |
 
-合并前审查第 1 轮（`epi -p` 审查会话，NOT ACCEPTABLE，6 条，均 CONFIRMED，已全部修复并各加回归测试）：图片保留行被画上脊柱，导致半滚出屏幕的图片消失（脊柱跳过图片行及其后的空保留行）；完成闪烁与运行中分支在 tip 之外变色（闪烁、分支高亮也只在 tip 内，闪烁只在最新回合的 tip）；转换器改写的代码段在改宽度或 invalidate 后不更新（缓存按源文本 `setText`）；回放后发新消息时上一回合被当成活回合（回合之后出现非回合块即不再活）；错误结果仍显示部分结果留下的摘要（出错时不显示摘要）；两个无用导出。第 2 轮（NOT ACCEPTABLE，1 条 CONFIRMED）：iTerm2 图片的保留空行在图片行**之前**（光标上移后绘制），第 1 轮只保护了 Kitty 的后置空行——现在图片行前后相邻的空行都不画。第 3 轮（NOT ACCEPTABLE，2 条 CONFIRMED）：Markdown 里的保留行是空格填充而非空串；前后都保护会把 Kitty 图片前普通的 spacer 行也空掉。改为按 pi-tui `Image` 的实际版式算精确范围：Kitty 取序列的 `r=` 高度、向后；iTerm2 取 `ESC[<n>A`、向前；空串或纯空格行都算保留行。回归测试覆盖两种协议、工具结果与 Markdown 两条路径、动画下一帧，以及 spacer 行保留脊柱。第 4 轮（NOT ACCEPTABLE，1 条 CONFIRMED）：没有 `r=` 的 Kitty 图片（`encodeKitty` 只给列数、高度由终端定）被当成 1 行——没有声明高度时改为占用其后所有空行（iTerm2 没有上移序列时同理）。
+合并前审查第 1 轮（`epi -p` 审查会话，NOT ACCEPTABLE，6 条，均 CONFIRMED，已全部修复并各加回归测试）：图片保留行被画上脊柱，导致半滚出屏幕的图片消失（脊柱跳过图片行及其后的空保留行）；完成闪烁与运行中分支在 tip 之外变色（闪烁、分支高亮也只在 tip 内，闪烁只在最新回合的 tip）；转换器改写的代码段在改宽度或 invalidate 后不更新（缓存按源文本 `setText`）；回放后发新消息时上一回合被当成活回合（回合之后出现非回合块即不再活）；错误结果仍显示部分结果留下的摘要（出错时不显示摘要）；两个无用导出。第 2 轮（NOT ACCEPTABLE，1 条 CONFIRMED）：iTerm2 图片的保留空行在图片行**之前**（光标上移后绘制），第 1 轮只保护了 Kitty 的后置空行——现在图片行前后相邻的空行都不画。第 3 轮（NOT ACCEPTABLE，2 条 CONFIRMED）：Markdown 里的保留行是空格填充而非空串；前后都保护会把 Kitty 图片前普通的 spacer 行也空掉。改为按 pi-tui `Image` 的实际版式算精确范围：Kitty 取序列的 `r=` 高度、向后；iTerm2 取 `ESC[<n>A`、向前；空串或纯空格行都算保留行。回归测试覆盖两种协议、工具结果与 Markdown 两条路径、动画下一帧，以及 spacer 行保留脊柱。第 4 轮（NOT ACCEPTABLE，1 条 CONFIRMED）：没有 `r=` 的 Kitty 图片（`encodeKitty` 只给列数、高度由终端定）被当成 1 行——没有声明高度时改为占用其后所有空行。第 5 轮：**ACCEPTABLE**（整条分支可以合并发布），余 1 条 P3：pi-tui 对单行 iTerm2 图片本来就不加上移序列，第 4 轮把它也当成"高度未知"，吞掉了其后的普通空行——已改回只有 Kitty 缺 `r=` 才向后占用，加回归测试。
 
 pi-internals 新登记：`tool-exec-leading-blank`、`pi-tui-marked`、`markdown-codeblock-border`、`markdown-list-bullet`（§4 的 `tool-exec-durationms` 不需要，见 W1）。
 

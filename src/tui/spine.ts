@@ -147,9 +147,9 @@ function paintRow(context: PaintContext, line: string, glyph: Glyph, member: Spi
 /** Rows a block's image keeps for itself, as pi-tui's Image lays it out (components/image.js): Kitty
  * puts its sequence on the first row (its `r=` parameter is the height) and keeps the rows after it,
  * which pi-tui searches back through to draw an image whose first row has scrolled off; iTerm2 keeps
- * the rows before its last row, which moves the cursor up over them (`ESC[<n>A`) to draw. Without a
- * stated height (a renderer calling encodeKitty with columns only, or iTerm2 drawing downward), the
- * image takes every blank row after it. Those rows must stay as the block drew them (empty, or padded
+ * the rows before its last row, which moves the cursor up over them (`ESC[<n>A`; none for a one-row
+ * image). A Kitty sequence with no `r=` (encodeKitty with columns only: the terminal picks the
+ * height) takes every blank row after it. Those rows must stay as the block drew them (empty, or padded
  * with spaces inside Markdown) on every frame: pi-tui patching one would erase part of the image
  * without drawing it again. */
 function imageRows(lines: readonly string[]): Set<number> {
@@ -160,11 +160,11 @@ function imageRows(lines: readonly string[]): Set<number> {
     const iterm = kitty === null ? ITERM2_MOVE_UP.exec(line) : null;
     if (kitty === null && iterm === null) return;
     rows.add(row);
-    const stated = kitty !== null ? /(?:^|,)r=(\d+)/.exec(kitty[1]!)?.[1] : undefined;
-    if (iterm?.[1] !== undefined) {
-      for (let up = row - 1; up >= row - Number(iterm[1]) && reserved(up); up -= 1) rows.add(up);
+    if (iterm !== null) {
+      for (let up = row - 1; up >= row - Number(iterm[1] ?? 0) && reserved(up); up -= 1) rows.add(up);
       return;
     }
+    const stated = /(?:^|,)r=(\d+)/.exec(kitty![1]!)?.[1];
     const last = stated === undefined ? lines.length : row + Number(stated);
     for (let below = row + 1; below < last && reserved(below); below += 1) rows.add(below);
   });

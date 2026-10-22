@@ -8,6 +8,7 @@ import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 
 import { piTui } from "../dist/tui/pi-tui.js";
+import { paintSpine } from "../dist/tui/spine.js";
 import { createEpiTheme } from "../dist/tui/theme.js";
 import { Transcript } from "../dist/tui/transcript.js";
 
@@ -391,4 +392,17 @@ test("a Kitty image with no stated height keeps the blank rows after it", async 
   assert.equal(first[anchor + 1], original[anchor + 1]);
   assert.equal(second[anchor + 1], original[anchor + 1]);
   assert.match(strip(first[anchor + 2]), /^ [│┃]   after$/, "visible text after the image still gets the spine");
+});
+
+// Review round 5: a one-row iTerm2 image (no cursor-up) owns no rows but its own; the spacer after it
+// keeps the spine.
+test("a one-row iTerm2 image leaves the blank row after it to the spine", (t) => {
+  const caps = piTui.getCapabilities();
+  piTui.setCapabilities({ ...caps, images: "iterm2" });
+  t.after(() => piTui.setCapabilities(caps));
+  const sequence = piTui.encodeITerm2(pngData(), { inline: true, width: 4, height: 1 });
+  const blocks = [{ member: { spineRole: "trunk" }, lines: ["     before", sequence, "", "     after"] }];
+  paintSpine(theme, blocks, 80, false);
+  assert.equal(blocks[0].lines[1], sequence);
+  assert.equal(strip(blocks[0].lines[2]), " │");
 });
