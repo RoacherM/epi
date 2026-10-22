@@ -206,9 +206,11 @@ test("tool blocks put a marker before the call and indent results under it", () 
   assert.equal(framed.renderShell, "self");
   const args = { command: "npm test" };
   const running = plain(framed.renderCall(args, theme, renderContext({ args, isPartial: true })).render(80)[0]);
-  assert.equal(running, "   $ npm test");
+  // docs/tui-one-column-design.md §2.2: the time so far while it runs, the final time once done, as a
+  // bar ending at the column's edge (80 columns: the terminal's edge).
+  assert.match(running, /^   \$ npm test +▏···$/);
   const done = plain(framed.renderCall(args, theme, renderContext({ args, durationMs: 1500 })).render(80)[0]);
-  assert.equal(done, "   $ npm test  1.5s");
+  assert.equal(done, `${"   $ npm test".padEnd(76)}██▏·`);
   const result = framed.renderResult({ content: [{ type: "text", text: "ok" }] }, { expanded: false, isPartial: false }, theme, renderContext({ args }));
   assert.deepEqual(result.render(80), [], "success takes no row");
   const failed = framed.renderResult({ content: [{ type: "text", text: "boom\n\nCommand exited with code 1" }] }, { expanded: false, isPartial: false }, theme, renderContext({ args, isError: true }));

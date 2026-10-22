@@ -14,16 +14,19 @@ export interface Inspectable {
 export declare class LinesComponent implements Component {
     private lines;
     private inspectable;
-    constructor(lines: string[] | string, inspectable?: Inspectable);
-    /** `inspectable` row indices count the rows as split here, one per "\n"-separated part. */
-    setLines(lines: string[] | string, inspectable?: Inspectable): void;
+    private columnRows;
+    constructor(lines: string[] | string, inspectable?: Inspectable, columnRows?: readonly number[]);
+    /** `inspectable` row indices count the rows as split here, one per "\n"-separated part.
+     * `columnRows` are rows of the turn's column -- a failure row -- cut at the reply's measure;
+     * every other row is data and keeps the full width (docs/tui-one-column-design.md §2.1). */
+    setLines(lines: string[] | string, inspectable?: Inspectable, columnRows?: readonly number[]): void;
     /** The inspector target behind rendered row `row`, if that row opens one. */
     inspectTargetAt(row: number): InspectTarget | undefined;
     invalidate(): void;
     render(width: number): string[];
 }
 /** Reuses the renderer's previous LinesComponent (Pi hands it back as `lastComponent`) when there is one. */
-export declare function createOrUpdateLines(context: ToolRenderContext, lines: string[], inspectable?: Inspectable): Component;
+export declare function createOrUpdateLines(context: ToolRenderContext, lines: string[], inspectable?: Inspectable, columnRows?: readonly number[]): Component;
 /** The text parts of a tool result joined by "\n"; images and malformed parts are skipped. */
 export declare function textContent(result: AgentToolResult<unknown>): string;
 export declare function isErrorResult(result: AgentToolResult<unknown>, context: ToolRenderContext | undefined): boolean;
@@ -40,6 +43,24 @@ export declare function formatToolDuration(ms: number): string;
  * design.md §4-C: a long command must not eat its `· +8 lines`). A tail wider than the line is
  * dropped rather than cut. */
 export declare function fitWithTail(body: string, tail: string, width: number, ellipsis: string): string;
+/** `ms` as a bar: dim filled cells, then `·` for the empty ones; with the time after a full bar. */
+export declare function durationBar(theme: Theme, ms: number): string;
+/** What a call row holds: the body (cut to fit), its tail (`· +36 lines`, `· +3 −1`; never cut), the
+ * duration bar ("" for none), and the time as a number for a line too narrow for a column. */
+interface CallRowParts {
+    body: string;
+    tail: string;
+    bar: string;
+    fallbackTime?: string;
+}
+/**
+ * A call row in the turn's one column (docs/tui-one-column-design.md §2.1): the body and its tail
+ * fill the column up to the bar, and the bar starts at the same column on every row -- the
+ * measure's right edge less its cells -- so a group of calls lines its bars up. A number after a
+ * full bar runs past the edge when the line has room, and otherwise moves the bar left. `width` is
+ * the row's width after the marker.
+ */
+export declare function fitCallRow({ body, tail, bar, fallbackTime }: CallRowParts, width: number, ellipsis: string): string;
 /** The marker a call line puts in the marker column: `$` for shell commands, `◆` for the rest.
  * tools/block.ts paints it in the color of the tool's state. */
 export type CallMarker = "$" | "◆";
@@ -57,10 +78,15 @@ export declare class CallLine implements Component {
     private readonly body;
     private readonly context;
     private readonly extra;
-    constructor(marker: CallMarker, theme: Theme, body: string, context: Pick<ToolRenderContext, "state" | "durationMs" | "isError" | "isPartial">, extra?: string);
-    /** The tail as it reads right now: `extra`, the result's summary, then the run time. A failed
-     * result's own row says what happened, so a summary left by an earlier (partial) result is dropped. */
+    constructor(marker: CallMarker, theme: Theme, body: string, context: Pick<ToolRenderContext, "state" | "durationMs" | "isError" | "isPartial" | "executionStarted" | "expanded">, extra?: string);
+    /** The tail as it reads right now: `extra`, then the result's summary. A failed result's own row
+     * says what happened, so a summary left by an earlier (partial) result is dropped. */
     tail(): string;
+    /** How long the tool has run: the final time, or while it runs the time since it started (kept in
+     * the renderer's state, which Pi keeps per call). A failure draws none, as in 0.1.22. */
+    private elapsed;
+    /** The bar for the time so far, with the exact time after it when expanded (Ctrl+O). */
+    private bar;
     invalidate(): void;
     render(width: number): string[];
 }
@@ -79,4 +105,5 @@ export declare function shortenCommand(command: string, cwd: string | undefined,
     text: string;
     extraLines: number;
 };
+export {};
 //# sourceMappingURL=common.d.ts.map

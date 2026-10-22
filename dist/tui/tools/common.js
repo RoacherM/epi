@@ -1,6 +1,8 @@
 // Pieces shared by the built-in tool renderers, the tool block fallback and the `!cmd` block.
 import { homedir } from "node:os";
 import { formatDuration } from "../chrome.js";
+import { displayNow } from "../clock.js";
+import { DEFAULT_MEASURE } from "../measure.js";
 import { piTui } from "../pi-tui.js";
 /**
  * Lines cut to the viewport width. Entries may hold several rows separated by "\n". A single string
@@ -9,11 +11,14 @@ import { piTui } from "../pi-tui.js";
 export class LinesComponent {
     lines = [];
     inspectable;
-    constructor(lines, inspectable) {
-        this.setLines(lines, inspectable);
+    columnRows = new Set();
+    constructor(lines, inspectable, columnRows = []) {
+        this.setLines(lines, inspectable, columnRows);
     }
-    /** `inspectable` row indices count the rows as split here, one per "\n"-separated part. */
-    setLines(lines, inspectable) {
+    /** `inspectable` row indices count the rows as split here, one per "\n"-separated part.
+     * `columnRows` are rows of the turn's column -- a failure row -- cut at the reply's measure;
+     * every other row is data and keeps the full width (docs/tui-one-column-design.md §2.1). */
+    setLines(lines, inspectable, columnRows = []) {
         if (typeof lines === "string") {
             this.lines = lines ? lines.split("\n") : [];
         }
@@ -21,6 +26,7 @@ export class LinesComponent {
             this.lines = lines.flatMap((line) => line.split("\n"));
         }
         this.inspectable = inspectable;
+        this.columnRows = new Set(columnRows);
     }
     /** The inspector target behind rendered row `row`, if that row opens one. */
     inspectTargetAt(row) {
@@ -28,16 +34,16 @@ export class LinesComponent {
     }
     invalidate() { }
     render(width) {
-        return this.lines.map((line) => piTui.truncateToWidth(line, width));
+        return this.lines.map((line, row) => (this.columnRows.has(row) ? piTui.truncateToWidth(line, Math.min(width, DEFAULT_MEASURE)) : piTui.truncateToWidth(line, width)));
     }
 }
 /** Reuses the renderer's previous LinesComponent (Pi hands it back as `lastComponent`) when there is one. */
-export function createOrUpdateLines(context, lines, inspectable) {
+export function createOrUpdateLines(context, lines, inspectable, columnRows = []) {
     if (context.lastComponent instanceof LinesComponent) {
-        context.lastComponent.setLines(lines, inspectable);
+        context.lastComponent.setLines(lines, inspectable, columnRows);
         return context.lastComponent;
     }
-    return new LinesComponent(lines, inspectable);
+    return new LinesComponent(lines, inspectable, columnRows);
 }
 /** The text parts of a tool result joined by "\n"; images and malformed parts are skipped. */
 export function textContent(result) {
@@ -77,6 +83,42 @@ export function fitWithTail(body, tail, width, ellipsis) {
         return piTui.truncateToWidth(body, Math.max(0, width), ellipsis);
     return piTui.truncateToWidth(body, width - tailWidth, ellipsis) + tail;
 }
+// A duration bar (docs/tui-one-column-design.md §2.2): four cells, one decade each -- 10ms–100ms,
+// 100ms–1s, 1s–10s, 10s–100s -- filled in eighths at the log position. Tool run times span four or
+// five decades; on a linear scale everything but the slowest would be a sliver.
+const BAR_CELLS = 4;
+const EIGHTHS = ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
+// From here the bar is full and can't tell lengths apart, so the time follows it as a number.
+const BAR_FULL_MS = 100_000;
+// Below this many columns for the whole call row there is no room for a column: the time stays a
+// number at the end of the body, as in 0.1.22.
+const MIN_COLUMN_FOR_BAR = 16;
+/** `ms` as a bar: dim filled cells, then `·` for the empty ones; with the time after a full bar. */
+export function durationBar(theme, ms) {
+    const position = Math.min(BAR_CELLS, Math.max(0, Math.log10(Math.max(ms, 1) / 10)));
+    const full = Math.floor(position);
+    const eighths = Math.round((position - full) * 8);
+    let filled = "█".repeat(full) + (full < BAR_CELLS && eighths > 0 ? EIGHTHS[eighths - 1] : "");
+    if (filled === "")
+        filled = "▏";
+    const bar = theme.fg("dim", filled) + theme.fg("borderMuted", "·".repeat(BAR_CELLS - [...filled].length));
+    return ms >= BAR_FULL_MS ? `${bar} ${theme.fg("dim", formatDuration(ms))}` : bar;
+}
+/**
+ * A call row in the turn's one column (docs/tui-one-column-design.md §2.1): the body and its tail
+ * fill the column up to the bar, and the bar starts at the same column on every row -- the
+ * measure's right edge less its cells -- so a group of calls lines its bars up. A number after a
+ * full bar runs past the edge when the line has room, and otherwise moves the bar left. `width` is
+ * the row's width after the marker.
+ */
+export function fitCallRow({ body, tail, bar, fallbackTime = "" }, width, ellipsis) {
+    const column = Math.min(width, DEFAULT_MEASURE);
+    if (bar === "" || column < MIN_COLUMN_FOR_BAR)
+        return fitWithTail(body, tail + fallbackTime, column, ellipsis);
+    const start = Math.max(0, Math.min(column - BAR_CELLS, width - piTui.visibleWidth(bar)));
+    const left = fitWithTail(body, tail, Math.max(1, start - 1), ellipsis);
+    return left + " ".repeat(Math.max(1, start - piTui.visibleWidth(left))) + bar;
+}
 /**
  * A built-in tool's one-row call line (docs/tui-transcript-layout-implementation.md W3): the body
  * (`read src/a.ts`, the command) cut to fit, then a dim tail that is never cut -- a summary the
@@ -97,20 +139,43 @@ export class CallLine {
         this.body = body;
         this.context = context;
         this.extra = extra;
+        // Pi builds the call component again when the tool starts (markExecutionStarted -> updateDisplay),
+        // drawn or not -- a call folded into a group row is not -- so the clock starts with the tool.
+        const { executionStarted, isPartial, isError, state } = context;
+        if (executionStarted && isPartial && !isError && state !== undefined && state !== null)
+            state.startedAt ??= Date.now();
     }
-    /** The tail as it reads right now: `extra`, the result's summary, then the run time. A failed
-     * result's own row says what happened, so a summary left by an earlier (partial) result is dropped. */
+    /** The tail as it reads right now: `extra`, then the result's summary. A failed result's own row
+     * says what happened, so a summary left by an earlier (partial) result is dropped. */
     tail() {
         const summary = typeof this.context.state?.callSummary === "string" && !this.context.isError ? this.context.state.callSummary : "";
         const parts = [this.extra, summary].filter((part) => part !== "");
-        const dot = parts.map((part) => `${this.theme.fg("dim", " · ")}${part}`).join("");
-        const { durationMs, isError, isPartial } = this.context;
-        const time = durationMs !== undefined && !isError && !isPartial ? `  ${this.theme.fg("dim", formatToolDuration(durationMs))}` : "";
-        return dot + time;
+        return parts.map((part) => `${this.theme.fg("dim", " · ")}${part}`).join("");
+    }
+    /** How long the tool has run: the final time, or while it runs the time since it started (kept in
+     * the renderer's state, which Pi keeps per call). A failure draws none, as in 0.1.22. */
+    elapsed() {
+        const { durationMs, isError, isPartial, state } = this.context;
+        if (isError)
+            return undefined;
+        if (!isPartial)
+            return durationMs;
+        const startedAt = state?.startedAt;
+        return typeof startedAt === "number" ? Math.max(0, displayNow() - startedAt) : undefined;
+    }
+    /** The bar for the time so far, with the exact time after it when expanded (Ctrl+O). */
+    bar() {
+        const ms = this.elapsed();
+        if (ms === undefined)
+            return "";
+        const exact = this.context.expanded && ms < 100_000 ? ` ${this.theme.fg("dim", formatToolDuration(ms))}` : "";
+        return durationBar(this.theme, ms) + exact;
     }
     invalidate() { }
     render(width) {
-        return [fitWithTail(this.body, this.tail(), width, this.theme.fg("dim", "…"))];
+        const ms = this.elapsed();
+        const fallback = ms !== undefined && !this.context.isPartial ? `  ${this.theme.fg("dim", formatToolDuration(ms))}` : "";
+        return [fitCallRow({ body: this.body, tail: this.tail(), bar: this.bar(), fallbackTime: fallback }, width, this.theme.fg("dim", "…"))];
     }
 }
 /** A result renderer's summary for the call line's tail (see `CallLine`). */

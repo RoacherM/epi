@@ -1,8 +1,10 @@
 import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import { drawAt } from "../clock.js";
 import { breathe, motionTime } from "../motion.js";
 import { piTui } from "../pi-tui.js";
 import { dispatchToRows } from "../rows.js";
-import { paintSpine, spineMember } from "../spine.js";
+import { isClockGated, paintSpine, spineMember, TIP_ROWS } from "../spine.js";
+import { durationBar, fitCallRow } from "./common.js";
 import { createFlashState, disposeFlash, isFlashing, startFlash } from "./flash.js";
 const GROUP_KINDS = new Set(["read", "grep", "find", "ls"]);
 /** Only a built-in read/grep/find/ls tool groups; an extension overriding one of these names (or any
@@ -44,6 +46,11 @@ export class ToolEntry extends ToolExecutionComponent {
     status = "running";
     expandedFlag = false;
     flash = createFlashState();
+    /** The final result's run time, for the group row's bar. */
+    durationMs;
+    clockLive = true;
+    // The time this block last showed with a live clock; it is drawn at that time while it may not move.
+    shownAt;
     started = false;
     constructor(toolName, toolCallId, args, renderers, hostUi, cwd, groupKind, options) {
         super(toolName, toolCallId, args, options, renderers, hostUi, cwd);
@@ -54,8 +61,19 @@ export class ToolEntry extends ToolExecutionComponent {
         this.started = true;
         super.markExecutionStarted();
     }
+    /** Running with its call row outside the transcript's tip: drawn at the time it last showed inside
+     * it, so the duration bar holds still while the rest redraws as usual (spine.ts ClockGated). */
+    render(width) {
+        if (this.clockLive || this.status !== "running") {
+            this.shownAt = Date.now();
+            return super.render(width);
+        }
+        return drawAt(this.shownAt, () => super.render(width));
+    }
     updateResult(result, isPartial = false) {
         super.updateResult(result, isPartial);
+        if (!isPartial)
+            this.durationMs = result.durationMs;
         if (isPartial) {
             this.status = "running";
             return;
@@ -135,7 +153,12 @@ export function verbGroupLine(members, theme, width, t = motionTime()) {
         ? breathe(theme, "accent", "thinkingHigh", t, "◈ ")
         : theme.fg(anyFailed ? "error" : "muted", "◈ ");
     const contentWidth = Math.max(1, width - PREFIX - 2);
-    return lead + bullet + piTui.truncateToWidth(text, contentWidth);
+    // The group's bar is the sum of its members' times, in the same column as single calls
+    // (docs/tui-one-column-design.md §2.2); none while one runs or when a time is missing.
+    const times = members.map((member) => member.durationMs);
+    const total = !anyRunning && times.every((ms) => ms !== undefined) ? times.reduce((sum, ms) => sum + ms, 0) : undefined;
+    const bar = total === undefined ? "" : durationBar(theme, total);
+    return lead + bullet + fitCallRow({ body: text, tail: "", bar }, contentWidth, "…");
 }
 /** A muted `◈ ...` line laid out with the same 3-column lead as every other line (rail + padding),
  * for the "N more" and "fold" affordances, which have no rail of their own to draw. */
@@ -187,6 +210,11 @@ export class GroupedMessages {
     // identifies "this run" for as long as it exists.
     unfolded = new Set();
     revealed = new Set();
+    // Last frame's blocks, and those whose clock row (first row with text) is in the transcript's last
+    // TIP_ROWS rows: only there may a clock-driven block move (spine.ts ClockGated). A block not drawn
+    // last frame counts as live.
+    drawn = new Set();
+    inTip = new Set();
     constructor(messages, tui, theme, 
     /** A turn is in progress: its spine is live (src/tui/spine.ts). */
     turnRunning = () => false) {
@@ -208,10 +236,16 @@ export class GroupedMessages {
     dispose() {
         this.unfolded.clear();
         this.revealed.clear();
+        this.drawn.clear();
+        this.inTip.clear();
     }
     render(width) {
         const placed = [];
         const children = this.messages.children;
+        for (const child of children) {
+            if (isClockGated(child))
+                child.clockLive = !this.drawn.has(child) || this.inTip.has(child);
+        }
         let i = 0;
         while (i < children.length) {
             const first = children[i]; // guarded by the `while` bound above
@@ -254,9 +288,26 @@ export class GroupedMessages {
             i += 1;
         }
         joinToolRuns(placed);
+        // Before the spine paints: it fills a blank row with `│`, which would read as the clock row.
+        this.noteTip(placed);
         paintSpine(this.theme, placed, width, this.turnRunning());
         this.mouseLayout = { width, rows: placed.map(({ component, lines, skipped }) => ({ component, height: lines.length, skipped })) };
         return placed.flatMap((block) => block.lines);
+    }
+    /** Which blocks this frame drew, and which have their clock row -- the first row with text, where
+     * a call's duration bar is -- in the last TIP_ROWS rows. */
+    noteTip(placed) {
+        const total = placed.reduce((rows, block) => rows + block.lines.length, 0);
+        this.drawn = new Set();
+        this.inTip = new Set();
+        let start = 0;
+        for (const block of placed) {
+            const clockRow = start + Math.max(0, block.lines.findIndex((line) => line.trim() !== ""));
+            start += block.lines.length;
+            this.drawn.add(block.component);
+            if (clockRow >= total - TIP_ROWS)
+                this.inTip.add(block.component);
+        }
     }
     handleMouse(event) {
         if (event.y < 0 || event.y >= event.height)

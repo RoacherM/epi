@@ -1,9 +1,9 @@
 import type { Theme, ToolExecutionOptions } from "@earendil-works/pi-coding-agent";
 import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import type { Component, Container, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { type SpineMember } from "../spine.js";
-import type { ToolRenderers } from "./types.js";
+import { type ClockGated, type SpineMember } from "../spine.js";
 import { type FlashState } from "./flash.js";
+import type { ToolRenderers } from "./types.js";
 export type GroupKind = "read" | "grep" | "find" | "ls";
 /** Only a built-in read/grep/find/ls tool groups; an extension overriding one of these names (or any
  * other extension tool) never does (docs/tui-design.md 4.2: "Only built-in read-only tools group"). */
@@ -17,16 +17,23 @@ type Status = "running" | "done" | "error";
  * directly to decide whether (and in what color) the group's merged line should flash -- there is no
  * separate group-level flash timer (see `GroupedMessages.renderSummaryLine`).
  */
-export declare class ToolEntry extends ToolExecutionComponent implements SpineMember {
+export declare class ToolEntry extends ToolExecutionComponent implements SpineMember, ClockGated {
     private readonly hostUi;
     readonly groupKind: GroupKind | undefined;
     readonly spineRole = "tool";
     status: Status;
     expandedFlag: boolean;
     readonly flash: FlashState;
+    /** The final result's run time, for the group row's bar. */
+    durationMs: number | undefined;
+    clockLive: boolean;
+    private shownAt;
     private started;
     constructor(toolName: string, toolCallId: string, args: unknown, renderers: ToolRenderers | undefined, hostUi: TUI, cwd: string, groupKind: GroupKind | undefined, options?: ToolExecutionOptions);
     markExecutionStarted(): void;
+    /** Running with its call row outside the transcript's tip: drawn at the time it last showed inside
+     * it, so the duration bar holds still while the rest redraws as usual (spine.ts ClockGated). */
+    render(width: number): string[];
     updateResult(result: {
         content: Array<{
             type: string;
@@ -48,6 +55,8 @@ export declare class ToolEntry extends ToolExecutionComponent implements SpineMe
 interface MemberLike {
     groupKind: GroupKind | undefined;
     status: Status;
+    /** The final run time, when the result recorded one. */
+    durationMs?: number | undefined;
 }
 /** Pure text+layout for the collapsed group line, split out from `GroupedMessages` so widths
  * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the `◈`
@@ -78,6 +87,8 @@ export declare class GroupedMessages implements Component {
     private toolsExpanded;
     private readonly unfolded;
     private readonly revealed;
+    private drawn;
+    private inTip;
     constructor(messages: Container, tui: TUI, theme: Theme, 
     /** A turn is in progress: its spine is live (src/tui/spine.ts). */
     turnRunning?: () => boolean);
@@ -87,6 +98,9 @@ export declare class GroupedMessages implements Component {
     /** Cleared on `Transcript.reset()`: old runs' first members no longer resolve to anything on screen. */
     dispose(): void;
     render(width: number): string[];
+    /** Which blocks this frame drew, and which have their clock row -- the first row with text, where
+     * a call's duration bar is -- in the last TIP_ROWS rows. */
+    private noteTip;
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
     /**
      * Individual blocks again. Under `Ctrl+O` every member shows, uncapped (the user asked to see

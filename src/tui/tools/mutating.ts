@@ -254,8 +254,8 @@ function renderDiffExpanded(items: FormattedItem[], theme: Theme): string[] {
 function renderError(result: AgentToolResult<any>, expanded: boolean, theme: Theme): Component {
   const errorText = textContent(result) || "Error";
   const [firstLine = "Error", ...rest] = errorText.split("\n");
-  if (!expanded) return new LinesComponent(failureRow(theme, firstLine));
-  return new LinesComponent([failureRow(theme, firstLine), ...rest.map((line) => theme.fg("error", line))]);
+  if (!expanded) return new LinesComponent([failureRow(theme, firstLine)], undefined, [0]);
+  return new LinesComponent([failureRow(theme, firstLine), ...rest.map((line) => theme.fg("error", line))], undefined, [0]);
 }
 
 function renderUnifiedDiffResult(
@@ -346,11 +346,12 @@ export const bashRenderers: ToolRenderers = {
     // Success is the normal case and takes no row (docs/tui-transcript-layout-design.md R4): the
     // call line's run time says it finished. Only a failure gets a row, collapsed or not.
     const failureRows = failure === undefined ? [] : [bashFailureRow(theme, failure, lines)];
-    if (!options.expanded) return new LinesComponent(failureRows);
+    if (!options.expanded) return new LinesComponent(failureRows, undefined, failureRows.map((_, row) => row));
 
     const painted = lines.map((l) => theme.fg("toolOutput", l));
     const shown = truncateOutputLines(painted, (text) => theme.fg("muted", text));
-    if (shown.length === painted.length) return new LinesComponent([...shown, ...failureRows]);
+    const failureAt = failureRows.map((_, row) => shown.length + row);
+    if (shown.length === painted.length) return new LinesComponent([...shown, ...failureRows], undefined, failureAt);
     // truncateOutputLines's ellipsis row (index 2) opens every line of the output.
     const command = typeof context.args?.command === "string" ? context.args.command : "";
     const target: InspectTarget = {
@@ -360,7 +361,7 @@ export const bashRenderers: ToolRenderers = {
       firstLineNumber: 1,
       text: lines.join("\n"),
     };
-    return new LinesComponent([...shown, ...failureRows], { rows: [2], target });
+    return new LinesComponent([...shown, ...failureRows], { rows: [2], target }, failureAt);
   },
 };
 

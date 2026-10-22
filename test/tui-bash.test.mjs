@@ -85,7 +85,7 @@ test("Esc aborts a running user bash command and the app keeps working", (t) => 
   assert.match(out, /EXIT=0/);
   assert.match(out, /\(cancelled\)/);
   // A command that succeeded has no status row, only its run time on the call line (W3).
-  assert.match(out, /\$ echo AFTER-ABORT  \d+ms/);
+  assert.match(out, /\$ echo AFTER-ABORT +[▏▎▍▌▋▊▉█][▏▎▍▌▋▊▉█·]{3}/);
 });
 
 test("running another bash command while one is running is refused", (t) => {
@@ -143,7 +143,7 @@ test("UserBashBlock fits widths 40, 80 and 120 while running, done, and with lon
   done.setComplete(0, false);
   assertWidths(done);
   const doneLines = done.render(80).map(strip);
-  assert.match(doneLines[0], /^   \$ echo hi  \d+ms$/, "a live run shows its run time; success takes no status row");
+  assert.match(doneLines[0], /^   \$ echo hi +[▏▎▍▌▋▊▉█][▏▎▍▌▋▊▉█·]{3}$/, "a live run shows its run time as a bar; success takes no status row");
   assert.deepEqual(doneLines.slice(1), ["     hi"]);
 
   const failed = new UserBashBlock(theme, "false", false);

@@ -10,6 +10,8 @@ import { pathToFileURL } from "node:url";
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, MarkdownTheme } from "@earendil-works/pi-tui";
 
+import { CONTENT_COLUMN, DEFAULT_MEASURE } from "./measure.js";
+import { renderMermaid } from "./mermaid.js";
 import { piTui } from "./pi-tui.js";
 
 /** The block-level token fields this file reads; marked's own types aren't an Epi dependency. */
@@ -28,10 +30,7 @@ const { Lexer } = (await import(pathToFileURL(createRequire(piTuiEntry).resolve(
   Lexer: { lex(source: string): BlockToken[] };
 };
 
-/** Columns of body text per row (Bringhurst's 45–75 characters; WCAG 1.4.8 asks for ≤ 80). */
-const DEFAULT_MEASURE = 76;
-/** The content column: body text and code start here, under a tool's call text (R3). */
-export const CONTENT_COLUMN = 5;
+export { CONTENT_COLUMN };
 // The code rail sits in the marker column, like a tool's `◆`.
 const CODE_RAIL_COLUMN = 3;
 // Languages whose label says nothing; a bare fence gets none either.
@@ -77,6 +76,23 @@ function trimPartialClosingFence(token: BlockToken): string {
   const lastLine = token.raw.split("\n").pop();
   if (!marker || !lastLine || lastLine.length >= marker.length || lastLine !== marker[0]!.repeat(lastLine.length)) return text;
   return text.slice(0, -lastLine.length).replace(/\n$/, "");
+}
+
+/** A code block's language: the first word of its info string. */
+function codeLanguage(token: BlockToken): string {
+  return (token.lang ?? "").trim().split(/\s/)[0] ?? "";
+}
+
+/** Whether a code block's closing fence has arrived; one still streaming has none yet. A closing
+ * fence by CommonMark's rule (§4.5): at most three spaces of indentation, the opening fence's
+ * character at least as many times, then only spaces or tabs -- the rule marked applies, so a row
+ * it keeps as code (four spaces, a no-break space) never counts as closing. */
+function fenceClosed(token: BlockToken): boolean {
+  const marker = /^ {0,3}(`{3,}|~{3,})/.exec(token.raw)?.[1];
+  const lines = token.raw.replace(/\n+$/, "").split("\n");
+  if (!marker || lines.length < 2) return false;
+  const closing = /^ {0,3}(`+|~+)[ \t]*$/.exec(lines[lines.length - 1]!)?.[1];
+  return closing !== undefined && closing[0] === marker[0] && closing.length >= marker.length;
 }
 
 const ANSI = /\x1b\[[0-9;]*m|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
@@ -159,7 +175,23 @@ export class MeasuredMarkdown implements Component {
     // A transformer turned the code into something else (a diagram, say): draw that as markdown.
     if (token === undefined) return this.markdown(index, transformed, false).render(width);
     const isLast = index === this.segments.length - 1;
+    // A mermaid block is drawn once its closing fence is in (docs/mermaid-design.md §4.4): half a
+    // diagram would jump about while it streams.
+    if (codeLanguage(token).toLowerCase() === "mermaid" && fenceClosed(token)) return this.mermaidRows(token, codeWidth);
     return this.codeRows(token, isLast ? trimPartialClosingFence(token) : (token.text ?? ""), codeWidth);
+  }
+
+  /** A mermaid block as box art behind the code rail, under a dim `mermaid` label; its source, with
+   * the label saying why, when it can't be drawn or doesn't fit (docs/mermaid-design.md §4.3). */
+  private mermaidRows(token: BlockToken, codeWidth: number): string[] {
+    const drawn = renderMermaid(this.theme, token.text ?? "", codeWidth);
+    const note = drawn.note === undefined ? "" : ` · ${drawn.note}`;
+    if (drawn.kind === "source") return this.codeRows(token, token.text ?? "", codeWidth, `mermaid${note}`);
+    return [this.rail() + piTui.truncateToWidth(this.theme.fg("mdCodeBlockBorder", `mermaid${note}`), codeWidth), ...drawn.rows.map((row) => this.rail() + row)];
+  }
+
+  private rail(): string {
+    return `${" ".repeat(CODE_RAIL_COLUMN)}${this.theme.fg("borderMuted", "│")}${" ".repeat(CONTENT_COLUMN - CODE_RAIL_COLUMN - 1)}`;
   }
 
   /** The segment's Pi `Markdown`, kept across renders so its own per-width cache is reused. A code
@@ -180,11 +212,12 @@ export class MeasuredMarkdown implements Component {
 
   /** A code block without its fence rows: an optional dim language label, then the code, every row
    * behind a `│` rail in the marker column and wrapped (not cut) at the full width. */
-  private codeRows(token: BlockToken, code: string, codeWidth: number): string[] {
-    const lang = (token.lang ?? "").trim().split(/\s/)[0] ?? "";
-    const rail = `${" ".repeat(CODE_RAIL_COLUMN)}${this.theme.fg("borderMuted", "│")}${" ".repeat(CONTENT_COLUMN - CODE_RAIL_COLUMN - 1)}`;
+  private codeRows(token: BlockToken, code: string, codeWidth: number, label?: string): string[] {
+    const lang = codeLanguage(token);
+    const rail = this.rail();
     const highlighted = this.markdownTheme.highlightCode?.(code, lang || undefined) ?? code.split("\n").map((line) => this.markdownTheme.codeBlock(line));
-    const rows = UNLABELLED.has(lang) ? [] : [rail + piTui.truncateToWidth(this.theme.fg("mdCodeBlockBorder", lang), codeWidth)];
+    const shown = label ?? (UNLABELLED.has(lang) ? undefined : lang);
+    const rows = shown === undefined ? [] : [rail + piTui.truncateToWidth(this.theme.fg("mdCodeBlockBorder", shown), codeWidth)];
     for (const line of highlighted) {
       for (const piece of piTui.wrapTextWithAnsi(line, codeWidth)) rows.push(rail + piece);
     }

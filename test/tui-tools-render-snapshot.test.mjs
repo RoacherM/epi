@@ -13,6 +13,7 @@ import { UserBashBlock } from "../dist/tui/bash-block.js";
 import { piTui } from "../dist/tui/pi-tui.js";
 import { installEpiTheme } from "../dist/tui/theme.js";
 import { toolBlock } from "../dist/tui/tools/block.js";
+import { durationBar } from "../dist/tui/tools/common.js";
 import { bashRenderers, editRenderers, writeRenderers } from "../dist/tui/tools/mutating.js";
 import { findRenderers, grepRenderers, lsRenderers, readRenderers } from "../dist/tui/tools/read-only.js";
 
@@ -27,6 +28,12 @@ const out = (value) => fg("toolOutput", value);
 // The call line's tail (tools/common.ts CallLine): ` · <summary>` and the run time, both dim.
 const dot = fg("dim", " · ");
 const CWD = "/w";
+
+/** A call row with its duration bar at the column's edge (docs/tui-one-column-design.md §2.2): `width`
+ * is what the call component renders into, so the bar starts 4 cells before min(width, 76). */
+function withBar(left, ms, width) {
+  return left + " ".repeat(Math.min(width, 76) - 4 - piTui.visibleWidth(left)) + durationBar(theme, ms);
+}
 
 function ctx(overrides = {}) {
   return {
@@ -64,7 +71,7 @@ test("snapshot: read call", () => {
     `${out("read")} ${out("/elsewhere/y.md")}${fg("muted", ":1-2")}`,
   ]);
   assert.deepEqual(readRenderers.renderCall({ path: "a.ts" }, theme, ctx({ durationMs: 16 })).render(80), [
-    `${out("read")} ${out("a.ts")}  ${fg("dim", "16ms")}`,
+    withBar(`${out("read")} ${out("a.ts")}`, 16, 80),
   ]);
 });
 
@@ -247,7 +254,7 @@ test("snapshot: edit call and collapsed summary", () => {
   assert.deepEqual(editRenderers.renderCall({}, theme, ctx()).render(80), [out("edit")]);
 
   const summary = (diff) => collapsedCall(editRenderers, { path: "a.ts" }, { content: [], details: { diff } }, ctx({ durationMs: 40 }));
-  const call = (tail) => [`${out("edit a.ts")}${dot}${tail}  ${fg("dim", "40ms")}`];
+  const call = (tail) => [withBar(`${out("edit a.ts")}${dot}${tail}`, 40, 80)];
   assert.deepEqual(summary("- 1 a\n+ 1 b\n+ 2 c"), call(`${fg("toolDiffAdded", "+2")} ${fg("toolDiffRemoved", "−1")}`));
   assert.deepEqual(summary("+ 1 b"), call(fg("toolDiffAdded", "+1")));
   assert.deepEqual(summary("- 1 a\n- 2 b"), call(fg("toolDiffRemoved", "−2")));
@@ -320,7 +327,7 @@ test("snapshot: write call and result", () => {
 test("snapshot: bash tool call and results", () => {
   assert.deepEqual(bashRenderers.renderCall({ command: "npm test\necho done" }, theme, ctx()).render(80), [`${out("npm test")}${dot}${fg("dim", "+1 lines")}`]);
   assert.deepEqual(bashRenderers.renderCall({}, theme, ctx()).render(80), [out("")]);
-  assert.deepEqual(bashRenderers.renderCall({ command: "cd /w && make" }, theme, ctx({ durationMs: 2100 })).render(80), [`${out("make")}  ${fg("dim", "2.1s")}`]);
+  assert.deepEqual(bashRenderers.renderCall({ command: "cd /w && make" }, theme, ctx({ durationMs: 2100 })).render(80), [withBar(out("make"), 2100, 80)]);
 
   const outs = (lines) => lines.map((line) => fg("toolOutput", line));
   const render = (result, options, context = ctx()) => bashRenderers.renderResult(result, options, theme, context).render(80);
@@ -349,8 +356,9 @@ test("snapshot: tool block frame around a built-in renderer", () => {
   const framed = toolBlock("bash", bashRenderers);
   const call = out("make");
   // The running pulse is the turn spine's (src/tui/spine.ts), not the block's.
+  // Running: the time so far (well under 10ms here: the bar's first eighth).
   assert.deepEqual(framed.renderCall({ command: "make" }, theme, ctx({ isPartial: true })).render(80), [
-    `   ${fg("bashMode", "$ ")}${call}`,
+    `   ${fg("bashMode", "$ ")}${withBar(call, 0, 75)}`,
   ]);
   assert.deepEqual(framed.renderCall({ command: "make" }, theme, ctx()).render(80), [`   ${fg("bashMode", "$ ")}${call}`]);
   assert.deepEqual(framed.renderCall({ command: "make" }, theme, ctx({ isError: true })).render(80), [`   ${fg("error", "$ ")}${call}`]);
@@ -412,7 +420,11 @@ test("snapshot: user bash block", () => {
   const outRow = (line) => `     ${fg("toolOutput", line)}`;
   const running = new UserBashBlock(theme, "seq 1 9", false);
   running.appendOutput(`${numbered(4).join("\n")}\n`);
-  assert.deepEqual(running.render(80), [
+  // The bar is the time since the block started: normalized, it depends on how fast this runs.
+  const [runningCall, ...runningRest] = running.render(80);
+  assert.match(runningCall, new RegExp(`${fg("dim", "\u0000").split("\u0000")[0].replace(/\[/g, "\\[")}[▏▎▍▌]`));
+  assert.equal(piTui.visibleWidth(runningCall), 80, "the bar ends at the terminal's edge");
+  assert.deepEqual([runningCall.slice(0, runningCall.indexOf(" ".repeat(10))), ...runningRest], [
     `   ${fg("bashMode", "$")} ${out("seq 1 9")}`,
     outRow("line 2"),
     outRow("line 3"),

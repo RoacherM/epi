@@ -44,7 +44,7 @@ export declare class UserMessageBlock implements Component {
     private expanded;
     constructor(theme: Theme, content: unknown, time: Date);
     setExpanded(expanded: boolean): void;
-    render(width: number): string[];
+    render(fullWidth: number): string[];
     invalidate(): void;
 }
 /** Pi's WorkingIndicatorOptions (ui.setWorkingIndicator): custom frames drawn verbatim, `[]` hides
