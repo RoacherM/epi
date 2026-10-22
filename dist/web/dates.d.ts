@@ -23,7 +23,8 @@ export declare function localDay(ms: number): Day;
 export declare function startDay(text: string): Day | undefined;
 /** `day` moved by `days` (negative: earlier), as a calendar day. */
 export declare function addDays(day: Day, days: number): Day;
-/** The range a `recency` names, counted back from today: `week` is today and the 6 days before. */
+/** The range a `recency` names, counted back from today: `week` is today and the 6 days before,
+ * `month` the day after the same day a month ago. */
 export declare function recencyRange(recency: Recency, now: number): DateRange;
 /** A source's date normalized (§4.3). A UTC midnight is a date only, kept as that UTC day: the
  * sources give it for pages that only state a day, and converting it would move it to the day before

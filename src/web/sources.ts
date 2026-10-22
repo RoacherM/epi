@@ -60,7 +60,21 @@ function errorReason(body: unknown): string | undefined {
 
 const STATUS_HINTS: Record<number, string> = { 401: "invalid API key", 402: "insufficient balance", 403: "blocked by policy", 404: "no content", 429: "rate limited" };
 
+/** `text` with `key` taken out: the last guard, for an error some layer below wrote the key into. */
+function redact(text: string, key: string): string {
+  return key === "" ? text : text.split(key).join("<key>");
+}
+
 async function postJson(source: BuiltInSource, path: string, key: string, body: unknown, signal: AbortSignal): Promise<unknown> {
+  try {
+    return await postJsonUnredacted(source, path, key, body, signal);
+  } catch (error) {
+    if (error instanceof SourceError) throw new SourceError(redact(error.message, key));
+    throw error;
+  }
+}
+
+async function postJsonUnredacted(source: BuiltInSource, path: string, key: string, body: unknown, signal: AbortSignal): Promise<unknown> {
   let response: Response;
   try {
     response = await fetch(`${baseUrl(source)}${path}`, {
@@ -71,8 +85,10 @@ async function postJson(source: BuiltInSource, path: string, key: string, body: 
     });
   } catch (error) {
     if (signal.aborted) throw new SourceError(signal.reason instanceof SourceError ? signal.reason.message : "cancelled");
-    const cause = (error as { cause?: { code?: string; message?: string } }).cause;
-    throw new SourceError(`request failed: ${cause?.code ?? cause?.message ?? (error as Error).message}`);
+    // Only a network error's code (ECONNREFUSED, ENOTFOUND, …): fetch's own messages can quote the
+    // request headers, so they are not passed on.
+    const code = (error as { cause?: { code?: unknown } }).cause?.code;
+    throw new SourceError(typeof code === "string" ? `request failed: ${code}` : `request failed (${(error as Error).name})`);
   }
   const text = await response.text();
   let parsed: unknown;
@@ -142,8 +158,10 @@ class ExaSource implements WebSource {
   async search(request: SearchRequest, signal: AbortSignal): Promise<SourceHit[]> {
     const body: Record<string, unknown> = { query: request.query, numResults: request.count, contents: { highlights: true } };
     if (request.sites.length > 0) body.includeDomains = request.sites;
-    if (request.range.after !== undefined) body.startPublishedDate = exaInstant(request.range.after);
-    if (request.range.before !== undefined) body.endPublishedDate = exaInstant(request.range.before);
+    // Widened a day each way, like DeepSeek's: Exa dates a page that only states a day at UTC midnight,
+    // which west of UTC is before local midnight of that day. The local recheck trims the extra.
+    if (request.range.after !== undefined) body.startPublishedDate = exaInstant(addDays(request.range.after, -1));
+    if (request.range.before !== undefined) body.endPublishedDate = exaInstant(addDays(request.range.before, 1));
     const response = await postJson("exa", "/search", this.key, body, signal);
     const results = (response as { results?: unknown }).results;
     if (!Array.isArray(results)) throw new SourceError("the response has no results list");
@@ -168,19 +186,30 @@ class ExaSource implements WebSource {
 
 /** §4.5: the result of an MCP search tool, `{ results: [{ url, title?, summary?, snippet?, date? }] }`,
  * from its structuredContent or the JSON in its first text block. */
-export function parseMcpResults(result: { content: unknown; structuredContent?: unknown }): SourceHit[] {
-  let value: unknown = result.structuredContent;
-  // Pi's MCP tools put the whole CallToolResult in structuredContent; the tool's own is inside it.
-  if (typeof value === "object" && value !== null && "structuredContent" in value) value = (value as { structuredContent: unknown }).structuredContent;
-  if (typeof value !== "object" || value === null || !("results" in value)) {
-    const text = Array.isArray(result.content) ? result.content.find((part) => part?.type === "text")?.text : undefined;
-    if (typeof text !== "string") throw new SourceError("returned no structuredContent and no text");
-    try {
-      value = JSON.parse(text);
-    } catch {
-      throw new SourceError("returned text that is not JSON { results: [...] }");
-    }
+function firstText(content: unknown): string | undefined {
+  const text = Array.isArray(content) ? content.find((part) => part?.type === "text")?.text : undefined;
+  return typeof text === "string" ? text : undefined;
+}
+
+/** The value an MCP search tool returned: its own structuredContent, or the JSON in its first text
+ * block. Pi's MCP tools put the whole CallToolResult in structuredContent, with the tool's own
+ * structuredContent inside it and the content blocks before Pi cut long text (over 20KB) for the
+ * model, so the text is read from there first. */
+function mcpValue(result: { content: unknown; structuredContent?: unknown }): unknown {
+  const whole = result.structuredContent as { structuredContent?: unknown; content?: unknown } | undefined;
+  const own = typeof whole === "object" && whole !== null && "structuredContent" in whole ? whole.structuredContent : whole;
+  if (typeof own === "object" && own !== null && "results" in own) return own;
+  const text = firstText(whole?.content) ?? firstText(result.content);
+  if (text === undefined) throw new SourceError("returned no structuredContent and no text");
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new SourceError("returned text that is not JSON { results: [...] }");
   }
+}
+
+export function parseMcpResults(result: { content: unknown; structuredContent?: unknown }): SourceHit[] {
+  const value = mcpValue(result);
   const results = (value as { results?: unknown }).results;
   if (!Array.isArray(results)) throw new SourceError("returned no results list");
   return results.map((item, index) => {
@@ -202,8 +231,10 @@ class McpSource implements WebSource {
     if (request.sites.length > 0) args.sites = request.sites;
     const result = await this.callTool(this.tool, args, signal);
     if (result.isError) {
-      const text = Array.isArray(result.content) ? result.content.find((part) => part?.type === "text")?.text : undefined;
-      throw new SourceError(typeof text === "string" && text.trim() !== "" ? text.trim().split("\n")[0]! : `tool ${this.tool} failed`);
+      const text = firstText(result.content)?.trim().split("\n")[0] ?? "";
+      // Pi's own wording for a tool that isn't registered (pi-agent-core agent-loop.js: `Tool X not found`).
+      if (text === `Tool ${this.tool} not found`) throw new SourceError(`tool ${this.tool} is not available (is the MCP server connected?)`);
+      throw new SourceError(text !== "" ? text : `tool ${this.tool} failed`);
     }
     return parseMcpResults(result);
   }

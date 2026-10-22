@@ -99,20 +99,24 @@ export class UserBashBlock {
             this.shownAt = Date.now();
             return this.draw(width, running);
         }
+        this.shownAt ??= Date.now();
         return drawAt(this.shownAt, () => this.draw(width, running));
     }
-    draw(width, running) {
+    /** `$` (`!!` for a `!!cmd`), the rotating x until then (glyphs.ts). */
+    marker(running) {
         if (running)
             this.shownRunning = true;
-        const glyph = this.excludeFromContext ? "!!" : GLYPHS.shell;
-        const marker = paintMarker(this.theme, {
+        return paintMarker(this.theme, {
             state: running ? "running" : this.status === "error" ? "error" : "done",
-            glyph,
+            glyph: this.excludeFromContext ? "!!" : GLYPHS.shell,
             color: "bashMode",
             endedAt: this.endedAt,
             phase: this.phase,
             lead: this.excludeFromContext ? "!" : "",
         });
+    }
+    draw(width, running) {
+        const marker = this.marker(running);
         const { text, extraLines } = shortenCommand(this.command, undefined);
         const extra = extraLines > 0 ? this.theme.fg("dim", ` · +${extraLines} lines`) : "";
         // The same column and bar as a model's call row (docs/tui-one-column-design.md §2.2): the time so

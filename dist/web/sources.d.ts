@@ -37,8 +37,6 @@ export interface WebSource {
 /** The query with DeepSeek's operators for the sites and dates (§4.3): `after:` is inclusive of the
  * UTC day DeepSeek reads, so both ends are widened by a day and the local recheck trims the rest. */
 export declare function deepseekQuery(request: SearchRequest): string;
-/** §4.5: the result of an MCP search tool, `{ results: [{ url, title?, summary?, snippet?, date? }] }`,
- * from its structuredContent or the JSON in its first text block. */
 export declare function parseMcpResults(result: {
     content: unknown;
     structuredContent?: unknown;

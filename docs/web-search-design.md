@@ -95,7 +95,7 @@ interface WebSource {
 - `after`、`before`：`YYYY`、`YYYY-MM` 或 `YYYY-MM-DD`，按本地时区理解。
 - `recency`：`day`、`week`、`month`、`year` 的简写，按今天换算成 `after`。和 `after` 同时给时报参数错误，不猜哪个优先。
 - `sort`：`relevance`（默认）或 `newest`。
-- 翻译：DeepSeek 拼成 `after:2026-09-14`（只给到年时写 `after:2026`，给到月时写当月 1 日）。DeepSeek 的日期按 UTC 算，所以日期向外放宽一天，多出来的由本地复核去掉。DeepSeek 的查询串上限是 128 字符，日期和站点写法也算在内：拼完超长时这个源不发请求，记为失败并说明长度（`deepseek: query with filters is 140 characters, over its 128`），其余源照常查，不悄悄截掉条件。Exa 换算成本地当天 00:00 对应的 UTC 时间，填 `startPublishedDate` / `endPublishedDate`。
+- 翻译：DeepSeek 拼成 `after:2026-09-14`（只给到年时写 `after:2026`，给到月时写当月 1 日）。DeepSeek 的日期按 UTC 算，所以日期向外放宽一天，多出来的由本地复核去掉。DeepSeek 的查询串上限是 128 字符，日期和站点写法也算在内：拼完超长时这个源不发请求，记为失败并说明长度（`deepseek: query with filters is 140 characters, over its 128`），其余源照常查，不悄悄截掉条件。Exa 换算成本地当天 00:00 对应的 UTC 时间，填 `startPublishedDate` / `endPublishedDate`，同样向外放宽一天（Exa 把只有日期的页面标成 UTC 00:00，在 UTC 以西早于本地当天 0 点，会在服务端被滤掉；终审第 1 轮 P3-11）。
 - 范围：`after` 含当天（或当月、当年）的第一天，`before` 不含：`before 2026-06-01` 是 5 月 31 日及以前。比较都按本地日历日。
 
 **每条结果的日期归一：**
@@ -155,7 +155,7 @@ Searched 2026-10-22 15:40 Asia/Shanghai · after 2026-09-15 · newest first · d
   { results: { url: string; title?: string; summary?: string; snippet?: string; date?: string | null }[] }
   ```
 
-  `date` 用 ISO 8601 / RFC 3339，不知道就省略或给 `null`。顺序就是这个源的排名。结构不对（不是 JSON、没有 `results`、某条没有 `url`）时这个源记为失败，原因写明哪里不对，不猜。工具本身报错（`isError`）也记为这个源失败。
+  `date` 用 ISO 8601 / RFC 3339，不知道就省略或给 `null`。结果大时请放进 `structuredContent`：Pi 给模型的文字超过 20KB 会从中间截断（Epi 读的是截断前的原文，但别的客户端不一定）。顺序就是这个源的排名。结构不对（不是 JSON、没有 `results`、某条没有 `url`）时这个源记为失败，原因写明哪里不对，不猜。工具本身报错（`isError`）也记为这个源失败。
 - **前提**：`epi:mcp` 开着、这个工具可调用（Pi 的 MCP 工具默认是 codemode/deferred，不占模型的工具列表，但能被 `executeTool` 调到）。调不到时这个源失败：`brave: tool mcp__brave__search is not available (is the MCP server connected?)`。
 - **抓取**：MCP 源第一版只用于搜索，写进 `fetch.order` 报配置错误。
 - **为什么不自己连 MCP**：MCP 只在 Epi 里内置（`epi:mcp`，决策 MCP1/MCP2），再连一次就是两套配置、两套 OAuth。复用 `executeTool`，MCP 的配置、登录、`/mcp` 里的开关都不变。
@@ -188,7 +188,7 @@ Searched 2026-10-22 15:40 Asia/Shanghai · after 2026-09-15 · newest first · d
 
 ### 6.1 首次启动和 `/web`
 
-- **首次启动**：`epi:web` 开启时，启动页的 CONFIGURE 区多一项 `/web web search`（和 `/login` 一样一直在，不看有没有配置：启动页不读各能力的配置文件）。交互模式下一个源都没配置时，第一次发送消息前弹一次提示（「配置网页检索？现在 / 以后 / 不再提示」）：「现在」打开 `/web`，关掉后消息照常发出；「以后」这次会话不再问；「不再提示」写 `"prompt": false`。`-p`、json、rpc 等非交互模式不提示。
+- **首次启动**：`epi:web` 开启时，启动页的 CONFIGURE 区多一项 `/web web search`（和 `/login` 一样一直在，不看有没有配置：启动页不读各能力的配置文件）。交互模式下一个源都没配置时，第一次发送消息前弹一次提示（「配置网页检索？现在 / 以后 / 不再提示」）：「现在」打开 `/web`，关掉后消息照常发出；「以后」到 Epi 重启前不再问（`/new`、`/resume` 也不问）；「不再提示」写 `"prompt": false`。`-p`、json、rpc 等非交互模式不提示。
 - **`/web`**：一个选择列表，每个源一行：状态（已启用 / 缺少 key / 已关闭）、key 的来源（文件、环境变量）、最近一次测试的结果和耗时。选中一个源可以：填 key（输入时遮盖，只显示最后 4 位）、用 DeepSeek 模型的 key、开关、删掉 key、「测试」（真的发一次查询，显示命中数和耗时；MCP 源不在这里测，它只能在工具调用里调到）。
 
 ### 6.2 对话区

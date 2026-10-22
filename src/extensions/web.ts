@@ -155,6 +155,8 @@ class WebTools {
       if (error instanceof WebParamError) return errorResult(`web_search: ${error.message}`);
       throw error;
     }
+    // Pi has no way to unregister a tool, and /tree can bring a deactivated one back: say why.
+    if (chosen.length === 0) return errorResult("web_search: no web source can run (every source is off or has no key); /web sets one up");
     const outcome = await hybridSearch(params, range, params.count ?? this.config.count, { sources: chosen, signal: signal ?? new AbortController().signal, now });
     this.seen.note(outcome.details);
     return { content: [{ type: "text" as const, text: outcome.text }], details: outcome.details, ...(outcome.failed ? { isError: true } : {}) };
@@ -171,6 +173,7 @@ class WebTools {
     if (url.protocol !== "http:" && url.protocol !== "https:") return errorResult(`web_fetch: only http and https URLs (${url.protocol})`);
     const available = usableSources(this.epiHome, this.config, undefined);
     const ordered = this.config.fetchOrder.flatMap((id) => available.filter((source) => source.id === id && source.canFetch));
+    if (ordered.length === 0) return errorResult("web_fetch: no source in fetch.order can run (off or no key); /web sets one up");
     const outcome = await fetchPage(url.href, params.fresh === true, ordered, this.seen, { signal: signal ?? new AbortController().signal, now: Date.now() });
     return { content: [{ type: "text" as const, text: outcome.text }], details: outcome.details, ...(outcome.failed ? { isError: true } : {}) };
   }
@@ -180,6 +183,10 @@ class WebTools {
     this.seen.clear();
   }
 }
+
+// The first-run question is asked once per process at most: "Later" means not again until Epi
+// restarts, also across /new, /resume and /reload (each runs the factory again).
+let askedThisProcess = false;
 
 export function createWebInlineExtension(options: WebExtensionOptions): InlineExtension {
   // Eager: a broken web.json or web-auth.json fails startup with the file and the reason, like
@@ -191,8 +198,7 @@ export function createWebInlineExtension(options: WebExtensionOptions): InlineEx
     factory(pi) {
       const tools = new WebTools(pi, options.epiHome);
       tools.sync(false);
-      // Asked once per process at most: "later" means not again this run.
-      let asked = false;
+
       pi.on("session_start", () => tools.reset());
 
       pi.registerCommand("web", {
@@ -209,9 +215,9 @@ export function createWebInlineExtension(options: WebExtensionOptions): InlineEx
 
       pi.on("input", async (event, ctx) => {
         // Offline, search couldn't run even once set up: nothing to offer.
-        if (asked || offline() || ctx.mode !== "tui" || event.source !== "interactive" || !tools.promptAllowed || tools.configured) return { action: "continue" };
+        if (askedThisProcess || offline() || ctx.mode !== "tui" || event.source !== "interactive" || !tools.promptAllowed || tools.configured) return { action: "continue" };
         if (event.text.trimStart().startsWith("/") || event.text.trimStart().startsWith("!")) return { action: "continue" };
-        asked = true;
+        askedThisProcess = true;
         await askOnce(ctx, options.epiHome, tools);
         return { action: "continue" };
       });

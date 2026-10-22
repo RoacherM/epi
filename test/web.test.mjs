@@ -217,7 +217,7 @@ test("a hybrid search: both sources at once, translated each its own way, merged
   const ex = requests.find((r) => r.path === "/search");
   assert.equal(ds.body.query, "deepseek search api after:2026-09-14");
   assert.equal(ds.auth, "Bearer ds-key");
-  assert.equal(ex.body.startPublishedDate, new Date(2026, 8, 15).toISOString(), "local midnight as a UTC instant");
+  assert.equal(ex.body.startPublishedDate, new Date(2026, 8, 14).toISOString(), "local midnight as a UTC instant, a day wider (review 1 P3-11)");
   assert.deepEqual(ex.body.contents, { highlights: true });
   const lines = outcome.text.split("\n");
   assert.match(lines[0], /^Searched 2026-10-22 15:40 \S+ · after 2026-09-15 · deepseek 2, exa 2 · 1 outside the date range$/);
@@ -291,8 +291,14 @@ test("mcp source: fixed arguments through callTool; results from structuredConte
   assert.deepEqual(parseMcpResults({ content: [{ type: "text", text: '{"results":[{"url":"https://t.com"}]}' }] }).map((hit) => hit.url), ["https://t.com"]);
   assert.throws(() => parseMcpResults({ content: [{ type: "text", text: "plain words" }] }), /not JSON \{ results/);
   assert.throws(() => parseMcpResults({ content: [], structuredContent: { results: [{ title: "x" }] } }), /result 1 has no url/);
-  const failing = createSource({ config: { id: "brave", kind: "mcp", enabled: true, tool: "t" } }, async () => ({ isError: true, content: [{ type: "text", text: "Tool t not found" }] }));
-  await assert.rejects(failing.search({ query: "q", count: 1, range: {}, sites: [], now: NOW }, new AbortController().signal), (error) => error instanceof SourceError && error.message === "Tool t not found");
+  const missing = createSource({ config: { id: "brave", kind: "mcp", enabled: true, tool: "t" } }, async () => ({ isError: true, content: [{ type: "text", text: "Tool t not found" }] }));
+  await assert.rejects(missing.search({ query: "q", count: 1, range: {}, sites: [], now: NOW }, new AbortController().signal), (error) => error instanceof SourceError && error.message === "tool t is not available (is the MCP server connected?)");
+  const failing = createSource({ config: { id: "brave", kind: "mcp", enabled: true, tool: "t" } }, async () => ({ isError: true, content: [{ type: "text", text: "quota exceeded\nmore" }] }));
+  await assert.rejects(failing.search({ query: "q", count: 1, range: {}, sites: [], now: NOW }, new AbortController().signal), (error) => error.message === "quota exceeded");
+  // Review 1 P3-6: text Pi cut for the model (over 20KB) is read from the uncut copy in structuredContent.
+  const big = JSON.stringify({ results: [{ url: "https://big.com" }], padding: "x".repeat(30_000) });
+  const cut = { content: [{ type: "text", text: "Warning: truncated output (original token count: 7600)\n…" }], structuredContent: { content: [{ type: "text", text: big }] } };
+  assert.deepEqual(parseMcpResults(cut).map((hit) => hit.url), ["https://big.com"]);
 });
 
 test("chooseSources: all by default; a named one must exist and be usable", () => {
@@ -394,7 +400,54 @@ test("extension: /web registers, re-describes, removes and restores the tools wi
   storeSourceKey(dir, "deepseek", "k");
   await web();
   assert.ok(pi.active.includes("web_search"), "back on: back in the active set");
-  assert.match(pi.tools.get("web_search").description, /Sources: exa, deepseek\./, "re-described with the sources now usable");
+  assert.match(pi.tools.get("web_search").description, /Sources: deepseek, exa\./, "re-described with the sources now usable, in the configured order");
+});
+
+// ── review 1 (.dev/milestones/0.1.24/review-1.md) ────────────────────────────
+
+test("review 1 P1-1: a key never reaches a result, details or an error message", async (t) => {
+  const dir = home(t);
+  // A key fetch can't send: refused where it comes from, with a reason that doesn't quote it.
+  writeFileSync(join(dir, "web-auth.json"), JSON.stringify({ exa: { key: "sk-SECRET-abc\u0000def" } }));
+  assert.throws(() => sourceKey(dir, "exa", {}), (error) => /control or non-ASCII/.test(error.message) && !error.message.includes("SECRET"));
+  assert.throws(() => sourceKey(dir, "exa", { EPI_WEB_EXA_API_KEY: "sk-SECRET\ndef" }), (error) => /EPI_WEB_EXA_API_KEY/.test(error.message) && !error.message.includes("SECRET"));
+  assert.throws(() => storeSourceKey(dir, "deepseek", "sk-SECRET def"), (error) => !error.message.includes("SECRET"));
+  // A broken web-auth.json: the place, never V8's quote of the text around it (the key).
+  writeFileSync(join(dir, "web-auth.json"), '{ "exa": { "key": sk-SECRET-xyz } }');
+  assert.throws(() => sourceKey(dir, "exa", {}), (error) => /not valid JSON at line 1, column 19$/.test(error.message) && !error.message.includes("SECRET"));
+  // An error that quotes the key anyway (a server echoing it back) has it taken out.
+  await fakeApis(t, { "/search": () => [400, { requestId: "r", error: "bad key sk-SECRET-123 for this endpoint", tag: "x" }] });
+  const leaky = createSource({ config: { id: "exa", kind: "exa", enabled: true }, key: "sk-SECRET-123" });
+  const outcome = await hybridSearch({ query: "q" }, {}, 8, { sources: [leaky], signal: new AbortController().signal, now: NOW });
+  assert.ok(!JSON.stringify(outcome).includes("sk-SECRET-123"), outcome.text);
+  assert.match(outcome.text, /exa: 400 bad key <key> for this endpoint/);
+});
+
+test("review 1 P3-3: turning a source off and on in /web keeps the source order", (t) => {
+  const dir = home(t);
+  setSourceEnabled(dir, "exa", false);
+  setSourceEnabled(dir, "exa", true);
+  assert.deepEqual(loadWebConfig(dir).sources.map((source) => source.id), ["deepseek", "exa"]);
+});
+
+test("review 1 P3-4/P3-5: a month back from the 31st, a year back from Feb 29, and a year-only date this year", () => {
+  assert.deepEqual(recencyRange("month", new Date(2026, 2, 31).getTime()), { after: "2026-03-01" });
+  assert.deepEqual(recencyRange("year", new Date(2028, 1, 29).getTime()), { after: "2027-03-01" });
+  assert.equal(ago({ date: "2026", precision: "year" }, new Date(2026, 0, 3).getTime()), "this year");
+  assert.equal(ago({ date: "2027", precision: "year" }, new Date(2026, 0, 3).getTime()), "in the future");
+});
+
+test("review 1 P3-7: with no usable source left, a call says why", async (t) => {
+  const dir = home(t);
+  storeSourceKey(dir, "exa", "k");
+  const pi = fakePi();
+  createWebInlineExtension({ epiHome: dir }).factory(pi);
+  storeSourceKey(dir, "exa", undefined);
+  const search = await pi.tools.get("web_search").execute("c", { query: "q" }, undefined, undefined, { executeTool: async () => ({}) });
+  assert.equal(search.isError, true);
+  assert.match(search.content[0].text, /no web source can run .* \/web sets one up/);
+  const fetched = await pi.tools.get("web_fetch").execute("c", { url: "https://a.com" }, undefined);
+  assert.match(fetched.content[0].text, /no source in fetch\.order can run/);
 });
 
 // ── rendering (§6.2) ─────────────────────────────────────────────────────────

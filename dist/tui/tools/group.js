@@ -71,6 +71,8 @@ export class ToolEntry extends ToolExecutionComponent {
             this.shownAt = Date.now();
             return super.render(width);
         }
+        // Never drawn live (Ctrl+O just unfolded it outside the tip): held at now, not the real clock.
+        this.shownAt ??= Date.now();
         return drawAt(this.shownAt, () => super.render(width));
     }
     updateResult(result, isPartial = false) {
@@ -231,6 +233,9 @@ export class GroupedMessages {
     runShownAt = new WeakMap();
     /** Folded runs drawn while a member ran: only those shake as they settle (glyphs.ts). */
     runShownRunning = new WeakSet();
+    /** A folded run's own tip key, apart from its first member's: Ctrl+O switches between drawing the
+     * run as one row and as its members, and the two must not take each other's place in the tip. */
+    runKeys = new WeakMap();
     constructor(messages, tui, theme, 
     /** A turn is in progress: its spine is live (src/tui/spine.ts). */
     turnRunning = () => false) {
@@ -300,15 +305,32 @@ export class GroupedMessages {
             }
             const rendered = first.render(width);
             if (rendered.length > 0)
-                placed.push(place(first, rendered));
+                placed.push(place(first, rendered, width));
             i += 1;
         }
         joinToolRuns(placed);
         // Before the spine paints: it fills a blank row with `│`, which would read as the clock row.
         this.noteTip(placed);
+        this.holdOutsideTip(placed);
         paintSpine(this.theme, placed, width, this.turnRunning());
         this.mouseLayout = { width, rows: placed.map(({ component, lines, skipped }) => ({ component, height: lines.length, skipped })) };
         return placed.flatMap((block) => block.lines);
+    }
+    /** Whether a block may move with the clock is judged from the last frame's layout. A block drawn
+     * live that this frame's layout put outside the tip (a long reply pushed it up as it finished) is
+     * drawn again held, so no frame changes a row outside the tip with the clock alone: a landing shake
+     * there would otherwise show for one frame. Only clock-driven cells differ, so the row count holds. */
+    holdOutsideTip(placed) {
+        for (const block of placed) {
+            if (block.held === undefined || this.inTip.has(block.clockKey ?? block.component))
+                continue;
+            block.lines = block.held().slice(block.skipped);
+        }
+    }
+    hold(key) {
+        const now = Date.now();
+        this.runShownAt.set(key, now);
+        return now;
     }
     /** Which blocks this frame drew, and which have their clock row -- the first row with text, where
      * a call's duration bar is -- in the last TIP_ROWS rows. */
@@ -350,7 +372,7 @@ export class GroupedMessages {
             placed.push({ component: reveal, lines: [leadLine(this.theme, `◈ ${hidden} more`)], skipped: 0, member: TRUNK, toolish: true });
         }
         for (const member of visible)
-            placed.push(place(member, member.render(width)));
+            placed.push(place(member, member.render(width), width));
         if (!this.toolsExpanded) {
             const fold = clickTarget(() => {
                 this.unfolded.delete(anchor);
@@ -378,16 +400,25 @@ export class GroupedMessages {
             return (flashing.find((member) => member.flash.tone === "error") ?? flashing[0])?.flash;
         };
         const unfold = clickTarget(() => { this.unfolded.add(anchor); this.tui.requestRender(); });
-        const live = !this.drawn.has(anchor) || this.inTip.has(anchor);
+        let key = this.runKeys.get(anchor);
+        if (key === undefined) {
+            key = { render: () => [], invalidate: noop };
+            this.runKeys.set(anchor, key);
+        }
+        const live = !this.drawn.has(key) || this.inTip.has(key);
         if (live)
-            this.runShownAt.set(anchor, Date.now());
+            this.runShownAt.set(key, Date.now());
         if (running)
             this.runShownRunning.add(anchor);
         const shown = this.runShownRunning.has(anchor) ? members : members.map(({ groupKind, status, durationMs }) => ({ groupKind, status, durationMs }));
-        const line = live ? verbGroupLine(shown, this.theme, width) : drawAt(this.runShownAt.get(anchor), () => verbGroupLine(shown, this.theme, width));
+        // Held but never drawn live (Ctrl+O just folded it outside the tip): held at now, not the real clock.
+        const heldAt = live ? undefined : this.runShownAt.get(key) ?? this.hold(key);
+        const line = live ? verbGroupLine(shown, this.theme, width) : drawAt(heldAt, () => verbGroupLine(shown, this.theme, width));
+        const runKey = key;
         return {
             component: unfold,
-            clockKey: anchor,
+            clockKey: key,
+            ...(live ? { held: () => ["", drawAt(this.runShownAt.get(runKey), () => verbGroupLine(shown, this.theme, width))] } : {}),
             lines: ["", line],
             skipped: 0,
             member: { spineRole: "tool", spineRunning: running, spineFlash: flash },
@@ -396,9 +427,16 @@ export class GroupedMessages {
     }
 }
 const TRUNK = { spineRole: "trunk" };
-function place(component, lines) {
+function place(component, lines, width) {
     const member = component instanceof piTui.Spacer ? "spacer" : spineMember(component);
-    return { component, lines: [...lines], skipped: 0, member, toolish: component instanceof ToolEntry };
+    const placed = { component, lines: [...lines], skipped: 0, member, toolish: component instanceof ToolEntry };
+    if (isClockGated(component) && component.clockLive) {
+        placed.held = () => {
+            component.clockLive = false;
+            return component.render(width);
+        };
+    }
+    return placed;
 }
 /**
  * Consecutive tool rows sit together with no blank row between them (docs/tui-transcript-layout-

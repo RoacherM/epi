@@ -343,6 +343,7 @@ export class AssistantBlock implements Component, SpineMember, ClockGated {
       this.shownAt = Date.now();
       return this.draw(width);
     }
+    this.shownAt ??= Date.now();
     return drawAt(this.shownAt, () => this.draw(width));
   }
 

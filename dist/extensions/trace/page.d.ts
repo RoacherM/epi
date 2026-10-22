@@ -40,6 +40,7 @@ export declare class TracePage {
     private readonly unsubscribe;
     /** Turns a running step's icon while one is in view; stops when none is. */
     private spinner;
+    private disposed;
     /** Body geometry from the last render, for the mouse. */
     private geometry;
     constructor(options: TracePageOptions);

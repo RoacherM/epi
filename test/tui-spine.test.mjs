@@ -512,3 +512,52 @@ test("the first of eight running calls after reply text, on the tip's first row,
   assert.equal(callRow, before.length - 8, "the call is on the tip's first row");
   assert.match(after[callRow], /edge-0 +██▎·$/);
 });
+
+// Review 1 of 0.1.24 (.dev/milestones/0.1.24/review-1.md P2-1, P3-2): no row outside the tip may change
+// with the clock alone -- after Ctrl+O folds or unfolds a running run out there, or when a call that
+// just finished is pushed out of the tip in the same frame (its landing shake must not show there).
+for (const order of ["fold-then-expand", "expand-then-fold"]) {
+  test(`Ctrl+O (${order}) on running calls outside the tip: no full redraw while only the clock runs`, (t) => {
+    let now = 1_000_000;
+    t.mock.method(Date, "now", () => now);
+    const tr = transcript();
+    const screen = new piTui.TuiMainScreen({ columns: 80, rows: 12, write() {}, hideCursor() {}, showCursor() {} }, false);
+    screen.addChild(tr.root);
+    if (order === "expand-then-fold") tr.setToolsExpanded(true);
+    tr.handle({ type: "agent_start" });
+    tr.handle({ type: "message_start", message: user("go") });
+    const calls = [call("grep", "g1", { pattern: "foo" }), call("grep", "g2", { pattern: "bar" }), ...Array.from({ length: 16 }, (_, i) => call("bash", `b${i}`, { command: `make part${i}` }))];
+    const message = { ...assistant(calls), stopReason: "toolUse" };
+    tr.handle({ type: "message_start", message: { ...message, content: [] } });
+    tr.handle({ type: "message_end", message });
+    for (const c of calls) tr.handle({ type: "tool_execution_start", toolName: c.name, toolCallId: c.id, args: c.arguments });
+    for (let i = 0; i < 3; i += 1) { now += 80; screen.renderNow(); }
+    tr.setToolsExpanded(order === "fold-then-expand");
+    now += 80;
+    screen.renderNow();
+    const before = screen.fullRedraws;
+    for (let i = 0; i < 10; i += 1) { now += 320; screen.renderNow(); }
+    assert.equal(screen.fullRedraws - before, 0);
+  });
+}
+
+test("a call that finishes as a long reply pushes it out of the tip never shakes outside it", (t) => {
+  let now = 1_000_000;
+  t.mock.method(Date, "now", () => now);
+  const tr = transcript();
+  const screen = new piTui.TuiMainScreen({ columns: 80, rows: 12, write() {}, hideCursor() {}, showCursor() {} }, false);
+  screen.addChild(tr.root);
+  tr.handle({ type: "agent_start" });
+  tr.handle({ type: "message_start", message: user("go") });
+  runTool(tr, "bash", "b1", { args: { command: "npm test" }, finish: false });
+  for (let i = 0; i < 3; i += 1) { now += 80; screen.renderNow(); }
+  tr.handle({ type: "tool_execution_end", toolName: "bash", toolCallId: "b1", result: { content: [{ type: "text", text: "ok" }] }, isError: false, durationMs: 900 });
+  reply(tr, [{ type: "text", text: Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n\n") }]);
+  now += 80;
+  screen.renderNow();
+  const markers = [strip(tr.root.render(80).find((row) => strip(row).includes("npm test")))[3]];
+  const before = screen.fullRedraws;
+  for (let i = 0; i < 6; i += 1) { now += 80; screen.renderNow(); markers.push(strip(tr.root.render(80).find((row) => strip(row).includes("npm test")))[3]); }
+  assert.deepEqual([...new Set(markers)], ["$"], "settled at once outside the tip");
+  assert.equal(screen.fullRedraws - before, 0);
+});

@@ -100,6 +100,9 @@ export declare class GroupedMessages implements Component {
     private readonly runShownAt;
     /** Folded runs drawn while a member ran: only those shake as they settle (glyphs.ts). */
     private readonly runShownRunning;
+    /** A folded run's own tip key, apart from its first member's: Ctrl+O switches between drawing the
+     * run as one row and as its members, and the two must not take each other's place in the tip. */
+    private readonly runKeys;
     constructor(messages: Container, tui: TUI, theme: Theme, 
     /** A turn is in progress: its spine is live (src/tui/spine.ts). */
     turnRunning?: () => boolean);
@@ -109,6 +112,12 @@ export declare class GroupedMessages implements Component {
     /** Cleared on `Transcript.reset()`: old runs' first members no longer resolve to anything on screen. */
     dispose(): void;
     render(width: number): string[];
+    /** Whether a block may move with the clock is judged from the last frame's layout. A block drawn
+     * live that this frame's layout put outside the tip (a long reply pushed it up as it finished) is
+     * drawn again held, so no frame changes a row outside the tip with the clock alone: a landing shake
+     * there would otherwise show for one frame. Only clock-driven cells differ, so the row count holds. */
+    private holdOutsideTip;
+    private hold;
     /** Which blocks this frame drew, and which have their clock row -- the first row with text, where
      * a call's duration bar is -- in the last TIP_ROWS rows. */
     private noteTip;

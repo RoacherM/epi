@@ -77,6 +77,7 @@ export class TracePage {
   private readonly unsubscribe: () => void;
   /** Turns a running step's icon while one is in view; stops when none is. */
   private spinner: ReturnType<typeof setInterval> | undefined;
+  private disposed = false;
   /** Body geometry from the last render, for the mouse. */
   private geometry: { top: number; height: number; listWidth: number; wide: boolean } | undefined;
 
@@ -85,12 +86,13 @@ export class TracePage {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.unsubscribe();
     this.spin(false);
   }
 
   private spin(on: boolean): void {
-    if (on) {
+    if (on && !this.disposed) {
       // The x turns every 4 ticks; redrawing more often would change nothing.
       this.spinner ??= setInterval(() => this.options.tui.requestRender(), TICK_MS * 4);
       this.spinner.unref?.();

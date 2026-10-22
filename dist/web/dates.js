@@ -30,14 +30,19 @@ export function addDays(day, days) {
     const [year, month, date] = day.split("-").map(Number);
     return localDay(new Date(year, month - 1, date + days).getTime());
 }
-/** The range a `recency` names, counted back from today: `week` is today and the 6 days before. */
+/** The same day `months` earlier, cut to that month's last day (March 31 → February 28). */
+function monthsBack(day, months) {
+    const [year, month, date] = day.split("-").map(Number);
+    const lastDay = new Date(year, month - 1 - months + 1, 0).getDate();
+    return localDay(new Date(year, month - 1 - months, Math.min(date, lastDay)).getTime());
+}
+/** The range a `recency` names, counted back from today: `week` is today and the 6 days before,
+ * `month` the day after the same day a month ago. */
 export function recencyRange(recency, now) {
     const today = localDay(now);
-    const [year, month, day] = today.split("-").map(Number);
     const after = recency === "day" ? today
         : recency === "week" ? addDays(today, -6)
-            : recency === "month" ? localDay(new Date(year, month - 2, day + 1).getTime())
-                : localDay(new Date(year - 1, month - 1, day + 1).getTime());
+            : addDays(monthsBack(today, recency === "month" ? 1 : 12), 1);
     return { after };
 }
 /** A source's date normalized (§4.3). A UTC midnight is a date only, kept as that UTC day: the
@@ -101,15 +106,13 @@ export function inRange(date, range) {
 }
 /** `3 days ago`, `4 months ago`, `today`; `in the future` for a date after today. */
 export function ago(date, now) {
-    const today = dayNumber(localDay(now));
-    const then = dayNumber(date.precision === "year" ? `${date.date}-07-01` : date.date);
-    const days = Math.round(today - then);
-    if (days < 0)
-        return "in the future";
     if (date.precision === "year") {
         const years = new Date(now).getFullYear() - Number(date.date);
-        return years <= 0 ? "this year" : years === 1 ? "last year" : `${years} years ago`;
+        return years < 0 ? "in the future" : years === 0 ? "this year" : years === 1 ? "last year" : `${years} years ago`;
     }
+    const days = Math.round(dayNumber(localDay(now)) - dayNumber(date.date));
+    if (days < 0)
+        return "in the future";
     if (days === 0)
         return "today";
     if (days === 1)

@@ -5,6 +5,7 @@ import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/
 import type { Component, Focusable } from "@earendil-works/pi-tui";
 
 import { piTui } from "../tui/pi-tui.js";
+import { EpiConfigError } from "../errors.js";
 import { type BuiltInSource, keyEnvName, loadWebConfig, setSourceEnabled, type SourceConfig, sourceKey, storeSourceKey, webConfigPath } from "../web/config.js";
 import { hybridSearch } from "../web/search.js";
 import { createSource } from "../web/sources.js";
@@ -84,7 +85,7 @@ async function copyModelKey(ctx: ExtensionCommandContext, epiHome: string): Prom
     ctx.ui.notify("The DeepSeek model provider has no API key (/login sets one)", "warning");
     return false;
   }
-  storeSourceKey(epiHome, "deepseek", key);
+  if (!store(ctx, epiHome, "deepseek", key)) return false;
   ctx.ui.notify("Copied the DeepSeek model's key for web search; the two are separate from now on", "info");
   return true;
 }
@@ -115,11 +116,22 @@ async function sourceMenu(ctx: ExtensionCommandContext, options: WebPanelOptions
   }
 }
 
+/** Stores a key; a key that can't be used is refused with the reason (never the key) instead. */
+function store(ctx: ExtensionContext, epiHome: string, source: BuiltInSource, key: string): boolean {
+  try {
+    storeSourceKey(epiHome, source, key);
+    return true;
+  } catch (error) {
+    if (!(error instanceof EpiConfigError)) throw error;
+    ctx.ui.notify(`Not saved: ${error.message}`, "error");
+    return false;
+  }
+}
+
 async function keyAction(ctx: ExtensionCommandContext, epiHome: string, source: BuiltInSource, choice: string): Promise<void> {
   if (choice === "Enter API key" || choice === "Replace API key") {
     const key = await askKey(ctx, source);
-    if (key === undefined) return;
-    storeSourceKey(epiHome, source, key);
+    if (key === undefined || !store(ctx, epiHome, source, key)) return;
     if (process.env[keyEnvName(source)]) ctx.ui.notify(`${keyEnvName(source)} is set and wins over the stored key`, "warning");
     await testSource(ctx, epiHome, source);
   } else if (choice === "Use the DeepSeek model's key") {

@@ -48,38 +48,85 @@ function fail(path: string, message: string): never {
   throw new EpiConfigError(`${path}: ${message}`);
 }
 
+/** Whether V8's message says the text merely ended early, rather than holding something wrong. */
+function endedEarly(message: string, length: number): boolean {
+  if (/Unexpected end|Unterminated/.test(message)) return true;
+  const at = /position (\d+)/.exec(message)?.[1];
+  return at !== undefined && Number(at) >= length;
+}
+
+/** The offset where JSON.parse gave up: from V8's message when it states one, else the end of the
+ * longest prefix that is only cut short, never wrong. */
+function jsonErrorOffset(text: string, error: unknown): number {
+  const stated = /position (\d+)/.exec((error as Error).message)?.[1];
+  if (stated !== undefined) return Number(stated);
+  for (let end = 1; end <= text.length; end += 1) {
+    try {
+      JSON.parse(text.slice(0, end));
+    } catch (prefixError) {
+      if (!endedEarly((prefixError as Error).message, end)) return end - 1;
+    }
+  }
+  return text.length;
+}
+
+/** Where in `text` JSON.parse gave up, as `line L, column C`. V8's message itself is never shown: it
+ * quotes the text around the error, which in web-auth.json is a key. */
+function jsonErrorPlace(text: string, error: unknown): string {
+  const offset = jsonErrorOffset(text, error);
+  const before = text.slice(0, offset);
+  return ` at line ${before.split("\n").length}, column ${offset - before.lastIndexOf("\n")}`;
+}
+
 function readJson(path: string): unknown {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
   } catch (error) {
-    fail(path, `cannot read it: ${(error as Error).message}`);
+    fail(path, `cannot read it: ${(error as NodeJS.ErrnoException).code ?? (error as Error).message}`);
   }
   try {
     return JSON.parse(text);
   } catch (error) {
-    fail(path, `not valid JSON: ${(error as Error).message}`);
+    fail(path, `not valid JSON${jsonErrorPlace(text, error)}`);
   }
+}
+
+// What can go in an HTTP header: printable ASCII. Anything else would fail in fetch, whose error
+// quotes the whole header value -- the key.
+const KEY_SHAPE = /^[\x21-\x7e]+$/;
+
+/** A key's problem, never quoting it; undefined when it is fine. */
+function keyProblem(key: string): string | undefined {
+  return KEY_SHAPE.test(key) ? undefined : "the API key has spaces, control or non-ASCII characters, which can't go in an HTTP header";
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function onlyKeys(path: string, id: string, value: Record<string, unknown>, allowed: readonly string[]): void {
+  for (const key of Object.keys(value)) if (!allowed.includes(key)) fail(path, `sources.${id}.${key} is not a setting`);
+}
+
+function parseBuiltInSource(path: string, id: BuiltInSource, value: Record<string, unknown>, enabled: boolean): SourceConfig {
+  if ((value.kind ?? id) !== id) fail(path, `sources.${id} is a built-in source; its kind is "${id}"`);
+  onlyKeys(path, id, value, ["enabled", "kind"]);
+  return { id, kind: id, enabled };
+}
+
+function parseMcpSource(path: string, id: string, value: Record<string, unknown>, enabled: boolean): SourceConfig {
+  if (value.kind !== "mcp") fail(path, `sources.${id}: unknown source; a source other than ${BUILT_IN_SOURCES.join(" and ")} needs "kind": "mcp" and "tool"`);
+  if (typeof value.tool !== "string" || value.tool.trim() === "") fail(path, `sources.${id}.tool must name an MCP tool (e.g. "mcp__brave__search")`);
+  onlyKeys(path, id, value, ["enabled", "kind", "tool"]);
+  return { id, kind: "mcp", enabled, tool: value.tool.trim() };
+}
+
 function parseSource(path: string, id: string, value: unknown): SourceConfig {
   if (!isObject(value)) fail(path, `sources.${id} must be an object`);
   const enabled = value.enabled ?? true;
   if (typeof enabled !== "boolean") fail(path, `sources.${id}.enabled must be true or false`);
-  const kind = value.kind ?? (isBuiltIn(id) ? id : undefined);
-  if (isBuiltIn(id)) {
-    if (kind !== id) fail(path, `sources.${id} is a built-in source; its kind is "${id}"`);
-    for (const key of Object.keys(value)) if (key !== "enabled" && key !== "kind") fail(path, `sources.${id}.${key} is not a setting (only "enabled")`);
-    return { id, kind: id, enabled };
-  }
-  if (kind !== "mcp") fail(path, `sources.${id}: unknown source; a source other than ${BUILT_IN_SOURCES.join(" and ")} needs "kind": "mcp" and "tool"`);
-  if (typeof value.tool !== "string" || value.tool.trim() === "") fail(path, `sources.${id}.tool must name an MCP tool (e.g. "mcp__brave__search")`);
-  for (const key of Object.keys(value)) if (!["enabled", "kind", "tool"].includes(key)) fail(path, `sources.${id}.${key} is not a setting`);
-  return { id, kind: "mcp", enabled, tool: value.tool.trim() };
+  return isBuiltIn(id) ? parseBuiltInSource(path, id, value, enabled) : parseMcpSource(path, id, value, enabled);
 }
 
 function parseSources(path: string, value: unknown): SourceConfig[] {
@@ -150,11 +197,15 @@ export function updateWebConfig(epiHome: string, edit: (raw: Record<string, unkn
 
 /** Turns a source on or off in `web.json`. */
 export function setSourceEnabled(epiHome: string, id: string, enabled: boolean): WebConfig {
+  const order = loadWebConfig(epiHome).sources.map((source) => source.id);
   return updateWebConfig(epiHome, (raw) => {
     const sources = isObject(raw.sources) ? raw.sources : {};
-    const current = isObject(sources[id]) ? sources[id] : {};
-    sources[id] = { ...current, enabled };
-    raw.sources = sources;
+    // Every source written in the order now in effect: a built-in left out of the file would
+    // otherwise move behind this one, and the order decides ties in the merge.
+    const next: Record<string, unknown> = {};
+    for (const name of order) next[name] = isObject(sources[name]) ? sources[name] : {};
+    next[id] = { ...(next[id] as Record<string, unknown>), enabled };
+    raw.sources = next;
   });
 }
 
@@ -169,7 +220,9 @@ function readKeys(epiHome: string): StoredKeys {
   for (const [id, entry] of Object.entries(raw)) {
     if (!isBuiltIn(id)) fail(path, `"${id}" is not a built-in source (${BUILT_IN_SOURCES.join(", ")})`);
     if (!isObject(entry) || typeof entry.key !== "string") fail(path, `${id} must be { "key": "..." }`);
-    keys[id] = entry.key;
+    const problem = keyProblem(entry.key.trim());
+    if (problem !== undefined && entry.key.trim() !== "") fail(path, `${id}: ${problem}`);
+    keys[id] = entry.key.trim();
   }
   return keys;
 }
@@ -183,7 +236,11 @@ interface KeyLookup {
 /** A built-in source's key: the environment variable first, then `web-auth.json`. */
 export function sourceKey(epiHome: string, source: BuiltInSource, environment: NodeJS.ProcessEnv = process.env): KeyLookup {
   const fromEnv = environment[keyEnvName(source)];
-  if (fromEnv !== undefined && fromEnv.trim() !== "") return { key: fromEnv.trim(), origin: keyEnvName(source) };
+  if (fromEnv !== undefined && fromEnv.trim() !== "") {
+    const problem = keyProblem(fromEnv.trim());
+    if (problem !== undefined) throw new EpiConfigError(`${keyEnvName(source)}: ${problem}`);
+    return { key: fromEnv.trim(), origin: keyEnvName(source) };
+  }
   const stored = readKeys(epiHome)[source];
   return stored === undefined || stored === "" ? { key: undefined, origin: undefined } : { key: stored, origin: "web-auth.json" };
 }
@@ -192,7 +249,11 @@ export function sourceKey(epiHome: string, source: BuiltInSource, environment: N
 export function storeSourceKey(epiHome: string, source: BuiltInSource, key: string | undefined): void {
   const keys = readKeys(epiHome);
   if (key === undefined) delete keys[source];
-  else keys[source] = key;
+  else {
+    const problem = keyProblem(key.trim());
+    if (problem !== undefined) throw new EpiConfigError(`${source}: ${problem}`);
+    keys[source] = key.trim();
+  }
   const out = Object.fromEntries(Object.entries(keys).map(([id, value]) => [id, { key: value }]));
   writeAtomically(webAuthPath(epiHome), `${JSON.stringify(out, null, 2)}\n`, 0o600);
 }

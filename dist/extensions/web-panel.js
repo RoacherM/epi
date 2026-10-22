@@ -1,4 +1,5 @@
 import { piTui } from "../tui/pi-tui.js";
+import { EpiConfigError } from "../errors.js";
 import { keyEnvName, loadWebConfig, setSourceEnabled, sourceKey, storeSourceKey, webConfigPath } from "../web/config.js";
 import { hybridSearch } from "../web/search.js";
 import { createSource } from "../web/sources.js";
@@ -66,7 +67,8 @@ async function copyModelKey(ctx, epiHome) {
         ctx.ui.notify("The DeepSeek model provider has no API key (/login sets one)", "warning");
         return false;
     }
-    storeSourceKey(epiHome, "deepseek", key);
+    if (!store(ctx, epiHome, "deepseek", key))
+        return false;
     ctx.ui.notify("Copied the DeepSeek model's key for web search; the two are separate from now on", "info");
     return true;
 }
@@ -101,12 +103,24 @@ async function sourceMenu(ctx, options, id) {
         options.onChange();
     }
 }
+/** Stores a key; a key that can't be used is refused with the reason (never the key) instead. */
+function store(ctx, epiHome, source, key) {
+    try {
+        storeSourceKey(epiHome, source, key);
+        return true;
+    }
+    catch (error) {
+        if (!(error instanceof EpiConfigError))
+            throw error;
+        ctx.ui.notify(`Not saved: ${error.message}`, "error");
+        return false;
+    }
+}
 async function keyAction(ctx, epiHome, source, choice) {
     if (choice === "Enter API key" || choice === "Replace API key") {
         const key = await askKey(ctx, source);
-        if (key === undefined)
+        if (key === undefined || !store(ctx, epiHome, source, key))
             return;
-        storeSourceKey(epiHome, source, key);
         if (process.env[keyEnvName(source)])
             ctx.ui.notify(`${keyEnvName(source)} is set and wins over the stored key`, "warning");
         await testSource(ctx, epiHome, source);

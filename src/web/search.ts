@@ -263,6 +263,18 @@ function pageDate(page: FetchedPage, source: string, url: string, seen: SeenDate
   return earlier === undefined ? {} : { date: earlier, from: "an earlier search result" };
 }
 
+function fetchedOutcome(page: FetchedPage, source: string, url: string, runs: SourceRun[], seen: SeenDates, now: number): FetchOutcome {
+  const { date, from } = pageDate(page, source, url, seen, now);
+  let content = page.content.trim();
+  const lines = content === "" ? 0 : content.split("\n").length;
+  if (content.length > FETCH_MAX) content = `${content.slice(0, FETCH_MAX)}\n\n(cut at ${FETCH_MAX} of ${page.content.length} characters)`;
+  const details: FetchDetails = { kind: "fetch", url, title: page.title, today: describeNow(now), runs, from: source, lines, ...(date === undefined ? {} : { date: date.date, ago: ago(date, now), dateFrom: from! }) };
+  const failures = runs.filter((run) => run.error !== undefined).map((run) => `${run.id}: ${run.error}`);
+  const dateLine = date === undefined ? "date unknown" : `${date.date} · ${ago(date, now)}${from === source ? "" : ` (from ${from})`}`;
+  const head = [`Fetched ${details.today} · ${source}${failures.length > 0 ? ` (after ${failures.join("; ")})` : ""}`, `[${dateLine}] ${page.title || url} — ${url}`];
+  return { text: `${head.join("\n")}\n\n${content}`, details, failed: false };
+}
+
 /** Fetches `url` from the sources in order; the next is tried only when one fails, and each failure
  * is written into the result (§4.4: a configured order, not a silent fallback). */
 export async function fetchPage(url: string, fresh: boolean, sources: readonly WebSource[], seen: SeenDates, context: Omit<SearchContext, "sources">): Promise<FetchOutcome> {
@@ -273,16 +285,7 @@ export async function fetchPage(url: string, fresh: boolean, sources: readonly W
     try {
       const page = await runSource(signal, (own) => source.fetch!(url, { fresh }, own));
       runs.push({ id: source.id, ms: Date.now() - started });
-      const { date, from } = pageDate(page, source.id, url, seen, now);
-      let content = page.content.trim();
-      const lines = content === "" ? 0 : content.split("\n").length;
-      const cut = content.length > FETCH_MAX;
-      if (cut) content = `${content.slice(0, FETCH_MAX)}\n\n(cut at ${FETCH_MAX} of ${page.content.length} characters)`;
-      const details: FetchDetails = { kind: "fetch", url, title: page.title, today: describeNow(now), runs, from: source.id, lines, ...(date === undefined ? {} : { date: date.date, ago: ago(date, now), dateFrom: from! }) };
-      const failures = runs.filter((run) => run.error !== undefined).map((run) => `${run.id}: ${run.error}`);
-      const dateLine = date === undefined ? "date unknown" : `${date.date} · ${ago(date, now)}${from === source.id ? "" : ` (from ${from})`}`;
-      const head = [`Fetched ${details.today} · ${source.id}${failures.length > 0 ? ` (after ${failures.join("; ")})` : ""}`, `[${dateLine}] ${page.title || url} — ${url}`];
-      return { text: `${head.join("\n")}\n\n${content}`, details, failed: false };
+      return fetchedOutcome(page, source.id, url, runs, seen, now);
     } catch (error) {
       runs.push({ id: source.id, ms: Date.now() - started, error: reason(error) });
       if (signal.aborted) break;

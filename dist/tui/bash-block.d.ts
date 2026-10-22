@@ -46,6 +46,8 @@ export declare class UserBashBlock implements Component, SpineMember, ClockGated
      * a tail that is never cut; output rows under it; a status row only while running, when
      * cancelled, or when the command failed. */
     render(width: number): string[];
+    /** `$` (`!!` for a `!!cmd`), the rotating x until then (glyphs.ts). */
+    private marker;
     private draw;
     private statusText;
     /** The `… +N lines` row (the call line, then two output rows above it) opens the full output. */
