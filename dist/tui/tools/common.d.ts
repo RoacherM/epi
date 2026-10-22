@@ -47,7 +47,7 @@ export declare function fitWithTail(body: string, tail: string, width: number, e
 export declare function durationBar(theme: Theme, ms: number): string;
 /** What a call row holds: the body (cut to fit), its tail (`· +36 lines`, `· +3 −1`; never cut), the
  * duration bar ("" for none), and the time as a number for a line too narrow for a column. */
-export interface CallRowParts {
+interface CallRowParts {
     body: string;
     tail: string;
     bar: string;
@@ -105,4 +105,5 @@ export declare function shortenCommand(command: string, cwd: string | undefined,
     text: string;
     extraLines: number;
 };
+export {};
 //# sourceMappingURL=common.d.ts.map

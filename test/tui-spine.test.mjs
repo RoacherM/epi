@@ -435,10 +435,11 @@ test("running duration bars move only inside the tip; rows above it hold still a
   assert.ok(before.some((row) => /long build p1 +▏···/.test(row)), JSON.stringify(before.slice(0, 12)));
   assert.deepEqual(changed.filter((index) => index < tipStart), [], `rows outside the tip changed: ${JSON.stringify(changed.map((index) => after[index]))}`);
 
-  // An event (new output) still updates a row outside the tip.
+  // An event (new output) still redraws a block outside the tip; only its clock is held.
   tr.handle({ type: "tool_execution_update", toolName: "bash", toolCallId: "p1", args: { command: "long build p1" }, partialResult: { content: [{ type: "text", text: "step 1" }] } });
   const updated = tr.root.render(120).map(strip);
-  assert.ok(updated.some((row) => /long build p1 +██▎·/.test(row)), "the event redraws p1 with its time so far");
+  assert.ok(updated.some((row) => row.includes("step 1")), "the new output shows");
+  assert.ok(updated.some((row) => /long build p1 +▏···/.test(row)), "the bar still reads the time it last showed in the tip");
 
   // pi-tui's main-screen renderer never needs a full redraw while only the clock runs.
   const screen = new piTui.TuiMainScreen({ columns: 120, rows: 12, write() {}, hideCursor() {}, showCursor() {} }, false);
@@ -450,4 +451,46 @@ test("running duration bars move only inside the tip; rows above it hold still a
     screen.renderNow();
   }
   assert.equal(screen.fullRedraws, redraws);
+});
+
+// Review 2 (.dev/milestones/0.1.23/review-2.md): the tip is judged by the call row (where the bar is),
+// not by the block; only the clock is held, so an event outside the tip still redraws.
+for (const kind of ["tool", "user bash"]) {
+  test(`${kind}: a call row outside the tip holds still even when its output reaches into the tip`, async (t) => {
+    let now = 100_000;
+    t.mock.method(Date, "now", () => now);
+    const tr = transcript();
+    tr.handle({ type: "agent_start" });
+    if (kind === "tool") {
+      tr.handle({ type: "tool_execution_start", toolName: "bash", toolCallId: "b", args: { command: "straddling build" } });
+      tr.handle({ type: "tool_execution_update", toolName: "bash", toolCallId: "b", args: { command: "straddling build" }, partialResult: { content: [{ type: "text", text: "a\nb\nc" }] } });
+    } else {
+      const { UserBashBlock } = await import("../dist/tui/bash-block.js");
+      const block = new UserBashBlock(theme, "straddling build", false);
+      block.appendOutput("a\nb\nc");
+      tr.addBlock(block);
+    }
+    const { LinesComponent } = await import("../dist/tui/tools/common.js");
+    tr.addBlock(new LinesComponent(["f1", "f2", "f3", "f4", "f5"]));
+    const before = tr.root.render(120).map(strip);
+    now += 2_000;
+    const after = tr.root.render(120).map(strip);
+    assert.ok(before.some((row) => /straddling build +▏···/.test(row)), JSON.stringify(before));
+    assert.deepEqual(after.slice(0, -8), before.slice(0, -8));
+  });
+}
+
+test("a pending call outside the tip still redraws when its arguments change (only the clock is held)", (t) => {
+  t.mock.method(Date, "now", () => 100_000);
+  const tr = transcript();
+  tr.handle({ type: "agent_start" });
+  const content = Array.from({ length: 12 }, (_, index) => call("bash", `p${index}`, { command: index === 0 ? "old command" : `pending ${index}` }));
+  const message = { ...assistant(content), stopReason: "toolUse" };
+  tr.handle({ type: "message_start", message: { ...message, content: [] } });
+  tr.handle({ type: "message_update", message });
+  tr.root.render(120);
+  const newer = { ...message, content: content.map((part, index) => (index === 0 ? { ...part, arguments: { command: "NEW COMMAND" } } : part)) };
+  tr.handle({ type: "message_update", message: newer });
+  const rows = tr.root.render(120).map(strip);
+  assert.ok(rows.some((row) => row.includes("NEW COMMAND")), JSON.stringify(rows.slice(0, 4)));
 });

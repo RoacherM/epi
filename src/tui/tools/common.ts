@@ -6,6 +6,7 @@ import type { Component } from "@earendil-works/pi-tui";
 
 import type { InspectTarget } from "../buffer/inspector.js";
 import { formatDuration } from "../chrome.js";
+import { displayNow } from "../clock.js";
 import { DEFAULT_MEASURE } from "../measure.js";
 import { piTui } from "../pi-tui.js";
 import type { ToolRenderContext } from "./types.js";
@@ -126,7 +127,7 @@ export function durationBar(theme: Theme, ms: number): string {
 
 /** What a call row holds: the body (cut to fit), its tail (`· +36 lines`, `· +3 −1`; never cut), the
  * duration bar ("" for none), and the time as a number for a line too narrow for a column. */
-export interface CallRowParts {
+interface CallRowParts {
   body: string;
   tail: string;
   bar: string;
@@ -189,7 +190,7 @@ export class CallLine implements Component {
     if (isError) return undefined;
     if (!isPartial) return durationMs;
     const startedAt = state?.startedAt;
-    return typeof startedAt === "number" ? Date.now() - startedAt : undefined;
+    return typeof startedAt === "number" ? Math.max(0, displayNow() - startedAt) : undefined;
   }
 
   /** The bar for the time so far, with the exact time after it when expanded (Ctrl+O). */

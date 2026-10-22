@@ -9,6 +9,7 @@ import type { Theme, ToolExecutionOptions } from "@earendil-works/pi-coding-agen
 import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import type { Component, Container, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
+import { drawAt } from "../clock.js";
 import { breathe, motionTime } from "../motion.js";
 import { piTui } from "../pi-tui.js";
 import { type ChildRows, dispatchToRows } from "../rows.js";
@@ -66,8 +67,8 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember, Cl
   /** The final result's run time, for the group row's bar. */
   durationMs: number | undefined;
   clockLive = true;
-  // The rows last drawn while running, kept for frames when the clock may not move them.
-  private frozen: { width: number; lines: string[] } | undefined;
+  // The time this block last showed with a live clock; it is drawn at that time while it may not move.
+  private shownAt: number | undefined;
   private started = false;
 
   constructor(
@@ -85,22 +86,17 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember, Cl
 
   override markExecutionStarted(): void {
     this.started = true;
-    this.frozen = undefined;
     super.markExecutionStarted();
   }
 
-  /** Running and outside the transcript's tip: the rows as last drawn, so the duration bar holds
-   * still (spine.ts ClockGated); anything that happened since (output, the result) already cleared them. */
+  /** Running with its call row outside the transcript's tip: drawn at the time it last showed inside
+   * it, so the duration bar holds still while the rest redraws as usual (spine.ts ClockGated). */
   override render(width: number): string[] {
-    if (this.status === "running" && !this.clockLive && this.frozen?.width === width) return this.frozen.lines;
-    const lines = super.render(width);
-    this.frozen = this.status === "running" ? { width, lines } : undefined;
-    return lines;
-  }
-
-  override invalidate(): void {
-    this.frozen = undefined;
-    super.invalidate();
+    if (this.clockLive || this.status !== "running") {
+      this.shownAt = Date.now();
+      return super.render(width);
+    }
+    return drawAt(this.shownAt, () => super.render(width));
   }
 
   override updateResult(
@@ -108,7 +104,6 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember, Cl
     isPartial = false,
   ): void {
     super.updateResult(result, isPartial);
-    this.frozen = undefined;
     if (!isPartial) this.durationMs = result.durationMs;
     if (isPartial) {
       this.status = "running";
@@ -125,7 +120,6 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember, Cl
 
   override setExpanded(expanded: boolean): void {
     this.expandedFlag = expanded;
-    this.frozen = undefined;
     super.setExpanded(expanded);
   }
 
@@ -255,8 +249,9 @@ export class GroupedMessages implements Component {
   // identifies "this run" for as long as it exists.
   private readonly unfolded = new Set<ToolEntry>();
   private readonly revealed = new Set<ToolEntry>();
-  // Last frame's blocks, and those with a row in the transcript's last TIP_ROWS rows: a clock-driven
-  // block may move only there (spine.ts ClockGated). A block not drawn last frame counts as live.
+  // Last frame's blocks, and those whose clock row (first row with text) is in the transcript's last
+  // TIP_ROWS rows: only there may a clock-driven block move (spine.ts ClockGated). A block not drawn
+  // last frame counts as live.
   private drawn = new Set<Component>();
   private inTip = new Set<Component>();
 
@@ -339,16 +334,18 @@ export class GroupedMessages implements Component {
     return placed.flatMap((block) => block.lines);
   }
 
-  /** Which blocks this frame drew, and which of them reach into the last TIP_ROWS rows. */
+  /** Which blocks this frame drew, and which have their clock row -- the first row with text, where
+   * a call's duration bar is -- in the last TIP_ROWS rows. */
   private noteTip(placed: readonly Placed[]): void {
     const total = placed.reduce((rows, block) => rows + block.lines.length, 0);
     this.drawn = new Set();
     this.inTip = new Set();
-    let end = 0;
+    let start = 0;
     for (const block of placed) {
-      end += block.lines.length;
+      const clockRow = start + Math.max(0, block.lines.findIndex((line) => line.trim() !== ""));
+      start += block.lines.length;
       this.drawn.add(block.component);
-      if (end > total - TIP_ROWS) this.inTip.add(block.component);
+      if (clockRow >= total - TIP_ROWS) this.inTip.add(block.component);
     }
   }
 

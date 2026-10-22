@@ -1,6 +1,7 @@
 // Pieces shared by the built-in tool renderers, the tool block fallback and the `!cmd` block.
 import { homedir } from "node:os";
 import { formatDuration } from "../chrome.js";
+import { displayNow } from "../clock.js";
 import { DEFAULT_MEASURE } from "../measure.js";
 import { piTui } from "../pi-tui.js";
 /**
@@ -160,7 +161,7 @@ export class CallLine {
         if (!isPartial)
             return durationMs;
         const startedAt = state?.startedAt;
-        return typeof startedAt === "number" ? Date.now() - startedAt : undefined;
+        return typeof startedAt === "number" ? Math.max(0, displayNow() - startedAt) : undefined;
     }
     /** The bar for the time so far, with the exact time after it when expanded (Ctrl+O). */
     bar() {

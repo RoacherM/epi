@@ -27,14 +27,13 @@ export declare class ToolEntry extends ToolExecutionComponent implements SpineMe
     /** The final result's run time, for the group row's bar. */
     durationMs: number | undefined;
     clockLive: boolean;
-    private frozen;
+    private shownAt;
     private started;
     constructor(toolName: string, toolCallId: string, args: unknown, renderers: ToolRenderers | undefined, hostUi: TUI, cwd: string, groupKind: GroupKind | undefined, options?: ToolExecutionOptions);
     markExecutionStarted(): void;
-    /** Running and outside the transcript's tip: the rows as last drawn, so the duration bar holds
-     * still (spine.ts ClockGated); anything that happened since (output, the result) already cleared them. */
+    /** Running with its call row outside the transcript's tip: drawn at the time it last showed inside
+     * it, so the duration bar holds still while the rest redraws as usual (spine.ts ClockGated). */
     render(width: number): string[];
-    invalidate(): void;
     updateResult(result: {
         content: Array<{
             type: string;
@@ -99,7 +98,8 @@ export declare class GroupedMessages implements Component {
     /** Cleared on `Transcript.reset()`: old runs' first members no longer resolve to anything on screen. */
     dispose(): void;
     render(width: number): string[];
-    /** Which blocks this frame drew, and which of them reach into the last TIP_ROWS rows. */
+    /** Which blocks this frame drew, and which have their clock row -- the first row with text, where
+     * a call's duration bar is -- in the last TIP_ROWS rows. */
     private noteTip;
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
     /**

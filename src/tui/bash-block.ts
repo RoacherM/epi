@@ -8,6 +8,7 @@ import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-wo
 
 import type { InspectTarget } from "./buffer/inspector.js";
 import type { CommandHost } from "./command-host.js";
+import { displayNow, drawAt } from "./clock.js";
 import { errorText } from "./errors.js";
 import { TURN_COLUMNS } from "./measure.js";
 import { piTui } from "./pi-tui.js";
@@ -40,8 +41,8 @@ export function truncateBashOutput(lines: string[]): string[] {
 export class UserBashBlock implements Component, SpineMember, ClockGated {
   readonly spineRole = "bash";
   clockLive = true;
-  // The rows last drawn while running, for frames when the clock may not move them (spine.ts ClockGated).
-  private frozen: { width: number; rows: string[] } | undefined;
+  // The time this block last showed with a live clock (spine.ts ClockGated).
+  private shownAt: number | undefined;
   private outputLines: string[] = [];
   private status: Status = "running";
   private exitCode: number | undefined;
@@ -73,7 +74,6 @@ export class UserBashBlock implements Component, SpineMember, ClockGated {
     // Append to the last (possibly incomplete) line, same as Pi's BashExecutionComponent.
     this.outputLines[this.outputLines.length - 1] += parts[0] ?? "";
     this.outputLines.push(...parts.slice(1));
-    this.frozen = undefined;
   }
 
   get spineRunning(): boolean {
@@ -84,7 +84,6 @@ export class UserBashBlock implements Component, SpineMember, ClockGated {
     this.exitCode = exitCode;
     this.status = cancelled ? "cancelled" : exitCode === undefined || exitCode !== 0 ? "error" : "done";
     if (this.startedAt !== undefined) this.durationMs = Date.now() - this.startedAt;
-    this.frozen = undefined;
   }
 
   /** The output as lines, without the single trailing newline most commands leave. */
@@ -98,10 +97,11 @@ export class UserBashBlock implements Component, SpineMember, ClockGated {
    * cancelled, or when the command failed. */
   render(width: number): string[] {
     const running = this.status === "running";
-    if (running && !this.clockLive && this.frozen?.width === width) return this.frozen.rows;
-    const rows = this.draw(width, running);
-    this.frozen = running ? { width, rows } : undefined;
-    return rows;
+    if (this.clockLive || !running) {
+      this.shownAt = Date.now();
+      return this.draw(width, running);
+    }
+    return drawAt(this.shownAt, () => this.draw(width, running));
   }
 
   private draw(width: number, running: boolean): string[] {
@@ -110,7 +110,7 @@ export class UserBashBlock implements Component, SpineMember, ClockGated {
     const extra = extraLines > 0 ? this.theme.fg("dim", ` · +${extraLines} lines`) : "";
     // The same column and bar as a model's call row (docs/tui-one-column-design.md §2.2): the time so
     // far while it runs, the final time once done; a failure or a cancel draws none.
-    const ms = this.status === "done" ? this.durationMs : running && this.startedAt !== undefined ? Date.now() - this.startedAt : undefined;
+    const ms = this.status === "done" ? this.durationMs : running && this.startedAt !== undefined ? Math.max(0, displayNow() - this.startedAt) : undefined;
     const bar = ms === undefined ? "" : durationBar(this.theme, ms);
     const fallback = this.status === "done" && ms !== undefined ? `  ${this.theme.fg("dim", formatToolDuration(ms))}` : "";
     const callPrefix = `${" ".repeat(CALL_PREFIX)}${marker} `;
@@ -154,9 +154,7 @@ export class UserBashBlock implements Component, SpineMember, ClockGated {
     return { handled: true };
   }
 
-  invalidate(): void {
-    this.frozen = undefined;
-  }
+  invalidate(): void {}
 }
 
 /**

@@ -22,7 +22,7 @@ export declare class UserBashBlock implements Component, SpineMember, ClockGated
     private readonly onInspect?;
     readonly spineRole = "bash";
     clockLive: boolean;
-    private frozen;
+    private shownAt;
     private outputLines;
     private status;
     private exitCode;
