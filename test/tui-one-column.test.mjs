@@ -23,9 +23,11 @@ const WIDTHS = [40, 80, 120, 230, 300];
 const context = (overrides = {}) => ({ state: {}, isError: false, isPartial: false, executionStarted: true, expanded: false, ...overrides });
 
 test("the bar: one decade per cell from 10ms, eighths inside a cell, the time after a full bar", () => {
-  assert.equal(bar(1), "▏···", "under 10ms: the thinnest mark");
-  assert.equal(bar(9), "▏···");
-  assert.equal(bar(10), "▏···");
+  // Under 10ms nothing is filled: a ▏ there joined the next fast call's into a vertical line.
+  assert.equal(bar(0), "····", "under 10ms: all but instant");
+  assert.equal(bar(1), "····");
+  assert.equal(bar(9), "····");
+  assert.equal(bar(10), "▏···", "from 10ms the thinnest mark");
   assert.equal(bar(30), "▌···");
   assert.equal(bar(100), "█···", "100ms fills the first cell");
   assert.equal(bar(1000), "██··");

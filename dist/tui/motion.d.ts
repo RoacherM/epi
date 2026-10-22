@@ -26,8 +26,6 @@ export declare function pulseRule(theme: MotionTheme, width: number, t: number, 
 export declare function railBlend(theme: MotionTheme, row: number, t: number): Blend;
 /** A running rail's `row`: `┃` in `railBlend`'s color. */
 export declare function railGlyph(theme: MotionTheme, row: number, t: number): string;
-/** A glyph breathing between `from` and `to` about once a second (a running group's `◈`). */
-export declare function breathe(theme: MotionTheme, from: ThemeColor, to: ThemeColor, t: number, text: string): string;
 /** Seconds on the shared motion clock. One clock keeps every rail and spinner in step. */
 export declare function motionTime(now?: number): number;
 /**

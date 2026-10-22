@@ -6,6 +6,7 @@ import { basename, sep } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorComponent, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
+import { GLYPHS, spinFrame } from "./glyphs.js";
 import { TURN_COLUMNS } from "./measure.js";
 import { imageLabelNumbers } from "./paste-chips.js";
 import { piTui } from "./pi-tui.js";
@@ -209,7 +210,7 @@ export class UserMessageBlock implements Component {
     const source = this.expanded ? this.text : collapseUserText(this.text);
     const lines = piTui.wrapTextWithAnsi(source, bodyWidth);
     const rows = lines.map((text, index) => {
-      const prefix = index === 0 ? `${this.theme.fg("muted", "❯")} ` : "  ";
+      const prefix = index === 0 ? `${this.theme.fg("muted", GLYPHS.user)} ` : "  ";
       const left = `  ${prefix}${this.theme.fg("userMessageText", text)}`;
       return index === 0 ? spread(left, `${clock}  `, width) : fit(left, width);
     });
@@ -221,14 +222,13 @@ export class UserMessageBlock implements Component {
 
 // ── turn status row ───────────────────────────────────────────────────────────
 
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
-// Spinner frame interval, also for an extension's custom frames that don't set one.
+// Frame interval for an extension's custom frames that don't set one.
 const SPINNER_MS = 133;
 // docs/tui-motion-design.md §3.2: one tick for the status row and every running rail it redraws.
 const MOTION_TICK_MS = 80;
 
 /** Pi's WorkingIndicatorOptions (ui.setWorkingIndicator): custom frames drawn verbatim, `[]` hides
- * the indicator. Undefined means Epi's built-in braille spinner. */
+ * the indicator. Undefined means Epi's built-in rotating x (docs/tui-glyphs-design.md §7). */
 export interface WorkingIndicator {
   frames?: string[];
   intervalMs?: number;
@@ -245,7 +245,7 @@ export interface TurnState {
   estimated: boolean;
 }
 
-/** `⠧ Waiting for response… 2.4s ····· 2.4s ⇣2.3k [stop]`; zero rows when idle. */
+/** `× Waiting for response… 2.4s ····· 2.4s ⇣2.3k [stop]`; zero rows when idle. */
 export class TurnStatus implements Component {
   private timer: NodeJS.Timeout | undefined;
   private indicator: WorkingIndicator | undefined;
@@ -269,7 +269,7 @@ export class TurnStatus implements Component {
       const interval = this.indicator?.intervalMs !== undefined && this.indicator.intervalMs > 0 ? this.indicator.intervalMs : SPINNER_MS;
       return `${custom[Math.floor(now / interval) % custom.length] ?? ""} `;
     }
-    return `${this.theme.fg("accent", SPINNER[Math.floor(now / SPINNER_MS) % SPINNER.length] ?? "")} `;
+    return `${this.theme.fg("accent", spinFrame(now))} `;
   }
 
   render(width: number): string[] {

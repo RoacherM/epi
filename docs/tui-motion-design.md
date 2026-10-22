@@ -29,7 +29,7 @@
 | **M2** | **启动页右侧分割线** | `src/startup-page.ts` (`assemblyRows`) | `ASSEMBLY` / `COMPOSITION` / `CONFIGURE` 之间为静态 `─` | 改为 **细线双向流光分割线（`renderPulseRule`）**：保持字符几何为 `─`/`━`（不使用会在部分字体下鼓包的连续 `●`），用 `borderMuted` → `accent` / `syntaxFunction` 的颜色亮度高斯波表现呼吸感 |
 | **M3** | **回合等待状态行 (`TurnStatus`)** | `src/tui/chrome.ts`<br>`src/tui/ext-host.ts` | 单字符盲文 `SPINNER = ["⠋", …]`（133ms） | 升级为 6 列宽的微缩动效（默认 `comet`：`···•●` 带高斯拖尾与紫青渐变；可选 `wave` / `braille`）；同时打通 `ext-host.ts:57` 的 `ui.setWorkingIndicator`，允许扩展替换或切换指示器样式 |
 | **M4** | **流式 Thinking 与运行中 Tool / Bash 竖轨** | `src/tui/assistant-block.ts`<br>`src/tui/tools/block.ts`<br>`src/tui/bash-block.ts` | 运行中第 0 列为纯色静态 `theme.fg("accent", "┃")` | 当块处于 `active / running` 状态时，第 0 列渲染自上而下滑动的高光脉冲轨（`│` ↔ `┃`，颜色在 `accent` 与 `thinkingHigh` 间按行高斯插值）；非流式或只有 1 行时退化为单色流光呼吸 |
-| **M5** | **连续只读工具合并行 (`Reading…`)** | `src/tui/tools/group.ts` | 运行中显示静态 `┃  ◈ Reading…` | 运行中时左侧竖轨接入 M4 流光轨，`◈` 随帧脉冲呼吸 |
+| **M5** | **连续只读工具合并行 (`Reading…`)** | `src/tui/tools/group.ts` | 运行中显示静态 `┃  ◈ Reading…` | 运行中时左侧竖轨接入 M4 流光轨，`◈` 随帧脉冲呼吸（0.1.24 起改为旋转的 x，见 [tui-glyphs-design.md](tui-glyphs-design.md)） |
 | **M6** | **完成闪烁过渡 (`Completion Flash`)** | `src/tui/tools/flash.ts` | 结束时硬切纯绿/纯红 `┃` 400ms，到期瞬间消失 | 改为 **400ms 指数衰减呼吸（Ease-out Glow）**：前 120ms 高亮峰值（`success` / `error`），随后向 `borderMuted` 平滑衰减直至消隐 |
 
 ### Phase 2：二级面板与扩展卡片层（后续按需接入）
@@ -113,7 +113,7 @@
 
 | 项 | 实现 | 与上文的差异及理由 |
 |---|---|---|
-| `src/tui/motion.ts` | `blend`/`blendFg`（用 `Theme.colors` + pi-tui `mixColors`/`foregroundAnsi`，跟随 Theme 的 truecolor/256 色模式）、`paintRuns`、`pulseRule`、`railGlyph`、`breathe`、`FrameTicker` | 没做 `Grid`/Z-buffer/`restyleLook`：只服务 3D Hero 与 5 种 Look，而它们还没有选择入口（设置项或命令），先不加无人调用的代码 |
+| `src/tui/motion.ts` | `blend`/`blendFg`（用 `Theme.colors` + pi-tui `mixColors`/`foregroundAnsi`，跟随 Theme 的 truecolor/256 色模式）、`paintRuns`、`pulseRule`、`railGlyph`、`FrameTicker`（`breathe` 在 0.1.24 去掉：`◈`、`∴` 改成旋转的 x，见 [tui-glyphs-design.md](tui-glyphs-design.md)） | 没做 `Grid`/Z-buffer/`restyleLook`：只服务 3D Hero 与 5 种 Look，而它们还没有选择入口（设置项或命令），先不加无人调用的代码 |
 | M1/M2 欢迎页 | 双波流光 Logo + 两条错相位脉冲分割线，24 FPS（`FrameTicker`，下一拍未被 render 即自停） | **只播一段 4s 开场**（3s 全强度 + 1s ease-out），之后静止在静态帧、定时器停止；`/new`、`/resume`、`/reload` 新建 header 时重播。实测常驻流光在空闲欢迎页约 90–130 KB/s 终端输出，违反 §1「不增加空闲开销」，也让依赖「画面静止」的测试失效。要改回常驻，改 `welcomeMotionStrength` 即可 |
 | M3 状态行 | 保留原有单字符盲文 spinner（`⠋⠙⠹…`，accent，133ms 一帧），所有宽度相同；`ui.setWorkingIndicator` 已打通（自定义帧原样绘制、`[]` 隐藏、`undefined` 恢复），会话失效时复位 | **不做 comet 等新指示器**：用户实测 6 列 comet 后认为从左到右扫动"不够优雅克制"，试过原地呼吸的 `●` 后，确认更喜欢原来的盲文 spinner（2026-10-21）。状态行右侧（耗时、tokens、速度、`[stop]`）和输入框右下的模型标签保持静态文字。刷新节拍由 133ms 改为 80ms（驱动运行中竖轨），spinner 帧仍按 133ms 取；扩展自定义 `intervalMs` 按 80ms 节拍取整 |
 | M4/M5 运行中竖轨 | 工具块、`!cmd` 块、流式 Thinking、只读分组：`┃` 颜色随脉冲沿行下移（accent ↔ thinkingHigh），分组 `◈` 呼吸；共用 TurnStatus 80ms 节拍，不另开定时器 | **字形固定为 `┃`，不在 `│`/`┃` 间切换**：e2e 测试与用户都以「`┃` 消失」判断块已结束；没有活动回合时（单独的 `!cmd`）竖轨不动画 |

@@ -26,13 +26,16 @@ export declare class ToolEntry extends ToolExecutionComponent implements SpineMe
     readonly flash: FlashState;
     /** The final result's run time, for the group row's bar. */
     durationMs: number | undefined;
+    /** When it finished, if it was seen running: the group row's marker shakes then (glyphs.ts). */
+    endedAt: number | undefined;
     clockLive: boolean;
     private shownAt;
     private started;
     constructor(toolName: string, toolCallId: string, args: unknown, renderers: ToolRenderers | undefined, hostUi: TUI, cwd: string, groupKind: GroupKind | undefined, options?: ToolExecutionOptions);
     markExecutionStarted(): void;
-    /** Running with its call row outside the transcript's tip: drawn at the time it last showed inside
-     * it, so the duration bar holds still while the rest redraws as usual (spine.ts ClockGated). */
+    /** With its call row outside the transcript's tip: drawn at the time it last showed inside it, so
+     * the duration bar and the rotating marker hold still and a landing shake doesn't play, while the
+     * rest redraws as usual (spine.ts ClockGated). */
     render(width: number): string[];
     updateResult(result: {
         content: Array<{
@@ -57,11 +60,14 @@ interface MemberLike {
     status: Status;
     /** The final run time, when the result recorded one. */
     durationMs?: number | undefined;
+    /** When it finished, if it was seen running. */
+    endedAt?: number | undefined;
 }
 /** Pure text+layout for the collapsed group line, split out from `GroupedMessages` so widths
- * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the `◈`
- * breathes (docs/tui-motion-design.md M5), read at `t` seconds; the turn spine beside it pulses. */
-export declare function verbGroupLine(members: MemberLike[], theme: Theme, width: number, t?: number): string;
+ * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the marker is
+ * the rotating x, read at `now`; once all settled it shakes twice and becomes `◈`
+ * (docs/tui-glyphs-design.md §3). The turn spine beside it pulses. */
+export declare function verbGroupLine(members: MemberLike[], theme: Theme, width: number, now?: number): string;
 /**
  * Wraps `Transcript`'s `messages` container: folds consecutive collapsed built-in read-only tool
  * blocks into one line at render time. Swapped in for `this.messages` as `root`'s child; `add()`
@@ -89,6 +95,11 @@ export declare class GroupedMessages implements Component {
     private readonly revealed;
     private drawn;
     private inTip;
+    /** A folded run's row has no block of its own: it is tracked by its first member, and drawn at the
+     * time it last showed in the tip while outside it, like a ClockGated block. */
+    private readonly runShownAt;
+    /** Folded runs drawn while a member ran: only those shake as they settle (glyphs.ts). */
+    private readonly runShownRunning;
     constructor(messages: Container, tui: TUI, theme: Theme, 
     /** A turn is in progress: its spine is live (src/tui/spine.ts). */
     turnRunning?: () => boolean);

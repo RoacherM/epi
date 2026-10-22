@@ -1,6 +1,6 @@
 import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
-import { drawAt } from "../clock.js";
-import { breathe, motionTime } from "../motion.js";
+import { displayNow, drawAt } from "../clock.js";
+import { GLYPHS, paintMarker } from "../glyphs.js";
 import { piTui } from "../pi-tui.js";
 import { dispatchToRows } from "../rows.js";
 import { isClockGated, paintSpine, spineMember, TIP_ROWS } from "../spine.js";
@@ -48,6 +48,8 @@ export class ToolEntry extends ToolExecutionComponent {
     flash = createFlashState();
     /** The final result's run time, for the group row's bar. */
     durationMs;
+    /** When it finished, if it was seen running: the group row's marker shakes then (glyphs.ts). */
+    endedAt;
     clockLive = true;
     // The time this block last showed with a live clock; it is drawn at that time while it may not move.
     shownAt;
@@ -61,10 +63,11 @@ export class ToolEntry extends ToolExecutionComponent {
         this.started = true;
         super.markExecutionStarted();
     }
-    /** Running with its call row outside the transcript's tip: drawn at the time it last showed inside
-     * it, so the duration bar holds still while the rest redraws as usual (spine.ts ClockGated). */
+    /** With its call row outside the transcript's tip: drawn at the time it last showed inside it, so
+     * the duration bar and the rotating marker hold still and a landing shake doesn't play, while the
+     * rest redraws as usual (spine.ts ClockGated). */
     render(width) {
-        if (this.clockLive || this.status !== "running") {
+        if (this.clockLive) {
             this.shownAt = Date.now();
             return super.render(width);
         }
@@ -83,6 +86,7 @@ export class ToolEntry extends ToolExecutionComponent {
         // Gated on `started`: replay (addFinishedMessage -> syncToolCalls -> a "toolResult" message
         // attaching the already-known result) never called markExecutionStarted, so it never flashes.
         if (wasRunning && this.started) {
+            this.endedAt = Date.now();
             startFlash(this.flash, this.status === "error" ? "error" : "success", () => this.hostUi.requestRender());
         }
     }
@@ -139,9 +143,10 @@ function summarize(members) {
     return { running, completed, failed, breakdown };
 }
 /** Pure text+layout for the collapsed group line, split out from `GroupedMessages` so widths
- * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the `◈`
- * breathes (docs/tui-motion-design.md M5), read at `t` seconds; the turn spine beside it pulses. */
-export function verbGroupLine(members, theme, width, t = motionTime()) {
+ * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the marker is
+ * the rotating x, read at `now`; once all settled it shakes twice and becomes `◈`
+ * (docs/tui-glyphs-design.md §3). The turn spine beside it pulses. */
+export function verbGroupLine(members, theme, width, now = displayNow()) {
     const { running, failed, completed, breakdown } = summarize(members);
     const anyRunning = running > 0;
     const anyFailed = failed > 0;
@@ -149,9 +154,15 @@ export function verbGroupLine(members, theme, width, t = motionTime()) {
     if (anyFailed)
         text += ` ${theme.fg("error", `· ${failed} failed`)}`;
     const lead = " ".repeat(PREFIX);
-    const bullet = anyRunning
-        ? breathe(theme, "accent", "thinkingHigh", t, "◈ ")
-        : theme.fg(anyFailed ? "error" : "muted", "◈ ");
+    const ended = members.map((member) => member.endedAt).filter((at) => at !== undefined);
+    const bullet = `${paintMarker(theme, {
+        state: anyRunning ? "running" : anyFailed ? "error" : "done",
+        glyph: GLYPHS.group,
+        color: "muted",
+        // One failed member doesn't fail the others: the row keeps its own glyph, in red.
+        failedGlyph: GLYPHS.group,
+        endedAt: ended.length > 0 ? Math.max(...ended) : undefined,
+    }, now)} `;
     const contentWidth = Math.max(1, width - PREFIX - 2);
     // The group's bar is the sum of its members' times, in the same column as single calls
     // (docs/tui-one-column-design.md §2.2); none while one runs or when a time is missing.
@@ -215,6 +226,11 @@ export class GroupedMessages {
     // last frame counts as live.
     drawn = new Set();
     inTip = new Set();
+    /** A folded run's row has no block of its own: it is tracked by its first member, and drawn at the
+     * time it last showed in the tip while outside it, like a ClockGated block. */
+    runShownAt = new WeakMap();
+    /** Folded runs drawn while a member ran: only those shake as they settle (glyphs.ts). */
+    runShownRunning = new WeakSet();
     constructor(messages, tui, theme, 
     /** A turn is in progress: its spine is live (src/tui/spine.ts). */
     turnRunning = () => false) {
@@ -302,11 +318,13 @@ export class GroupedMessages {
         this.inTip = new Set();
         let start = 0;
         for (const block of placed) {
-            const clockRow = start + Math.max(0, block.lines.findIndex((line) => line.trim() !== ""));
+            const own = isClockGated(block.component) ? block.component.clockRow : undefined;
+            const clockRow = start + (own ?? Math.max(0, block.lines.findIndex((line) => line.trim() !== "")));
             start += block.lines.length;
-            this.drawn.add(block.component);
+            const key = block.clockKey ?? block.component;
+            this.drawn.add(key);
             if (clockRow >= total - TIP_ROWS)
-                this.inTip.add(block.component);
+                this.inTip.add(key);
         }
     }
     handleMouse(event) {
@@ -360,9 +378,17 @@ export class GroupedMessages {
             return (flashing.find((member) => member.flash.tone === "error") ?? flashing[0])?.flash;
         };
         const unfold = clickTarget(() => { this.unfolded.add(anchor); this.tui.requestRender(); });
+        const live = !this.drawn.has(anchor) || this.inTip.has(anchor);
+        if (live)
+            this.runShownAt.set(anchor, Date.now());
+        if (running)
+            this.runShownRunning.add(anchor);
+        const shown = this.runShownRunning.has(anchor) ? members : members.map(({ groupKind, status, durationMs }) => ({ groupKind, status, durationMs }));
+        const line = live ? verbGroupLine(shown, this.theme, width) : drawAt(this.runShownAt.get(anchor), () => verbGroupLine(shown, this.theme, width));
         return {
             component: unfold,
-            lines: ["", verbGroupLine(members, this.theme, width)],
+            clockKey: anchor,
+            lines: ["", line],
             skipped: 0,
             member: { spineRole: "tool", spineRunning: running, spineFlash: flash },
             toolish: true,

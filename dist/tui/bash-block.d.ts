@@ -20,6 +20,7 @@ export declare class UserBashBlock implements Component, SpineMember, ClockGated
     private readonly command;
     private readonly excludeFromContext;
     private readonly onInspect?;
+    private readonly requestRender?;
     readonly spineRole = "bash";
     clockLive: boolean;
     private shownAt;
@@ -29,7 +30,11 @@ export declare class UserBashBlock implements Component, SpineMember, ClockGated
     /** Live runs only: a replayed `bashExecution` message has no duration, so it shows none. */
     private startedAt;
     private durationMs;
-    constructor(theme: Theme, command: string, excludeFromContext: boolean, onInspect?: ((target: InspectTarget) => void) | undefined);
+    /** When a run drawn while it ran ended: its marker shakes then (glyphs.ts). */
+    private endedAt;
+    private shownRunning;
+    private readonly phase;
+    constructor(theme: Theme, command: string, excludeFromContext: boolean, onInspect?: ((target: InspectTarget) => void) | undefined, requestRender?: (() => void) | undefined);
     /** Replays a finished `bashExecution` session message after /new, /resume or /reload. */
     static fromMessage(theme: Theme, message: FinishedBashMessage, onInspect?: (target: InspectTarget) => void): UserBashBlock;
     appendOutput(chunk: string): void;

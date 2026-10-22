@@ -1,3 +1,4 @@
+import { GLYPHS, spinFrame, TICK_MS } from "../../tui/glyphs.js";
 import { piTui } from "../../tui/pi-tui.js";
 import { pad } from "../preview/draw.js";
 import { scrollbar } from "../../tui/buffer/scrollbar.js";
@@ -8,7 +9,18 @@ import { foldTimeline } from "./fold.js";
 import { projectTrace } from "./project.js";
 const { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } = piTui;
 const SECTIONS = ["Summary", "Payload", "Result", "Schema", "Timing"];
-const KIND_GLYPH = { model: "◆", tool: "⚙", user: "»", event: "·", unknown: "?" };
+// The transcript's glyphs (docs/tui-glyphs-design.md §4): a step looks like what it is in the chat.
+const KIND_GLYPH = { model: GLYPHS.model, tool: GLYPHS.tool, user: GLYPHS.user, event: GLYPHS.event, unknown: "?" };
+/** A step's icon: the rotating x while it runs, a `×` once it failed, else its kind (`$` for bash). */
+function stepGlyph(step, now) {
+    if (step.status === "running")
+        return spinFrame(now);
+    if (step.status === "error" || step.status === "aborted")
+        return "×";
+    if (step.kind === "tool" && step.tool?.name === "bash")
+        return GLYPHS.shell;
+    return KIND_GLYPH[step.kind] ?? "?";
+}
 /** A frame with the list and, at ≥120 columns, the inspector side by side. */
 export class TracePage {
     options;
@@ -29,6 +41,8 @@ export class TracePage {
     message = "";
     cache;
     unsubscribe;
+    /** Turns a running step's icon while one is in view; stops when none is. */
+    spinner;
     /** Body geometry from the last render, for the mouse. */
     geometry;
     constructor(options) {
@@ -37,6 +51,18 @@ export class TracePage {
     }
     dispose() {
         this.unsubscribe();
+        this.spin(false);
+    }
+    spin(on) {
+        if (on) {
+            // The x turns every 4 ticks; redrawing more often would change nothing.
+            this.spinner ??= setInterval(() => this.options.tui.requestRender(), TICK_MS * 4);
+            this.spinner.unref?.();
+        }
+        else if (this.spinner !== undefined) {
+            clearInterval(this.spinner);
+            this.spinner = undefined;
+        }
     }
     /** Recompute the projection only when the branch actually changed. */
     summary() {
@@ -333,7 +359,7 @@ export class TracePage {
         const marker = selected ? "›" : " ";
         const seq = String(index + 1).padStart(3);
         const duration = pad(formatDuration(durationMs), 7);
-        const glyph = KIND_GLYPH[step.kind] ?? "?";
+        const glyph = stepGlyph(step, Date.now());
         // The icon carries the same colour the step has in the dot matrix above.
         const iconTone = step.status === "error" || step.status === "aborted" ? "error" : step.status === "running" ? "warning" : step.kind === "model" ? "accent" : step.kind === "tool" ? "success" : step.kind === "user" ? "text" : "dim";
         const typeWidth = width >= 80 ? 12 : 8;
@@ -526,6 +552,7 @@ export class TracePage {
         const height = this.options.tui.terminal.rows;
         const compact = height < 16;
         const summary = this.summary();
+        this.spin(summary.steps.some((step) => step.status === "running"));
         const bodyHeight = this.bodyHeight();
         this.syncList(summary, bodyHeight);
         const labelWidth = 5;

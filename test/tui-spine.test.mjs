@@ -65,15 +65,16 @@ test("a settled turn is one spine: trunk, branches, a red failure branch, closed
   const t = transcript();
   fullTurn(t);
   const rows = lines(t);
-  const start = rows.findIndex((row) => row.includes("∴"));
+  const start = rows.findIndex((row) => row.includes("◇"));
   // A call's time is a bar at the column's edge (docs/tui-one-column-design.md §2.2); the footer's a number.
   const BAR = / +[▏▎▍▌▋▊▉█][▏▎▍▌▋▊▉█·]{3}( \S+)?$/;
   assert.deepEqual(rows.slice(start).map((row) => row.replace(BAR, "  <t>").replace(/\d+(\.\d+)?(ms|s)$/, "<t>")), [
-    " │ ∴ thought",
+    " │ ◇ thought",
     " │   Checking.",
     " │",
     " ├─$ npm test  <t>",
-    " ├─$ false",
+    // A failed call settles on a red × (docs/tui-glyphs-design.md §3).
+    " ├─× false",
     " ├─  ✗ exit 1 · boom",
     " │",
     " │   Done.",
@@ -124,7 +125,7 @@ test("a replayed turn gets the same spine, ending at its last row (replay has no
   ]));
   const rows = lines(t);
   const start = rows.findIndex((row) => row.includes("$ ls"));
-  assert.deepEqual(rows.slice(start), [`${" ├─$ ls".padEnd(76)}▏···`, " │", " │   Listed."]);
+  assert.deepEqual(rows.slice(start), [`${" ├─$ ls".padEnd(76)}····`, " │", " │   Listed."]);
 });
 
 test("consecutive tool rows sit together, across messages and around a group line", () => {
@@ -171,7 +172,7 @@ test("while a turn runs only its tip pulses; rows above it already look settled"
   const heavy = spined.filter((row) => strip(row).startsWith(" ┃"));
   assert.ok(heavy.length > 0 && heavy.length <= 8, `the tip is at most 8 rows (got ${heavy.length})`);
   assert.ok(spined.slice(-heavy.length - 1).some((row) => strip(row).startsWith(" ├─")), "the running tool sits in the tip");
-  const branch = live.find((row) => strip(row).includes("$ sleep 9"));
+  const branch = live.find((row) => /[+×] sleep 9/.test(strip(row)));
   assert.ok(!branch.includes(theme.fg("borderMuted", "├─")), "a running tool's branch is lit");
 
   t.handle({ type: "tool_execution_end", toolName: "bash", toolCallId: "b1", result: { content: [{ type: "text", text: "" }] }, isError: false, durationMs: 9000 });
@@ -432,14 +433,14 @@ test("running duration bars move only inside the tip; rows above it hold still a
   const after = tr.root.render(120).map(strip);
   const changed = after.flatMap((row, index) => (row === before[index] ? [] : [index]));
   const tipStart = after.length - 8;
-  assert.ok(before.some((row) => /long build p1 +▏···/.test(row)), JSON.stringify(before.slice(0, 12)));
+  assert.ok(before.some((row) => /long build p1 +[▏·]···/.test(row)), JSON.stringify(before.slice(0, 12)));
   assert.deepEqual(changed.filter((index) => index < tipStart), [], `rows outside the tip changed: ${JSON.stringify(changed.map((index) => after[index]))}`);
 
   // An event (new output) still redraws a block outside the tip; only its clock is held.
   tr.handle({ type: "tool_execution_update", toolName: "bash", toolCallId: "p1", args: { command: "long build p1" }, partialResult: { content: [{ type: "text", text: "step 1" }] } });
   const updated = tr.root.render(120).map(strip);
   assert.ok(updated.some((row) => row.includes("step 1")), "the new output shows");
-  assert.ok(updated.some((row) => /long build p1 +▏···/.test(row)), "the bar still reads the time it last showed in the tip");
+  assert.ok(updated.some((row) => /long build p1 +[▏·]···/.test(row)), "the bar still reads the time it last showed in the tip");
 
   // pi-tui's main-screen renderer never needs a full redraw while only the clock runs.
   const screen = new piTui.TuiMainScreen({ columns: 120, rows: 12, write() {}, hideCursor() {}, showCursor() {} }, false);
@@ -475,7 +476,7 @@ for (const kind of ["tool", "user bash"]) {
     const before = tr.root.render(120).map(strip);
     now += 2_000;
     const after = tr.root.render(120).map(strip);
-    assert.ok(before.some((row) => /straddling build +▏···/.test(row)), JSON.stringify(before));
+    assert.ok(before.some((row) => /straddling build +[▏·]···/.test(row)), JSON.stringify(before));
     assert.deepEqual(after.slice(0, -8), before.slice(0, -8));
   });
 }

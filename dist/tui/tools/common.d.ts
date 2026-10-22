@@ -43,7 +43,9 @@ export declare function formatToolDuration(ms: number): string;
  * design.md §4-C: a long command must not eat its `· +8 lines`). A tail wider than the line is
  * dropped rather than cut. */
 export declare function fitWithTail(body: string, tail: string, width: number, ellipsis: string): string;
-/** `ms` as a bar: dim filled cells, then `·` for the empty ones; with the time after a full bar. */
+/** `ms` as a bar: dim filled cells, then `·` for the empty ones; with the time after a full bar. Under
+ * 10ms nothing is filled (`····`, all but instant): a `▏` there, drawn full-height by terminals, lined
+ * up with the next fast call's into what read as a divider (docs/tui-one-column-design.md §2.2). */
 export declare function durationBar(theme: Theme, ms: number): string;
 /** What a call row holds: the body (cut to fit), its tail (`· +36 lines`, `· +3 −1`; never cut), the
  * duration bar ("" for none), and the time as a number for a line too narrow for a column. */
@@ -61,8 +63,8 @@ interface CallRowParts {
  * the row's width after the marker.
  */
 export declare function fitCallRow({ body, tail, bar, fallbackTime }: CallRowParts, width: number, ellipsis: string): string;
-/** The marker a call line puts in the marker column: `$` for shell commands, `◆` for the rest.
- * tools/block.ts paints it in the color of the tool's state. */
+/** The marker a call line puts in the marker column once it settles: `$` for shell commands, `◆` for
+ * the rest. tools/block.ts draws the rotating x until then (src/tui/glyphs.ts). */
 export type CallMarker = "$" | "◆";
 /**
  * A built-in tool's one-row call line (docs/tui-transcript-layout-implementation.md W3): the body

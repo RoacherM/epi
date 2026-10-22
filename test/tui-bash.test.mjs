@@ -71,21 +71,23 @@ test("a non-zero exit code is shown", (t) => {
     ["waitReady"], ["type", "!false"], ["key", "enter"], ["wait", 1000], ["key", "ctrl+d"],
   ]);
   assert.match(out, /EXIT=0/);
-  assert.match(out, /\$ false/);
+  // A failed command settles on a red × in the marker column (docs/tui-glyphs-design.md §3).
+  assert.match(out, /× false/);
   assert.match(out, /✗ exit 1/);
 });
 
 test("Esc aborts a running user bash command and the app keeps working", (t) => {
-  const { text: out } = runApp(t, [], [
+  const { text: out, screens } = runApp(t, [], [
     ["waitReady"], ["type", "!sleep 30"], ["key", "enter"], ["wait", 800],
     ["key", "esc"], ["wait", 800],
-    ["type", "!echo AFTER-ABORT"], ["key", "enter"], ["wait", 800],
+    ["type", "!echo AFTER-ABORT"], ["key", "enter"], ["wait", 800], ["screen", "after"],
     ["key", "ctrl+d"],
   ]);
   assert.match(out, /EXIT=0/);
   assert.match(out, /\(cancelled\)/);
-  // A command that succeeded has no status row, only its run time on the call line (W3).
-  assert.match(out, /\$ echo AFTER-ABORT +[▏▎▍▌▋▊▉█][▏▎▍▌▋▊▉█·]{3}/);
+  // A command that succeeded has no status row, only its run time on the call line (W3). Read from
+  // the screen: once the rotating x settles on `$`, only that one cell is redrawn.
+  assert.match(screens.after.join("\n"), /\$ echo AFTER-ABORT +[▏▎▍▌▋▊▉█·]{4}/);
 });
 
 test("running another bash command while one is running is refused", (t) => {
@@ -143,7 +145,8 @@ test("UserBashBlock fits widths 40, 80 and 120 while running, done, and with lon
   done.setComplete(0, false);
   assertWidths(done);
   const doneLines = done.render(80).map(strip);
-  assert.match(doneLines[0], /^   \$ echo hi +[▏▎▍▌▋▊▉█][▏▎▍▌▋▊▉█·]{3}$/, "a live run shows its run time as a bar; success takes no status row");
+  // Finished before any frame drew it running: it settles at once on `$`, no landing shake.
+  assert.match(doneLines[0], /^   \$ echo hi +[▏▎▍▌▋▊▉█·]{4}$/, "a live run shows its run time as a bar; success takes no status row");
   assert.deepEqual(doneLines.slice(1), ["     hi"]);
 
   const failed = new UserBashBlock(theme, "false", false);

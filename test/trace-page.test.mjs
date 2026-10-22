@@ -64,9 +64,14 @@ test("/trace opens full-screen with a single-row dot matrix and the steps below"
   assert.doesNotMatch(trace, /Model/);
   assert.match(trace, /edit/);
   assert.match(trace, /write/);
-  // The composer is gone while the page owns the screen, and is back after Esc.
-  assert.doesNotMatch(trace, /❯/);
-  assert.match(shown(screens.back), /❯/);
+  // The composer is gone while the page owns the screen, and is back after Esc. The steps use the
+  // transcript's glyphs now (docs/tui-glyphs-design.md §4), so a user step's ❯ is on the page: look
+  // for the composer's frame instead.
+  assert.doesNotMatch(trace, /editor \(off\)/, "the composer's frame (its model label) is gone");
+  assert.match(trace, /❯ +user +change things/, "a user step has the chat's ❯");
+  assert.match(trace, /◇ +\S/, "a model step has ◇");
+  assert.doesNotMatch(trace, /⚙|»/, "the old glyphs are gone");
+  assert.match(shown(screens.back), /editor \(off\)/);
   void exit;
 });
 

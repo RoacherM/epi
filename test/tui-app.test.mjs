@@ -61,13 +61,14 @@ test("TUI v2 aborts a streaming reply on Esc and keeps working", (t) => {
 });
 
 test("TUI v2 runs a built-in tool call", (t) => {
-  const { text: out, marks } = runApp(t, [fixture("faux-bash-tool.mjs")], [
-    ["waitReady"], ["type", "run"], ["key", "enter"], turnDone("TOOL-DONE saw TOOL-RAN-42"), ["key", "ctrl+d"],
+  const { text: out, screens } = runApp(t, [fixture("faux-bash-tool.mjs")], [
+    ["waitReady"], ["type", "run"], ["key", "enter"], turnDone("TOOL-DONE saw TOOL-RAN-42"), ["wait", 500], ["screen", "done"], ["key", "ctrl+d"],
   ]);
   // The shell really ran ($((40+2)) evaluated), and the card is Epi's collapsed bash renderer.
   assert.match(out, /TOOL-DONE saw TOOL-RAN-42/);
-  // Success takes no status row: the call line ends in the run time instead (W1/W3).
-  assert.match(out, /\$ echo TOOL-RAN.*  \d+(ms|\.\ds)/);
+  // Success takes no status row: the call line ends in the run time instead (W1/W3). Read from the
+  // screen: once the rotating x settles on `$`, only that one cell is redrawn.
+  assert.match(screens.done.join("\n"), /\$ echo TOOL-RAN.* +[▏▎▍▌▋▊▉█·]{4}/);
 });
 
 test("TUI v2 hosts extension custom() and select() dialogs", (t) => {

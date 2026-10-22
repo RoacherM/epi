@@ -38,10 +38,13 @@ export declare class TracePage {
     private message;
     private cache;
     private readonly unsubscribe;
+    /** Turns a running step's icon while one is in view; stops when none is. */
+    private spinner;
     /** Body geometry from the last render, for the mouse. */
     private geometry;
     constructor(options: TracePageOptions);
     dispose(): void;
+    private spin;
     /** Recompute the projection only when the branch actually changed. */
     private summary;
     private currentStep;

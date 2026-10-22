@@ -48,7 +48,7 @@ export declare class UserMessageBlock implements Component {
     invalidate(): void;
 }
 /** Pi's WorkingIndicatorOptions (ui.setWorkingIndicator): custom frames drawn verbatim, `[]` hides
- * the indicator. Undefined means Epi's built-in braille spinner. */
+ * the indicator. Undefined means Epi's built-in rotating x (docs/tui-glyphs-design.md §7). */
 export interface WorkingIndicator {
     frames?: string[];
     intervalMs?: number;
@@ -63,7 +63,7 @@ export interface TurnState {
     committedOutput: number;
     estimated: boolean;
 }
-/** `⠧ Waiting for response… 2.4s ····· 2.4s ⇣2.3k [stop]`; zero rows when idle. */
+/** `× Waiting for response… 2.4s ····· 2.4s ⇣2.3k [stop]`; zero rows when idle. */
 export declare class TurnStatus implements Component {
     private readonly theme;
     private readonly state;

@@ -60,6 +60,9 @@ export const TIP_ROWS = 8;
  */
 export interface ClockGated {
   clockLive: boolean;
+  /** The row that moves with the clock, when not the first row with text (a thinking run after the
+   * reply's text). */
+  readonly clockRow?: number | undefined;
 }
 
 export function isClockGated(component: object): component is ClockGated {

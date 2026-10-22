@@ -66,13 +66,13 @@ function runningTurn() {
   return { startedAt: now, phaseStartedAt: now, activity: "Responding…", outputTokens: 0, committedOutput: 0, estimated: false };
 }
 
-test("turn status: the braille spinner at every width, in accent, every row fits", (t) => {
+test("turn status: the rotating x at every width, in accent, every row fits", (t) => {
   const status = new TurnStatus(theme, () => runningTurn(), () => {});
   t.after(() => status.stop());
   for (const width of [12, 20, 40, 59, 60, 80, 120]) {
     const line = status.render(width)[0];
     if (width >= 20) {
-      assert.match(plain(line), /^[⠋⠙⠹⠸⠼⠴⠦⠧] Respo/, `${width}`);
+      assert.match(plain(line), /^[+×] Respo/, `${width}`);
       assert.ok(line.startsWith(theme.getFgAnsi("accent")), `${width}: accent spinner`);
     }
     assert.ok(piTui.visibleWidth(line) <= width, `${width}: ${plain(line)}`);
@@ -111,21 +111,33 @@ test("ui.setWorkingIndicator: custom frames verbatim, [] hides it, undefined res
   ui.setWorkingIndicator({ frames: [] });
   assert.match(plain(status.render(80)[0]), /^Responding…/);
   ui.setWorkingIndicator(undefined);
-  assert.match(plain(status.render(80)[0]), /^[⠋⠙⠹⠸⠼⠴⠦⠧] Responding…/);
+  assert.match(plain(status.render(80)[0]), /^[+×] Responding…/);
   assert.deepEqual(notices, [], "no 'does not support' warning any more");
 });
 
 // ── M5: running group line ───────────────────────────────────────────────────
 
-test("a running group's ◈ breathes (the turn spine beside it pulses); a settled group's doesn't", () => {
+test("a running group's marker turns evenly (the turn spine beside it pulses); a settled group's is ◈ and still", () => {
   const running = [{ groupKind: "read", status: "running" }, { groupKind: "read", status: "done" }];
-  const first = verbGroupLine(running, theme, 80, 0);
-  const later = verbGroupLine(running, theme, 80, 0.5);
-  assert.match(plain(first), /^ {3}◈ Reading… · 1 completed$/);
-  assert.notEqual(first, later, "the running line changes over time");
+  // 4 ticks of 80ms a quarter turn: + at 0ms, × at 320ms, + again at 640ms.
+  assert.match(plain(verbGroupLine(running, theme, 80, 0)), /^ {3}\+ Reading… · 1 completed$/);
+  assert.match(plain(verbGroupLine(running, theme, 80, 319)), /^ {3}\+ Reading…/);
+  assert.match(plain(verbGroupLine(running, theme, 80, 320)), /^ {3}× Reading…/);
+  assert.match(plain(verbGroupLine(running, theme, 80, 640)), /^ {3}\+ Reading…/);
+  assert.ok(verbGroupLine(running, theme, 80, 320).includes(theme.fg("accent", "×")), "accent while it runs");
   const settled = [{ groupKind: "read", status: "done" }, { groupKind: "read", status: "done" }];
-  assert.equal(verbGroupLine(settled, theme, 80, 0), verbGroupLine(settled, theme, 80, 0.5));
+  assert.equal(verbGroupLine(settled, theme, 80, 0), verbGroupLine(settled, theme, 80, 500));
   assert.match(plain(verbGroupLine(settled, theme, 80, 0)), /^ {3}◈ Read 2 files$/);
+});
+
+test("a group seen running shakes twice as its last member lands, then settles as ◈", () => {
+  const members = [{ groupKind: "read", status: "done", endedAt: 1000 }, { groupKind: "read", status: "done", endedAt: 1200 }];
+  const at = (now) => plain(verbGroupLine(members, theme, 80, now))[3];
+  // From the last end: × + × + one tick (80ms) each, then ◈.
+  assert.deepEqual([1200, 1280, 1360, 1440, 1520, 5000].map(at), ["×", "+", "×", "+", "◈", "◈"]);
+  const failed = [{ groupKind: "read", status: "error", endedAt: 1000 }, { groupKind: "read", status: "done" }];
+  assert.ok(verbGroupLine(failed, theme, 80, 1000).includes(theme.fg("error", "×")), "a failed run shakes in red");
+  assert.ok(verbGroupLine(failed, theme, 80, 2000).includes(theme.fg("error", "◈")), "and keeps its ◈, in red");
 });
 
 // ── M6: completion flash ease-out ────────────────────────────────────────────
