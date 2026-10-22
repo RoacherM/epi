@@ -66,15 +66,6 @@ function redact(text: string, key: string): string {
 }
 
 async function postJson(source: BuiltInSource, path: string, key: string, body: unknown, signal: AbortSignal): Promise<unknown> {
-  try {
-    return await postJsonUnredacted(source, path, key, body, signal);
-  } catch (error) {
-    if (error instanceof SourceError) throw new SourceError(redact(error.message, key));
-    throw error;
-  }
-}
-
-async function postJsonUnredacted(source: BuiltInSource, path: string, key: string, body: unknown, signal: AbortSignal): Promise<unknown> {
   let response: Response;
   try {
     response = await fetch(`${baseUrl(source)}${path}`, {
@@ -251,5 +242,29 @@ export function createSource(setup: SourceSetup, callTool: CallTool | undefined)
   const { config, key } = setup;
   if (config.kind === "mcp") return new McpSource(config.id, config.tool, callTool);
   if (key === undefined) return undefined;
-  return config.kind === "deepseek" ? new DeepSeekSource(key) : new ExaSource(key);
+  return redacting(config.kind === "deepseek" ? new DeepSeekSource(key) : new ExaSource(key), key);
+}
+
+/** Deep copy of `value` with `key` taken out of every string. */
+function redactAll<T>(value: T, key: string): T {
+  return JSON.parse(JSON.stringify(value, (_name, part: unknown) => (typeof part === "string" ? redact(part, key) : part))) as T;
+}
+
+/** A built-in source whose results and errors never hold its key: whatever a server echoes back -- an
+ * error, a status tag, page content -- has it replaced with `<key>` (review 2 of 0.1.24). */
+function redacting(source: WebSource, key: string): WebSource {
+  const guard = async <T>(run: () => Promise<T>): Promise<T> => {
+    try {
+      return redactAll(await run(), key);
+    } catch (error) {
+      if (error instanceof SourceError) throw new SourceError(redact(error.message, key));
+      throw error;
+    }
+  };
+  return {
+    id: source.id,
+    canFetch: source.canFetch,
+    search: (request, signal) => guard(() => source.search(request, signal)),
+    ...(source.fetch === undefined ? {} : { fetch: (url: string, options: FetchOptions, signal: AbortSignal) => guard(() => source.fetch!(url, options, signal)) }),
+  };
 }

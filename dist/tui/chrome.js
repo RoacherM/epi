@@ -445,13 +445,21 @@ export function shortcutsBar(theme, state) {
  * Messages queued while a turn runs (4.1 排队区), between the turn status row and the prompt.
  * At most 3 lines: Pi's `Steering:` / `Follow-up:` lines, plus an Alt+Up hint if there is room.
  */
+/** A queued message's first non-blank line, with `…` when there is more. */
+function firstLine(message) {
+    const lines = message.split(/\r?\n/).filter((line) => line.trim() !== "");
+    return (lines[0] ?? "") + (lines.length > 1 ? " …" : "");
+}
 export function queuedMessagesBar(theme, state) {
     return {
         render(width) {
             const { steering, followUp } = state();
+            // One row each: a multi-line message shows its first line (Pi's TruncatedText does the same).
+            // Its other lines once reached the screen as rows of their own, under the turn status, where they
+            // read as stray transcript text.
             const lines = [
-                ...steering.map((message) => `Steering: ${message}`),
-                ...followUp.map((message) => `Follow-up: ${message}`),
+                ...steering.map((message) => `Steering: ${firstLine(message)}`),
+                ...followUp.map((message) => `Follow-up: ${firstLine(message)}`),
             ].slice(0, 3);
             if (lines.length === 0)
                 return [];

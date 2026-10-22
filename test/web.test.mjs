@@ -421,6 +421,16 @@ test("review 1 P1-1: a key never reaches a result, details or an error message",
   const outcome = await hybridSearch({ query: "q" }, {}, 8, { sources: [leaky], signal: new AbortController().signal, now: NOW });
   assert.ok(!JSON.stringify(outcome).includes("sk-SECRET-123"), outcome.text);
   assert.match(outcome.text, /exa: 400 bad key <key> for this endpoint/);
+  // Review 2: a /contents status tag, or page content, that echoes the key.
+  await fakeApis(t, {
+    "/contents": () => [200, { results: [], statuses: [{ id: "https://a.com", status: "error", error: { tag: "bad key sk-SECRET-123", httpStatusCode: 401 } }] }],
+    "/v1/tools/fetch": () => [200, { title: "Bearer sk-SECRET-123", content: "echo sk-SECRET-123" }],
+  });
+  const ds = createSource({ config: { id: "deepseek", kind: "deepseek", enabled: true }, key: "sk-SECRET-123" });
+  for (const source of [leaky, ds]) {
+    const page = await fetchPage("https://a.com", false, [source], new SeenDates(), { signal: new AbortController().signal, now: NOW });
+    assert.ok(!JSON.stringify(page).includes("sk-SECRET-123"), page.text);
+  }
 });
 
 test("review 1 P3-3: turning a source off and on in /web keeps the source order", (t) => {

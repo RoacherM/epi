@@ -25,16 +25,6 @@ function redact(text, key) {
     return key === "" ? text : text.split(key).join("<key>");
 }
 async function postJson(source, path, key, body, signal) {
-    try {
-        return await postJsonUnredacted(source, path, key, body, signal);
-    }
-    catch (error) {
-        if (error instanceof SourceError)
-            throw new SourceError(redact(error.message, key));
-        throw error;
-    }
-}
-async function postJsonUnredacted(source, path, key, body, signal) {
     let response;
     try {
         response = await fetch(`${baseUrl(source)}${path}`, {
@@ -234,6 +224,30 @@ export function createSource(setup, callTool) {
         return new McpSource(config.id, config.tool, callTool);
     if (key === undefined)
         return undefined;
-    return config.kind === "deepseek" ? new DeepSeekSource(key) : new ExaSource(key);
+    return redacting(config.kind === "deepseek" ? new DeepSeekSource(key) : new ExaSource(key), key);
+}
+/** Deep copy of `value` with `key` taken out of every string. */
+function redactAll(value, key) {
+    return JSON.parse(JSON.stringify(value, (_name, part) => (typeof part === "string" ? redact(part, key) : part)));
+}
+/** A built-in source whose results and errors never hold its key: whatever a server echoes back -- an
+ * error, a status tag, page content -- has it replaced with `<key>` (review 2 of 0.1.24). */
+function redacting(source, key) {
+    const guard = async (run) => {
+        try {
+            return redactAll(await run(), key);
+        }
+        catch (error) {
+            if (error instanceof SourceError)
+                throw new SourceError(redact(error.message, key));
+            throw error;
+        }
+    };
+    return {
+        id: source.id,
+        canFetch: source.canFetch,
+        search: (request, signal) => guard(() => source.search(request, signal)),
+        ...(source.fetch === undefined ? {} : { fetch: (url, options, signal) => guard(() => source.fetch(url, options, signal)) }),
+    };
 }
 //# sourceMappingURL=sources.js.map

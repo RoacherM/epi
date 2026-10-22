@@ -40,3 +40,21 @@ test("a string-content message is matched and claimed like any other, so the sec
   const peeked = [{ role: "user", content: "hi" }, user({ type: "text", text: "hi" }, image("A"))];
   assert.deepEqual(imagesFor(["hi", "hi"], peeked), [[], [image("A")]]);
 });
+
+// A multi-line queued message (dogfood 2026-10-22, screenshot): its second line `1. 我这边需要什么`
+// showed as a stray row under "Waiting for response…" with no `Follow-up:` label, and stayed on screen
+// after Alt+Up took the message back: the row held a raw "\n", so pi-tui's diff renderer lost track.
+test("queued bar: a multi-line message takes one row, its first line, and no row holds a newline", async () => {
+  const { queuedMessagesBar } = await import("../dist/tui/chrome.js");
+  const { createEpiTheme } = await import("../dist/tui/theme.js");
+  const theme = createEpiTheme("dark");
+  const bar = queuedMessagesBar(theme, () => ({ steering: [], followUp: ["哦扣扣\n1. 我这边需要什么\n2. 还有什么"] }));
+  for (const width of [40, 80, 120]) {
+    const rows = bar.render(width);
+    assert.ok(rows.every((row) => !row.includes("\n")), JSON.stringify(rows));
+    const plain = rows.map((row) => row.replace(/\x1b\[[0-9;]*m/g, ""));
+    assert.match(plain[0], /^Follow-up: 哦扣扣 …/);
+    assert.ok(!plain.some((row) => row.includes("我这边需要什么")), "later lines don't show on their own");
+    assert.equal(plain.length, 2, "the message and the Alt+Up hint");
+  }
+});

@@ -38,6 +38,9 @@ function jsonErrorOffset(text, error) {
     const stated = /position (\d+)/.exec(error.message)?.[1];
     if (stated !== undefined)
         return Number(stated);
+    // Prefixes are parsed one by one; a config file is small, so this stays cheap. Beyond that, no place.
+    if (text.length > 8_192)
+        return -1;
     for (let end = 1; end <= text.length; end += 1) {
         try {
             JSON.parse(text.slice(0, end));
@@ -53,6 +56,8 @@ function jsonErrorOffset(text, error) {
  * quotes the text around the error, which in web-auth.json is a key. */
 function jsonErrorPlace(text, error) {
     const offset = jsonErrorOffset(text, error);
+    if (offset < 0)
+        return "";
     const before = text.slice(0, offset);
     return ` at line ${before.split("\n").length}, column ${offset - before.lastIndexOf("\n")}`;
 }
