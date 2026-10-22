@@ -24,6 +24,12 @@ const ALLOWED = [
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
+// Git's own test for binary content: a NUL byte in the first 8000 bytes. Images and videos (the
+// release showcases in docs/showcase/) are bytes, not lines; random bytes can spell the old name.
+function isBinary(content) {
+  return content.subarray(0, 8000).includes(0);
+}
+
 function allowed(file, line) {
   return ALLOWED.some((entry) => entry.file.test(file) && (entry.line === undefined || entry.line.test(line)));
 }
@@ -39,7 +45,9 @@ test("no tracked file name or line uses the old product name outside the allow-l
     if (OLD_NAME.test(file) && !allowed(file, "")) {
       offenders.push(`${file}: file name`);
     }
-    const lines = readFileSync(`${root}/${file}`, "utf8").split("\n");
+    const content = readFileSync(`${root}/${file}`);
+    if (isBinary(content)) continue;
+    const lines = content.toString("utf8").split("\n");
     lines.forEach((line, index) => {
       if (OLD_NAME.test(line) && !allowed(file, line)) {
         offenders.push(`${file}:${index + 1}: ${line.trim().slice(0, 120)}`);
@@ -47,6 +55,8 @@ test("no tracked file name or line uses the old product name outside the allow-l
     });
   }
 
+  // The skip must not swallow text: every tracked source and doc file is still read.
+  assert.ok(files.filter((file) => /\.(ts|md|mjs)$/.test(file)).every((file) => !isBinary(readFileSync(`${root}/${file}`))));
   assert.deepEqual(
     offenders,
     [],
