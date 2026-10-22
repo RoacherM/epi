@@ -494,3 +494,20 @@ test("a pending call outside the tip still redraws when its arguments change (on
   const rows = tr.root.render(120).map(strip);
   assert.ok(rows.some((row) => row.includes("NEW COMMAND")), JSON.stringify(rows.slice(0, 4)));
 });
+
+// Review 3 (.dev/milestones/0.1.23/review-3.md, P3): the clock row is found before the spine paints
+// Pi's blank row as `│`, so a call on the tip's first row still runs.
+test("the first of eight running calls after reply text, on the tip's first row, still shows its time", (t) => {
+  let now = 100_000;
+  t.mock.method(Date, "now", () => now);
+  const tr = transcript();
+  tr.handle({ type: "agent_start" });
+  reply(tr, [{ type: "text", text: "Checking." }]);
+  for (let index = 0; index < 8; index += 1) tr.handle({ type: "tool_execution_start", toolName: "bash", toolCallId: `edge-${index}`, args: { command: `edge-${index}` } });
+  const before = tr.root.render(120).map(strip);
+  now += 2_000;
+  const after = tr.root.render(120).map(strip);
+  const callRow = before.findIndex((row) => row.includes("edge-0"));
+  assert.equal(callRow, before.length - 8, "the call is on the tip's first row");
+  assert.match(after[callRow], /edge-0 +██▎·$/);
+});

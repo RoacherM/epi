@@ -288,8 +288,9 @@ export class GroupedMessages {
             i += 1;
         }
         joinToolRuns(placed);
-        paintSpine(this.theme, placed, width, this.turnRunning());
+        // Before the spine paints: it fills a blank row with `│`, which would read as the clock row.
         this.noteTip(placed);
+        paintSpine(this.theme, placed, width, this.turnRunning());
         this.mouseLayout = { width, rows: placed.map(({ component, lines, skipped }) => ({ component, height: lines.length, skipped })) };
         return placed.flatMap((block) => block.lines);
     }
