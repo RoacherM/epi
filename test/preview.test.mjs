@@ -22,7 +22,9 @@ const ONE_PIXEL_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
 
 function tempDir(t) {
   const dir = mkdtempSync(join(tmpdir(), "epi-preview-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  // Retries: a fake media tool (fakeMediaTools) can still be writing a frame into it as the test ends,
+  // and rmSync then races it (ENOTEMPTY, seen on CI for 0.1.24).
+  t.after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   return dir;
 }
 
