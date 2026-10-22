@@ -44,6 +44,7 @@ Epi 是基于 Pi SDK 的可定制终端编程助手。自有 grok 风格 TUI，�
 - **正文限宽**：回复正文每行最多 76 列，宽终端里更好读；代码块和表格仍按全宽显示。代码块不再露出 ```` ``` ```` 围栏行，改为左侧一条暗线加暗色语言标签（`text`/无语言不显示）；列表符号改为 `•`，行内代码和无高亮代码块的颜色调淡。
 - 修复：底部 token 数超过百万时显示 `156M`、`1.2B`，不再是 `156186k`。
 - 模型看到的内容没有变化（`model-snapshot` 无差异）。设计与实现记录见 [tui-transcript-layout-design.md](docs/tui-transcript-layout-design.md)、[tui-transcript-layout-implementation.md](docs/tui-transcript-layout-implementation.md)。
+- 录屏与截图见 [0.1.22 特性展示](docs/showcase/0.1.22/README.md)。
 
 **0.1.21：工具块全文悬浮窗，统一的 Vim 移动键，克制的动效**
 
@@ -115,4 +116,5 @@ epi
 ## 文档
 
 - [使用文档](docs/guide/README.md)：[安装与升级](docs/guide/install.md) · [命令行](docs/guide/cli.md) · [配置](docs/guide/configuration.md) · [Preview](docs/guide/preview.md) · [Review](docs/guide/review.md) · [Trace](docs/guide/trace.md) · [Task](docs/guide/task.md) · [MCP](docs/guide/mcp.md) · [Hooks](docs/guide/hooks.md)
+- [特性展示](docs/showcase/README.md)：每个版本的录屏与截图
 - 开发：[架构设计（原则）](docs/architecture.md) · [实现与契约](docs/development.md) · [开发流程](docs/dev-workflow.md)（[自举流程](docs/dev-workflow-herdr.md)、[通用的工作流图（wayne-skills 的 workflow-graph skill）](https://github.com/RoacherM/Wayne-Skills/blob/main/skills/workflow-graph/SKILL.md)） · [设计决策](docs/decisions.md)；给开发代理的入口是 [AGENTS.md](AGENTS.md)
