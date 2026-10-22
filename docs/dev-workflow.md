@@ -79,3 +79,15 @@
 - `.epi/` 是本地活动配置，整目录忽略；自开发模板放 [examples/development](../examples/development/README.md)，每个 worktree 按需手动启用。Herdr 草案不会随 clone 自动加载。
 - `dist/` 是发布包入口，源码构建后必须一起提交；提交前执行 `npm run build`、`git diff --exit-code -- dist`，交付前执行完整 `npm test`。
 - 合并保留分支历史（`--no-ff`）；主开发基线是 `main`，任务说明固定本次基线 SHA。发布版本与源码分支分开：只有发布流程创建的新 Release 才是安装器的升级来源。
+
+## 7. 发版清单
+
+改 `package.json` 版本号的那个提交（`release: <版本> …`）推送之前，下面几项都要做完（用户 2026-10-22 定："记得更新repo里面的配图或者示意视频……后续要形成规范"）：
+
+1. **README「最近更新」**：新版本一节写在最前面，说清改了什么、对用户有什么变化。
+2. **特性展示**：新建 `docs/showcase/<版本>/`（录屏、截图、`README.md`，宣发文案放 `announce.md`），场景脚本放 `scripts/docs/showcase/<版本>.mjs`，用 `node scripts/docs/capture-showcase.mjs <版本>` 生成；`docs/showcase/README.md` 的索引加一行。只修 bug、界面没变的版本，目录里只放一份 `README.md`，写明「本版本无界面变化」和改了什么。约定见 [showcase/README.md](showcase/README.md)。
+3. **README 截图**：界面有变化时，用 `node scripts/docs/capture-ui.mjs` 重新生成 `docs/assets/epi-ui.png` 和 `epi-welcome.png`（见 [assets/README.md](assets/README.md)）；脚本断言失败说明演示和界面对不上了，先修脚本，不要跳过。
+4. **提交以后再跑完整测试**：媒体文件要先被 git 跟踪，`test/naming.test.mjs` 这类扫描已跟踪文件的测试才看得到它们（0.1.22 的教训）。
+5. 推送前用户明确同意（闸门 G2）。推送后看 Release 和 CI 两个工作流都成功，Release 页面有 `epi-<版本>.tgz` 和 `install.sh`。
+
+第 1、2 项由 `test/showcase.test.mjs` 检查：当前版本的展示目录、索引和 README 链接缺一个都会失败。

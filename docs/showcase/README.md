@@ -9,6 +9,8 @@
 
 ## 约定
 
+每次发版都要有这里的一个目录，是发版清单的一项（[dev-workflow.md](../dev-workflow.md) §7），`test/showcase.test.mjs` 会检查。
+
 - **目录**：`docs/showcase/<版本>/`，里面一个 `README.md` 说明每个文件展示了什么；宣发文案放同目录的 `announce.md`。
 - **场景脚本**：`scripts/docs/showcase/<版本>.mjs`，同时是一个 Epi 扩展（默认导出注册离线脚本模型）和录制剧本（`files` 演示项目、`play` 输入步骤、`clips` 剪哪几段、`stills` 截哪几张）。新版本复制上一版改。
 - **格式**：每段都出 MP4（发社交媒体用，比 GIF 清楚）；只有要在文档里内嵌显示的段落才额外出 GIF。完整导览只出 MP4，控制仓库体积。

@@ -1,6 +1,6 @@
 # README 界面截图
 
-`epi-ui.png` 展示对话、思考、真实 read/edit/bash 工具与 Markdown；`epi-welcome.png` 展示启动页。两张图均来自真实 Epi TUI，使用离线脚本化模型回复，不代表真实模型的效果或耗时。
+`epi-ui.png` 展示对话、思考、真实 read/edit/bash 工具与 Markdown；`epi-welcome.png` 展示启动页。界面有变化的版本，发版前要重新生成这两张（发版清单，[dev-workflow.md](../dev-workflow.md) §7）。两张图均来自真实 Epi TUI，使用离线脚本化模型回复，不代表真实模型的效果或耗时。
 
 复现（仓库根目录）：
 

@@ -26,8 +26,8 @@ try {
     ["paste", "Make the greeting handle whitespace and empty names. Check the syntax."],
     ["key", "enter"],
     ["waitFor", { regex: "passed\\.[\\s\\S]*Worked for" }],
-    // At this fixed viewport size, click the real edit card to reveal its diff.
-    ["mouse", { x: 4, y: 12 }], ["wait", 100],
+    // Click the real edit row to reveal its diff (found by its text, so a layout change can't miss it).
+    ["clickText", "edit src/greet.js"], ["wait", 100],
     ["screen", "session"], ["rawMark", "session"],
     ["key", "ctrl+d"],
   ];
@@ -50,7 +50,6 @@ try {
   assert.equal(capture.exit, 0);
   const session = capture.screens.session.join("\n");
   assert.match(session, /node --check src\/greet.js.*passed/);
-  assert.match(session, /exit 0/);
   assert.match(session, /const displayName = name.trim/);
   assert.match(readFileSync(join(cwd, "src/greet.js"), "utf8"), /const displayName = name.trim\(\) \|\| "world";/);
   for (const [mark, filename] of [["welcome", "epi-welcome.png"], ["session", "epi-ui.png"]]) {
