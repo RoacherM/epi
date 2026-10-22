@@ -5,7 +5,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { diagramKind, render, type MermaidArt, type Role } from "lovely-mermaid";
 
-export type MermaidResult =
+type MermaidResult =
   /** `rows`: the art, styled, no wider than the width asked for. `note`: what was given up on, if anything. */
   | { kind: "art"; rows: string[]; note: string | undefined }
   /** Nothing to draw at this width: `note` says why. */

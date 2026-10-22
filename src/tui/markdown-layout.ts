@@ -83,13 +83,16 @@ function codeLanguage(token: BlockToken): string {
   return (token.lang ?? "").trim().split(/\s/)[0] ?? "";
 }
 
-/** Whether a code block's closing fence has arrived; one still streaming has none yet. */
+/** Whether a code block's closing fence has arrived; one still streaming has none yet. A closing
+ * fence by CommonMark's rule (§4.5): at most three spaces of indentation, the opening fence's
+ * character at least as many times, then only spaces or tabs -- the rule marked applies, so a row
+ * it keeps as code (four spaces, a no-break space) never counts as closing. */
 function fenceClosed(token: BlockToken): boolean {
   const marker = /^ {0,3}(`{3,}|~{3,})/.exec(token.raw)?.[1];
   const lines = token.raw.replace(/\n+$/, "").split("\n");
   if (!marker || lines.length < 2) return false;
-  const last = lines[lines.length - 1]!.trim();
-  return last.length >= marker.length && last === marker[0]!.repeat(last.length);
+  const closing = /^ {0,3}(`+|~+)[ \t]*$/.exec(lines[lines.length - 1]!)?.[1];
+  return closing !== undefined && closing[0] === marker[0] && closing.length >= marker.length;
 }
 
 const ANSI = /\x1b\[[0-9;]*m|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;

@@ -2,7 +2,7 @@ import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { breathe, motionTime } from "../motion.js";
 import { piTui } from "../pi-tui.js";
 import { dispatchToRows } from "../rows.js";
-import { paintSpine, spineMember } from "../spine.js";
+import { isClockGated, paintSpine, spineMember, TIP_ROWS } from "../spine.js";
 import { durationBar, fitCallRow } from "./common.js";
 import { createFlashState, disposeFlash, isFlashing, startFlash } from "./flash.js";
 const GROUP_KINDS = new Set(["read", "grep", "find", "ls"]);
@@ -47,6 +47,9 @@ export class ToolEntry extends ToolExecutionComponent {
     flash = createFlashState();
     /** The final result's run time, for the group row's bar. */
     durationMs;
+    clockLive = true;
+    // The rows last drawn while running, kept for frames when the clock may not move them.
+    frozen;
     started = false;
     constructor(toolName, toolCallId, args, renderers, hostUi, cwd, groupKind, options) {
         super(toolName, toolCallId, args, options, renderers, hostUi, cwd);
@@ -55,10 +58,25 @@ export class ToolEntry extends ToolExecutionComponent {
     }
     markExecutionStarted() {
         this.started = true;
+        this.frozen = undefined;
         super.markExecutionStarted();
+    }
+    /** Running and outside the transcript's tip: the rows as last drawn, so the duration bar holds
+     * still (spine.ts ClockGated); anything that happened since (output, the result) already cleared them. */
+    render(width) {
+        if (this.status === "running" && !this.clockLive && this.frozen?.width === width)
+            return this.frozen.lines;
+        const lines = super.render(width);
+        this.frozen = this.status === "running" ? { width, lines } : undefined;
+        return lines;
+    }
+    invalidate() {
+        this.frozen = undefined;
+        super.invalidate();
     }
     updateResult(result, isPartial = false) {
         super.updateResult(result, isPartial);
+        this.frozen = undefined;
         if (!isPartial)
             this.durationMs = result.durationMs;
         if (isPartial) {
@@ -75,6 +93,7 @@ export class ToolEntry extends ToolExecutionComponent {
     }
     setExpanded(expanded) {
         this.expandedFlag = expanded;
+        this.frozen = undefined;
         super.setExpanded(expanded);
     }
     /** The completion flash lights the whole block's stretch of the turn spine (src/tui/spine.ts). */
@@ -145,7 +164,7 @@ export function verbGroupLine(members, theme, width, t = motionTime()) {
     const times = members.map((member) => member.durationMs);
     const total = !anyRunning && times.every((ms) => ms !== undefined) ? times.reduce((sum, ms) => sum + ms, 0) : undefined;
     const bar = total === undefined ? "" : durationBar(theme, total);
-    return lead + bullet + fitCallRow(text, "", bar, contentWidth, "…");
+    return lead + bullet + fitCallRow({ body: text, tail: "", bar }, contentWidth, "…");
 }
 /** A muted `◈ ...` line laid out with the same 3-column lead as every other line (rail + padding),
  * for the "N more" and "fold" affordances, which have no rail of their own to draw. */
@@ -197,6 +216,10 @@ export class GroupedMessages {
     // identifies "this run" for as long as it exists.
     unfolded = new Set();
     revealed = new Set();
+    // Last frame's blocks, and those with a row in the transcript's last TIP_ROWS rows: a clock-driven
+    // block may move only there (spine.ts ClockGated). A block not drawn last frame counts as live.
+    drawn = new Set();
+    inTip = new Set();
     constructor(messages, tui, theme, 
     /** A turn is in progress: its spine is live (src/tui/spine.ts). */
     turnRunning = () => false) {
@@ -218,10 +241,16 @@ export class GroupedMessages {
     dispose() {
         this.unfolded.clear();
         this.revealed.clear();
+        this.drawn.clear();
+        this.inTip.clear();
     }
     render(width) {
         const placed = [];
         const children = this.messages.children;
+        for (const child of children) {
+            if (isClockGated(child))
+                child.clockLive = !this.drawn.has(child) || this.inTip.has(child);
+        }
         let i = 0;
         while (i < children.length) {
             const first = children[i]; // guarded by the `while` bound above
@@ -265,8 +294,22 @@ export class GroupedMessages {
         }
         joinToolRuns(placed);
         paintSpine(this.theme, placed, width, this.turnRunning());
+        this.noteTip(placed);
         this.mouseLayout = { width, rows: placed.map(({ component, lines, skipped }) => ({ component, height: lines.length, skipped })) };
         return placed.flatMap((block) => block.lines);
+    }
+    /** Which blocks this frame drew, and which of them reach into the last TIP_ROWS rows. */
+    noteTip(placed) {
+        const total = placed.reduce((rows, block) => rows + block.lines.length, 0);
+        this.drawn = new Set();
+        this.inTip = new Set();
+        let end = 0;
+        for (const block of placed) {
+            end += block.lines.length;
+            this.drawn.add(block.component);
+            if (end > total - TIP_ROWS)
+                this.inTip.add(block.component);
+        }
     }
     handleMouse(event) {
         if (event.y < 0 || event.y >= event.height)

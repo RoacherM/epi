@@ -17,6 +17,18 @@ export interface SpineBlock {
     lines: string[];
     member: SpineMember | "spacer" | undefined;
 }
+export declare const TIP_ROWS = 8;
+/**
+ * A block whose rows change with the clock alone (a running tool's duration bar), not only when
+ * something happens. Outside the transcript's last TIP_ROWS rows it must draw what it drew last time,
+ * or every frame would change a row that may have scrolled off -- the full redraw the spine's tip
+ * exists to avoid. GroupedMessages sets `clockLive` before each render; an event (new output, the
+ * result) still changes the rows wherever they are.
+ */
+export interface ClockGated {
+    clockLive: boolean;
+}
+export declare function isClockGated(component: object): component is ClockGated;
 /**
  * Paints the spine into `blocks`' lines in place. `running`: a turn is in progress, so the last turn
  * is live if it has no footer yet and nothing outside a turn (the new prompt's user message) came

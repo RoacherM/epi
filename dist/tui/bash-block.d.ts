@@ -2,7 +2,7 @@ import { type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import type { InspectTarget } from "./buffer/inspector.js";
 import type { CommandHost } from "./command-host.js";
-import type { SpineMember } from "./spine.js";
+import type { ClockGated, SpineMember } from "./spine.js";
 interface FinishedBashMessage {
     command: string;
     output: string;
@@ -15,12 +15,14 @@ interface FinishedBashMessage {
  * included, `toolOutput` (the model's bash block paints it `muted`; both kept, 8.4).
  */
 export declare function truncateBashOutput(lines: string[]): string[];
-export declare class UserBashBlock implements Component, SpineMember {
+export declare class UserBashBlock implements Component, SpineMember, ClockGated {
     private readonly theme;
     private readonly command;
     private readonly excludeFromContext;
     private readonly onInspect?;
     readonly spineRole = "bash";
+    clockLive: boolean;
+    private frozen;
     private outputLines;
     private status;
     private exitCode;
@@ -39,6 +41,7 @@ export declare class UserBashBlock implements Component, SpineMember {
      * a tail that is never cut; output rows under it; a status row only while running, when
      * cancelled, or when the command failed. */
     render(width: number): string[];
+    private draw;
     private statusText;
     /** The `… +N lines` row (the call line, then two output rows above it) opens the full output. */
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;

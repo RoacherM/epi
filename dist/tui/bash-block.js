@@ -25,6 +25,9 @@ export class UserBashBlock {
     excludeFromContext;
     onInspect;
     spineRole = "bash";
+    clockLive = true;
+    // The rows last drawn while running, for frames when the clock may not move them (spine.ts ClockGated).
+    frozen;
     outputLines = [];
     status = "running";
     exitCode;
@@ -56,6 +59,7 @@ export class UserBashBlock {
         // Append to the last (possibly incomplete) line, same as Pi's BashExecutionComponent.
         this.outputLines[this.outputLines.length - 1] += parts[0] ?? "";
         this.outputLines.push(...parts.slice(1));
+        this.frozen = undefined;
     }
     get spineRunning() {
         return this.status === "running";
@@ -65,6 +69,7 @@ export class UserBashBlock {
         this.status = cancelled ? "cancelled" : exitCode === undefined || exitCode !== 0 ? "error" : "done";
         if (this.startedAt !== undefined)
             this.durationMs = Date.now() - this.startedAt;
+        this.frozen = undefined;
     }
     /** The output as lines, without the single trailing newline most commands leave. */
     lines() {
@@ -76,6 +81,13 @@ export class UserBashBlock {
      * cancelled, or when the command failed. */
     render(width) {
         const running = this.status === "running";
+        if (running && !this.clockLive && this.frozen?.width === width)
+            return this.frozen.rows;
+        const rows = this.draw(width, running);
+        this.frozen = running ? { width, rows } : undefined;
+        return rows;
+    }
+    draw(width, running) {
         const marker = this.theme.fg(this.status === "error" ? "error" : "bashMode", this.excludeFromContext ? "!!" : "$");
         const { text, extraLines } = shortenCommand(this.command, undefined);
         const extra = extraLines > 0 ? this.theme.fg("dim", ` · +${extraLines} lines`) : "";
@@ -85,7 +97,7 @@ export class UserBashBlock {
         const bar = ms === undefined ? "" : durationBar(this.theme, ms);
         const fallback = this.status === "done" && ms !== undefined ? `  ${this.theme.fg("dim", formatToolDuration(ms))}` : "";
         const callPrefix = `${" ".repeat(CALL_PREFIX)}${marker} `;
-        const body = fitCallRow(this.theme.fg("toolOutput", text), extra, bar, Math.max(1, width - piTui.visibleWidth(callPrefix)), this.theme.fg("dim", "…"), fallback);
+        const body = fitCallRow({ body: this.theme.fg("toolOutput", text), tail: extra, bar, fallbackTime: fallback }, Math.max(1, width - piTui.visibleWidth(callPrefix)), this.theme.fg("dim", "…"));
         const callLine = callPrefix + body;
         const lines = this.lines();
         // While running, show the live tail (matches tools/mutating.ts bashRenderers' `isPartial` case);
@@ -127,7 +139,9 @@ export class UserBashBlock {
         });
         return { handled: true };
     }
-    invalidate() { }
+    invalidate() {
+        this.frozen = undefined;
+    }
 }
 /**
  * Handles a submitted `!cmd` / `!!cmd`. Returns false for anything else, so the caller falls

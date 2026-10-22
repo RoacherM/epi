@@ -200,8 +200,8 @@ function renderError(result, expanded, theme) {
     const errorText = textContent(result) || "Error";
     const [firstLine = "Error", ...rest] = errorText.split("\n");
     if (!expanded)
-        return new LinesComponent(failureRow(theme, firstLine));
-    return new LinesComponent([failureRow(theme, firstLine), ...rest.map((line) => theme.fg("error", line))]);
+        return new LinesComponent([failureRow(theme, firstLine)], undefined, [0]);
+    return new LinesComponent([failureRow(theme, firstLine), ...rest.map((line) => theme.fg("error", line))], undefined, [0]);
 }
 function renderUnifiedDiffResult(result, options, theme, context) {
     if (isErrorResult(result, context)) {
@@ -276,11 +276,12 @@ export const bashRenderers = {
         // call line's run time says it finished. Only a failure gets a row, collapsed or not.
         const failureRows = failure === undefined ? [] : [bashFailureRow(theme, failure, lines)];
         if (!options.expanded)
-            return new LinesComponent(failureRows);
+            return new LinesComponent(failureRows, undefined, failureRows.map((_, row) => row));
         const painted = lines.map((l) => theme.fg("toolOutput", l));
         const shown = truncateOutputLines(painted, (text) => theme.fg("muted", text));
+        const failureAt = failureRows.map((_, row) => shown.length + row);
         if (shown.length === painted.length)
-            return new LinesComponent([...shown, ...failureRows]);
+            return new LinesComponent([...shown, ...failureRows], undefined, failureAt);
         // truncateOutputLines's ellipsis row (index 2) opens every line of the output.
         const command = typeof context.args?.command === "string" ? context.args.command : "";
         const target = {
@@ -290,7 +291,7 @@ export const bashRenderers = {
             firstLineNumber: 1,
             text: lines.join("\n"),
         };
-        return new LinesComponent([...shown, ...failureRows], { rows: [2], target });
+        return new LinesComponent([...shown, ...failureRows], { rows: [2], target }, failureAt);
     },
 };
 export const editRenderers = {

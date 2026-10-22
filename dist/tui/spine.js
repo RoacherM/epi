@@ -4,8 +4,12 @@ export function spineMember(component) {
     return "spineRole" in component ? component : undefined;
 }
 // The animated tip: the live turn's last rows, one pulse period (motion.ts RAIL_PERIOD). Small enough to
-// stay on screen in any terminal the transcript has room in.
-const TIP_ROWS = 8;
+// stay on screen in any terminal the transcript has room in. Running duration bars obey it too
+// (tools/group.ts, ClockGated).
+export const TIP_ROWS = 8;
+export function isClockGated(component) {
+    return "clockLive" in component;
+}
 const ESCAPES = /\x1b\[[0-9;]*m|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 // pi-tui's image lines (terminal-image.js isImageLine, not exported): Kitty and iTerm2 sequences.
 const IMAGE = /\x1b_G|\x1b\]1337;File=/;

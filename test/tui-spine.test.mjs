@@ -412,3 +412,42 @@ test("a one-row iTerm2 image leaves the blank row after it to the spine", (t) =>
   assert.equal(blocks[0].lines[1], sequence);
   assert.equal(strip(blocks[0].lines[2]), " │");
 });
+
+// Review 1 #2 (.dev/milestones/0.1.23/review-1.md): running duration bars obey the tip too.
+test("running duration bars move only inside the tip; rows above it hold still as the clock runs", (t) => {
+  let now = 50_000;
+  t.mock.method(Date, "now", () => now);
+  const tr = transcript();
+  tr.handle({ type: "agent_start" });
+  tr.handle({ type: "message_start", message: user("build everything") });
+  // Five commands start at once, then a reply long enough to push the first ones out of the tip.
+  const ids = ["p1", "p2", "p3", "p4", "p5"];
+  const message = assistant(ids.map((id) => call("bash", id, { command: `long build ${id}` })));
+  tr.handle({ type: "message_start", message: { ...message, content: [] } });
+  tr.handle({ type: "message_end", message });
+  for (const id of ids) tr.handle({ type: "tool_execution_start", toolName: "bash", toolCallId: id, args: { command: `long build ${id}` } });
+  reply(tr, [{ type: "text", text: Array.from({ length: 10 }, (_, i) => `progress note ${i}`).join("\n\n") }]);
+  const before = tr.root.render(120).map(strip);
+  now += 2_000;
+  const after = tr.root.render(120).map(strip);
+  const changed = after.flatMap((row, index) => (row === before[index] ? [] : [index]));
+  const tipStart = after.length - 8;
+  assert.ok(before.some((row) => /long build p1 +▏···/.test(row)), JSON.stringify(before.slice(0, 12)));
+  assert.deepEqual(changed.filter((index) => index < tipStart), [], `rows outside the tip changed: ${JSON.stringify(changed.map((index) => after[index]))}`);
+
+  // An event (new output) still updates a row outside the tip.
+  tr.handle({ type: "tool_execution_update", toolName: "bash", toolCallId: "p1", args: { command: "long build p1" }, partialResult: { content: [{ type: "text", text: "step 1" }] } });
+  const updated = tr.root.render(120).map(strip);
+  assert.ok(updated.some((row) => /long build p1 +██▎·/.test(row)), "the event redraws p1 with its time so far");
+
+  // pi-tui's main-screen renderer never needs a full redraw while only the clock runs.
+  const screen = new piTui.TuiMainScreen({ columns: 120, rows: 12, write() {}, hideCursor() {}, showCursor() {} }, false);
+  screen.addChild(tr.root);
+  screen.renderNow();
+  const redraws = screen.fullRedraws;
+  for (let step = 0; step < 5; step += 1) {
+    now += 700;
+    screen.renderNow();
+  }
+  assert.equal(screen.fullRedraws, redraws);
+});

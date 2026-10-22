@@ -6,12 +6,14 @@ import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 
 import { formatDuration, UserMessageBlock } from "../dist/tui/chrome.js";
+import { MeasuredMarkdown } from "../dist/tui/markdown-layout.js";
 import { piTui } from "../dist/tui/pi-tui.js";
 import { createEpiTheme } from "../dist/tui/theme.js";
 import { toolBlock } from "../dist/tui/tools/block.js";
 import { CallLine, durationBar, fitCallRow } from "../dist/tui/tools/common.js";
 import { verbGroupLine } from "../dist/tui/tools/group.js";
-import { bashRenderers } from "../dist/tui/tools/mutating.js";
+import { bashRenderers, editRenderers } from "../dist/tui/tools/mutating.js";
+import { readRenderers } from "../dist/tui/tools/read-only.js";
 
 initTheme("dark");
 const theme = createEpiTheme("dark");
@@ -74,9 +76,9 @@ test("a long command stops at the column, its tail (· +N lines) never cut", () 
 });
 
 test("a full bar's time runs past the edge when there is room, and moves the bar left when not", () => {
-  const wide = fitCallRow("make", "", durationBar(theme, 140_500), 120, "…");
+  const wide = fitCallRow({ body: "make", tail: "", bar: durationBar(theme, 140_500) }, 120, "…");
   assert.equal(strip(wide), `${"make".padEnd(72)}████ 2m20s`);
-  const tight = fitCallRow("make", "", durationBar(theme, 140_500), 76, "…");
+  const tight = fitCallRow({ body: "make", tail: "", bar: durationBar(theme, 140_500) }, 76, "…");
   assert.equal(piTui.visibleWidth(tight), 76);
   assert.match(strip(tight), /make +████ 2m20s$/);
 });
@@ -86,10 +88,15 @@ test("too narrow for a column: the time stays a number after the body", () => {
   assert.equal(strip(line.render(14)[0]), "npm test  1.5s");
 });
 
-test("running: the bar is the time so far; expanded adds the exact time; a failure draws none", () => {
-  const state = { startedAt: Date.now() - 2_000 };
+test("running: the bar is the time so far; expanded adds the exact time; a failure draws none", (t) => {
+  let now = 1_000_000;
+  t.mock.method(Date, "now", () => now);
+  const state = {};
+  // Pi builds the call component when the tool starts (markExecutionStarted): the clock starts there.
+  new CallLine("$", theme, "sleep 9", context({ isPartial: true, state }));
+  now += 2_000;
   const running = new CallLine("$", theme, "sleep 9", context({ isPartial: true, state }));
-  assert.match(strip(running.render(80)[0]), /sleep 9 +██[▎▍▌]·$/, "about 2s");
+  assert.match(strip(running.render(80)[0]), /sleep 9 +██▎·$/, "2s");
   const notStarted = new CallLine("$", theme, "sleep 9", context({ isPartial: true, executionStarted: false }));
   assert.equal(strip(notStarted.render(80)[0]), "sleep 9");
   const expanded = new CallLine("$", theme, "make", context({ durationMs: 1500, expanded: true }));
@@ -128,4 +135,43 @@ test("a read-only group row's bar is its members' total, in the same column", ()
   assert.equal(strip(row).search(/[▏▎▍▌▋▊▉█]/), 77);
   assert.match(strip(row), /Read 2 files +█···$/, "40ms + 60ms = 100ms");
   assert.doesNotMatch(strip(verbGroupLine([{ ...members[0], status: "running", durationMs: undefined }, members[1]], theme, 120)), /[▏▎▍▌▋▊▉█]/, "none while one runs");
+});
+
+// Review 1 (.dev/milestones/0.1.23/review-1.md) regressions.
+
+test("review 1 #1: a call folded into a group row is timed from its start, not from when it is first shown", (t) => {
+  let now = 5_000_000;
+  t.mock.method(Date, "now", () => now);
+  const state = {};
+  const args = { path: "a.ts" };
+  // Pi: renderCall when the tool is created, again from markExecutionStarted; the row is not drawn.
+  readRenderers.renderCall(args, theme, context({ args, isPartial: true, executionStarted: false, state }));
+  readRenderers.renderCall(args, theme, context({ args, isPartial: true, state }));
+  now += 10_000;
+  // Ctrl+O: drawn for the first time ten seconds later.
+  const shown = readRenderers.renderCall(args, theme, context({ args, isPartial: true, expanded: true, state })).render(120)[0];
+  assert.match(strip(shown), /███· 10\.0s$/, strip(shown));
+});
+
+test("review 1 #3: output that starts with ✗ is data and keeps the full width; the failure row is cut", () => {
+  const ordinary = `✗ ${"ordinary-output-".repeat(12)}END`;
+  const framed = toolBlock("bash", bashRenderers);
+  const args = { command: "make" };
+  const ok = framed.renderResult({ content: [{ type: "text", text: ordinary }] }, { expanded: true, isPartial: false }, theme, context({ args })).render(300);
+  assert.ok(ok.some((row) => strip(row).endsWith("END")), JSON.stringify(ok.map(strip)));
+  const failed = framed.renderResult({ content: [{ type: "text", text: `${ordinary}\n\nCommand exited with code 1` }] }, { expanded: true, isPartial: false }, theme, context({ args, isError: true })).render(300);
+  assert.ok(failed.some((row) => strip(row).endsWith("END")), "a failed tool's own output keeps the full width too");
+  const status = failed.find((row) => strip(row).startsWith("     ✗ exit 1"));
+  assert.ok(status !== undefined && piTui.visibleWidth(status) <= 81, "the failure row stops at the column");
+  const edit = editRenderers.renderResult({ content: [{ type: "text", text: `x${"y".repeat(200)}` }] }, { expanded: false, isPartial: false }, theme, context({ isError: true })).render(300);
+  assert.ok(piTui.visibleWidth(edit[0]) <= 76, "an edit failure row too");
+});
+
+test("review 1 #4: only a CommonMark closing fence closes a mermaid block", () => {
+  const drawn = (source) => new MeasuredMarkdown(theme, source, (markdown) => markdown).render(120).map(strip).some((row) => row.includes("┌"));
+  const body = "```mermaid\nflowchart LR\n A[Start] --> B[End]\n";
+  for (const closing of ["```", " ```", "   ```", "````", "```  ", "```\t"]) assert.ok(drawn(body + closing), `closes: ${JSON.stringify(closing)}`);
+  for (const closing of ["    ```", "\u00a0```", "``", "~~~", "``` x"]) assert.ok(!drawn(body + closing), `does not close: ${JSON.stringify(closing)}`);
+  assert.ok(drawn("~~~~mermaid\nflowchart LR\n A --> B\n~~~~"), "tildes close tildes");
+  assert.ok(!drawn("````mermaid\nflowchart LR\n A --> B\n```"), "a shorter fence does not close a longer one");
 });

@@ -46,8 +46,24 @@ export interface SpineBlock {
 type Glyph = "trunk" | "branch" | "fail" | "close";
 
 // The animated tip: the live turn's last rows, one pulse period (motion.ts RAIL_PERIOD). Small enough to
-// stay on screen in any terminal the transcript has room in.
-const TIP_ROWS = 8;
+// stay on screen in any terminal the transcript has room in. Running duration bars obey it too
+// (tools/group.ts, ClockGated).
+export const TIP_ROWS = 8;
+
+/**
+ * A block whose rows change with the clock alone (a running tool's duration bar), not only when
+ * something happens. Outside the transcript's last TIP_ROWS rows it must draw what it drew last time,
+ * or every frame would change a row that may have scrolled off -- the full redraw the spine's tip
+ * exists to avoid. GroupedMessages sets `clockLive` before each render; an event (new output, the
+ * result) still changes the rows wherever they are.
+ */
+export interface ClockGated {
+  clockLive: boolean;
+}
+
+export function isClockGated(component: object): component is ClockGated {
+  return "clockLive" in component;
+}
 
 const ESCAPES = /\x1b\[[0-9;]*m|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 // pi-tui's image lines (terminal-image.js isImageLine, not exported): Kitty and iTerm2 sequences.

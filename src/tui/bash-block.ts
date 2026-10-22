@@ -11,7 +11,7 @@ import type { CommandHost } from "./command-host.js";
 import { errorText } from "./errors.js";
 import { TURN_COLUMNS } from "./measure.js";
 import { piTui } from "./pi-tui.js";
-import type { SpineMember } from "./spine.js";
+import type { ClockGated, SpineMember } from "./spine.js";
 import { durationBar, failureRow, fitCallRow, formatToolDuration, shortenCommand, truncateOutputLines } from "./tools/common.js";
 
 // Matches tools/block.ts: a rail column, then 2 columns of padding before the `◆` bullet; output
@@ -37,8 +37,11 @@ export function truncateBashOutput(lines: string[]): string[] {
   return truncateOutputLines(lines, (text) => text);
 }
 
-export class UserBashBlock implements Component, SpineMember {
+export class UserBashBlock implements Component, SpineMember, ClockGated {
   readonly spineRole = "bash";
+  clockLive = true;
+  // The rows last drawn while running, for frames when the clock may not move them (spine.ts ClockGated).
+  private frozen: { width: number; rows: string[] } | undefined;
   private outputLines: string[] = [];
   private status: Status = "running";
   private exitCode: number | undefined;
@@ -70,6 +73,7 @@ export class UserBashBlock implements Component, SpineMember {
     // Append to the last (possibly incomplete) line, same as Pi's BashExecutionComponent.
     this.outputLines[this.outputLines.length - 1] += parts[0] ?? "";
     this.outputLines.push(...parts.slice(1));
+    this.frozen = undefined;
   }
 
   get spineRunning(): boolean {
@@ -80,6 +84,7 @@ export class UserBashBlock implements Component, SpineMember {
     this.exitCode = exitCode;
     this.status = cancelled ? "cancelled" : exitCode === undefined || exitCode !== 0 ? "error" : "done";
     if (this.startedAt !== undefined) this.durationMs = Date.now() - this.startedAt;
+    this.frozen = undefined;
   }
 
   /** The output as lines, without the single trailing newline most commands leave. */
@@ -93,6 +98,13 @@ export class UserBashBlock implements Component, SpineMember {
    * cancelled, or when the command failed. */
   render(width: number): string[] {
     const running = this.status === "running";
+    if (running && !this.clockLive && this.frozen?.width === width) return this.frozen.rows;
+    const rows = this.draw(width, running);
+    this.frozen = running ? { width, rows } : undefined;
+    return rows;
+  }
+
+  private draw(width: number, running: boolean): string[] {
     const marker = this.theme.fg(this.status === "error" ? "error" : "bashMode", this.excludeFromContext ? "!!" : "$");
     const { text, extraLines } = shortenCommand(this.command, undefined);
     const extra = extraLines > 0 ? this.theme.fg("dim", ` · +${extraLines} lines`) : "";
@@ -102,7 +114,7 @@ export class UserBashBlock implements Component, SpineMember {
     const bar = ms === undefined ? "" : durationBar(this.theme, ms);
     const fallback = this.status === "done" && ms !== undefined ? `  ${this.theme.fg("dim", formatToolDuration(ms))}` : "";
     const callPrefix = `${" ".repeat(CALL_PREFIX)}${marker} `;
-    const body = fitCallRow(this.theme.fg("toolOutput", text), extra, bar, Math.max(1, width - piTui.visibleWidth(callPrefix)), this.theme.fg("dim", "…"), fallback);
+    const body = fitCallRow({ body: this.theme.fg("toolOutput", text), tail: extra, bar, fallbackTime: fallback }, Math.max(1, width - piTui.visibleWidth(callPrefix)), this.theme.fg("dim", "…"));
     const callLine = callPrefix + body;
 
     const lines = this.lines();
@@ -142,7 +154,9 @@ export class UserBashBlock implements Component, SpineMember {
     return { handled: true };
   }
 
-  invalidate(): void {}
+  invalidate(): void {
+    this.frozen = undefined;
+  }
 }
 
 /**

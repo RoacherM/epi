@@ -23,19 +23,23 @@ export interface Inspectable {
 export class LinesComponent implements Component {
   private lines: string[] = [];
   private inspectable: Inspectable | undefined;
+  private columnRows: ReadonlySet<number> = new Set();
 
-  constructor(lines: string[] | string, inspectable?: Inspectable) {
-    this.setLines(lines, inspectable);
+  constructor(lines: string[] | string, inspectable?: Inspectable, columnRows: readonly number[] = []) {
+    this.setLines(lines, inspectable, columnRows);
   }
 
-  /** `inspectable` row indices count the rows as split here, one per "\n"-separated part. */
-  setLines(lines: string[] | string, inspectable?: Inspectable): void {
+  /** `inspectable` row indices count the rows as split here, one per "\n"-separated part.
+   * `columnRows` are rows of the turn's column -- a failure row -- cut at the reply's measure;
+   * every other row is data and keeps the full width (docs/tui-one-column-design.md §2.1). */
+  setLines(lines: string[] | string, inspectable?: Inspectable, columnRows: readonly number[] = []): void {
     if (typeof lines === "string") {
       this.lines = lines ? lines.split("\n") : [];
     } else {
       this.lines = lines.flatMap((line) => line.split("\n"));
     }
     this.inspectable = inspectable;
+    this.columnRows = new Set(columnRows);
   }
 
   /** The inspector target behind rendered row `row`, if that row opens one. */
@@ -46,17 +50,17 @@ export class LinesComponent implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
-    return this.lines.map((line) => piTui.truncateToWidth(line, width));
+    return this.lines.map((line, row) => (this.columnRows.has(row) ? piTui.truncateToWidth(line, Math.min(width, DEFAULT_MEASURE)) : piTui.truncateToWidth(line, width)));
   }
 }
 
 /** Reuses the renderer's previous LinesComponent (Pi hands it back as `lastComponent`) when there is one. */
-export function createOrUpdateLines(context: ToolRenderContext, lines: string[], inspectable?: Inspectable): Component {
+export function createOrUpdateLines(context: ToolRenderContext, lines: string[], inspectable?: Inspectable, columnRows: readonly number[] = []): Component {
   if (context.lastComponent instanceof LinesComponent) {
-    context.lastComponent.setLines(lines, inspectable);
+    context.lastComponent.setLines(lines, inspectable, columnRows);
     return context.lastComponent;
   }
-  return new LinesComponent(lines, inspectable);
+  return new LinesComponent(lines, inspectable, columnRows);
 }
 
 /** The text parts of a tool result joined by "\n"; images and malformed parts are skipped. */
@@ -101,7 +105,7 @@ export function fitWithTail(body: string, tail: string, width: number, ellipsis:
 // A duration bar (docs/tui-one-column-design.md §2.2): four cells, one decade each -- 10ms–100ms,
 // 100ms–1s, 1s–10s, 10s–100s -- filled in eighths at the log position. Tool run times span four or
 // five decades; on a linear scale everything but the slowest would be a sliver.
-export const BAR_CELLS = 4;
+const BAR_CELLS = 4;
 const EIGHTHS = ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
 // From here the bar is full and can't tell lengths apart, so the time follows it as a number.
 const BAR_FULL_MS = 100_000;
@@ -120,14 +124,23 @@ export function durationBar(theme: Theme, ms: number): string {
   return ms >= BAR_FULL_MS ? `${bar} ${theme.fg("dim", formatDuration(ms))}` : bar;
 }
 
+/** What a call row holds: the body (cut to fit), its tail (`· +36 lines`, `· +3 −1`; never cut), the
+ * duration bar ("" for none), and the time as a number for a line too narrow for a column. */
+export interface CallRowParts {
+  body: string;
+  tail: string;
+  bar: string;
+  fallbackTime?: string;
+}
+
 /**
- * A call row in the turn's one column (docs/tui-one-column-design.md §2.1): `body` and its `tail`
- * (`· +36 lines`, `· +3 −1`; never cut) fill the column up to the bar, and the bar starts at the same
- * column on every row -- the measure's right edge less its cells -- so a group of calls lines its
- * bars up. A number after a full bar runs past the edge when the line has room, and otherwise moves
- * the bar left. `width` is the row's width after the marker; `bar` "" draws no bar.
+ * A call row in the turn's one column (docs/tui-one-column-design.md §2.1): the body and its tail
+ * fill the column up to the bar, and the bar starts at the same column on every row -- the
+ * measure's right edge less its cells -- so a group of calls lines its bars up. A number after a
+ * full bar runs past the edge when the line has room, and otherwise moves the bar left. `width` is
+ * the row's width after the marker.
  */
-export function fitCallRow(body: string, tail: string, bar: string, width: number, ellipsis: string, fallbackTime = ""): string {
+export function fitCallRow({ body, tail, bar, fallbackTime = "" }: CallRowParts, width: number, ellipsis: string): string {
   const column = Math.min(width, DEFAULT_MEASURE);
   if (bar === "" || column < MIN_COLUMN_FOR_BAR) return fitWithTail(body, tail + fallbackTime, column, ellipsis);
   const start = Math.max(0, Math.min(column - BAR_CELLS, width - piTui.visibleWidth(bar)));
@@ -154,7 +167,12 @@ export class CallLine implements Component {
     private readonly body: string,
     private readonly context: Pick<ToolRenderContext, "state" | "durationMs" | "isError" | "isPartial" | "executionStarted" | "expanded">,
     private readonly extra = "",
-  ) {}
+  ) {
+    // Pi builds the call component again when the tool starts (markExecutionStarted -> updateDisplay),
+    // drawn or not -- a call folded into a group row is not -- so the clock starts with the tool.
+    const { executionStarted, isPartial, isError, state } = context;
+    if (executionStarted && isPartial && !isError && state !== undefined && state !== null) state.startedAt ??= Date.now();
+  }
 
   /** The tail as it reads right now: `extra`, then the result's summary. A failed result's own row
    * says what happened, so a summary left by an earlier (partial) result is dropped. */
@@ -167,12 +185,11 @@ export class CallLine implements Component {
   /** How long the tool has run: the final time, or while it runs the time since it started (kept in
    * the renderer's state, which Pi keeps per call). A failure draws none, as in 0.1.22. */
   private elapsed(): number | undefined {
-    const { durationMs, isError, isPartial, executionStarted, state } = this.context;
+    const { durationMs, isError, isPartial, state } = this.context;
     if (isError) return undefined;
     if (!isPartial) return durationMs;
-    if (!executionStarted || state === undefined || state === null) return undefined;
-    state.startedAt ??= Date.now();
-    return Date.now() - state.startedAt;
+    const startedAt = state?.startedAt;
+    return typeof startedAt === "number" ? Date.now() - startedAt : undefined;
   }
 
   /** The bar for the time so far, with the exact time after it when expanded (Ctrl+O). */
@@ -188,7 +205,7 @@ export class CallLine implements Component {
   render(width: number): string[] {
     const ms = this.elapsed();
     const fallback = ms !== undefined && !this.context.isPartial ? `  ${this.theme.fg("dim", formatToolDuration(ms))}` : "";
-    return [fitCallRow(this.body, this.tail(), this.bar(), width, this.theme.fg("dim", "…"), fallback)];
+    return [fitCallRow({ body: this.body, tail: this.tail(), bar: this.bar(), fallbackTime: fallback }, width, this.theme.fg("dim", "…"))];
   }
 }
 

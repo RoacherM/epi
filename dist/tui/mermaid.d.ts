@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-export type MermaidResult = 
+type MermaidResult = 
 /** `rows`: the art, styled, no wider than the width asked for. `note`: what was given up on, if anything. */
 {
     kind: "art";
@@ -14,4 +14,5 @@ export type MermaidResult =
 /** The diagram drawn into at most `width` columns, or why it isn't. Pure in `source` and `width`,
  * apart from the theme's colors. */
 export declare function renderMermaid(theme: Theme, source: string, width: number): MermaidResult;
+export {};
 //# sourceMappingURL=mermaid.d.ts.map

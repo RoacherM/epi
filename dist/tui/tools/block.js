@@ -1,4 +1,3 @@
-import { DEFAULT_MEASURE } from "../measure.js";
 import { piTui } from "../pi-tui.js";
 import { CallLine, LinesComponent, textContent } from "./common.js";
 // Rail column, then padding so `◆` lines up with assistant text (transcript CONTENT_PAD = 3).
@@ -46,10 +45,8 @@ class Railed {
         const contentWidth = Math.max(1, width - prefix - (this.isCall ? 2 : 0));
         const lead = " ".repeat(prefix);
         return this.inner.render(contentWidth).map((line, index) => {
-            // A failure row (`✗ exit 1 · …`) is part of the turn's column; output rows are data and keep the
-            // full width (docs/tui-one-column-design.md §2.1).
             if (!this.isCall)
-                return lead + (isFailureRow(line) ? piTui.truncateToWidth(line, Math.min(contentWidth, DEFAULT_MEASURE), "…") : line);
+                return lead + line;
             return lead + (index === 0 ? bullet : "  ") + line;
         });
     }
@@ -62,10 +59,6 @@ class Railed {
     invalidate() {
         this.inner.invalidate();
     }
-}
-// tools/common.ts failureRow(): the row starts with `✗ ` (src/tui/spine.ts reads it the same way).
-function isFailureRow(line) {
-    return line.replace(/\x1b\[[0-9;]*m/g, "").startsWith("✗ ");
 }
 /** Renderers that reuse their last component see their own component, not the frame around it. */
 function unwrap(context) {

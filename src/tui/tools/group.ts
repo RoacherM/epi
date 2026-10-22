@@ -12,7 +12,7 @@ import type { Component, Container, TUI, TuiMouseEvent, TuiMouseEventResult } fr
 import { breathe, motionTime } from "../motion.js";
 import { piTui } from "../pi-tui.js";
 import { type ChildRows, dispatchToRows } from "../rows.js";
-import { paintSpine, type SpineBlock, type SpineMember, spineMember } from "../spine.js";
+import { type ClockGated, isClockGated, paintSpine, type SpineBlock, type SpineMember, spineMember, TIP_ROWS } from "../spine.js";
 import { durationBar, fitCallRow } from "./common.js";
 import { createFlashState, disposeFlash, type FlashState, isFlashing, startFlash } from "./flash.js";
 import type { ToolRenderers } from "./types.js";
@@ -58,13 +58,16 @@ type Status = "running" | "done" | "error";
  * directly to decide whether (and in what color) the group's merged line should flash -- there is no
  * separate group-level flash timer (see `GroupedMessages.renderSummaryLine`).
  */
-export class ToolEntry extends ToolExecutionComponent implements SpineMember {
+export class ToolEntry extends ToolExecutionComponent implements SpineMember, ClockGated {
   readonly spineRole = "tool";
   status: Status = "running";
   expandedFlag = false;
   readonly flash: FlashState = createFlashState();
   /** The final result's run time, for the group row's bar. */
   durationMs: number | undefined;
+  clockLive = true;
+  // The rows last drawn while running, kept for frames when the clock may not move them.
+  private frozen: { width: number; lines: string[] } | undefined;
   private started = false;
 
   constructor(
@@ -82,7 +85,22 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember {
 
   override markExecutionStarted(): void {
     this.started = true;
+    this.frozen = undefined;
     super.markExecutionStarted();
+  }
+
+  /** Running and outside the transcript's tip: the rows as last drawn, so the duration bar holds
+   * still (spine.ts ClockGated); anything that happened since (output, the result) already cleared them. */
+  override render(width: number): string[] {
+    if (this.status === "running" && !this.clockLive && this.frozen?.width === width) return this.frozen.lines;
+    const lines = super.render(width);
+    this.frozen = this.status === "running" ? { width, lines } : undefined;
+    return lines;
+  }
+
+  override invalidate(): void {
+    this.frozen = undefined;
+    super.invalidate();
   }
 
   override updateResult(
@@ -90,6 +108,7 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember {
     isPartial = false,
   ): void {
     super.updateResult(result, isPartial);
+    this.frozen = undefined;
     if (!isPartial) this.durationMs = result.durationMs;
     if (isPartial) {
       this.status = "running";
@@ -106,6 +125,7 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember {
 
   override setExpanded(expanded: boolean): void {
     this.expandedFlag = expanded;
+    this.frozen = undefined;
     super.setExpanded(expanded);
   }
 
@@ -183,7 +203,7 @@ export function verbGroupLine(members: MemberLike[], theme: Theme, width: number
   const times = members.map((member) => member.durationMs);
   const total = !anyRunning && times.every((ms) => ms !== undefined) ? times.reduce<number>((sum, ms) => sum + ms!, 0) : undefined;
   const bar = total === undefined ? "" : durationBar(theme, total);
-  return lead + bullet + fitCallRow(text, "", bar, contentWidth, "…");
+  return lead + bullet + fitCallRow({ body: text, tail: "", bar }, contentWidth, "…");
 }
 
 /** A muted `◈ ...` line laid out with the same 3-column lead as every other line (rail + padding),
@@ -235,6 +255,10 @@ export class GroupedMessages implements Component {
   // identifies "this run" for as long as it exists.
   private readonly unfolded = new Set<ToolEntry>();
   private readonly revealed = new Set<ToolEntry>();
+  // Last frame's blocks, and those with a row in the transcript's last TIP_ROWS rows: a clock-driven
+  // block may move only there (spine.ts ClockGated). A block not drawn last frame counts as live.
+  private drawn = new Set<Component>();
+  private inTip = new Set<Component>();
 
   constructor(
     private readonly messages: Container,
@@ -259,11 +283,16 @@ export class GroupedMessages implements Component {
   dispose(): void {
     this.unfolded.clear();
     this.revealed.clear();
+    this.drawn.clear();
+    this.inTip.clear();
   }
 
   render(width: number): string[] {
     const placed: Placed[] = [];
     const children = this.messages.children;
+    for (const child of children) {
+      if (isClockGated(child)) child.clockLive = !this.drawn.has(child) || this.inTip.has(child);
+    }
     let i = 0;
     while (i < children.length) {
       const first = children[i]!; // guarded by the `while` bound above
@@ -305,8 +334,22 @@ export class GroupedMessages implements Component {
     }
     joinToolRuns(placed);
     paintSpine(this.theme, placed, width, this.turnRunning());
+    this.noteTip(placed);
     this.mouseLayout = { width, rows: placed.map(({ component, lines, skipped }) => ({ component, height: lines.length, skipped })) };
     return placed.flatMap((block) => block.lines);
+  }
+
+  /** Which blocks this frame drew, and which of them reach into the last TIP_ROWS rows. */
+  private noteTip(placed: readonly Placed[]): void {
+    const total = placed.reduce((rows, block) => rows + block.lines.length, 0);
+    this.drawn = new Set();
+    this.inTip = new Set();
+    let end = 0;
+    for (const block of placed) {
+      end += block.lines.length;
+      this.drawn.add(block.component);
+      if (end > total - TIP_ROWS) this.inTip.add(block.component);
+    }
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {

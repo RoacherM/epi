@@ -99,8 +99,8 @@ function renderError(
   { fallback, expanded }: { fallback: string; expanded: boolean },
 ): Component {
   const [first = fallback, ...rest] = output ? output.split("\n") : [fallback];
-  if (!expanded) return createOrUpdateLines(context, [failureRow(theme, first)]);
-  return createOrUpdateLines(context, [failureRow(theme, first), ...rest.map((line) => theme.fg("error", line))]);
+  if (!expanded) return createOrUpdateLines(context, [failureRow(theme, first)], undefined, [0]);
+  return createOrUpdateLines(context, [failureRow(theme, first), ...rest.map((line) => theme.fg("error", line))], undefined, [0]);
 }
 
 /** A built-in read-only tool's call line: `◆ <verb> <what>`, all in the tool-output tone. */
