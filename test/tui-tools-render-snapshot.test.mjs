@@ -32,7 +32,7 @@ const CWD = "/w";
 /** A call row with its duration bar at the column's edge (docs/tui-one-column-design.md §2.2): `width`
  * is what the call component renders into, so the bar starts 4 cells before min(width, 76). */
 function withBar(left, ms, width) {
-  return left + " ".repeat(Math.min(width, 76) - 4 - piTui.visibleWidth(left)) + durationBar(theme, ms);
+  return left + " ".repeat(width - 4 - piTui.visibleWidth(left)) + durationBar(theme, ms);
 }
 
 function ctx(overrides = {}) {

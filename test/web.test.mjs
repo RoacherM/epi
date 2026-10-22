@@ -469,7 +469,7 @@ test("call row: the query, then range or date span, result count, a failed sourc
   webRenderers.web_search.renderResult({ content: [], details }, { expanded: false, isPartial: false }, theme, context(state));
   const row = strip(webRenderers.web_search.renderCall({ query: "deepseek search api" }, theme, context(state, { durationMs: 500 })).render(120)[0]);
   // The tail is never cut; the query gives way to it within the column.
-  assert.match(row, /^search "deepse.*… · after 2026-09-15 · 1 result · 2 out of range · exa ✗ +[█▏▎▍▌▋▊▉·]{4}$/);
+  assert.match(row, /^search "deepseek search api" · after 2026-09-15 · 1 result · 2 out of range · exa ✗ +[█▏▎▍▌▋▊▉·]{4}$/);
   const expanded = webRenderers.web_search.renderResult({ content: [], details }, { expanded: true, isPartial: false }, theme, context({})).render(120).map(strip);
   assert.match(expanded[0], /^2026-10-20 2 days ago  A a\.com \[deepseek\]/);
   assert.match(expanded[1], /exa failed: 401 invalid API key · 2 outside the date range/);

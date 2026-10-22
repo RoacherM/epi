@@ -169,8 +169,8 @@ test("bash: a long first line is cut before the tail, which always shows whole",
   for (const width of [40, 80, 120, 230]) {
     const [line] = component.render(width);
     assert.ok(piTui.visibleWidth(line) <= width);
-    // The body stops at the column (76 columns at most), the tail never: the bar follows it.
-    assert.match(strip(line), /x… · \+1 lines +██▍·$/, `width ${width}: ${strip(line)}`);
+    // The body is cut to fit the terminal, the tail never: the bar follows it.
+    assert.match(strip(line), width >= 230 ? /x · \+1 lines +██▍·$/ : /x… · \+1 lines +██▍·$/, `width ${width}: ${strip(line)}`);
   }
 });
 
@@ -182,8 +182,8 @@ test("bash: the call line drops `cd <cwd> &&`, writes home as ~, and adds the ru
   assert.equal(call(`cd "${cwd}"; npm test`), "npm test");
   assert.equal(call(`cd ~/proj && ls ${home}/other`), "ls ~/other");
   assert.equal(call(`cd ${cwd}/sub && make`), `cd ~/proj/sub && make`, "only the session's own cwd is left out");
-  assert.equal(call("npm test", { durationMs: 30 }), `${"npm test".padEnd(72)}▌···`);
-  assert.equal(call("npm test", { durationMs: 140_500 }), `${"npm test".padEnd(72)}████ 2m20s`, "a full bar is followed by the time");
+  assert.equal(call("npm test", { durationMs: 30 }), `${"npm test".padEnd(196)}▌···`);
+  assert.equal(call("npm test", { durationMs: 140_500 }), `${"npm test".padEnd(190)}████ 2m20s`, "a full bar is followed by the time");
   assert.equal(call("npm test", { durationMs: 30, isError: true }), "npm test", "a failure's row says what happened instead");
   assert.equal(call("npm test", { durationMs: 30, isPartial: true }), "npm test", "not started yet: no time so far");
 });
@@ -337,7 +337,7 @@ test("edit: collapsed result shows summary +N −M without +/- symbol columns", 
   // The summary goes on the call line instead (W3).
   const call = editRenderers.renderCall({ path: "/w/a.ts" }, theme, { ...context, durationMs: 12 });
   const [line] = call.render(80);
-  assert.equal(strip(line), `${"edit a.ts · +12 −3".padEnd(72)}▏···`);
+  assert.equal(strip(line), `${"edit a.ts · +12 −3".padEnd(76)}▏···`);
   assert.ok(line.includes(fg("toolDiffAdded")));
   assert.ok(line.includes(fg("toolDiffRemoved")));
 });
