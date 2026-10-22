@@ -107,16 +107,15 @@ test("the shortcuts bar on a text chip also offers Shift+Enter:newline", (t) => 
 test("Enter right after a paste sends it, like grok, instead of expanding it in place", (t) => {
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
     ["waitReady"], paste, chipDrawn, ["mark", "pasted"],
-    ["key", "enter"], ["waitFor", { regex: "ECHO:line1[\\s\\S]*?line2\\s+line3\\s+line4" }], ["mark", "sent"], ["key", "ctrl+d"],
+    ["key", "enter"], ["waitFor", { regex: "ECHO:line1[\\s\\S]*?line2[\\s│┃]+line3[\\s│┃]+line4" }], ["mark", "sent"], ["key", "ctrl+d"],
   ]);
   assert.match(marks.pasted, /\[Pasted: 4 lines\]/);
   // ECHO: only appears once the model actually received the message -- "expanded in place" never
   // calls the model at all, so this is what tells the two apart (both leave "[Pasted:" gone and
   // "line1".."line4" somewhere on screen, which is why a weaker assertion wouldn't catch a
-  // regression back to expand-on-Enter). "ECHO:line1" is the reply's first rendered row, which
-  // carries the M4 assistant-message clock (item 1, docs/tui-design.md 4.2) in its row padding, so
-  // that one gap tolerates arbitrary characters, not just whitespace.
-  assert.match(marks.sent, /ECHO:line1[\s\S]*?line2\s+line3\s+line4/);
+  // regression back to expand-on-Enter). Each reply row after the first starts with the turn spine's
+  // `│` (src/tui/spine.ts), so the gaps between rows tolerate it as well as whitespace.
+  assert.match(marks.sent, /ECHO:line1[\s\S]*?line2[\s│┃]+line3[\s│┃]+line4/);
 });
 
 test("Enter on the chip expands it in place instead of submitting, once the caret has moved onto it", (t) => {
@@ -149,16 +148,14 @@ test("backspace deletes the whole chip in one keystroke", (t) => {
 test("submitting after the chip sends the full pasted text to the model, not the marker", (t) => {
   const { marks } = runApp(t, [fixture("faux-echo.mjs")], [
     ["waitReady"], ["type", "before "], paste, ["type", " after"],
-    ["key", "enter"], ["waitFor", { regex: "ECHO:before line1[\\s\\S]*?line2\\s+line3\\s+line4 after" }], ["mark", "sent"], ["key", "ctrl+d"],
+    ["key", "enter"], ["waitFor", { regex: "ECHO:before line1[\\s\\S]*?line2[\\s│┃]+line3[\\s│┃]+line4 after" }], ["mark", "sent"], ["key", "ctrl+d"],
   ]);
   // The screen wraps the sent text across rows (no literal "\n" survives stripping ANSI cursor
   // moves), so match the lines in order with whatever row padding sits between them. The chip
   // marker legitimately appeared on screen earlier while typing; what matters is that the ECHO
-  // (what the model actually received) has the expanded lines instead of it. Between "line1" and
-  // "line2" specifically, that padding also carries the M4 assistant-message clock (item 1,
-  // docs/tui-design.md 4.2) -- it sits on the reply's first rendered row, same as it would on any
-  // other row padding, so that gap alone tolerates arbitrary characters, not just whitespace.
-  assert.match(marks.sent, /ECHO:before line1[\s\S]*?line2\s+line3\s+line4 after/);
+  // (what the model actually received) has the expanded lines instead of it. Reply rows carry the
+  // turn spine's `│` (src/tui/spine.ts) at their start, so the gaps tolerate it too.
+  assert.match(marks.sent, /ECHO:before line1[\s\S]*?line2[\s│┃]+line3[\s│┃]+line4 after/);
 });
 
 test("a chip pasted into the draft survives Alt+Up restoring a queued follow-up ahead of it", (t) => {

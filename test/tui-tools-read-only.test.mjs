@@ -42,6 +42,9 @@ function createMockContext(cwd, args, expanded = false, isError = false) {
   };
 }
 
+const strip = (text) => text.replace(/\x1b\[[0-9;]*m/g, "");
+const WIDTHS = [40, 80, 120, 230];
+
 function assertLinesFitWidth(lines, width) {
   assert.ok(Array.isArray(lines), "Expected lines to be an array");
   for (const line of lines) {
@@ -81,17 +84,15 @@ test("read renderer fits widths 40, 80, 120 and follows grok-build content rules
   const resExpandedComp = readRenderers.renderResult(resCjk, { expanded: true, isPartial: false }, theme, ctxCjk);
 
   // Check widths 40, 80, 120 for call, collapsed result, expanded result
-  for (const w of [40, 80, 120]) {
+  for (const w of WIDTHS) {
     assertLinesFitWidth(callComp.render(w), w);
     assertLinesFitWidth(resCollapsedComp.render(w), w);
     assertLinesFitWidth(resExpandedComp.render(w), w);
   }
 
-  // Collapsed shows one line: path (cwd-relative) and line count
-  const collapsedLines = resCollapsedComp.render(80);
-  assert.equal(collapsedLines.length, 1);
-  assert.match(collapsedLines[0], /项目\/测试\.ts/);
-  assert.match(collapsedLines[0], /15 lines/);
+  // Collapsed takes no row of its own: the call line carries the cwd-relative path and line count
+  assert.deepEqual(resCollapsedComp.render(80), []);
+  assert.equal(strip(callComp.render(80)[0]), "read 项目/测试.ts · 15 lines");
 
   // Expanded shows first 5 lines, then … N more lines, then last 3 lines
   const expandedLines = resExpandedComp.render(120);
@@ -118,14 +119,11 @@ test("read renderer fits widths 40, 80, 120 and follows grok-build content rules
   const argsRange = { path: cjkRelPath, offset: 3, limit: 4 };
   const resRange = await readTool.execute("call-3", argsRange, undefined, undefined, { cwd: tempDir });
   const ctxRange = createMockContext(tempDir, argsRange, false);
-  const rangeCallLine = readRenderers.renderCall(argsRange, theme, ctxRange).render(80)[0];
+  const rangeCall = readRenderers.renderCall(argsRange, theme, ctxRange);
   const resRangeCollapsed = readRenderers.renderResult(resRange, { expanded: false, isPartial: false }, theme, ctxRange);
-  const rangeCollapsedLines = resRangeCollapsed.render(80);
-  assert.equal(rangeCollapsedLines.length, 1);
-  assert.match(rangeCollapsedLines[0], /项目\/测试\.ts/);
+  assert.deepEqual(resRangeCollapsed.render(80), []);
   // 4 content lines plus Pi's own "more lines in file" continuation notice (2 more lines).
-  assert.match(rangeCollapsedLines[0], /6 lines/);
-  assert.notEqual(rangeCollapsedLines[0], rangeCallLine, "collapsed result must not repeat the call line verbatim");
+  assert.equal(strip(rangeCall.render(80)[0]), "read 项目/测试.ts:3-6 · 6 lines");
 });
 
 test("read renderer: offset=1 (a common model default) does not make the collapsed result repeat the call line", async (t) => {
@@ -142,14 +140,11 @@ test("read renderer: offset=1 (a common model default) does not make the collaps
   const result = await readTool.execute("call-1", args, undefined, undefined, { cwd: tempDir });
   const ctx = createMockContext(tempDir, args, false);
 
-  const callLine = readRenderers.renderCall(args, theme, ctx).render(80)[0];
-  const collapsedLine = readRenderers.renderResult(result, { expanded: false, isPartial: false }, theme, ctx).render(80)[0];
+  const call = readRenderers.renderCall(args, theme, ctx);
+  const collapsed = readRenderers.renderResult(result, { expanded: false, isPartial: false }, theme, ctx).render(80);
 
-  assert.match(callLine, /notes\.md/);
-  assert.match(callLine, /:1/);
-  assert.match(collapsedLine, /notes\.md/);
-  assert.match(collapsedLine, /3 lines/);
-  assert.notEqual(collapsedLine, callLine);
+  assert.deepEqual(collapsed, []);
+  assert.equal(strip(call.render(80)[0]), "read notes.md:1 · 3 lines");
 });
 
 test("grep renderer fits widths 40, 80, 120 and follows grok-build content rules", async (t) => {
@@ -169,17 +164,15 @@ test("grep renderer fits widths 40, 80, 120 and follows grok-build content rules
   const collapsedComp = grepRenderers.renderResult(grepRes, { expanded: false, isPartial: false }, theme, ctx);
   const expandedComp = grepRenderers.renderResult(grepRes, { expanded: true, isPartial: false }, theme, ctx);
 
-  for (const w of [40, 80, 120]) {
+  for (const w of WIDTHS) {
     assertLinesFitWidth(callComp.render(w), w);
     assertLinesFitWidth(collapsedComp.render(w), w);
     assertLinesFitWidth(expandedComp.render(w), w);
   }
 
-  // Collapsed shows pattern and N matches in M files
-  const collapsedLines = collapsedComp.render(80);
-  assert.equal(collapsedLines.length, 1);
-  assert.match(collapsedLines[0], /\/match_\.\*_target\//);
-  assert.match(collapsedLines[0], /16 matches in 2 files/);
+  // Collapsed: the call line shows the pattern and N matches in M files
+  assert.deepEqual(collapsedComp.render(80), []);
+  assert.equal(strip(callComp.render(80)[0]), "grep /match_.*_target/ in . · 16 matches in 2 files");
 
   // Expanded lists at most 10 result lines, then … N more
   const expandedLines = expandedComp.render(120);
@@ -205,17 +198,15 @@ test("find renderer fits widths 40, 80, 120 and follows grok-build content rules
   const collapsedComp = findRenderers.renderResult(findRes, { expanded: false, isPartial: false }, theme, ctx);
   const expandedComp = findRenderers.renderResult(findRes, { expanded: true, isPartial: false }, theme, ctx);
 
-  for (const w of [40, 80, 120]) {
+  for (const w of WIDTHS) {
     assertLinesFitWidth(callComp.render(w), w);
     assertLinesFitWidth(collapsedComp.render(w), w);
     assertLinesFitWidth(expandedComp.render(w), w);
   }
 
-  // Collapsed shows pattern and entry count
-  const collapsedLines = collapsedComp.render(80);
-  assert.equal(collapsedLines.length, 1);
-  assert.match(collapsedLines[0], /\*\.ts/);
-  assert.match(collapsedLines[0], /14 entries/);
+  // Collapsed: the call line shows the pattern and entry count
+  assert.deepEqual(collapsedComp.render(80), []);
+  assert.equal(strip(callComp.render(80)[0]), "find *.ts in 项目 · 14 entries");
 
   // Expanded lists at most 10 entries, then … N more
   const expandedLines = expandedComp.render(80);
@@ -241,17 +232,15 @@ test("ls renderer fits widths 40, 80, 120 and follows grok-build content rules",
   const collapsedComp = lsRenderers.renderResult(lsRes, { expanded: false, isPartial: false }, theme, ctx);
   const expandedComp = lsRenderers.renderResult(lsRes, { expanded: true, isPartial: false }, theme, ctx);
 
-  for (const w of [40, 80, 120]) {
+  for (const w of WIDTHS) {
     assertLinesFitWidth(callComp.render(w), w);
     assertLinesFitWidth(collapsedComp.render(w), w);
     assertLinesFitWidth(expandedComp.render(w), w);
   }
 
-  // Collapsed shows path and entry count
-  const collapsedLines = collapsedComp.render(80);
-  assert.equal(collapsedLines.length, 1);
-  assert.match(collapsedLines[0], /项目/);
-  assert.match(collapsedLines[0], /12 entries/);
+  // Collapsed: the call line shows the path and entry count
+  assert.deepEqual(collapsedComp.render(80), []);
+  assert.equal(strip(callComp.render(80)[0]), "ls 项目 · 12 entries");
 
   // Expanded lists at most 10 entries, then … N more
   const expandedLines = expandedComp.render(80);
@@ -265,10 +254,11 @@ test("readOnlyRenderers exports all tools and supports component reuse", () => {
   assert.ok(readOnlyRenderers.find);
   assert.ok(readOnlyRenderers.ls);
 
-  const ctx = createMockContext("/tmp", { path: "test.ts" });
-  const first = readOnlyRenderers.read.renderCall({ path: "test.ts" }, theme, ctx);
+  const ctx = createMockContext("/tmp", { path: "test.ts" }, true);
+  const result = { content: [{ type: "text", text: "one" }] };
+  const first = readOnlyRenderers.read.renderResult(result, { expanded: true, isPartial: false }, theme, ctx);
   ctx.lastComponent = first;
-  const second = readOnlyRenderers.read.renderCall({ path: "test2.ts" }, theme, ctx);
+  const second = readOnlyRenderers.read.renderResult(result, { expanded: true, isPartial: false }, theme, ctx);
   assert.equal(first, second, "Should reuse lastComponent when available");
 });
 
@@ -282,11 +272,23 @@ test("renderers handle error results gracefully", () => {
   const collapsed = readOnlyRenderers.read.renderResult(errResult, { expanded: false, isPartial: false }, theme, ctx);
   const expanded = readOnlyRenderers.read.renderResult(errResult, { expanded: true, isPartial: false }, theme, ctx);
 
-  for (const w of [40, 80, 120]) {
+  for (const w of WIDTHS) {
     assertLinesFitWidth(collapsed.render(w), w);
     assertLinesFitWidth(expanded.render(w), w);
   }
 
-  assert.equal(collapsed.render(80).length, 1);
-  assert.match(collapsed.render(80)[0], /ENOENT/);
+  assert.deepEqual(collapsed.render(80).map(strip), ["✗ Error: ENOENT: no such file or directory"]);
+});
+
+test("a failed result drops the summary an earlier partial result left on the call line", async () => {
+  const { ToolEntry } = await import("../dist/tui/tools/group.js");
+  const { toolBlock } = await import("../dist/tui/tools/block.js");
+  const entry = new ToolEntry("read", "r", { path: "a.txt" }, toolBlock("read", readRenderers), { requestRender() {} }, "/w", "read");
+  entry.updateResult({ content: [{ type: "text", text: "one\ntwo" }], isError: false }, true);
+  entry.render(80);
+  entry.updateResult({ content: [{ type: "text", text: "Permission denied" }], isError: true });
+  const rows = entry.render(80).map(strip);
+  assert.ok(rows.some((row) => row.includes("✗ Permission denied")), rows.join("\n"));
+  assert.ok(!rows.join("\n").includes("2 lines"), rows.join("\n"));
+  entry.dispose();
 });

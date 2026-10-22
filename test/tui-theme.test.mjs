@@ -43,3 +43,17 @@ test("Pi's components and Epi's own Theme instance draw identical colors", (t) =
     assert.equal(fromPi, fromEpi);
   }
 });
+
+// docs/tui-transcript-layout-design.md R5: inline code, unhighlighted code blocks and list bullets
+// are toned down to sit next to body text, in both palettes.
+test("markdown code and list bullets use the toned-down colors", () => {
+  const hex = (color) => `#${[color.r, color.g, color.b].map((part) => part.toString(16).padStart(2, "0")).join("")}`;
+  const expected = {
+    dark: { mdCode: "#8fb3c0", mdCodeBlock: "#b8c0cc", mdListBullet: "#6c6c6c" },
+    light: { mdCode: "#4f6f7a", mdCodeBlock: "#5c6b77", mdListBullet: "#767676" },
+  };
+  for (const [appearance, tokens] of Object.entries(expected)) {
+    const { colors } = createEpiTheme(appearance);
+    for (const [token, value] of Object.entries(tokens)) assert.equal(hex(colors[token]), value, `${appearance} ${token}`);
+  }
+});

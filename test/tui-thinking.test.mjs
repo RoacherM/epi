@@ -42,7 +42,7 @@ const stripAnsi = (text) => text.replace(/\x1b\[[0-9;]*m/g, "");
 // *no longer* does, since old diff-rendered bytes can still sit in the log after the real screen
 // has moved on. That "no longer visible" half is covered instead, exactly, by the direct
 // Transcript.render() snapshots in test/tui-transcript.test.mjs; this test only checks presence.
-test("thinking streams 'Thinking…' while running, then settles as 'Thought for Ns'", (t) => {
+test("thinking streams 'Thinking…' while running, then settles as '∴ Ns'", (t) => {
   const { marks, output } = runApp(t, [fixture("faux-thinking.mjs")], [
     ["waitReady"], ["type", "go"], ["key", "enter"],
     ["wait", 300], ["mark", "midstream"],
@@ -52,7 +52,7 @@ test("thinking streams 'Thinking…' while running, then settles as 'Thought for
   assert.match(stripAnsi(marks.midstream), /Thinking…/);
 
   const settled = stripAnsi(marks.settled);
-  assert.match(settled, /Thought for \d+\.\ds/);
+  assert.match(settled, /∴ \d+\.\ds/);
   assert.match(settled, /THINK-DONE/);
   assert.match(stripAnsi(output), /THINK-DONE/);
 });
@@ -122,8 +122,6 @@ test("expanded thinking renders markdown and lines up with the answer text", (t)
     const { screens } = runApp(t, [fixture("faux-thinking-markdown.mjs")], [
       ["waitReady"], ["type", "go"], ["key", "enter"],
       ["waitFor", "Worked for", { screen: true }],
-      // The thinking rail's completion flash (D24) paints column 0 for 400ms; measure after it.
-      ["waitGone", "┃", { timeoutMs: 2000 }],
       ["key", "ctrl+t"], ["waitFor", "doThing", { screen: true }], ["screen", "expanded"],
       ["key", "ctrl+d"],
     ], { columns });
@@ -134,7 +132,8 @@ test("expanded thinking renders markdown and lines up with the answer text", (t)
     const columnsOf = texts.map((text) => {
       const row = rows.find((candidate) => candidate.includes(text));
       assert.ok(row !== undefined, `expected "${text}" on screen at ${columns} columns:\n${screen}`);
-      return row.search(/\S/);
+      // Where the text itself starts: the turn spine (src/tui/spine.ts) draws in column 1 of every row.
+      return row.indexOf(text);
     });
     assert.deepEqual(columnsOf, texts.map(() => columnsOf.at(-1)), `thinking rows must start in the answer's column at ${columns} columns:\n${screen}`);
   }

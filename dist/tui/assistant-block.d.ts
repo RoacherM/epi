@@ -1,11 +1,17 @@
 import { type MarkdownTransformer, type Theme } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-export declare class AssistantBlock implements Component {
+import type { SpineMember } from "./spine.js";
+import { type FlashState } from "./tools/flash.js";
+export declare class AssistantBlock implements Component, SpineMember {
     private readonly theme;
     private readonly transformers;
     private readonly requestRender;
+    readonly spineRole = "trunk";
     private readonly container;
+    /** Each child's rows in the last render, for click routing and the spine's flash rows. */
+    private rows;
+    private rowsWidth;
     private lastMessage;
     private lastStreaming;
     private readonly timing;
@@ -17,7 +23,6 @@ export declare class AssistantBlock implements Component {
      * guard as a tool's `started` flag. */
     private activeThinking;
     private globalExpanded;
-    private readonly clock;
     constructor(theme: Theme, message: AssistantMessage, transformers: readonly MarkdownTransformer[], streaming: boolean, globalExpanded?: boolean, requestRender?: () => void);
     /** Finds which thinking segment (by its startIndex key) a streaming event's contentIndex falls
      * into, so a run built from several adjacent `thinking` content parts still gets one timer. */
@@ -28,24 +33,21 @@ export declare class AssistantBlock implements Component {
      * `setHideThinkingBlock` clearing `thinkingVisibilityOverrides`. */
     setGlobalExpanded(expanded: boolean): void;
     private rebuild;
+    /** The component for `segments[segmentIndex]`, or undefined when it draws nothing: an empty run,
+     * a text run with no text (tool calls only), or a collapsed thinking run that no text follows. */
+    private piece;
+    /** Whether text (not a tool call) comes right after thinking segment `index`. While the message
+     * streams, an empty text part counts too, so the `∴` row doesn't blink out for the moment between
+     * `text_start` and the first delta. */
+    private textFollows;
     private flash;
     /** Drops pending flash timers when the transcript is cleared (/new, /resume, /reload). */
     dispose(): void;
-    /** The width the inner container is actually rendered at -- narrower than the component's own,
-     * to leave room for the clock (chrome.ts's `UserMessageBlock` does the same). Shared by `render()`
-     * and `handleMouse()` so a click is dispatched against the same row heights it was drawn with. */
-    private innerWidth;
-    /** Item 1 (docs/tui-design.md 4.2): the time sits on the first *visible* line, like a user
-     * message -- not literally render()'s line 0, which is usually the blank spacer Pi's component
-     * always opens with. Reused, `spread`'s narrowing (chrome.ts's UserMessageBlock does the same)
-     * costs a little wrap width throughout rather than only on that one line, which pi-tui's Markdown
-     * has no hook to do more precisely. */
     render(width: number): string[];
-    /** `event.width` must match what `render()` last drew the container at, or pi-tui's `Container.
-     * handleMouse` recomputes row heights at the wrong (full, not narrowed) width and a click lands on
-     * the wrong segment whenever an earlier one wraps differently at the two widths -- `Container`
-     * only reuses its cached per-child heights when the width matches exactly. */
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
+    /** A thinking run that just ended flashes its rows' stretch of the turn spine (docs/tui-motion-
+     * design.md M6); `row` counts the rows of the last render. */
+    spineFlash(row: number): FlashState | undefined;
     invalidate(): void;
 }
 //# sourceMappingURL=assistant-block.d.ts.map

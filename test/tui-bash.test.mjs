@@ -72,7 +72,7 @@ test("a non-zero exit code is shown", (t) => {
   ]);
   assert.match(out, /EXIT=0/);
   assert.match(out, /\$ false/);
-  assert.match(out, /exit 1/);
+  assert.match(out, /✗ exit 1/);
 });
 
 test("Esc aborts a running user bash command and the app keeps working", (t) => {
@@ -84,8 +84,8 @@ test("Esc aborts a running user bash command and the app keeps working", (t) => 
   ]);
   assert.match(out, /EXIT=0/);
   assert.match(out, /\(cancelled\)/);
-  assert.match(out, /\$ echo AFTER-ABORT/);
-  assert.match(out, /exit 0/);
+  // A command that succeeded has no status row, only its run time on the call line (W3).
+  assert.match(out, /\$ echo AFTER-ABORT  \d+ms/);
 });
 
 test("running another bash command while one is running is refused", (t) => {
@@ -108,7 +108,9 @@ test("running another bash command while one is running is refused", (t) => {
 
 const theme = createEpiTheme("dark");
 
-function assertWidths(component, widths = [40, 80, 120]) {
+const strip = (text) => text.replace(/\x1b\[[0-9;]*m/g, "");
+
+function assertWidths(component, widths = [40, 80, 120, 230]) {
   for (const width of widths) {
     const lines = component.render(width);
     for (const line of lines) {
@@ -140,12 +142,14 @@ test("UserBashBlock fits widths 40, 80 and 120 while running, done, and with lon
   done.appendOutput("hi\n");
   done.setComplete(0, false);
   assertWidths(done);
-  assert.ok(done.render(80).some((line) => line.includes("exit 0")));
+  const doneLines = done.render(80).map(strip);
+  assert.match(doneLines[0], /^   \$ echo hi  \d+ms$/, "a live run shows its run time; success takes no status row");
+  assert.deepEqual(doneLines.slice(1), ["     hi"]);
 
   const failed = new UserBashBlock(theme, "false", false);
   failed.setComplete(1, false);
   assertWidths(failed);
-  assert.ok(failed.render(80).some((line) => line.includes(theme.fg("error", "exit 1"))));
+  assert.ok(failed.render(80).some((line) => line.includes(theme.fg("error", "✗ exit 1"))));
 
   const cancelled = new UserBashBlock(theme, "sleep 30", false);
   cancelled.setComplete(undefined, true);
@@ -154,7 +158,7 @@ test("UserBashBlock fits widths 40, 80 and 120 while running, done, and with lon
 
   const excluded = new UserBashBlock(theme, "echo secret", true);
   excluded.setComplete(0, false);
-  assert.ok(excluded.render(80)[0]?.includes("!! echo secret"));
+  assert.match(strip(excluded.render(80)[0]), /^   !! echo secret/);
 
   const long = new UserBashBlock(theme, "seq 1 20", false);
   for (let i = 1; i <= 20; i++) long.appendOutput(`${i}\n`);
@@ -170,8 +174,6 @@ test("UserBashBlock.fromMessage replays a finished session message", () => {
     exitCode: 0,
     cancelled: false,
   });
-  const lines = block.render(80);
-  assert.ok(lines[0]?.includes("$ echo hi"));
-  assert.ok(lines.some((line) => line.includes("hi")));
-  assert.ok(lines.some((line) => line.includes("exit 0")));
+  // A replayed message has no run time to show.
+  assert.deepEqual(block.render(80).map(strip), ["   $ echo hi", "     hi"]);
 });

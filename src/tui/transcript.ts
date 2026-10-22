@@ -12,19 +12,34 @@ import type { Component, Container, OverlayHandle, TUI } from "@earendil-works/p
 import { AssistantBlock } from "./assistant-block.js";
 import { UserBashBlock } from "./bash-block.js";
 import { BlockInspectorOverlay, type InspectTarget } from "./buffer/inspector.js";
-import { formatDuration, messageText, UserMessageBlock } from "./chrome.js";
+import { fit, formatDuration, messageText, UserMessageBlock } from "./chrome.js";
 import { writeClipboardText } from "./clipboard.js";
 import { rewritePiText } from "../pi-output.js";
 import { imageLabelNumbers } from "./paste-chips.js";
 import { piTui } from "./pi-tui.js";
+import type { SpineMember } from "./spine.js";
 import { toolBlock } from "./tools/block.js";
 import { asGroupKind, GroupedMessages, ToolEntry } from "./tools/group.js";
 import { builtInToolRenderers } from "./tools/index.js";
 
 type AgentMessage = AgentSession["messages"][number];
 
-// grok block layout: a 1-column rail plus 2 columns of padding before block content.
-const CONTENT_PAD = 3;
+/** `Worked for 12.3s` / `Stopped after 4.0s` under a settled turn, dim. It starts in column 4, so
+ * the turn spine closes into it: `╰─ Worked for 12.3s` (src/tui/spine.ts). */
+class TurnFooter implements Component, SpineMember {
+  readonly spineRole = "footer";
+
+  constructor(
+    private readonly theme: Theme,
+    private readonly label: string,
+  ) {}
+
+  render(width: number): string[] {
+    return [fit(`    ${this.theme.fg("dim", this.label)}`, width)];
+  }
+
+  invalidate(): void {}
+}
 
 export class Transcript {
   /** Scrolled content: the welcome page (extension header) until the first message, then messages. */
@@ -75,7 +90,7 @@ export class Transcript {
     private readonly theme: Theme,
     private session: AgentSession,
   ) {
-    this.groupedMessages = new GroupedMessages(this.messages, this.tui, this.theme);
+    this.groupedMessages = new GroupedMessages(this.messages, this.tui, this.theme, () => this.turnStartedAt !== undefined);
     this.root.addChild({
       render: (width) => (this.messageCount === 0 ? this.header.render(width) : []),
       invalidate: () => this.header.invalidate(),
@@ -306,7 +321,9 @@ export class Transcript {
   }
 
   private toolEnded(event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>): void {
-    this.tool(event.toolName, event.toolCallId).updateResult({ ...event.result, isError: event.isError }, false);
+    // durationMs is a top-level event field, not part of `result`; Pi's interactive-mode.js passes it
+    // the same way, and its ToolExecutionComponent hands it to renderers as `context.durationMs`.
+    this.tool(event.toolName, event.toolCallId).updateResult({ ...event.result, isError: event.isError, durationMs: event.durationMs }, false);
     // Pi also stops, and drains follow-ups, after a batch whose every tool returned `terminate:
     // true` (agent-loop.js shouldTerminateToolBatch; each of the batch's calls ends here once).
     if (this.toolBatch !== undefined) {
@@ -375,7 +392,7 @@ export class Transcript {
     this.finishedReply = undefined;
     this.toolBatch = undefined;
     const label = aborted ? "Stopped after" : "Worked for";
-    this.add(new piTui.Text(this.theme.fg("muted", `${label} ${formatDuration(duration)}`), CONTENT_PAD, 0), true, false);
+    this.add(new TurnFooter(this.theme, `${label} ${formatDuration(duration)}`), true, false);
   }
 
   private addFinishedMessage(message: AgentMessage): void {
@@ -441,7 +458,6 @@ export class Transcript {
       renderers,
       this.tui,
       this.session.sessionManager.getCwd(),
-      this.theme,
       asGroupKind(toolName, isBuiltIn),
     );
     component.setExpanded(this.toolsExpanded);

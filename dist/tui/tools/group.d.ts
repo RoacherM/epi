@@ -1,6 +1,7 @@
 import type { Theme, ToolExecutionOptions } from "@earendil-works/pi-coding-agent";
 import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import type { Component, Container, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { type SpineMember } from "../spine.js";
 import type { ToolRenderers } from "./types.js";
 import { type FlashState } from "./flash.js";
 export type GroupKind = "read" | "grep" | "find" | "ls";
@@ -16,15 +17,15 @@ type Status = "running" | "done" | "error";
  * directly to decide whether (and in what color) the group's merged line should flash -- there is no
  * separate group-level flash timer (see `GroupedMessages.renderSummaryLine`).
  */
-export declare class ToolEntry extends ToolExecutionComponent {
+export declare class ToolEntry extends ToolExecutionComponent implements SpineMember {
     private readonly hostUi;
-    private readonly theme;
     readonly groupKind: GroupKind | undefined;
+    readonly spineRole = "tool";
     status: Status;
     expandedFlag: boolean;
     readonly flash: FlashState;
     private started;
-    constructor(toolName: string, toolCallId: string, args: unknown, renderers: ToolRenderers | undefined, hostUi: TUI, cwd: string, theme: Theme, groupKind: GroupKind | undefined, options?: ToolExecutionOptions);
+    constructor(toolName: string, toolCallId: string, args: unknown, renderers: ToolRenderers | undefined, hostUi: TUI, cwd: string, groupKind: GroupKind | undefined, options?: ToolExecutionOptions);
     markExecutionStarted(): void;
     updateResult(result: {
         content: Array<{
@@ -35,9 +36,12 @@ export declare class ToolEntry extends ToolExecutionComponent {
         }>;
         details?: unknown;
         isError: boolean;
+        durationMs?: number;
     }, isPartial?: boolean): void;
     setExpanded(expanded: boolean): void;
-    render(width: number): string[];
+    /** The completion flash lights the whole block's stretch of the turn spine (src/tui/spine.ts). */
+    spineFlash(): FlashState | undefined;
+    get spineRunning(): boolean;
     /** Cleared on `Transcript.reset()` so a stale flash timer never fires after this entry is gone. */
     dispose(): void;
 }
@@ -46,8 +50,8 @@ interface MemberLike {
     status: Status;
 }
 /** Pure text+layout for the collapsed group line, split out from `GroupedMessages` so widths
- * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the rail
- * pulses and the `◈` breathes (docs/tui-motion-design.md M5), both read at `t` seconds. */
+ * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the `◈`
+ * breathes (docs/tui-motion-design.md M5), read at `t` seconds; the turn spine beside it pulses. */
 export declare function verbGroupLine(members: MemberLike[], theme: Theme, width: number, t?: number): string;
 /**
  * Wraps `Transcript`'s `messages` container: folds consecutive collapsed built-in read-only tool
@@ -68,11 +72,15 @@ export declare class GroupedMessages implements Component {
     private readonly messages;
     private readonly tui;
     private readonly theme;
+    /** A turn is in progress: its spine is live (src/tui/spine.ts). */
+    private readonly turnRunning;
     private mouseLayout;
     private toolsExpanded;
     private readonly unfolded;
     private readonly revealed;
-    constructor(messages: Container, tui: TUI, theme: Theme);
+    constructor(messages: Container, tui: TUI, theme: Theme, 
+    /** A turn is in progress: its spine is live (src/tui/spine.ts). */
+    turnRunning?: () => boolean);
     invalidate(): void;
     /** `Ctrl+O`: always wins over any per-group unfold/reveal state left over from clicks. */
     setToolsExpanded(expanded: boolean): void;
@@ -89,15 +97,15 @@ export declare class GroupedMessages implements Component {
      */
     private renderUnfolded;
     /**
-     * The merged line has no group-level flash timer of its own: once every member has settled, it
-     * paints its rail in whichever tone a still-flashing member is showing (error wins over success),
-     * which is exactly the 400ms window each member already tracks on its own `ToolEntry.flash` (and
-     * fades the same way, read from that member's own state). This
-     * needs no "did a render happen between running and settled" observation -- pi-tui's own render
-     * throttle can (and in the real app, does) coalesce a fast run's frames so no such render ever
-     * happens, which a wall-clock read of `isFlashing()` doesn't care about.
+     * The merged line has no group-level flash timer of its own: once every member has settled, its
+     * spine branch flashes in whichever tone a still-flashing member is showing (error wins over
+     * success), which is exactly the 400ms window each member already tracks on its own
+     * `ToolEntry.flash` (and fades the same way, read from that member's own state). This needs no
+     * "did a render happen between running and settled" observation -- pi-tui's own render throttle
+     * can (and in the real app, does) coalesce a fast run's frames so no such render ever happens,
+     * which a wall-clock read of `isFlashing()` doesn't care about.
      */
-    private renderSummaryLine;
+    private summaryLine;
 }
 export {};
 //# sourceMappingURL=group.d.ts.map

@@ -16,6 +16,8 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
   expanded: boolean;
   showImages?: boolean;
   isError?: boolean;
+  /** How long the tool ran, from the final result; undefined while it runs or for old sessions. */
+  durationMs?: number | undefined;
 }
 
 export interface ToolRenderers {

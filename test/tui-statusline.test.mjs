@@ -204,6 +204,8 @@ test("extension ui.setStatusLine reaches the host surface, undefined restores th
 });
 
 // A finished turn: its reply drawn, then the "Worked for" line that closes the turn (tui-app.test.mjs).
+// The prompt frame's bottom border starts with its `╰` corner; the turn spine's `╰─ Worked for` doesn't.
+const isPromptBorder = (row) => row.trimStart().startsWith("╰") && row.trimEnd().endsWith("╯");
 const turnDone = (reply) => ["waitFor", { regex: `${reply}[\\s\\S]*Worked for` }];
 
 test("TUI draws session token stats on the prompt frame's bottom border", (t) => {
@@ -214,7 +216,7 @@ test("TUI draws session token stats on the prompt frame's bottom border", (t) =>
   const screen = screens.after.join("\n");
   // `m (off) · ⇡N ⇣N · cache N%` on the bottom border; the faux provider reports usage (cache
   // counters on the first call too). Context occupancy stays in the header's top-right corner.
-  const border = screens.after.find((row) => row.includes("╰")) ?? "";
+  const border = screens.after.find(isPromptBorder) ?? "";
   assert.match(border, /⇡[\d.]+k? ⇣~?[\d.]+k?/);
   assert.match(border, /cache \d+%/);
   assert.doesNotMatch(border, /128k/);
@@ -254,7 +256,7 @@ test("TUI setStatusLine(undefined) restores the built-in label", (t) => {
   ]);
   assert.match(out, /EXIT=0/);
   // findLast: the autocomplete popup's own frame also has ╰ rows; the prompt frame sits below it.
-  const border = screens.after.findLast((row) => row.includes("╰")) ?? "";
+  const border = screens.after.findLast(isPromptBorder) ?? "";
   assert.match(border, /⇡0 ⇣0/);
   assert.doesNotMatch(border, /CUSTOM/);
 });
@@ -266,7 +268,7 @@ test("TUI status line never double-counts a finished message while its tool call
     turnDone("AFTER-TOOL"), ["key", "ctrl+d"],
   ]);
   assert.match(out, /EXIT=0/);
-  const border = screens.midTool.find((row) => row.includes("╰")) ?? "";
+  const border = screens.midTool.find(isPromptBorder) ?? "";
   // The first message's final usage (13) is already in the session stats while its bash call
   // sleeps; the label must count it once (⇣13), not twice (⇣26).
   assert.match(border, /⇣13\b/);
@@ -285,6 +287,6 @@ test("TUI falls back to the default status line when an extension's formatter th
   assert.match(out, /EXIT=0/);
   const screen = screens.after.join("\n");
   assert.match(screen, /Status line formatter failed/);
-  const border = screens.after.find((row) => row.includes("╰")) ?? "";
+  const border = screens.after.find(isPromptBorder) ?? "";
   assert.match(border, /⇡[\d.]+k? ⇣/);
 });

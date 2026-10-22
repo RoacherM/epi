@@ -57,12 +57,17 @@ export function pulseRule(theme, width, t, phase = 0, strength = 1) {
 }
 // Rows between two pulses on a running rail; the pulse repeats down a block of any length.
 const RAIL_PERIOD = 8;
-/** Column 0 of a running block's `row`: `┃` whose color a pulse slides down, accent to thinkingHigh. */
-export function railGlyph(theme, row, t) {
+/** The color of a running rail's `row` at `t`: a pulse slides down it, accent to thinkingHigh,
+ * repeating every RAIL_PERIOD rows. The turn spine (src/tui/spine.ts) paints its live glyphs in it. */
+export function railBlend(theme, row, t) {
     const head = (t * 6) % RAIL_PERIOD;
     const offset = Math.abs(row % RAIL_PERIOD - head);
     const distance = Math.min(offset, RAIL_PERIOD - offset);
-    return blendFg(theme, "accent", "thinkingHigh", gaussian(distance, 1.2), "┃");
+    return blend(theme, "accent", "thinkingHigh", gaussian(distance, 1.2));
+}
+/** A running rail's `row`: `┃` in `railBlend`'s color. */
+export function railGlyph(theme, row, t) {
+    return railBlend(theme, row, t).paint("┃");
 }
 /** A glyph breathing between `from` and `to` about once a second (a running group's `◈`). */
 export function breathe(theme, from, to, t, text) {

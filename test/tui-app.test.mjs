@@ -66,8 +66,8 @@ test("TUI v2 runs a built-in tool call", (t) => {
   ]);
   // The shell really ran ($((40+2)) evaluated), and the card is Epi's collapsed bash renderer.
   assert.match(out, /TOOL-DONE saw TOOL-RAN-42/);
-  assert.match(out, /\$ echo TOOL-RAN/);
-  assert.match(out, /exit 0/);
+  // Success takes no status row: the call line ends in the run time instead (W1/W3).
+  assert.match(out, /\$ echo TOOL-RAN.*  \d+(ms|\.\ds)/);
 });
 
 test("TUI v2 hosts extension custom() and select() dialogs", (t) => {
@@ -245,9 +245,8 @@ test("TUI v2 draws built-in tools with Epi's grok renderers instead of Pi's own"
     ["waitReady"], ["type", "read it"], ["key", "enter"], turnDone("READ-DONE"), ["mark", "after"], ["key", "ctrl+d"],
   ]);
   assert.match(marks.after, /READ-DONE/);
-  assert.match(marks.after, /read read-me\.txt/);
-  // Epi's collapsed read result states the line count; Pi's own renderer shows no such line.
-  assert.match(marks.after, /read-me\.txt \(\d+ lines\)/);
+  // Epi's collapsed read states the line count on the call line; Pi's own renderer shows no such line.
+  assert.match(marks.after, /read read-me\.txt · \d+ lines/);
 });
 
 // Item 4/5 (pre-merge review, docs/tui-design.md 4.2/4.3): Ctrl+O now also expands a collapsed user

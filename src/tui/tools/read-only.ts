@@ -9,7 +9,7 @@ import {
 import type { Component } from "@earendil-works/pi-tui";
 
 import { piTui } from "../pi-tui.js";
-import { createOrUpdateLines, type Inspectable, isErrorResult, textContent } from "./common.js";
+import { CallLine, createOrUpdateLines, failureRow, type Inspectable, isErrorResult, setCallSummary, textContent } from "./common.js";
 import type { ToolRenderContext, ToolRenderers } from "./types.js";
 
 function formatRelativePath(filePath: string | undefined, cwd: string): string {
@@ -89,24 +89,33 @@ function parseGrepOutput(output: string): {
 }
 
 /**
- * Error result shared by all four tools: the first line collapsed (after `label: ` when given),
- * every line expanded, each painted `error`.
+ * Error result shared by all four tools: `✗` and the first line collapsed, every line expanded,
+ * each painted `error`. The call line above already names the file or pattern.
  */
 function renderError(
   context: ToolRenderContext,
   theme: Theme,
   output: string,
-  { fallback, expanded, label }: { fallback: string; expanded: boolean; label?: string },
+  { fallback, expanded }: { fallback: string; expanded: boolean },
 ): Component {
-  const errorLines = output ? output.split("\n") : [fallback];
-  if (!expanded) {
-    const first = theme.fg("error", errorLines[0] ?? "error");
-    return createOrUpdateLines(context, [label === undefined ? first : `${theme.fg("accent", label)}: ${first}`]);
-  }
-  return createOrUpdateLines(
-    context,
-    errorLines.map((line) => theme.fg("error", line)),
-  );
+  const [first = fallback, ...rest] = output ? output.split("\n") : [fallback];
+  if (!expanded) return createOrUpdateLines(context, [failureRow(theme, first)]);
+  return createOrUpdateLines(context, [failureRow(theme, first), ...rest.map((line) => theme.fg("error", line))]);
+}
+
+/** A built-in read-only tool's call line: `◆ <verb> <what>`, all in the tool-output tone. */
+function callLine(theme: Theme, context: ToolRenderContext, verb: string, what: string): Component {
+  return new CallLine("◆", theme, `${theme.fg("toolOutput", verb)} ${what}`, context);
+}
+
+/** Collapsed and successful: the count goes on the call line and the result takes no row. */
+function collapsedSummary(context: ToolRenderContext, summary: string): Component {
+  setCallSummary(context, summary);
+  return createOrUpdateLines(context, []);
+}
+
+function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : pluralForm}`;
 }
 
 /** Expanded grep/find/ls listing: the first 10 rows, then a count of the rest, which opens every
@@ -141,8 +150,7 @@ function renderReadCall(args: any, theme: Theme, context: ToolRenderContext): Co
   const rawPath = String(args?.path ?? args?.file_path ?? "");
   const relPath = formatRelativePath(rawPath, context.cwd);
   const rangeStr = readRange(args);
-  const callText = `${theme.fg("toolTitle", theme.bold("read"))} ${theme.fg("accent", relPath)}${rangeStr ? theme.fg("warning", rangeStr) : ""}`;
-  return createOrUpdateLines(context, [callText]);
+  return callLine(theme, context, "read", `${theme.fg("toolOutput", relPath)}${rangeStr ? theme.fg("muted", rangeStr) : ""}`);
 }
 
 function renderReadResult(
@@ -156,19 +164,14 @@ function renderReadResult(
   const output = textContent(result).replace(/\r/g, "");
 
   if (isErrorResult(result, context)) {
-    return renderError(context, theme, output, { fallback: "Error reading file", expanded: options.expanded, label: relPath });
+    return renderError(context, theme, output, { fallback: "Error reading file", expanded: options.expanded });
   }
 
   const lines = highlightRead(output, rawPath, theme);
   const totalLines = result.details?.truncation?.totalLines ?? lines.length;
-
-  if (!options.expanded) {
-    // grok content rule: collapsed always states the line count. The call line already shows
-    // any offset/limit range, so repeating it here would just duplicate the call verbatim.
-    const suffix = ` ${theme.fg("muted", `(${totalLines} ${totalLines === 1 ? "line" : "lines"})`)}`;
-    const line = `${theme.fg("accent", relPath)}${suffix}`;
-    return createOrUpdateLines(context, [line]);
-  }
+  // grok content rule: the line count is always stated, on the call line (W3).
+  if (!options.expanded) return collapsedSummary(context, theme.fg("dim", plural(totalLines, "line")));
+  setCallSummary(context, theme.fg("dim", plural(totalLines, "line")));
 
   if (lines.length <= 8) {
     return createOrUpdateLines(context, lines);
@@ -242,14 +245,14 @@ export const readRenderers: ToolRenderers = {
 
 function renderGrepCall(args: any, theme: Theme, context: ToolRenderContext): Component {
   const pattern = args?.pattern ? `/${args.pattern}/` : "[missing pattern]";
-  let callText = `${theme.fg("toolTitle", theme.bold("grep"))} ${theme.fg("accent", pattern)}`;
+  let what = theme.fg("toolOutput", pattern);
   if (args?.path) {
-    callText += ` in ${theme.fg("accent", formatRelativePath(args.path, context.cwd))}`;
+    what += theme.fg("toolOutput", ` in ${formatRelativePath(args.path, context.cwd)}`);
   }
   if (args?.glob) {
-    callText += ` ${theme.fg("muted", `(${args.glob})`)}`;
+    what += ` ${theme.fg("muted", `(${args.glob})`)}`;
   }
-  return createOrUpdateLines(context, [callText]);
+  return callLine(theme, context, "grep", what);
 }
 
 function renderGrepResult(
@@ -266,12 +269,9 @@ function renderGrepResult(
 
   const pattern = context.args?.pattern ? `/${context.args.pattern}/` : "[missing pattern]";
   const { lines, matchCount, fileCount } = parseGrepOutput(output);
-
-  if (!options.expanded) {
-    const matchText = `${matchCount} ${matchCount === 1 ? "match" : "matches"} in ${fileCount} ${fileCount === 1 ? "file" : "files"}`;
-    const line = `${theme.fg("accent", pattern)} ${theme.fg("muted", matchText)}`;
-    return createOrUpdateLines(context, [line]);
-  }
+  const summary = theme.fg("dim", `${plural(matchCount, "match", "matches")} in ${plural(fileCount, "file")}`);
+  if (!options.expanded) return collapsedSummary(context, summary);
+  setCallSummary(context, summary);
 
   if (lines.length === 0) {
     return createOrUpdateLines(context, [theme.fg("muted", "No matches found")]);
@@ -306,13 +306,9 @@ function entryListResult(
     }
 
     const entries = parseEntryLines(output, emptyMarker);
-    const count = entries.length;
-
-    if (!options.expanded) {
-      const entryText = `(${count} ${count === 1 ? "entry" : "entries"})`;
-      const line = `${theme.fg("accent", labelOf(context))} ${theme.fg("muted", entryText)}`;
-      return createOrUpdateLines(context, [line]);
-    }
+    const summary = theme.fg("dim", plural(entries.length, "entry", "entries"));
+    if (!options.expanded) return collapsedSummary(context, summary);
+    setCallSummary(context, summary);
 
     if (entries.length === 0) {
       return createOrUpdateLines(context, [theme.fg("muted", emptyMarker)]);
@@ -323,11 +319,8 @@ function entryListResult(
 
 function renderFindCall(args: any, theme: Theme, context: ToolRenderContext): Component {
   const pattern = args?.pattern ?? "";
-  let callText = `${theme.fg("toolTitle", theme.bold("find"))} ${theme.fg("accent", pattern)}`;
-  if (args?.path) {
-    callText += ` in ${theme.fg("accent", formatRelativePath(args.path, context.cwd))}`;
-  }
-  return createOrUpdateLines(context, [callText]);
+  const where = args?.path ? ` in ${formatRelativePath(args.path, context.cwd)}` : "";
+  return callLine(theme, context, "find", theme.fg("toolOutput", `${pattern}${where}`));
 }
 
 export const findRenderers: ToolRenderers = {
@@ -337,8 +330,7 @@ export const findRenderers: ToolRenderers = {
 
 function renderLsCall(args: any, theme: Theme, context: ToolRenderContext): Component {
   const relPath = formatRelativePath(args?.path ?? ".", context.cwd);
-  const callText = `${theme.fg("toolTitle", theme.bold("ls"))} ${theme.fg("accent", relPath)}`;
-  return createOrUpdateLines(context, [callText]);
+  return callLine(theme, context, "ls", theme.fg("toolOutput", relPath));
 }
 
 export const lsRenderers: ToolRenderers = {

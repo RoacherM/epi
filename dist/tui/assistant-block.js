@@ -1,20 +1,23 @@
-// Assistant message rendering (docs/tui-design.md 4.2's "M4 视觉细节"): the timestamp on the first
-// line, and thinking blocks that stream as `◆ Thinking…` + last 3 lines, then collapse to
-// `◆ Thought for Ns`. Pi's `AssistantMessageComponent` can't do this: `hideThinkingBlock` /
+// Assistant message rendering (docs/tui-design.md 4.2's "M4 视觉细节", docs/tui-transcript-layout-
+// design.md §4-A/B): thinking blocks that stream as `∴ Thinking…` + last 3 lines, then collapse to a
+// dim `∴ 2.1s`. Pi's `AssistantMessageComponent` can't do this: `hideThinkingBlock` /
 // `hiddenThinkingLabel` are one flag and one static string for the *whole* component, but a message
 // can hold several thinking runs, each needing its own duration and its own click-to-expand state.
-// So thinking is rendered here, from scratch; plain text and tool-call bookkeeping (markdown,
-// transformers, the aborted/error/length footer) still go through Pi's real component -- that part
-// isn't broken, just reused per text run instead of once for the whole message.
-import { AssistantMessageComponent, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { fit, formatDuration, markPromptZone, spread, splitPromptZone, clockColumns } from "./chrome.js";
+// So thinking is rendered here, from scratch. Text runs go through `MeasuredMarkdown` (body text at a
+// reading measure, code blocks at the full width, docs/tui-transcript-layout-design.md §4-F), built
+// the way Pi's component builds its per-part `Markdown`: trimmed text, the assistant transformers.
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { fit, formatDuration, markPromptZone, splitPromptZone } from "./chrome.js";
 import { rewritePiText } from "../pi-output.js";
-import { motionTime, railGlyph } from "./motion.js";
+import { CONTENT_COLUMN, MeasuredMarkdown } from "./markdown-layout.js";
+import { breathe, motionTime } from "./motion.js";
 import { piTui } from "./pi-tui.js";
-import { createFlashState, disposeFlash, paintFlashRail, startFlash } from "./tools/flash.js";
-// Matches transcript.ts's CONTENT_PAD: a 1-column rail plus 2 columns of padding, so thinking lines
-// up under the assistant text next to it.
-const CONTENT_PAD = 3;
+import { dispatchToRows } from "./rows.js";
+import { createFlashState, disposeFlash, isFlashing, startFlash } from "./tools/flash.js";
+// The content column (R3): expanded thinking and the error lines start where the reply text does.
+const CONTENT_PAD = CONTENT_COLUMN;
+// The `∴` sits in the marker column, like a tool's `◆` (docs/tui-transcript-layout-design.md R3).
+const MARKER_PAD = 3;
 const STREAMING_TAIL_LINES = 3;
 function applyTransformers(markdown, messageType, isStreaming, availableWidth, transformers) {
     let text = markdown;
@@ -68,7 +71,9 @@ class ThinkingBlock {
     constructor(theme, text, active, timing, expanded, onToggle, transformers, 
     // The whole message's streaming state, which Pi hands to the thinking transformers too -- an
     // earlier, finished run of a still-streaming message gets `true`, as in Pi.
-    isStreaming, flash) {
+    isStreaming, 
+    /** Lights this run's stretch of the turn spine once it ends (AssistantBlock.spineFlash). */
+    flash) {
         this.theme = theme;
         this.text = text;
         this.active = active;
@@ -80,14 +85,11 @@ class ThinkingBlock {
         this.flash = flash;
     }
     renderLines(width) {
-        const bullet = this.theme.fg("dim", "◆");
-        const pad = " ".repeat(CONTENT_PAD - 2);
-        // Available width for wrapped content, matching `fit()`'s single-line budget elsewhere in this
-        // file: the same `pad` prefix, minus a column of slack `wrapTextWithAnsi` doesn't need but
-        // `fit()`'s `truncateToWidth` did.
-        const contentWidth = Math.max(1, width - pad.length);
+        const pad = " ".repeat(MARKER_PAD);
         if (this.active) {
-            const label = `${bullet} ${this.theme.fg("muted", "Thinking…")}`;
+            const bodyPad = " ".repeat(MARKER_PAD + 2);
+            const contentWidth = Math.max(1, width - bodyPad.length);
+            const label = `${breathe(this.theme, "muted", "thinkingHigh", motionTime(), "∴")} ${this.theme.fg("muted", "Thinking…")}`;
             const transformed = applyTransformers(this.text, "assistant-thinking", true, contentWidth, this.transformers);
             // Wrap first, *then* take the last 3 rows: a `fit()`/`truncateToWidth` per logical line (the
             // prior bug here) throws away everything past the terminal's width instead of carrying it to
@@ -95,21 +97,22 @@ class ThinkingBlock {
             const wrapped = piTui.wrapTextWithAnsi(transformed, contentWidth).filter((line) => line.trim() !== "");
             const tail = wrapped.slice(-STREAMING_TAIL_LINES);
             return [
-                `${pad}${label}`,
-                ...tail.map((line) => `${pad}${this.theme.fg("dim", line)}`),
+                fit(`${pad}${label}`, width),
+                ...tail.map((line) => `${bodyPad}${this.theme.fg("dim", line)}`),
             ];
         }
+        // One dim row, no bold and no clock: thinking is the least informative line of a turn
+        // (docs/tui-transcript-layout-design.md R2). Replayed history (docs/tui-design.md 4.2): no live
+        // thinking_start/delta/end ever reached this block, so there's no real duration to show -- a
+        // bare `∴ thought` rather than a misleadingly precise (and always-zero) `0.0s`.
         const hasTiming = this.timing.startedAt !== undefined || this.timing.lastAt !== undefined;
-        const suffix = hasTiming
-            ? this.theme.fg("muted", ` for ${formatDuration((this.timing.lastAt ?? this.timing.startedAt ?? 0) - (this.timing.startedAt ?? this.timing.lastAt ?? 0))}`)
-            // Replayed history (docs/tui-design.md 4.2): no live thinking_start/delta/end ever reached
-            // this block, so there's no real duration to show -- a bare "◆ Thought" rather than a
-            // misleadingly precise (and always-zero) "Thought for 0.0s".
-            : "";
-        const header = `${pad}${bullet} ${this.theme.bold(this.theme.fg("muted", "Thought"))}${suffix}`;
+        const label = hasTiming
+            ? formatDuration((this.timing.lastAt ?? this.timing.startedAt ?? 0) - (this.timing.startedAt ?? this.timing.lastAt ?? 0))
+            : "thought";
+        const header = fit(`${pad}${this.theme.fg("dim", "∴")} ${this.theme.fg("dim", label)}`, width);
         if (!this.expanded)
-            return [fit(header, width)];
-        return [fit(header, width), ...this.expandedBody().render(width)];
+            return [header];
+        return [header, ...this.expandedBody().render(width)];
     }
     /** Pi's own expanded thinking (assistant-message.js updateContent): a `Markdown` in the
      * thinkingText color, italic, after the `assistant-thinking` transformers, padded by the same
@@ -126,16 +129,9 @@ class ThinkingBlock {
         return this.body;
     }
     render(width) {
-        // The rail column is the blank first column of `pad`: a pulse runs down it while thinking
-        // (docs/tui-motion-design.md M4), and it flashes once when the run ends.
-        const lines = this.renderLines(width);
-        if (this.active) {
-            const t = motionTime();
-            return lines.map((line, row) => (line.startsWith(" ") ? railGlyph(this.theme, row, t) + line.slice(1) : line));
-        }
-        return paintFlashRail(lines, this.flash, this.theme);
+        return this.renderLines(width);
     }
-    /** Only the header row (the `Thought for Ns` / `Thinking…` line) toggles -- clicking into an
+    /** Only the header row (the `∴ 2.1s` / `Thinking…` line) toggles -- clicking into an
      * expanded block's body shouldn't collapse it back out from under a text selection. */
     handleMouse(event) {
         if (event.type !== "click" || event.button !== "left" || event.y !== 0 || this.active)
@@ -151,7 +147,11 @@ export class AssistantBlock {
     theme;
     transformers;
     requestRender;
+    spineRole = "trunk";
     container = new piTui.Container();
+    /** Each child's rows in the last render, for click routing and the spine's flash rows. */
+    rows = [];
+    rowsWidth;
     lastMessage;
     lastStreaming = false;
     timing = new Map();
@@ -163,7 +163,6 @@ export class AssistantBlock {
      * guard as a tool's `started` flag. */
     activeThinking;
     globalExpanded = false;
-    clock;
     constructor(theme, message, transformers, streaming, 
     // The transcript's current Ctrl+T state (Transcript.thinkingExpanded), applied *before* the
     // first rebuild instead of via a `setGlobalExpanded()` call right after construction -- that
@@ -175,9 +174,6 @@ export class AssistantBlock {
         this.theme = theme;
         this.transformers = transformers;
         this.requestRender = requestRender;
-        // Captured once, like UserMessageBlock's `time`: the component is reused across every
-        // streaming update for this message, so this must not drift as content arrives.
-        this.clock = theme.fg("muted", new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
         this.globalExpanded = globalExpanded;
         this.updateContent(message, streaming);
     }
@@ -218,61 +214,23 @@ export class AssistantBlock {
         const message = this.lastMessage;
         if (message === undefined)
             return;
-        const hasVisibleContent = message.content.some((part) => (part.type === "text" && part.text.trim() !== "") || (part.type === "thinking" && part.thinking.trim() !== ""));
-        // Only when the message *starts* with thinking: a leading content/tool-call segment already
-        // brings its own leading Spacer(1) (Pi's AssistantMessageComponent adds one itself whenever it
-        // has visible content), so adding this one too would double it up -- the bug a test caught
-        // (a plain, thinking-free reply rendering two blank rows instead of one).
-        if (hasVisibleContent && segments[0]?.kind === "thinking")
-            this.container.addChild(new piTui.Spacer(1));
         const lastSegment = segments[segments.length - 1];
         const activeThinking = this.lastStreaming && lastSegment?.kind === "thinking" ? lastSegment.startIndex : undefined;
         if (this.activeThinking !== undefined && this.activeThinking !== activeThinking) {
             startFlash(this.flash(this.activeThinking), "success", this.requestRender);
         }
         this.activeThinking = activeThinking;
-        segments.forEach((segment, segmentIndex) => {
-            if (segment.kind === "thinking") {
-                const text = segment.parts.map((part) => part.thinking.trim()).filter((part) => part !== "").join("\n\n");
-                if (text === "")
-                    return;
-                // Active: still the last segment and the message overall hasn't finished -- always shown
-                // as the live "Thinking…" tail, regardless of the expand/collapse toggle (docs/tui-design.md
-                // 4.2: that toggle only applies "when the thinking block finishes").
-                const active = this.lastStreaming && segmentIndex === segments.length - 1;
-                const timing = this.timing.get(segment.startIndex) ?? { startedAt: undefined, lastAt: undefined };
-                const expanded = this.expandedOverride.get(segment.startIndex) ?? this.globalExpanded;
-                const toggle = () => {
-                    this.expandedOverride.set(segment.startIndex, !(this.expandedOverride.get(segment.startIndex) ?? this.globalExpanded));
-                    if (this.lastMessage !== undefined)
-                        this.rebuild(splitSegments(this.lastMessage.content));
-                };
-                this.container.addChild(new ThinkingBlock(this.theme, text, active, timing, expanded, toggle, this.transformers, this.lastStreaming, this.flash(segment.startIndex)));
-                return;
-            }
-            // A text/tool-call run: Pi's own component, fed only this run's `content` and a neutral
-            // `stopReason` -- the real stopReason (aborted/error/length) is handled once, below, for the
-            // whole message, not per run (Pi's version only ever had one run to worry about). Constructed
-            // with no initial message so it doesn't render once with the wrong (default `false`)
-            // isStreaming before this updateContent call gives it the real one.
-            const synthetic = { ...message, content: segment.parts, stopReason: "stop" };
-            const component = new AssistantMessageComponent(undefined, false, getMarkdownTheme(), undefined, CONTENT_PAD, this.transformers);
-            component.updateContent(synthetic, this.lastStreaming);
-            const wrapped = {
-                render: (width) => {
-                    const rendered = component.render(width);
-                    // Pi's component always opens with a blank spacer row when it has visible content. Kept
-                    // for the very first segment (its only source of the one leading blank under the user
-                    // bubble above); dropped for every later one so a text run right after a thinking block
-                    // sits flush under it (the M4 mock-up shows no gap there). `visibleWidth`, not `.trim()`:
-                    // Pi also prepends a zero-width OSC133 marker to this exact row, which defeats a plain
-                    // string-emptiness check. The markers themselves are replaced in render() below.
-                    return segmentIndex === 0 || piTui.visibleWidth(rendered[0] ?? "") > 0 ? rendered : rendered.slice(1);
-                },
-                invalidate: () => component.invalidate(),
-                handleMouse: (mouseEvent) => component.handleMouse(mouseEvent),
-            };
-            this.container.addChild(wrapped);
+        const pieces = segments.flatMap((segment, segmentIndex) => {
+            const piece = this.piece(segments, segmentIndex);
+            return piece === undefined ? [] : [{ kind: segment.kind, piece }];
+        });
+        // One blank row above the message's first visible row (under the user bubble or the previous
+        // block), and one between a text run and a thinking run after it; a text run right after a
+        // thinking run sits flush under its `∴` (the M4 mock-up shows no gap there).
+        pieces.forEach(({ kind, piece }, index) => {
+            if (index === 0 || (kind === "thinking" && pieces[index - 1]?.kind === "content"))
+                this.container.addChild(new piTui.Spacer(1));
+            this.container.addChild(piece);
         });
         const hasToolCalls = message.content.some((part) => part.type === "toolCall");
         if (message.stopReason === "length") {
@@ -291,6 +249,59 @@ export class AssistantBlock {
             }
         }
     }
+    /** The component for `segments[segmentIndex]`, or undefined when it draws nothing: an empty run,
+     * a text run with no text (tool calls only), or a collapsed thinking run that no text follows. */
+    piece(segments, segmentIndex) {
+        const segment = segments[segmentIndex]; // in range: called with an index of `segments`
+        if (segment.kind === "thinking") {
+            const text = segment.parts.map((part) => part.thinking.trim()).filter((part) => part !== "").join("\n\n");
+            if (text === "")
+                return undefined;
+            // Active: still the last segment and the message overall hasn't finished -- always shown
+            // as the live "Thinking…" tail, regardless of the expand/collapse toggle (docs/tui-design.md
+            // 4.2: that toggle only applies "when the thinking block finishes").
+            const active = this.lastStreaming && segmentIndex === segments.length - 1;
+            const expanded = this.expandedOverride.get(segment.startIndex) ?? this.globalExpanded;
+            // `∴` heads the text it led to (docs/tui-transcript-layout-design.md §7.2-4): a collapsed run
+            // followed by tool calls, or by nothing, draws no row -- seven `∴` rows in one turn would cut
+            // the story into pieces. Its time still counts in the turn's `Worked for`.
+            if (!active && !expanded && !this.textFollows(segments, segmentIndex))
+                return undefined;
+            const timing = this.timing.get(segment.startIndex) ?? { startedAt: undefined, lastAt: undefined };
+            const toggle = () => {
+                this.expandedOverride.set(segment.startIndex, !(this.expandedOverride.get(segment.startIndex) ?? this.globalExpanded));
+                if (this.lastMessage !== undefined)
+                    this.rebuild(splitSegments(this.lastMessage.content));
+            };
+            return new ThinkingBlock(this.theme, text, active, timing, expanded, toggle, this.transformers, this.lastStreaming, this.flash(segment.startIndex));
+        }
+        // A text/tool-call run: one `MeasuredMarkdown` per non-blank text part, stacked with no gap, as
+        // Pi's AssistantMessageComponent stacks its `Markdown`s (tool calls draw nothing here). The
+        // message's real stopReason (aborted/error/length) is handled once, in rebuild(), not per run.
+        const transform = (markdown, availableWidth) => applyTransformers(markdown, "assistant", this.lastStreaming, availableWidth, this.transformers);
+        const texts = segment.parts.flatMap((part) => (part.type === "text" && part.text.trim() !== "" ? [part.text.trim()] : []));
+        if (texts.length === 0)
+            return undefined;
+        const stack = new piTui.Container();
+        for (const text of texts)
+            stack.addChild(new MeasuredMarkdown(this.theme, text, transform));
+        return stack;
+    }
+    /** Whether text (not a tool call) comes right after thinking segment `index`. While the message
+     * streams, an empty text part counts too, so the `∴` row doesn't blink out for the moment between
+     * `text_start` and the first delta. */
+    textFollows(segments, index) {
+        const next = segments[index + 1];
+        if (next?.kind !== "content")
+            return false;
+        for (const part of next.parts) {
+            if (part.type === "toolCall")
+                return false;
+            if (part.type === "text" && (part.text.trim() !== "" || this.lastStreaming))
+                return true;
+        }
+        return false;
+    }
     flash(startIndex) {
         let flash = this.flashes.get(startIndex);
         if (flash === undefined) {
@@ -304,36 +315,39 @@ export class AssistantBlock {
         for (const flash of this.flashes.values())
             disposeFlash(flash);
     }
-    /** The width the inner container is actually rendered at -- narrower than the component's own,
-     * to leave room for the clock (chrome.ts's `UserMessageBlock` does the same). Shared by `render()`
-     * and `handleMouse()` so a click is dispatched against the same row heights it was drawn with. */
-    innerWidth(width) {
-        return Math.max(1, width - clockColumns(this.clock) - 2);
-    }
-    /** Item 1 (docs/tui-design.md 4.2): the time sits on the first *visible* line, like a user
-     * message -- not literally render()'s line 0, which is usually the blank spacer Pi's component
-     * always opens with. Reused, `spread`'s narrowing (chrome.ts's UserMessageBlock does the same)
-     * costs a little wrap width throughout rather than only on that one line, which pi-tui's Markdown
-     * has no hook to do more precisely. */
     render(width) {
-        // Each text run's AssistantMessageComponent marks its own OSC133 prompt zone; the block is
-        // marked once as a whole instead (below), so those markers are dropped here.
-        const lines = this.container.render(this.innerWidth(width)).map((line) => splitPromptZone(line).rest);
-        const index = lines.findIndex((line) => piTui.visibleWidth(line) > 0);
-        if (index === -1)
-            return lines;
-        const rows = lines.map((line, lineIndex) => (lineIndex === index ? spread(line, this.clock, width) : line));
+        const lines = [];
+        this.rows = this.container.children.map((component) => {
+            const rendered = component.render(width);
+            lines.push(...rendered);
+            return { component, height: rendered.length };
+        });
+        this.rowsWidth = width;
+        // Markers a child may carry (an OSC133 prompt zone) are dropped: the block is marked once as a
+        // whole instead (below).
+        const rows = lines.map((line) => splitPromptZone(line).rest);
+        if (!rows.some((line) => piTui.visibleWidth(line) > 0))
+            return rows;
         // Pi's rule (assistant-message.js render): a message with tool calls is not a prompt zone, so
         // Ctrl+Up/Down step over a turn's intermediate tool-calling messages to its final answer.
         const hasToolCalls = this.lastMessage?.content.some((part) => part.type === "toolCall") ?? false;
         return hasToolCalls ? rows : markPromptZone(rows);
     }
-    /** `event.width` must match what `render()` last drew the container at, or pi-tui's `Container.
-     * handleMouse` recomputes row heights at the wrong (full, not narrowed) width and a click lands on
-     * the wrong segment whenever an earlier one wraps differently at the two widths -- `Container`
-     * only reuses its cached per-child heights when the width matches exactly. */
     handleMouse(event) {
-        return this.container.handleMouse({ ...event, width: this.innerWidth(event.width) });
+        if (this.rowsWidth !== event.width)
+            this.render(event.width);
+        return dispatchToRows(this.rows, event);
+    }
+    /** A thinking run that just ended flashes its rows' stretch of the turn spine (docs/tui-motion-
+     * design.md M6); `row` counts the rows of the last render. */
+    spineFlash(row) {
+        let top = 0;
+        for (const { component, height } of this.rows) {
+            if (row < top + height)
+                return component instanceof ThinkingBlock && isFlashing(component.flash) ? component.flash : undefined;
+            top += height;
+        }
+        return undefined;
     }
     invalidate() {
         this.container.invalidate();

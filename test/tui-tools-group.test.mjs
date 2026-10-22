@@ -253,23 +253,23 @@ test("assistant text between tool calls splits the group; each side still groups
   assert.match(out, /Here is what those files contain\./);
 });
 
-// Merge check (pi-087-upgrade's tool grouping + this branch's thinking/AssistantBlock, together for
-// the first time): a thinking-only assistant turn (no text) must break a group exactly like a
-// text-only one does -- the M4 spec says "breaks on text *or thinking*", and AssistantBlock renders
-// a real, non-empty ThinkingBlock for it (never []), so GroupedMessages' bridge check (only bridges a
-// child that renders zero lines) naturally stops there without either file needing to know about the
-// other's internals.
-test("assistant thinking between tool calls splits the group; each side still groups on its own", () => {
+// A thinking-only assistant turn (no text) draws no row while collapsed (`∴` only heads text,
+// docs/tui-transcript-layout-design.md §7.2-4), so it no longer splits a run; GroupedMessages only
+// bridges a child that renders zero lines, so neither file needs the other's internals. Once Ctrl+T
+// shows the thinking, it renders a row and splits the run again.
+test("collapsed thinking between tool calls doesn't split the group; shown thinking does", () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   runTool(transcript, "read", "c1");
   runTool(transcript, "read", "c2");
   assistantEnd(transcript, [{ type: "thinking", thinking: "reasoning about what those files contain" }]);
   runTool(transcript, "read", "c3");
   runTool(transcript, "read", "c4");
+  assert.match(render(transcript), /◈ Read 4 files/);
+  transcript.setThinkingExpanded(true);
   const out = render(transcript);
   const groupCount = (out.match(/◈ Read 2 files/g) ?? []).length;
   assert.equal(groupCount, 2, "expected two separate 'Read 2 files' groups, not one merged run of 4");
-  assert.match(out, /Thought/, "the thinking block itself must still render");
+  assert.match(out, /reasoning about what those files contain/, "the thinking block itself must render");
 });
 
 test("an assistant turn with only tool calls (no text) does not itself split a group", () => {
@@ -483,15 +483,16 @@ test("replay never flashes: reset()'d entries settle straight into their final c
   };
   const transcript = new Transcript(stubTui(), theme, stubSession());
   transcript.reset(session);
-  assert.ok(!renderRaw(transcript).includes(theme.fg("success", "┃")));
+  assert.ok(!renderRaw(transcript).includes(theme.fg("success", "├─")));
 });
 
-test("completion flash: a finished tool's rail flashes success color for ~400ms then clears", async () => {
+// The flash lights the tool's stretch of the turn spine (src/tui/spine.ts): its `├─` branch.
+test("completion flash: a finished tool's branch flashes success color for ~400ms then clears", async () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   runTool(transcript, "read", "c1"); // a lone tool, not part of any group -- exercises ToolEntry directly
-  const successBar = theme.fg("success", "┃");
+  const successBar = theme.fg("success", "├─");
   const justAfter = renderRaw(transcript);
-  assert.ok(justAfter.includes(successBar), "the rail must flash success color right after finishing");
+  assert.ok(justAfter.includes(successBar), "the branch must flash success color right after finishing");
 
   await new Promise((resolve) => setTimeout(resolve, 500));
   const later = renderRaw(transcript);
@@ -501,22 +502,24 @@ test("completion flash: a finished tool's rail flashes success color for ~400ms 
 test("completion flash: a failed tool flashes error color, not success", async () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   runTool(transcript, "read", "c1", { isError: true });
-  const errorBar = theme.fg("error", "┃");
-  assert.ok(renderRaw(transcript).includes(errorBar));
+  const errorBar = theme.fg("error", "├─");
+  const count = () => renderRaw(transcript).split(errorBar).length - 1;
+  assert.ok(!renderRaw(transcript).includes(theme.fg("success", "├─")));
+  assert.equal(count(), 2, "the call row's branch flashes error; the ✗ row's branch is always red");
   await new Promise((resolve) => setTimeout(resolve, 500));
-  assert.ok(!renderRaw(transcript).includes(errorBar));
+  assert.equal(count(), 1, "only the ✗ row stays red");
 });
 
 // Deliberately no render() call between "still running" and "finished": pi-tui's own render
 // throttle can (and in the real app, does) coalesce a fast run's frames so no such render ever
 // happens. The group's flash must still show on the very first render taken after settling, purely
 // from each member's own (already-independent) flash state -- not from observing a transition.
-test("completion flash: a collapsed group's own rail flashes once its last member finishes, with no render in between", async () => {
+test("completion flash: a collapsed group's own branch flashes once its last member finishes, with no render in between", async () => {
   const transcript = new Transcript(stubTui(), theme, stubSession());
   runTool(transcript, "read", "c1");
   runTool(transcript, "read", "c2");
-  const successBar = theme.fg("success", "┃");
-  assert.ok(renderRaw(transcript).includes(successBar), "the group line's rail must flash once fully settled");
+  const successBar = theme.fg("success", "├─");
+  assert.ok(renderRaw(transcript).includes(successBar), "the group line's branch must flash once fully settled");
   await new Promise((resolve) => setTimeout(resolve, 500));
   assert.ok(!renderRaw(transcript).includes(successBar));
 });
@@ -525,7 +528,7 @@ test("completion flash: a collapsed group flashes error when the last member to 
   const transcript = new Transcript(stubTui(), theme, stubSession());
   runTool(transcript, "read", "c1");
   runTool(transcript, "read", "c2", { isError: true });
-  const errorBar = theme.fg("error", "┃");
+  const errorBar = theme.fg("error", "├─");
   assert.ok(renderRaw(transcript).includes(errorBar));
   await new Promise((resolve) => setTimeout(resolve, 500));
   assert.ok(!renderRaw(transcript).includes(errorBar));
