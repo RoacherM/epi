@@ -41,6 +41,19 @@ epi --model openai/gpt-4o-mini
 
 悬浮窗显示的是这次工具调用返回的内容。Pi 的 `read` 一次最多返回 2000 行或 50KB，超出的部分在 agent 下一次 `read` 的块里打开；标题里会写 `lines 1–955 of 1098 · 50.0KB limit`。换会话（`/new`、`/resume`、`/reload`）时悬浮窗自动关闭。只读，不能编辑。
 
+### 工具耗时
+
+对话区排在一列里：工具调用行、失败行和你的消息条，都和回复正文在同一个右边界结束（设计见 [tui-one-column-design.md](../tui-one-column-design.md)）。每次工具调用的耗时是这条边界上的一个 4 格小条，每格代表一个数量级：
+
+| 条 | 耗时 |
+|---|---|
+| `▏···` 到 `█···` | 10ms 以内到 100ms |
+| `██··` | 约 1s |
+| `███·` | 约 10s |
+| `████ 2m20s` | 100s 以上，满格后补上具体时间 |
+
+运行中条会随时间变长。按 `Ctrl+O` 展开时，条后面显示确切耗时；`/trace` 里也有每一步的精确耗时。时间只用 h、m、s 三个单位（`1h5m12s`）。长命令会在这一列内截断，完整命令可以展开或单击打开全文悬浮窗查看。
+
 ### Mermaid 图表
 
 回复里的 ```` ```mermaid ```` 代码块会直接画成框线图（设计见 [mermaid-design.md](../mermaid-design.md)）。支持 flowchart/graph、sequence、state、class、ER、pie、mindmap、timeline 和 gitGraph。只改显示：模型看到的、复制出来的仍是 Mermaid 源码。

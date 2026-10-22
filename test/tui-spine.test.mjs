@@ -66,7 +66,9 @@ test("a settled turn is one spine: trunk, branches, a red failure branch, closed
   fullTurn(t);
   const rows = lines(t);
   const start = rows.findIndex((row) => row.includes("∴"));
-  assert.deepEqual(rows.slice(start).map((row) => row.replace(/\d+(\.\d+)?(ms|s)$/, "<t>")), [
+  // A call's time is a bar at the column's edge (docs/tui-one-column-design.md §2.2); the footer's a number.
+  const BAR = / +[▏▎▍▌▋▊▉█][▏▎▍▌▋▊▉█·]{3}( \S+)?$/;
+  assert.deepEqual(rows.slice(start).map((row) => row.replace(BAR, "  <t>").replace(/\d+(\.\d+)?(ms|s)$/, "<t>")), [
     " │ ∴ thought",
     " │   Checking.",
     " │",
@@ -122,7 +124,7 @@ test("a replayed turn gets the same spine, ending at its last row (replay has no
   ]));
   const rows = lines(t);
   const start = rows.findIndex((row) => row.includes("$ ls"));
-  assert.deepEqual(rows.slice(start), [" ├─$ ls  5ms", " │", " │   Listed."]);
+  assert.deepEqual(rows.slice(start), [`${" ├─$ ls".padEnd(76)}▏···`, " │", " │   Listed."]);
 });
 
 test("consecutive tool rows sit together, across messages and around a group line", () => {
@@ -134,7 +136,10 @@ test("consecutive tool rows sit together, across messages and around a group lin
   runTool(t, "edit", "e1", { args: { path: "a.ts" } });
   const rows = lines(t);
   const start = rows.findIndex((row) => row.includes("$ make"));
-  assert.deepEqual(rows.slice(start, start + 3).map((row) => row.replace(/  \d+ms$/, "")), [" ├─$ make", " ├─◈ Read 2 files", " ├─◆ edit a.ts · +0 −0"]);
+  const settled = rows.slice(start, start + 3);
+  assert.deepEqual(settled.map((row) => row.replace(/ +[▏▎▍▌▋▊▉█][▏▎▍▌▋▊▉█·]{3}$/, "")), [" ├─$ make", " ├─◈ Read 2 files", " ├─◆ edit a.ts · +0 −0"]);
+  // One column: the three bars (the group row's is its members' total) start at the same column.
+  assert.equal(new Set(settled.map((row) => row.search(/[▏▎▍▌▋▊▉█]/))).size, 1, JSON.stringify(settled));
 });
 
 test("a click on a tool row whose blank row was left out still reaches it (W2 mouse offset)", () => {
@@ -148,7 +153,8 @@ test("a click on a tool row whose blank row was left out still reaches it (W2 mo
   const click = { type: "click", button: "left", x: 6, y, screenX: 6, screenY: y, width: 80, height: rows.length, shift: false, alt: false, ctrl: false };
   assert.ok(t.root.handleMouse(click)?.handled, "the click on the call row is handled");
   const after = lines(t);
-  assert.deepEqual(after.slice(y, y + 3).map((row) => row.replace(/  \d+ms$/, "")), [" ├─$ printf 'one\\ntwo'", " │   one", " │   two"], "the click expanded this tool, not its neighbour");
+  // Expanded, the bar is followed by the exact time (docs/tui-one-column-design.md §2.2).
+  assert.deepEqual(after.slice(y, y + 3).map((row) => row.replace(/ +[▏▎▍▌▋▊▉█][▏▎▍▌▋▊▉█·]{3} \d+ms$/, "")), [" ├─$ printf 'one\\ntwo'", " │   one", " │   two"], "the click expanded this tool, not its neighbour");
   // And a click on the first one still lands on it.
   const first = { ...click, y: y - 1, screenY: y - 1, height: after.length };
   assert.ok(t.root.handleMouse(first)?.handled);

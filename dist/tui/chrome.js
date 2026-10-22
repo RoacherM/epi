@@ -2,6 +2,7 @@
 // turn status row, framed prompt, shortcuts bar. Pure render functions of the state they are given.
 import { homedir } from "node:os";
 import { basename, sep } from "node:path";
+import { TURN_COLUMNS } from "./measure.js";
 import { imageLabelNumbers } from "./paste-chips.js";
 import { piTui } from "./pi-tui.js";
 const { truncateToWidth, visibleWidth } = piTui;
@@ -47,9 +48,13 @@ export function formatTokens(count) {
 /** Shared with transcript.ts (turn footer) and assistant-block.ts (thinking duration). */
 export function formatDuration(ms) {
     const seconds = ms / 1000;
-    if (seconds < 60)
-        return `${seconds.toFixed(1)}s`;
-    return `${Math.floor(seconds / 60)}m${Math.floor(seconds % 60)}s`;
+    const tenths = seconds.toFixed(1);
+    if (seconds < 60 && tenths !== "60.0")
+        return `${tenths}s`;
+    // From a minute on, only h, m and s (docs/tui-one-column-design.md §2.2), zero parts left out.
+    const total = Math.max(60, Math.floor(seconds));
+    const parts = [[Math.floor(total / 3600), "h"], [Math.floor((total % 3600) / 60), "m"], [total % 60, "s"]];
+    return parts.filter(([value]) => value > 0).map(([value, unit]) => `${value}${unit}`).join("");
 }
 function line(render) {
     return { render: (width) => [render(width)], invalidate() { } };
@@ -165,7 +170,9 @@ export class UserMessageBlock {
     setExpanded(expanded) {
         this.expanded = expanded;
     }
-    render(width) {
+    render(fullWidth) {
+        // The bar spans the turn's column, not the terminal (docs/tui-one-column-design.md §2.1).
+        const width = Math.min(fullWidth, TURN_COLUMNS);
         const paint = (content) => this.theme.bg("userMessageBg", content + " ".repeat(Math.max(0, width - visibleWidth(content))));
         const clock = this.theme.fg("muted", this.time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
         const bodyWidth = Math.max(1, width - 4 - clockColumns(clock) - 3);

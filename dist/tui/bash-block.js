@@ -5,8 +5,9 @@
 // `BashExecutionComponent`, laid out like the model's bash call (tools/block.ts, tools/mutating.ts).
 import { keyText } from "@earendil-works/pi-coding-agent";
 import { errorText } from "./errors.js";
+import { TURN_COLUMNS } from "./measure.js";
 import { piTui } from "./pi-tui.js";
-import { failureRow, fitWithTail, formatToolDuration, shortenCommand, truncateOutputLines } from "./tools/common.js";
+import { durationBar, failureRow, fitCallRow, formatToolDuration, shortenCommand, truncateOutputLines } from "./tools/common.js";
 // Matches tools/block.ts: a rail column, then 2 columns of padding before the `◆` bullet; output
 // lines sit two columns further in, under the bullet's text.
 const CALL_PREFIX = 3;
@@ -78,9 +79,13 @@ export class UserBashBlock {
         const marker = this.theme.fg(this.status === "error" ? "error" : "bashMode", this.excludeFromContext ? "!!" : "$");
         const { text, extraLines } = shortenCommand(this.command, undefined);
         const extra = extraLines > 0 ? this.theme.fg("dim", ` · +${extraLines} lines`) : "";
-        const time = this.status === "done" && this.durationMs !== undefined ? `  ${this.theme.fg("dim", formatToolDuration(this.durationMs))}` : "";
+        // The same column and bar as a model's call row (docs/tui-one-column-design.md §2.2): the time so
+        // far while it runs, the final time once done; a failure or a cancel draws none.
+        const ms = this.status === "done" ? this.durationMs : running && this.startedAt !== undefined ? Date.now() - this.startedAt : undefined;
+        const bar = ms === undefined ? "" : durationBar(this.theme, ms);
+        const fallback = this.status === "done" && ms !== undefined ? `  ${this.theme.fg("dim", formatToolDuration(ms))}` : "";
         const callPrefix = `${" ".repeat(CALL_PREFIX)}${marker} `;
-        const body = fitWithTail(this.theme.fg("toolOutput", text), extra + time, Math.max(1, width - piTui.visibleWidth(callPrefix)), this.theme.fg("dim", "…"));
+        const body = fitCallRow(this.theme.fg("toolOutput", text), extra, bar, Math.max(1, width - piTui.visibleWidth(callPrefix)), this.theme.fg("dim", "…"), fallback);
         const callLine = callPrefix + body;
         const lines = this.lines();
         // While running, show the live tail (matches tools/mutating.ts bashRenderers' `isPartial` case);
@@ -89,8 +94,9 @@ export class UserBashBlock {
         const bodyPrefix = " ".repeat(RESULT_PREFIX);
         const rows = shown.map((entry) => bodyPrefix + this.theme.fg("toolOutput", entry));
         const status = this.statusText();
+        // The failure row ends at the column's edge, like a model's (tools/block.ts).
         if (status !== undefined)
-            rows.push(bodyPrefix + status);
+            rows.push(bodyPrefix + piTui.truncateToWidth(status, Math.max(1, Math.min(width, TURN_COLUMNS) - RESULT_PREFIX), "…"));
         return [callLine, ...rows].map((line) => piTui.truncateToWidth(line, width));
     }
     statusText() {

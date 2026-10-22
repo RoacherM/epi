@@ -13,8 +13,9 @@ import { breathe, motionTime } from "../motion.js";
 import { piTui } from "../pi-tui.js";
 import { type ChildRows, dispatchToRows } from "../rows.js";
 import { paintSpine, type SpineBlock, type SpineMember, spineMember } from "../spine.js";
-import type { ToolRenderers } from "./types.js";
+import { durationBar, fitCallRow } from "./common.js";
 import { createFlashState, disposeFlash, type FlashState, isFlashing, startFlash } from "./flash.js";
+import type { ToolRenderers } from "./types.js";
 
 export type GroupKind = "read" | "grep" | "find" | "ls";
 
@@ -62,6 +63,8 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember {
   status: Status = "running";
   expandedFlag = false;
   readonly flash: FlashState = createFlashState();
+  /** The final result's run time, for the group row's bar. */
+  durationMs: number | undefined;
   private started = false;
 
   constructor(
@@ -87,6 +90,7 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember {
     isPartial = false,
   ): void {
     super.updateResult(result, isPartial);
+    if (!isPartial) this.durationMs = result.durationMs;
     if (isPartial) {
       this.status = "running";
       return;
@@ -123,6 +127,8 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember {
 interface MemberLike {
   groupKind: GroupKind | undefined;
   status: Status;
+  /** The final run time, when the result recorded one. */
+  durationMs?: number | undefined;
 }
 
 function summarize(members: MemberLike[]): { running: number; completed: number; failed: number; breakdown: string } {
@@ -172,7 +178,12 @@ export function verbGroupLine(members: MemberLike[], theme: Theme, width: number
     ? breathe(theme, "accent", "thinkingHigh", t, "◈ ")
     : theme.fg(anyFailed ? "error" : "muted", "◈ ");
   const contentWidth = Math.max(1, width - PREFIX - 2);
-  return lead + bullet + piTui.truncateToWidth(text, contentWidth);
+  // The group's bar is the sum of its members' times, in the same column as single calls
+  // (docs/tui-one-column-design.md §2.2); none while one runs or when a time is missing.
+  const times = members.map((member) => member.durationMs);
+  const total = !anyRunning && times.every((ms) => ms !== undefined) ? times.reduce<number>((sum, ms) => sum + ms!, 0) : undefined;
+  const bar = total === undefined ? "" : durationBar(theme, total);
+  return lead + bullet + fitCallRow(text, "", bar, contentWidth, "…");
 }
 
 /** A muted `◈ ...` line laid out with the same 3-column lead as every other line (rail + padding),

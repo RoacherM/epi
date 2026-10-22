@@ -1,7 +1,7 @@
 import { type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-/** The content column: body text and code start here, under a tool's call text (R3). */
-export declare const CONTENT_COLUMN = 5;
+import { CONTENT_COLUMN } from "./measure.js";
+export { CONTENT_COLUMN };
 type Transform = (markdown: string, availableWidth: number) => string;
 interface Segment {
     kind: "prose" | "table" | "code";
@@ -39,5 +39,4 @@ export declare class MeasuredMarkdown implements Component {
      * behind a `│` rail in the marker column and wrapped (not cut) at the full width. */
     private codeRows;
 }
-export {};
 //# sourceMappingURL=markdown-layout.d.ts.map

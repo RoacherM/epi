@@ -40,6 +40,17 @@ export declare function formatToolDuration(ms: number): string;
  * design.md §4-C: a long command must not eat its `· +8 lines`). A tail wider than the line is
  * dropped rather than cut. */
 export declare function fitWithTail(body: string, tail: string, width: number, ellipsis: string): string;
+export declare const BAR_CELLS = 4;
+/** `ms` as a bar: dim filled cells, then `·` for the empty ones; with the time after a full bar. */
+export declare function durationBar(theme: Theme, ms: number): string;
+/**
+ * A call row in the turn's one column (docs/tui-one-column-design.md §2.1): `body` and its `tail`
+ * (`· +36 lines`, `· +3 −1`; never cut) fill the column up to the bar, and the bar starts at the same
+ * column on every row -- the measure's right edge less its cells -- so a group of calls lines its
+ * bars up. A number after a full bar runs past the edge when the line has room, and otherwise moves
+ * the bar left. `width` is the row's width after the marker; `bar` "" draws no bar.
+ */
+export declare function fitCallRow(body: string, tail: string, bar: string, width: number, ellipsis: string, fallbackTime?: string): string;
 /** The marker a call line puts in the marker column: `$` for shell commands, `◆` for the rest.
  * tools/block.ts paints it in the color of the tool's state. */
 export type CallMarker = "$" | "◆";
@@ -57,10 +68,15 @@ export declare class CallLine implements Component {
     private readonly body;
     private readonly context;
     private readonly extra;
-    constructor(marker: CallMarker, theme: Theme, body: string, context: Pick<ToolRenderContext, "state" | "durationMs" | "isError" | "isPartial">, extra?: string);
-    /** The tail as it reads right now: `extra`, the result's summary, then the run time. A failed
-     * result's own row says what happened, so a summary left by an earlier (partial) result is dropped. */
+    constructor(marker: CallMarker, theme: Theme, body: string, context: Pick<ToolRenderContext, "state" | "durationMs" | "isError" | "isPartial" | "executionStarted" | "expanded">, extra?: string);
+    /** The tail as it reads right now: `extra`, then the result's summary. A failed result's own row
+     * says what happened, so a summary left by an earlier (partial) result is dropped. */
     tail(): string;
+    /** How long the tool has run: the final time, or while it runs the time since it started (kept in
+     * the renderer's state, which Pi keeps per call). A failure draws none, as in 0.1.22. */
+    private elapsed;
+    /** The bar for the time so far, with the exact time after it when expanded (Ctrl+O). */
+    private bar;
     invalidate(): void;
     render(width: number): string[];
 }

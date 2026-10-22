@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, MarkdownTheme } from "@earendil-works/pi-tui";
 
+import { CONTENT_COLUMN, DEFAULT_MEASURE } from "./measure.js";
 import { renderMermaid } from "./mermaid.js";
 import { piTui } from "./pi-tui.js";
 
@@ -29,10 +30,7 @@ const { Lexer } = (await import(pathToFileURL(createRequire(piTuiEntry).resolve(
   Lexer: { lex(source: string): BlockToken[] };
 };
 
-/** Columns of body text per row (Bringhurst's 45–75 characters; WCAG 1.4.8 asks for ≤ 80). */
-const DEFAULT_MEASURE = 76;
-/** The content column: body text and code start here, under a tool's call text (R3). */
-export const CONTENT_COLUMN = 5;
+export { CONTENT_COLUMN };
 // The code rail sits in the marker column, like a tool's `◆`.
 const CODE_RAIL_COLUMN = 3;
 // Languages whose label says nothing; a bare fence gets none either.
