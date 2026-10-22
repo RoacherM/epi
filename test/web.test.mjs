@@ -369,19 +369,32 @@ test("extension: offline, and bad parameters, are tool errors the model can read
   assert.match(bad.content[0].text, /web_search: sources: "deepseek" is turned off or has no key; available: exa/);
 });
 
-test("extension: turning every source off takes the tools out of the active set", (t) => {
+test("extension: /web registers, re-describes, removes and restores the tools without a restart", async (t) => {
   const dir = home(t);
-  storeSourceKey(dir, "exa", "k");
+  for (const name of ["EPI_WEB_EXA_API_KEY", "EPI_WEB_DEEPSEEK_API_KEY"]) {
+    const saved = process.env[name];
+    delete process.env[name];
+    t.after(() => { if (saved !== undefined) process.env[name] = saved; });
+  }
   const pi = fakePi();
-  const extension = createWebInlineExtension({ epiHome: dir });
-  extension.factory(pi);
-  assert.ok(pi.active.includes("web_search"));
-  updateWebConfig(dir, (raw) => { raw.sources = { exa: { enabled: false }, deepseek: { enabled: false } }; });
-  // The /web panel calls refresh(); reach it through the session_start → command path is TUI-only,
-  // so a second factory run (a /reload) stands in: its sync sees nothing usable.
-  const again = fakePi();
-  extension.factory(again);
-  assert.ok(!again.active.includes("web_search"));
+  let command;
+  pi.registerCommand = (_name, options) => { command = options; };
+  createWebInlineExtension({ epiHome: dir }).factory(pi);
+  // A /web that is opened and closed again: what the panel changed (or a hand edit) takes effect.
+  const web = () => command.handler("", { mode: "tui", ui: { select: async () => "Done", notify() {} } });
+  assert.ok(!pi.active.includes("web_search"));
+  storeSourceKey(dir, "exa", "k");
+  await web();
+  assert.ok(pi.active.includes("web_search") && pi.active.includes("web_fetch"));
+  assert.match(pi.tools.get("web_search").description, /Sources: exa\./);
+  setSourceEnabled(dir, "exa", false);
+  await web();
+  assert.ok(!pi.active.includes("web_search") && !pi.active.includes("web_fetch"), "every source off: the model no longer sees them");
+  setSourceEnabled(dir, "exa", true);
+  storeSourceKey(dir, "deepseek", "k");
+  await web();
+  assert.ok(pi.active.includes("web_search"), "back on: back in the active set");
+  assert.match(pi.tools.get("web_search").description, /Sources: exa, deepseek\./, "re-described with the sources now usable");
 });
 
 // ── rendering (§6.2) ─────────────────────────────────────────────────────────

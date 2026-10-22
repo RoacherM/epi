@@ -123,7 +123,16 @@ async function keyAction(ctx, epiHome, source, choice) {
     }
 }
 export async function runWebPanel(ctx, options) {
-    const command = ctx;
+    try {
+        await panelLoop(ctx, options);
+    }
+    finally {
+        // Also on a plain open-and-close: /web is how a hand edit of web.json or web-auth.json takes effect.
+        options.onChange();
+    }
+}
+async function panelLoop(command, options) {
+    const ctx = command;
     for (;;) {
         const config = loadWebConfig(options.epiHome);
         const rows = config.sources.map((source) => sourceRow(options.epiHome, source));

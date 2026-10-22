@@ -132,7 +132,16 @@ async function keyAction(ctx: ExtensionCommandContext, epiHome: string, source: 
 }
 
 export async function runWebPanel(ctx: ExtensionCommandContext | ExtensionContext, options: WebPanelOptions): Promise<void> {
-  const command = ctx as ExtensionCommandContext;
+  try {
+    await panelLoop(ctx as ExtensionCommandContext, options);
+  } finally {
+    // Also on a plain open-and-close: /web is how a hand edit of web.json or web-auth.json takes effect.
+    options.onChange();
+  }
+}
+
+async function panelLoop(command: ExtensionCommandContext, options: WebPanelOptions): Promise<void> {
+  const ctx = command;
   for (;;) {
     const config = loadWebConfig(options.epiHome);
     const rows = config.sources.map((source) => sourceRow(options.epiHome, source));
