@@ -45,10 +45,10 @@ export const PI_ENV_RULES: Readonly<Record<string, PiEnvRule>> = {
   PI_MANAGED_INSTALL_ROOT: { kind: "cleared" },
   PI_INSTALLER_API_BASE: { kind: "cleared" },
   PI_PROGRAM_STATUS: { kind: "cleared" },
-  // Pi 1.4: remote clipboard (OSC 52) and the codemode worker limit. Epi offers no EPI_* knob for
-  // either yet, so a user's Pi setting is cleared like every other Pi-only switch.
-  PI_CLIPBOARD_OSC52: { kind: "cleared" },
-  PI_CODEMODE_MAX_WORKERS: { kind: "cleared" },
+  // Pi 1.4: remote clipboard (OSC 52) and the codemode worker limit. Both are user-facing knobs, so
+  // Epi's own names bridge them like every other user-facing switch (docs/cli-design.md §2.1).
+  PI_CLIPBOARD_OSC52: { kind: "bridged", epi: "EPI_CLIPBOARD_OSC52" },
+  PI_CODEMODE_MAX_WORKERS: { kind: "bridged", epi: "EPI_CODEMODE_MAX_WORKERS" },
 };
 
 /**

@@ -63,6 +63,8 @@ Manifest 里的扩展启动时加载失败，两条路径都和 Pi 一样报错�
 | `PI_OAUTH_CALLBACK_HOST` | `EPI_OAUTH_CALLBACK_HOST` | `/login`、`epi auth` 的 OAuth 回调监听地址（容器、WSL 里用）；Pi 在模块加载时读 |
 | `PI_HYPERLINKS`、`PI_IMAGE_PROTOCOL`、`PI_TRUE_COLOR` | `EPI_HYPERLINKS`、`EPI_IMAGE_PROTOCOL`、`EPI_TRUE_COLOR` | 覆盖 pi-tui 对终端能力的探测（OSC 8 链接、内联图片、真彩色） |
 | `PI_TUI_ESC_TIMEOUT` | `EPI_TUI_ESC_TIMEOUT` | 单独一个 ESC 等多久才算 Escape 键（毫秒；SSH 下默认 100） |
+| `PI_CLIPBOARD_OSC52` | `EPI_CLIPBOARD_OSC52` | Pi 1.4 在 SSH/MOSH 会话里用 OSC 52 把复制内容送到客户端剪贴板。远端会话 Pi 会从 `SSH_CONNECTION` 等自动识别；`EPI_CLIPBOARD_OSC52=1` 用于它识别不出的情况（例如从另一台机器接进来的 multiplexer） |
+| `PI_CODEMODE_MAX_WORKERS` | `EPI_CODEMODE_MAX_WORKERS` | Pi 1.4 的 codemode 并发 worker 上限（正整数，默认 2）；多个 codemode 调用或子代理并行时排队等空闲 worker，调大可以减少等待 |
 | `PI_CODING_AGENT_DIR` | Epi 自己设 | 固定是 `<EPI_HOME>/pi`。启动时就设好：Pi 的 `utils/tools-manager.js` 在模块加载时定下自管 fd/rg 的目录（`<agentDir>/bin`），以前那时 Epi 还没设，于是用的是 `~/.pi/agent/bin`（或用户自己的 `PI_CODING_AGENT_DIR`）。`EPI_HOME` 不合法时不设，运行在报这个错时就停下，`--help`/`--version` 照常 |
 | `PI_SKIP_VERSION_CHECK` | Epi 自己设 | 始终为 `1`：Pi 的更新提示让用户跑 `pi update`，更新不了 Epi 锁定的 Pi。Epi 自己的更新检查用 `EPI_DISABLE_UPDATE_CHECK` |
 | `PI_PACKAGE_DIR` | 只清掉 | 给 Nix/Guix 指 Pi 的包目录；用户的值指向的是另一份 Pi，会让 Epi 读错 Pi 的 `package.json`（版本号等），Pi 在模块加载时读 |
@@ -74,8 +76,7 @@ Manifest 里的扩展启动时加载失败，两条路径都和 Pi 一样报错�
 | `PI_STARTUP_BENCHMARK` | 只清掉 | Pi 交互界面的启动计时；设了它 `-p` 会直接报错退出 |
 | `PI_TIMING`、`PI_TUI_DEBUG`、`PI_TUI_DEBUG_REDRAW`、`PI_TUI_WRITE_LOG` | 只清掉 | Pi 自己的调试输出（计时、渲染日志、终端写入日志），不作为 Epi 的选项 |
 | `PI_MANAGED_INSTALL_ROOT`、`PI_INSTALLER_API_BASE` | 只清掉 | Pi 自更新和包命令用的；`epi install/update` 是 Epi 自己的，走不到 |
-| `PI_CLIPBOARD_OSC52` | 只清掉 | Pi 1.4 在 SSH/MOSH 会话里用 OSC 52 把复制内容送到客户端剪贴板；远端会话 Pi 自己会从 `SSH_CONNECTION` 等识别，不需要这个变量，Epi 也没有对应的 `EPI_*` 开关 |
-| `PI_CODEMODE_MAX_WORKERS` | 只清掉 | Pi 1.4 的 codemode 并发 worker 上限；Epi 没有暴露这个旋钮，保持 Pi 的默认值 2 |
+
 
 Pi 代码里出现但不是 Pi 读取的输入，不处理：`PI_CODING_AGENT`（Pi 的 CLI/RPC 入口给子进程设的标记）、`PI_SESSION_ID`/`PI_SESSION_FILE`/`PI_PROVIDER`/`PI_MODEL`/`PI_REASONING_LEVEL`（bash 工具给它跑的命令设的，自己会先删掉继承来的值）、`PI_BUNDLED_NODE`（Pi 编译版的构建期常量，不是环境变量）、`PI_AI_VERSION`/`PI_ATTRIBUTION`（pi-ai 的模块常量，不是 `process.env`）、`PI_LOGO_COLORS`/`PI_LOGO_PIXELS`（Pi 1.0.1 起 `modes/interactive/components/easter-egg-3d.js` 里 3D 彩蛋 logo 的像素图和配色常量，不是环境变量；只在 Pi 自己的交互界面里用，Epi 不跑它）。另外 pi-ai 在 Bun 下 `process.env` 为空时会去读 `/proc/self/environ`，Epi 跑在 Node 上，走不到。
 
