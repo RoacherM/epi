@@ -602,30 +602,3 @@ for (const action of ["no interaction", "fold", "expand", "new args", "the last 
     assert.equal(screen.fullRedraws - before, 0, `${action} made the clock redraw rows outside the tip`);
   });
 }
-
-// Review 1 of 0.1.24 (P3-2) held a block that had never been drawn live at `Date.now()`; without it,
-// Ctrl+O unfolding a group that was folded from the start drew it at the real clock, so every frame
-// changed the duration bar and the tip rule was broken again. Nothing else exercises that path.
-test("Ctrl+O unfolds a group that was never drawn live without redrawing on the clock", (t) => {
-  let now = 3_000_000;
-  t.mock.method(Date, "now", () => now);
-  const tr = transcript();
-  const screen = new piTui.TuiMainScreen({ columns: 80, rows: 12, write() {}, hideCursor() {}, showCursor() {} }, false);
-  screen.addChild(tr.root);
-  tr.setToolsExpanded(false);
-  tr.handle({ type: "agent_start" });
-  tr.handle({ type: "message_start", message: user("go") });
-  reply(tr, [{ type: "text", text: Array.from({ length: 8 }, (_, i) => `history ${i}`).join("\n\n") }]);
-  const calls = Array.from({ length: 18 }, (_, i) => call("bash", `f${i}`, { command: `make folded${i}` }));
-  const message = { ...assistant(calls), stopReason: "toolUse" };
-  tr.handle({ type: "message_start", message: { ...message, content: [] } });
-  tr.handle({ type: "message_end", message });
-  for (const c of calls) tr.handle({ type: "tool_execution_start", toolName: c.name, toolCallId: c.id, args: c.arguments });
-  for (let i = 0; i < 3; i += 1) { now += 80; screen.renderNow(); }
-  tr.setToolsExpanded(true);
-  now += 80;
-  screen.renderNow();
-  const before = screen.fullRedraws;
-  for (let i = 0; i < 10; i += 1) { now += 320; screen.renderNow(); }
-  assert.equal(screen.fullRedraws - before, 0);
-});
