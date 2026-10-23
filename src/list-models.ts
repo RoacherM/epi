@@ -19,11 +19,11 @@ import {
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 
 import type { ResolvedAssembly } from "./assembly.js";
+import { type Diagnostic, extensionLoadDiagnostics } from "./diagnostics.js";
 import { extensionLoadFailureHint, PROVIDER_LOGIN_HELP } from "./pi-output.js";
 import { settleRegisteredProviders } from "./provider-startup.js";
 import { configureHttpAtStartup, settingsDiagnostics } from "./tui/services.js";
 
-type Diagnostic = { type: "error" | "warning" | "info"; message: string };
 type ParsedPiArgs = ReturnType<typeof parseArgs>;
 type ListedModel = { provider: string; id: string; contextWindow: number; maxTokens: number; reasoning: boolean; input: readonly string[] };
 
@@ -126,14 +126,7 @@ export async function runListModels(
   const diagnostics: Diagnostic[] = [
     ...services.diagnostics,
     ...settingsDiagnostics(services.settingsManager),
-    ...extensions.errors.map(({ path, error }) => ({
-      type: "error" as const,
-      message: `Failed to load extension "${path}": ${error}`,
-    })),
-    ...(extensions.warnings ?? []).map(({ path, warning }) => ({
-      type: "warning" as const,
-      message: `Extension package "${path}": ${warning}`,
-    })),
+    ...extensionLoadDiagnostics(resourceLoader),
     ...providerWarnings,
   ];
   const seen = new Set<string>();

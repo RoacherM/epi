@@ -12,6 +12,7 @@
 // is not exported; docs/tui-design.md).
 import { createAgentSessionServices, parseArgs, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
+import { extensionLoadDiagnostics } from "./diagnostics.js";
 import { extensionLoadFailureHint, PROVIDER_LOGIN_HELP } from "./pi-output.js";
 import { settleRegisteredProviders } from "./provider-startup.js";
 import { configureHttpAtStartup, settingsDiagnostics } from "./tui/services.js";
@@ -101,14 +102,7 @@ export async function runListModels(piArgs, options) {
     const diagnostics = [
         ...services.diagnostics,
         ...settingsDiagnostics(services.settingsManager),
-        ...extensions.errors.map(({ path, error }) => ({
-            type: "error",
-            message: `Failed to load extension "${path}": ${error}`,
-        })),
-        ...(extensions.warnings ?? []).map(({ path, warning }) => ({
-            type: "warning",
-            message: `Extension package "${path}": ${warning}`,
-        })),
+        ...extensionLoadDiagnostics(resourceLoader),
         ...providerWarnings,
     ];
     const seen = new Set();
