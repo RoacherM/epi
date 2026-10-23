@@ -74,8 +74,10 @@ Manifest 里的扩展启动时加载失败，两条路径都和 Pi 一样报错�
 | `PI_STARTUP_BENCHMARK` | 只清掉 | Pi 交互界面的启动计时；设了它 `-p` 会直接报错退出 |
 | `PI_TIMING`、`PI_TUI_DEBUG`、`PI_TUI_DEBUG_REDRAW`、`PI_TUI_WRITE_LOG` | 只清掉 | Pi 自己的调试输出（计时、渲染日志、终端写入日志），不作为 Epi 的选项 |
 | `PI_MANAGED_INSTALL_ROOT`、`PI_INSTALLER_API_BASE` | 只清掉 | Pi 自更新和包命令用的；`epi install/update` 是 Epi 自己的，走不到 |
+| `PI_CLIPBOARD_OSC52` | 只清掉 | Pi 1.4 在 SSH/MOSH 会话里用 OSC 52 把复制内容送到客户端剪贴板；远端会话 Pi 自己会从 `SSH_CONNECTION` 等识别，不需要这个变量，Epi 也没有对应的 `EPI_*` 开关 |
+| `PI_CODEMODE_MAX_WORKERS` | 只清掉 | Pi 1.4 的 codemode 并发 worker 上限；Epi 没有暴露这个旋钮，保持 Pi 的默认值 2 |
 
-Pi 代码里出现但不是 Pi 读取的输入，不处理：`PI_CODING_AGENT`（Pi 的 CLI/RPC 入口给子进程设的标记）、`PI_SESSION_ID`/`PI_SESSION_FILE`/`PI_PROVIDER`/`PI_MODEL`/`PI_REASONING_LEVEL`（bash 工具给它跑的命令设的，自己会先删掉继承来的值）、`PI_BUNDLED_NODE`（Pi 编译版的构建期常量，不是环境变量）、`PI_LOGO_COLORS`/`PI_LOGO_PIXELS`（Pi 1.0.1 起 `modes/interactive/components/easter-egg-3d.js` 里 3D 彩蛋 logo 的像素图和配色常量，不是环境变量；只在 Pi 自己的交互界面里用，Epi 不跑它）。另外 pi-ai 在 Bun 下 `process.env` 为空时会去读 `/proc/self/environ`，Epi 跑在 Node 上，走不到。
+Pi 代码里出现但不是 Pi 读取的输入，不处理：`PI_CODING_AGENT`（Pi 的 CLI/RPC 入口给子进程设的标记）、`PI_SESSION_ID`/`PI_SESSION_FILE`/`PI_PROVIDER`/`PI_MODEL`/`PI_REASONING_LEVEL`（bash 工具给它跑的命令设的，自己会先删掉继承来的值）、`PI_BUNDLED_NODE`（Pi 编译版的构建期常量，不是环境变量）、`PI_AI_VERSION`/`PI_ATTRIBUTION`（pi-ai 的模块常量，不是 `process.env`）、`PI_LOGO_COLORS`/`PI_LOGO_PIXELS`（Pi 1.0.1 起 `modes/interactive/components/easter-egg-3d.js` 里 3D 彩蛋 logo 的像素图和配色常量，不是环境变量；只在 Pi 自己的交互界面里用，Epi 不跑它）。另外 pi-ai 在 Bun 下 `process.env` 为空时会去读 `/proc/self/environ`，Epi 跑在 Node 上，走不到。
 
 ## 3. 子命令
 

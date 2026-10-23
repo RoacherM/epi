@@ -748,8 +748,9 @@ describe("image numbering", { concurrency: Math.min(8, Math.max(2, availablePara
     caret.insertTextAtCursor("x [Image #7] y");
     for (let i = 0; i < 6; i += 1) caret.handleInput("\x1b[D"); // onto the label's space
     const caretText = styled(caret.render(60));
-    // Dim and struck through from `[` to `]`, including after the caret's own reset.
-    assert.match(caretText, /\x1b\[2;9m\[Image(?:\x1b\[[0-9;]*m)* \x1b\[0m\x1b\[2;9m#7\]\x1b\[22;29m y/);
+    // Dim and struck through from `[` to `]`. Pi 1.4 draws the caret with `\x1b_pi:*` markers instead
+    // of an inverted character plus a reset, so the span is continuous; `styled` strips the markers.
+    assert.match(caretText, /\x1b\[2;9m\[Image #7\]\x1b\[22;29m y/);
     // A label with data is left alone, wrapped or not.
     const chip = bareEditor();
     chip.insertTextAtCursor("abcdefghij ");
@@ -762,10 +763,13 @@ describe("image numbering", { concurrency: Math.min(8, Math.max(2, availablePara
     editor.focused = true;
     editor.insertTextAtCursor("abcdefghij [Image #7] tail");
     for (let i = 0; i < 9; i += 1) editor.handleInput("\x1b[D"); // onto the wrapping space
-    const text = editor.render(20).join("\n").replace(/\x1b_[^\x07]*\x07/g, "");
-    assert.match(text.replace(/\x1b\[(?:2;9|22;29)m/g, ""), /\[Image\x1b\[7m \x1b\[0m {2}\n#7\]/, "the caret is on the wrapping space");
+    const raw = editor.render(20).join("\n");
+    // Pi 1.4 marks the caret with `\x1b_pi:c` and a fake-cursor pair around the character, not with
+    // `\x1b[7m`; the wrapping space is the one inside the pair.
+    assert.match(raw, /\[Image\x1b_pi:c\x07\x1b_pi:fc\x07 \x1b_pi:\/fc\x07/, "the caret is on the wrapping space");
+    const text = raw.replace(/\x1b_[^\x07]*\x07/g, "");
     // Dim and struck through on both lines, not over the padding.
-    assert.match(text, /\x1b\[2;9m\[Image(?:\x1b\[[0-9;]*m)* \x1b\[0m(?:\x1b\[2;9m)?\x1b\[22;29m {2}\n\x1b\[2;9m#7\]\x1b\[22;29m tail/);
+    assert.match(text, /\x1b\[2;9m\[Image \x1b\[22;29m {2}\n\x1b\[2;9m#7\]\x1b\[22;29m tail/);
   });
 
   test("D49: text that only looks like a label across a line break is not drawn as one", () => {

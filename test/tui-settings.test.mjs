@@ -72,6 +72,9 @@ const HIDDEN = [
   "Show images", "Image width", "Editor padding", "Output padding", "Clear on shrink",
   "Hide thinking", "Mermaid diagrams", "Cache miss notices", "Collapse changelog", "Quiet startup",
   "Install telemetry", "Default project trust", "Warnings", "TUI mode", "Fullscreen exit output", "Theme",
+  // Pi 1.4 added /share's upload destination (auto/gist/radius). Epi's /share only creates a GitHub
+  // gist (docs/tui-design.md 4.6), with no Radius identity, so the setting would change nothing.
+  "Session share destination",
 ];
 // Pi's wording names keys or behaviour Epi does not have (see src/tui/settings-command.ts).
 const OWN_DESCRIPTION = new Set(["steering-mode", "follow-up-mode"]);
@@ -497,7 +500,7 @@ test("Epi's items match Pi's SettingsSelectorComponent: same order, labels, desc
     showImages: settings.getShowImages(), imageWidthCells: settings.getImageWidthCells(),
     autoResizeImages: settings.getImageAutoResize(), blockImages: settings.getBlockImages(),
     enableSkillCommands: settings.getEnableSkillCommands(), steeringMode: settings.getSteeringMode(),
-    followUpMode: settings.getFollowUpMode(), transport: settings.getTransport(),
+    followUpMode: settings.getFollowUpMode(), transport: settings.getTransport(), sessionShareDestination: settings.getSessionShareDestination(),
     httpIdleTimeoutMs: settings.getHttpIdleTimeoutMs(), cacheWarmingMode: settings.getCacheWarmingMode(),
     thinkingLevel: "medium", availableThinkingLevels: ["off", "medium"], modelThinkingLevels: {},
     currentTheme: "dark", availableThemes: ["dark"], hideThinkingBlock: false,

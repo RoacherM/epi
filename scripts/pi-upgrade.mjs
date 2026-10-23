@@ -15,7 +15,16 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import semver from "semver";
 
-const PI_PACKAGES = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "@earendil-works/pi-ai"];
+// The canonical version source. Every other @earendil-works package package.json pins directly is
+// moved with it: pi 1.4 made its subpackages exact dependencies, and a fixed three-name list left
+// pi-agent-core/pi-codemode/pi-mcp/pi-telemetry at the old version next to nested new ones.
+const PI_VERSION_SOURCE = "@earendil-works/pi-coding-agent";
+
+export function piPackages(pkg) {
+  const names = Object.keys(pkg.dependencies ?? {}).filter((name) => name.startsWith("@earendil-works/"));
+  if (!names.includes(PI_VERSION_SOURCE)) throw new Error(`package.json must depend on ${PI_VERSION_SOURCE}`);
+  return names;
+}
 
 // Supply-chain guard (pre-merge review blocker #2): don't adopt a Pi release until it's had time
 // for the ecosystem to notice a compromised or broken publish. `--version` bypasses this
@@ -344,8 +353,9 @@ export function runPiUpgrade({
   }
 
   const pkg = readPackageJson(cwd);
-  const oldPiVersion = pkg.dependencies[PI_PACKAGES[0]];
-  const newPiVersion = requestedVersion ?? registry.latestVersion(PI_PACKAGES[0]);
+  const packages = piPackages(pkg);
+  const oldPiVersion = pkg.dependencies[PI_VERSION_SOURCE];
+  const newPiVersion = requestedVersion ?? registry.latestVersion(PI_VERSION_SOURCE);
 
   if (!isNewerVersion(newPiVersion, oldPiVersion)) {
     return {
@@ -361,7 +371,7 @@ export function runPiUpgrade({
   // had a chance to react to yet. An explicit `--version` is a human's deliberate choice and skips
   // this entirely.
   if (requestedVersion === undefined) {
-    const piAge = checkPublishAge({ registry, name: PI_PACKAGES[0], version: newPiVersion, now });
+    const piAge = checkPublishAge({ registry, name: PI_VERSION_SOURCE, version: newPiVersion, now });
     if (piAge.tooNew) {
       return publishAgeWaitingResult({
         reason: `${newPiVersion} was published ${piAge.ageHours}h ago`,
@@ -371,7 +381,7 @@ export function runPiUpgrade({
     }
   }
 
-  for (const name of PI_PACKAGES) pkg.dependencies[name] = newPiVersion;
+  for (const name of packages) pkg.dependencies[name] = newPiVersion;
   writePackageJson(cwd, pkg, writeFile);
 
   const gate = runGate({ cwd, exec });

@@ -354,6 +354,8 @@ Epi 新写的文件也都在 `~/.epi/pi` 下：`themes/epi-grok-*.json`，键位
 
 **`/settings` 的项（2026-10-01 主控定，任务 D21）**
 
+Pi 1.4 新增的 `Session share destination` 不显示：Epi 的 `/share` 固定走 GitHub Gist（4.6 节），没有 Pi 的 Radius 身份，这个设置项改了不会有任何效果。它在 `test/tui-settings.test.mjs` 的 `HIDDEN` 里登记。
+
 显示的 15 项，顺序同 Pi。"Pi 核心"表示 Pi 的 `AgentSession`/SDK 自己读这个设置，Epi 只调 Pi 的公开 setter；"Epi 接线"表示 Pi 只在自己的界面里读，Epi 的界面照做。
 
 | id | 谁读 | 改了之后 |

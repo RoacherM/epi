@@ -12,7 +12,9 @@ import test from "node:test";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const shrinkwrap = JSON.parse(readFileSync(join(root, "npm-shrinkwrap.json"), "utf8"));
-const PI_PACKAGES = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "@earendil-works/pi-ai"];
+// Every Pi package package.json pins directly, not a fixed three: pi 1.4 made its subpackages exact
+// dependencies, and the old list let 1.1.0 copies stay at the top level beside nested 1.4.0 ones.
+const PI_PACKAGES = Object.keys(pkg.dependencies).filter((name) => name.startsWith("@earendil-works/"));
 
 test("npm-shrinkwrap.json is Epi's only lock file, and npm pack ships it", (t) => {
   assert.equal(existsSync(join(root, "package-lock.json")), false, "package-lock.json is back: npm would use the shrinkwrap and let it drift");
@@ -34,6 +36,8 @@ test("npm-shrinkwrap.json pins Epi's version and the Pi packages package.json na
   for (const name of PI_PACKAGES) {
     assert.equal(shrinkwrap.packages[`node_modules/${name}`]?.version, pkg.dependencies[name], `${name} is not pinned to package.json's version`);
   }
+  const versions = new Set(PI_PACKAGES.map((name) => pkg.dependencies[name]));
+  assert.equal(versions.size, 1, "Pi packages must move together: " + [...versions].join(", "));
   // src/tui/pi-tui.ts refuses to start with a second pi-tui (docs/pi-internals.md pi-tui-single-copy).
   const piTuiCopies = Object.keys(shrinkwrap.packages).filter((path) => path.endsWith("node_modules/@earendil-works/pi-tui"));
   assert.deepEqual(piTuiCopies, ["node_modules/@earendil-works/pi-tui"]);
@@ -46,7 +50,9 @@ test("every Pi package in the tree is pinned as an exact direct dependency", () 
   const piPackages = Object.keys(shrinkwrap.packages)
     .filter((path) => /^node_modules\/@earendil-works\/[^/]+$/.test(path))
     .map((path) => path.slice("node_modules/".length));
-  assert.ok(piPackages.length >= PI_PACKAGES.length, "no Pi packages found in the shrinkwrap");
+  assert.deepEqual([...piPackages].sort(), [...PI_PACKAGES].sort(), "the top level must hold exactly package.json's Pi packages");
+  const nested = Object.keys(shrinkwrap.packages).filter((path) => /\/node_modules\/@earendil-works\/[^/]+$/.test(path));
+  assert.deepEqual(nested, [], "a Pi package is nested under another package: package.json did not pin it directly");
   for (const name of piPackages) {
     assert.equal(
       pkg.dependencies[name],
