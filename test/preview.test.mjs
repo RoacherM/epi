@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { createPreviewInlineExtension, PREVIEW_PLAYER_CHANNEL, PREVIEW_VERSION } from "../dist/extensions/preview.js";
+import { removeTempDir } from "./helpers/temp-dir.mjs";
 import { clock, humanSize, kindOf, loadDoc, printable, readListing } from "../dist/extensions/preview/files.js";
 import { Player, StillCache, stillJob } from "../dist/extensions/preview/media.js";
 import { PlayerPane } from "../dist/extensions/preview/player-pane.js";
@@ -22,9 +23,9 @@ const ONE_PIXEL_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
 
 function tempDir(t) {
   const dir = mkdtempSync(join(tmpdir(), "epi-preview-"));
-  // Retries: a fake media tool (fakeMediaTools) can still be writing a frame into it as the test ends,
-  // and rmSync then races it (ENOTEMPTY, seen on CI for 0.1.24).
-  t.after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  // A fake media tool (fakeMediaTools) can still be writing a frame into it as the test ends; the
+  // shared helper retries instead of racing it (ENOTEMPTY, seen on CI for 0.1.24).
+  t.after(() => removeTempDir(dir));
   return dir;
 }
 
