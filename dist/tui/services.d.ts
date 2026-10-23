@@ -1,5 +1,6 @@
 import { type AgentSessionRuntime, type InlineExtension, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { type ResolvedAssembly } from "../assembly.js";
+import { type Diagnostic } from "../diagnostics.js";
 import { type ProjectIdentity } from "./project-guard.js";
 export interface EpiSessionOptions {
     cwd: string;
@@ -29,10 +30,7 @@ export declare class StartupDiagnosticsError extends Error {
     /** `extensionLoadFailureHint`, when an extension failed to load. */
     hint: string | undefined);
 }
-export type Diagnostic = {
-    type: "error" | "warning" | "info";
-    message: string;
-};
+export type { Diagnostic } from "../diagnostics.js";
 /** Pi's startup (main.js): the settings' `httpProxy` fills HTTP_PROXY/HTTPS_PROXY once, then the
  * dispatcher. Later rebinds only reconfigure the dispatcher (configureHttp), like Pi. */
 export declare function configureHttpAtStartup(settingsManager: SettingsManager): void;

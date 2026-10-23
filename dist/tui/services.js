@@ -7,6 +7,7 @@ import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createAgentSessionFromServices, createAgentSessionRuntime, createAgentSessionServices, parseArgs, resolveCliModel, resolveModelScopeWithDiagnostics, SessionManager, SettingsManager, } from "@earendil-works/pi-coding-agent";
 import { builtInOffInstruction } from "../assembly.js";
+import { extensionLoadDiagnostics } from "../diagnostics.js";
 import { BUILT_IN_EXTENSION_NAMES } from "../manifest.js";
 import { EpiArgumentError } from "../errors.js";
 import { extensionLoadFailureHint } from "../pi-output.js";
@@ -261,22 +262,6 @@ function duplicateCommandDiagnostics(services, assembly) {
         };
     });
 }
-/** createAgentSessionServices leaves extension load results out of its diagnostics; Pi's main.js
- * adds them itself (~641-648). Without this, a Manifest extension that failed to load was skipped
- * with nothing on screen (dogfood D45). */
-function collectExtensionDiagnostics(services) {
-    const extensions = services.resourceLoader.getExtensions();
-    return [
-        ...extensions.errors.map(({ path, error }) => ({
-            type: "error",
-            message: `Failed to load extension "${path}": ${error}`,
-        })),
-        ...(extensions.warnings ?? []).map(({ path, warning }) => ({
-            type: "warning",
-            message: `Extension package "${path}": ${warning}`,
-        })),
-    ];
-}
 /** Pi's buildSessionOptions (main.js ~382-401): prefer the saved default model when it's in scope,
  * otherwise fall back to the first scoped model. `modelsAreEqual` isn't part of the SDK's export
  * surface, so provider+id is compared directly instead. */
@@ -409,7 +394,7 @@ export async function createEpiRuntime(options) {
         const initial = await resolveInitialModel(parsed, services, sessionManager);
         const diagnostics = [
             ...services.diagnostics,
-            ...collectExtensionDiagnostics(services),
+            ...extensionLoadDiagnostics(services.resourceLoader),
             ...duplicateCommandDiagnostics(services, options.assembly),
             ...providers.warnings,
             ...notRunningWarnings(providers, {

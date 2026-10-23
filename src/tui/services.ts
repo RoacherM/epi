@@ -24,6 +24,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { builtInOffInstruction, type ResolvedAssembly } from "../assembly.js";
+import { type Diagnostic, extensionLoadDiagnostics } from "../diagnostics.js";
 import { BUILT_IN_EXTENSION_NAMES, type BuiltInExtensionName } from "../manifest.js";
 import { EpiArgumentError } from "../errors.js";
 import { extensionLoadFailureHint } from "../pi-output.js";
@@ -62,7 +63,7 @@ export class StartupDiagnosticsError extends Error {
 }
 
 type ParsedPiArgs = ReturnType<typeof parseArgs>;
-export type Diagnostic = { type: "error" | "warning" | "info"; message: string };
+export type { Diagnostic } from "../diagnostics.js";
 
 // pi-internals row `http-dispatcher` (dogfood D38): Pi's own core/http-dispatcher.js, not in the
 // package "exports" map, so imported by file path. The package root already loaded it (through
@@ -340,23 +341,6 @@ function duplicateCommandDiagnostics(
   });
 }
 
-/** createAgentSessionServices leaves extension load results out of its diagnostics; Pi's main.js
- * adds them itself (~641-648). Without this, a Manifest extension that failed to load was skipped
- * with nothing on screen (dogfood D45). */
-function collectExtensionDiagnostics(services: AgentSessionServices): Diagnostic[] {
-  const extensions = services.resourceLoader.getExtensions();
-  return [
-    ...extensions.errors.map(({ path, error }): Diagnostic => ({
-      type: "error",
-      message: `Failed to load extension "${path}": ${error}`,
-    })),
-    ...(extensions.warnings ?? []).map(({ path, warning }): Diagnostic => ({
-      type: "warning",
-      message: `Extension package "${path}": ${warning}`,
-    })),
-  ];
-}
-
 /** Pi's buildSessionOptions (main.js ~382-401): prefer the saved default model when it's in scope,
  * otherwise fall back to the first scoped model. `modelsAreEqual` isn't part of the SDK's export
  * surface, so provider+id is compared directly instead. */
@@ -513,7 +497,7 @@ export async function createEpiRuntime(options: EpiSessionOptions): Promise<Agen
     const initial = await resolveInitialModel(parsed, services, sessionManager);
     const diagnostics: Diagnostic[] = [
       ...services.diagnostics,
-      ...collectExtensionDiagnostics(services),
+      ...extensionLoadDiagnostics(services.resourceLoader),
       ...duplicateCommandDiagnostics(services, options.assembly),
       ...providers.warnings,
       ...notRunningWarnings(providers, {
