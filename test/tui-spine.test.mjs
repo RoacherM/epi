@@ -561,3 +561,71 @@ test("a call that finishes as a long reply pushes it out of the tip never shakes
   assert.deepEqual([...new Set(markers)], ["$"], "settled at once outside the tip");
   assert.equal(screen.fullRedraws - before, 0);
 });
+
+// Property (docs/code-quality.md §1; docs/dev-workflow.md §9): once a turn has painted, advancing only
+// the clock must not force a full redraw -- whatever the interaction was. The cases are covered one by
+// one above; this runs them on one long turn so fixing one path cannot quietly break another. The
+// invariant broke in 0.1.22, 0.1.23 and 0.1.24 in a row, each time in a path the previous test missed.
+for (const action of ["no interaction", "fold", "expand", "new args", "the last call lands"]) {
+  test(`only the clock runs after ${action}: no full redraw (property)`, (t) => {
+    let now = 2_000_000;
+    t.mock.method(Date, "now", () => now);
+    const tr = transcript();
+    const screen = new piTui.TuiMainScreen({ columns: 80, rows: 12, write() {}, hideCursor() {}, showCursor() {} }, false);
+    screen.addChild(tr.root);
+    tr.handle({ type: "agent_start" });
+    tr.handle({ type: "message_start", message: user("go") });
+    reply(tr, [{ type: "text", text: Array.from({ length: 8 }, (_, i) => `history ${i}`).join("\n\n") }]);
+    const calls = [
+      call("grep", "g1", { pattern: "foo" }),
+      call("grep", "g2", { pattern: "bar" }),
+      ...Array.from({ length: 16 }, (_, i) => call("bash", `b${i}`, { command: `make part${i}` })),
+    ];
+    const message = { ...assistant(calls), stopReason: "toolUse" };
+    tr.handle({ type: "message_start", message: { ...message, content: [] } });
+    tr.handle({ type: "message_end", message });
+    for (const c of calls) tr.handle({ type: "tool_execution_start", toolName: c.name, toolCallId: c.id, args: c.arguments });
+    for (let i = 0; i < 3; i += 1) { now += 80; screen.renderNow(); }
+    if (action === "fold") tr.setToolsExpanded(false);
+    if (action === "expand") tr.setToolsExpanded(true);
+    if (action === "new args") {
+      const newer = { ...message, content: calls.map((part, i) => (i === 0 ? { ...part, arguments: { pattern: "NEW" } } : part)) };
+      tr.handle({ type: "message_update", message: newer });
+    }
+    if (action === "the last call lands") {
+      tr.handle({ type: "tool_execution_end", toolName: "bash", toolCallId: "b15", result: { content: [{ type: "text", text: "ok" }] }, isError: false, durationMs: 900 });
+    }
+    now += 80;
+    screen.renderNow();
+    const before = screen.fullRedraws;
+    for (let i = 0; i < 10; i += 1) { now += 320; screen.renderNow(); }
+    assert.equal(screen.fullRedraws - before, 0, `${action} made the clock redraw rows outside the tip`);
+  });
+}
+
+// Review 1 of 0.1.24 (P3-2) held a block that had never been drawn live at `Date.now()`; without it,
+// Ctrl+O unfolding a group that was folded from the start drew it at the real clock, so every frame
+// changed the duration bar and the tip rule was broken again. Nothing else exercises that path.
+test("Ctrl+O unfolds a group that was never drawn live without redrawing on the clock", (t) => {
+  let now = 3_000_000;
+  t.mock.method(Date, "now", () => now);
+  const tr = transcript();
+  const screen = new piTui.TuiMainScreen({ columns: 80, rows: 12, write() {}, hideCursor() {}, showCursor() {} }, false);
+  screen.addChild(tr.root);
+  tr.setToolsExpanded(false);
+  tr.handle({ type: "agent_start" });
+  tr.handle({ type: "message_start", message: user("go") });
+  reply(tr, [{ type: "text", text: Array.from({ length: 8 }, (_, i) => `history ${i}`).join("\n\n") }]);
+  const calls = Array.from({ length: 18 }, (_, i) => call("bash", `f${i}`, { command: `make folded${i}` }));
+  const message = { ...assistant(calls), stopReason: "toolUse" };
+  tr.handle({ type: "message_start", message: { ...message, content: [] } });
+  tr.handle({ type: "message_end", message });
+  for (const c of calls) tr.handle({ type: "tool_execution_start", toolName: c.name, toolCallId: c.id, args: c.arguments });
+  for (let i = 0; i < 3; i += 1) { now += 80; screen.renderNow(); }
+  tr.setToolsExpanded(true);
+  now += 80;
+  screen.renderNow();
+  const before = screen.fullRedraws;
+  for (let i = 0; i < 10; i += 1) { now += 320; screen.renderNow(); }
+  assert.equal(screen.fullRedraws - before, 0);
+});
