@@ -72,8 +72,8 @@ const HIDDEN = [
   "Show images", "Image width", "Editor padding", "Output padding", "Clear on shrink",
   "Hide thinking", "Mermaid diagrams", "Cache miss notices", "Collapse changelog", "Quiet startup",
   "Install telemetry", "Default project trust", "Warnings", "TUI mode", "Fullscreen exit output", "Theme",
-  // Pi 1.4 added /share's upload destination; Epi has no /share (docs/tui-design.md 4.6), so the
-  // setting would be a control that changes nothing. Hidden, listed here so a future /share adds it.
+  // Pi 1.4 added /share's upload destination (auto/gist/radius). Epi's /share only creates a GitHub
+  // gist (docs/tui-design.md 4.6), with no Radius identity, so the setting would change nothing.
   "Session share destination",
 ];
 // Pi's wording names keys or behaviour Epi does not have (see src/tui/settings-command.ts).
