@@ -83,7 +83,17 @@ test("a slow tool lights a longer run of pixels than a fast one", (t) => {
     ["detach"],
   ], { extension: fauxSlowTools, model: "epi-faux/slowtools" });
   const trace = shown(screens.trace);
-  assert.match(trace, /1\.2s/);
+  // The property is "the slower tool is timed longer and paints more", not a wall-clock number:
+  // under a loaded CI runner the same 1.2s sleep measured 1.3s and the old /1\.2s/ assertion failed
+  // with nothing wrong. Compare the two steps to each other instead.
+  const row = (command) => trace.split("\n").find((line) => line.includes(command));
+  const millis = (line) => {
+    const match = /(\d+(?:\.\d+)?)(ms|s)\s+\$ bash/.exec(line ?? "");
+    return match === null ? Number.NaN : Number(match[1]) * (match[2] === "s" ? 1000 : 1);
+  };
+  const slow = millis(row("sleep 1.2"));
+  const fast = millis(row("sleep 0.3"));
+  assert.ok(slow > fast, `the slow tool (${slow}ms) is timed longer than the fast one (${fast}ms)`);
   assert.match(trace, /(?:▪▪ ){4,}/);
 });
 
