@@ -45,6 +45,10 @@ export const PI_ENV_RULES: Readonly<Record<string, PiEnvRule>> = {
   PI_MANAGED_INSTALL_ROOT: { kind: "cleared" },
   PI_INSTALLER_API_BASE: { kind: "cleared" },
   PI_PROGRAM_STATUS: { kind: "cleared" },
+  // Pi 1.4: remote clipboard (OSC 52) and the codemode worker limit. Epi offers no EPI_* knob for
+  // either yet, so a user's Pi setting is cleared like every other Pi-only switch.
+  PI_CLIPBOARD_OSC52: { kind: "cleared" },
+  PI_CODEMODE_MAX_WORKERS: { kind: "cleared" },
 };
 
 /**
@@ -63,6 +67,10 @@ export const PI_ENV_NOT_READ: readonly string[] = [
   "PI_REASONING_LEVEL",
   // A build-time global of Pi's compiled binary (`typeof PI_BUNDLED_NODE`), not process.env.
   "PI_BUNDLED_NODE",
+  // pi-ai module constants (utils/version.js, utils/identity.js), not process.env: the scan sees
+  // the names because they are exported uppercase identifiers.
+  "PI_AI_VERSION",
+  "PI_ATTRIBUTION",
   // Module constants of Pi's 3D logo easter egg (modes/interactive/components/easter-egg-3d.js), not
   // process.env; Pi's own interactive mode only, which Epi does not run.
   "PI_LOGO_COLORS",

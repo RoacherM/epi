@@ -112,7 +112,7 @@ export function settingsItems(host: CommandHost): EpiSetting[] {
       item: {
         id: "show-hardware-cursor",
         label: "Show hardware cursor",
-        description: "Show the terminal cursor while still positioning it for IME support",
+        description: "Use the terminal cursor instead of Pi's drawn cursor",
         currentValue: bool(showHardwareCursor(settings)),
         values: ["true", "false"],
       },
