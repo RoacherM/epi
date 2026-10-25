@@ -279,6 +279,37 @@ test("D85: a context overflow compaction cannot fix ends partial, keeping the re
   // test lives in test/task-progress.test.mjs.
 });
 
+// Live run 2026-10-25 (deepseek-v4.1-flash declared with a 10k window): Pi's overflow recovery
+// compacted 27k -> 27k (nothing to free), the retry stopped with finish_reason "length" after one
+// output token, and Pi emitted no failed compaction_end -- so the child reported an empty
+// `completed`. A length stop far below the model's output limit is the window running out.
+test("a length stop with almost no output after compaction is a context stop, not an empty success", async (t) => {
+  const fixture = await setup(t, { contextWindow: 40000, maxTokens: 4096 });
+  const big = { prompt_tokens: 39000, completion_tokens: 1, total_tokens: 39001 };
+  let agent = 0;
+  fixture.server.state.inferenceHandler = (_request, response, body) => {
+    if (!Array.isArray(body.tools) || body.tools.length === 0) {
+      streamChunks(response, [openaiChunk({ role: "assistant", content: "SUMMARY" }, null), openaiChunk({}, "stop")]);
+      return;
+    }
+    agent += 1;
+    if (agent === 1) {
+      streamChunks(response, [
+        openaiChunk({ role: "assistant", content: "FOUND KEY1=red", tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "node -e \"process.stdout.write('x'.repeat(50000))\"" }) } }] }, null),
+        openaiChunk({}, "tool_calls"),
+      ]);
+      return;
+    }
+    // Every later request: the window is full, one token comes back, the provider stops on length.
+    streamChunks(response, [openaiChunk({ role: "assistant", content: "" }, null), openaiChunk({}, "length", big)]);
+  };
+  const result = await runWorker(fixture, () => {}, { tools: ["bash"] }, () => {});
+  assert.equal(result.code, 0, result.context);
+  assert.equal(result.result.partial, true, result.context);
+  assert.equal(result.result.stopped, "context", result.context);
+  assert.equal(result.result.output, "FOUND KEY1=red", "the work done before the window filled is kept");
+});
+
 // Round-2 review P1 (both reviewers): usage was read from the projected messages, so every turn a
 // compaction summarized -- and the summarization calls themselves -- vanished from the report. The
 // probe's shape: every request reports 30k input tokens, and 4 agent requests plus 2 summarization

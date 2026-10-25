@@ -1,4 +1,4 @@
-import { isContextOverflow, type AssistantMessage } from "@earendil-works/pi-ai";
+import { isContextOverflow, isRecoverableLength, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSession, InlineExtension } from "@earendil-works/pi-coding-agent";
 
 /** D85: effective context can omit failed attempts before recovery itself fails. Keep the last
@@ -8,7 +8,7 @@ export function trackRequestOutcome(): {
   error: (messages: AgentSession["messages"]) => string | undefined;
   /** True when that failed request was a context overflow, which a child reports as a partial run
    * rather than a failure (docs/development.md §12.4): the session file survives and can resume. */
-  overflow: (messages: AgentSession["messages"]) => boolean;
+  overflow: (messages: AgentSession["messages"], maxOutputTokens?: number) => boolean;
   /** The last request's finish reason. A context overflow Pi could not compact away does not always
    * surface as an error: a recoverable `length` stop is one too, and it carries no errorMessage
    * (review round 2 item 4). `"stop"` is a normal completion. */
@@ -38,9 +38,16 @@ export function trackRequestOutcome(): {
         ? message.errorMessage || `Request ${message.stopReason}`
         : undefined;
     },
-    overflow(messages) {
+    overflow(messages, maxOutputTokens) {
       const message = lastAssistant ?? messages[messages.length - 1];
-      return message?.role === "assistant" && message.stopReason === "error" && isContextOverflow(message);
+      if (message?.role !== "assistant") return false;
+      if (message.stopReason === "error") return isContextOverflow(message);
+      // A length stop far below the model's output limit is the window running out, not the
+      // answer being long: Pi treats exactly this as overflow (isRecoverableLength, one
+      // compact-and-retry). When that retry also stops this way -- compaction freed nothing --
+      // Pi emits no failed compaction_end, so the stop itself is the only signal (live run:
+      // 27k -> 27k compaction, retry stopped at 1 output token, reported as an empty success).
+      return maxOutputTokens !== undefined && isRecoverableLength(message, maxOutputTokens);
     },
     stopReason(messages) {
       const message = lastAssistant ?? messages[messages.length - 1];
