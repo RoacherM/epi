@@ -16,7 +16,7 @@ import type {
 } from "./hooks-config.js";
 import type { HookDecision } from "./hook-events.js";
 import type { TaskAgentDefinition } from "./task-agents.js";
-import { TaskRuntime } from "./task-runtime.js";
+import { inheritedModelReference, TaskRuntime } from "./task-runtime.js";
 
 const MAX_HOOK_PAYLOAD_BYTES = 64 * 1024;
 const MAX_HOOK_OUTPUT_BYTES = 64 * 1024;
@@ -59,6 +59,10 @@ export interface HooksRuntimeOptions {
   artifactRoot: string;
   sessionRoot: string;
   projectTrusted: boolean;
+  /** The parent's trusted project root, when the caller knows it. `epi:hooks` does not pass one
+   * yet, so hook agent children resolve untrusted (the safe direction) instead of re-reading
+   * `trust.json` for whatever project their cwd lands in. */
+  projectRoot?: string | undefined;
 }
 
 function terminateProcess(processHandle: ChildProcessWithoutNullStreams): void {
@@ -340,6 +344,7 @@ export class HooksRuntime {
       sessionRoot: options.sessionRoot,
       agents: options.agents,
       projectTrusted: options.projectTrusted,
+      projectRoot: options.projectRoot,
       maxConcurrency: 2,
       maxOutputBytes: MAX_HOOK_OUTPUT_BYTES,
       // Design §9 (defect 4): a hook's agent handler must not itself trigger hooks, or a
@@ -479,7 +484,7 @@ export class HooksRuntime {
       case "prompt":
         return this.executePrompt(handler, payload, context, signal);
       case "agent":
-        return this.executeAgent(handler, payload, context.cwd, signal);
+        return this.executeAgent(handler, payload, context, signal);
     }
   }
 
@@ -640,7 +645,7 @@ export class HooksRuntime {
   private async executeAgent(
     handler: Extract<HookHandler, { type: "agent" }>,
     payload: HookPayload,
-    cwd: string,
+    context: ExtensionContext,
     signal: AbortSignal,
   ): Promise<string> {
     const started = this.taskRuntime.start({
@@ -650,7 +655,10 @@ export class HooksRuntime {
         "Return exactly one JSON decision object and no Markdown fences.",
         serializePayload(payload),
       ].join("\n\n"),
-      cwd,
+      cwd: context.cwd,
+      // The hook agent inherits the parent's model, as a `task` call does; without it a preset
+      // with `model: ":low"` would lose the model it is meant to keep (review pack A P1).
+      inheritedModel: inheritedModelReference(context.model, context.thinkingLevel),
     });
     const abort = () => {
       void this.taskRuntime.cancel(started.id);

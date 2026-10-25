@@ -2,6 +2,31 @@ import type { TaskAgentDefinition } from "./task-agents.js";
 /** Used when neither the call nor an `agents/*.md` preset sets one. */
 export declare const DEFAULT_TASK_TIMEOUT_SECONDS = 600;
 /**
+ * The longest `timeoutSeconds` a job may ask for. Node's `setTimeout` clamps a delay above
+ * 2^31-1 ms to 1 ms, which would turn "run for a month" into "kill at once" (review pack A P3).
+ */
+export declare const MAX_TASK_TIMEOUT_SECONDS: number;
+/**
+ * The parent's model as a `provider/id` reference a worker can resolve, with the parent's thinking
+ * level when it has one. Undefined when the session has no usable model, which leaves the child to
+ * Pi's own selection and its own error if there is none. "unknown" is Pi's placeholder for "no
+ * model could be selected".
+ */
+export declare function inheritedModelReference(model: {
+    provider: string;
+    id: string;
+} | undefined, thinkingLevel: string | undefined): string | undefined;
+/** A model reference without its trailing `:thinking`, leaving model ids that merely contain `:`
+ * alone. */
+export declare function baseModelReference(reference: string): string;
+/**
+ * The model reference the child resolves. A picked value that is only a thinking suffix (`":low"`)
+ * keeps the base model it modifies: a `:x` from the call keeps the preset model (falling back to
+ * the parent's), a `:x` from the preset keeps the parent's. The base's own `:thinking` is dropped
+ * first, so `a/b:high` + `:low` is `a/b:low`, never `a/b:high:low` (review pack A P1).
+ */
+export declare function childModelReference(picked: string | undefined, presetModel: string | undefined, inheritedModel: string | undefined, callPicked: boolean): string | undefined;
+/**
  * The parent entries a `context: "fork"` child may start from: the current branch, minus the
  * unfinished tail of this very turn.
  *
@@ -59,6 +84,9 @@ export interface TaskCapsule {
     /** Whether the parent's project Manifest counted as trusted for this run; a child never
      * re-decides trust on its own (hard rule 2). */
     projectTrusted: boolean;
+    /** The project root that decision was made for, so the worker can check the child's `cwd` is
+     * still inside it before applying the decision. Undefined when the parent trusted no project. */
+    projectRoot: string | undefined;
     maxTurns: number | undefined;
 }
 /** What one subagent spent. Reported up to the parent because a child's tokens are billed to the
@@ -104,6 +132,10 @@ export interface TaskRuntimeOptions {
     sessionRoot: string;
     agents: readonly TaskAgentDefinition[];
     projectTrusted: boolean;
+    /** The parent's trusted project root: the directory of the `.epi/epi.json` this run loaded, or
+     * undefined. The capsule carries it so the worker can refuse to load any other project (hard
+     * rule 2); `projectTrusted` says a root was trusted, this says which one. */
+    projectRoot?: string | undefined;
     maxConcurrency?: number;
     maxOutputBytes?: number;
     killGraceMs?: number;
@@ -175,7 +207,8 @@ export declare class TaskRuntime {
      * certainty: how Epi stopped it, then how the process died, then what it reported.
      */
     private settleOutcome;
-    /** The worker's answer, cut to the output budget with a pointer to the full artifact. */
+    /** The worker's answer, cut to the output budget with a pointer to the full artifact. The cut is
+     * made on a UTF-8 boundary, so a multi-byte code point is never split into U+FFFD. */
     private boundedResult;
     /** One setting's value: what the call said, else what the `agents/*.md` preset said, else the
      * subagent default (design §3: an explicit argument always outranks a preset). */

@@ -31,5 +31,14 @@ export declare function findNearestProjectManifest(cwd: string, globalManifestPa
  * never causes Epi's agentDir to be created.
  */
 export declare function readProjectTrustDecision(agentDir: string, cwd: string): boolean | null;
+/**
+ * Whether a child may load the project Manifest its own `cwd` sits in. The parent's trust decision
+ * counts only for the project it was made for: the child's nearest Manifest must be that same root.
+ * Any other cwd resolves untrusted, and the child never reads `trust.json` itself (hard rule 2).
+ *
+ * This is what keeps `task({ cwd: "../B" })` from loading an untrusted project B when the parent
+ * was started in a trusted project A (review pack A P1).
+ */
+export declare function childProjectTrust(parentProjectRoot: string | undefined, parentTrusted: boolean, cwd: string, globalManifestPath: string): boolean;
 export declare function resolveProjectManifest(options: ResolveProjectOptions): ProjectResolution;
 //# sourceMappingURL=project.d.ts.map

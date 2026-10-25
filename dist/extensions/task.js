@@ -1,4 +1,4 @@
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 // Just the pure text-width helper, not pi-tui's Component classes: this extension has none of the
 // "must be Pi's exact installed copy" concerns src/tui/pi-tui.ts exists for (no instanceof checks).
@@ -6,7 +6,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { emitTaskHook } from "../hook-events.js";
 import { loadTaskAgents } from "../task-agents.js";
-import { forkableBranch, TaskRuntime, } from "../task-runtime.js";
+import { forkableBranch, inheritedModelReference, MAX_TASK_TIMEOUT_SECONDS, TaskRuntime, } from "../task-runtime.js";
 /**
  * The nine orthogonal subagent settings (docs/subagents-design.md §3). All optional: a plain
  * `task({ task })` runs a nameless child with no skills, no MCP and no rules -- each switch is
@@ -36,7 +36,7 @@ const TaskToolParameters = Type.Object({
         description: "Manifest extensions to load in the subagent. Default all",
     })),
     maxTurns: Type.Optional(Type.Integer({ minimum: 1, description: "Stop after this many turns and return what is done" })),
-    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, description: "Kill the subagent after this long. Default 600" })),
+    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TASK_TIMEOUT_SECONDS, description: `Kill the subagent after this long. Default 600, maximum ${MAX_TASK_TIMEOUT_SECONDS}` })),
 });
 /** The settings half of a `task` call, as `StartTaskRequest` wants it: every field passed only
  * when the caller set it, so an `agents/*.md` preset's value is not overwritten with `undefined`. */
@@ -99,19 +99,19 @@ class SessionTodoStore {
         return [...this.items.values()];
     }
 }
-/** The parent's current model as a `provider/id` reference the worker can resolve, with the
- * parent's thinking level when it has one. Undefined when the session has no usable model, which
- * leaves the child to Pi's own selection and its own error if there is none. */
-function inheritedModel(ctx) {
-    const model = ctx.model;
-    // "unknown" is Pi's placeholder for "no model could be selected".
-    if (model === undefined || model.provider === "unknown") {
-        return undefined;
+/**
+ * The parent's trusted project root, for the capsule's trust check. `index.ts` passes the project's
+ * `agents/` directory (`<root>/.epi/agents`), so the root is two levels up; an explicit
+ * `projectRoot` wins once a caller passes one. Undefined means "no project was trusted", which the
+ * worker turns into an untrusted child.
+ */
+function projectRootFromOptions(options) {
+    if (options.projectRoot !== undefined) {
+        return options.projectRoot;
     }
-    const thinking = ctx.thinkingLevel;
-    return thinking === undefined || thinking === "off"
-        ? `${model.provider}/${model.id}`
-        : `${model.provider}/${model.id}:${thinking}`;
+    return options.projectAgentsDir === undefined
+        ? undefined
+        : dirname(dirname(options.projectAgentsDir));
 }
 function errorResult(error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -244,6 +244,7 @@ export function createTaskInlineExtension(options) {
         sessionRoot: join(options.epiHome, "runtime", "task", "sessions"),
         agents,
         projectTrusted: options.projectTrusted === true,
+        projectRoot: projectRootFromOptions(options),
         ...(options.maxConcurrency === undefined
             ? {}
             : { maxConcurrency: options.maxConcurrency }),
@@ -365,9 +366,9 @@ export function createTaskInlineExtension(options) {
                             // Design §3: the fallback when neither the call nor an `agents/*.md` preset names a
                             // model. Passed separately from `model` so it stays *below* the preset in
                             // precedence: a preset exists precisely to run a child on a different (often
-                            // cheaper) model than the parent. Without any fallback the child process resolves
-                            // its own default, which is invisible except in a cost report.
-                            ...(params.model === undefined ? { inheritedModel: inheritedModel(ctx) } : {}),
+                            // cheaper) model than the parent. Always sent now: a `model: ":low"` call still needs
+                            // the parent's model as the base the thinking suffix attaches to (review pack A P1).
+                            inheritedModel: inheritedModelReference(ctx.model, ctx.thinkingLevel),
                             ...(params.context === "fork"
                                 // The parent's branch minus this turn's unfinished tool call (design §9.1).
                                 ? { forkEntries: forkableBranch(ctx.sessionManager.getBranch()) }

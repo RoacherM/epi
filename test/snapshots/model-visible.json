@@ -190,7 +190,8 @@
             "type": "string"
           },
           "timeoutSeconds": {
-            "description": "Kill the subagent after this long. Default 600",
+            "description": "Kill the subagent after this long. Default 600, maximum 2147483",
+            "maximum": 2147483,
             "minimum": 1,
             "type": "integer"
           },
