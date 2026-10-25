@@ -101,7 +101,8 @@ N1 计划 ─brief.md─▶ N2 实现 ─report.md─▶ N3 审查验证 ─G1�
 2. **特性展示**：生成 `docs/showcase/<版本>/`（含 `README.md`、录屏/截图或「本版本无界面变化」说明；场景脚本放 `scripts/docs/showcase/<版本>.mjs`，用 `node scripts/docs/capture-showcase.mjs <版本>` 生成；宣发文案放 `announce.md`），更新 `docs/showcase/README.md` 索引。
 3. **README 截图**：界面变化时跑 `node scripts/docs/capture-ui.mjs` 更新 `docs/assets/epi-ui.png` 与 `epi-welcome.png`。
 4. **先 `git add`/提交再跑全套测试**：确保新媒体文件已被 git 跟踪，再跑 `npm test`。
-5. **过闸门 G2 推送**：确认 Release 与 CI 工作流全绿，产物含 `epi-<版本>.tgz` 和 `install.sh`。
+5. **本地 CI**：`scripts/dev/local-ci.sh`，在干净 worktree 里按 `ci.yml` 的步骤（`npm ci --ignore-scripts` → build → `dist/` 一致 → `npm test`）跑一遍，约 4 分钟，不用等 GitHub。
+6. **过闸门 G2 推送并发布**：`scripts/dev/local-ci.sh --release` 在 CI 通过后推 `main` 并在本机跑 `scripts/release.mjs`（`gh` 已登录）；GitHub 上的 `release.yml` 随后发现 tag 已存在，直接跳过。产物含 `epi-<版本>.tgz` 和 `install.sh`。
 
 ## 9. 已知质量风险与下一批任务
 
