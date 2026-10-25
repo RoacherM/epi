@@ -479,7 +479,7 @@ async function main() {
         // either as the provider's overflow error, or -- for a recoverable length stop -- as a bare
         // `length` finish with no error at all (review round 2 item 4). Any other request error (auth,
         // network, 5xx) stays a failure.
-        const contextStop = !stoppedAtMaxTurns && (outcome.overflow(session.messages) ||
+        const contextStop = !stoppedAtMaxTurns && (outcome.overflow(session.messages, session.model?.maxTokens) ||
             (overflowUnrecoverable && outcome.stopReason(session.messages) !== "stop"));
         const entries = session.sessionManager.getEntries();
         if (contextStop) {
