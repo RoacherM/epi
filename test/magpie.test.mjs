@@ -181,7 +181,7 @@ test("a saved catalog from before pricing is refreshed, not kept forever", async
 // The lifetime exists for Pi's CacheWarmer: getPromptCacheTtlMs is what decides whether a model is
 // eligible at all, so assert against Pi's own function, not just the field's shape.
 test("Pi's cache warmer reads the parsed five-minute lifetime (300000 ms)", async () => {
-  const cacheWarmer = await import(fileURLToPath(new URL("../node_modules/@earendil-works/pi-coding-agent/dist/core/cache-warmer.js", import.meta.url)));
+  const cacheWarmer = await import(new URL("./core/cache-warmer.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href);
   const baseUrl = "http://localhost:1234";
   const byId = new Map(parseMagpieModels({ data: magpieCatalog }, baseUrl).map((model) => [model.id, model]));
   assert.equal(cacheWarmer.getPromptCacheTtlMs(byId.get("claude/claude-opus-test"), {}), 300000);
