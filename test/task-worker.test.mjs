@@ -22,7 +22,7 @@ const PI_DOCS = /pi-coding-agent[\\/]+docs/;
 /** A temp home whose `other` provider (models.json) talks to the fake gateway; `withKey: false`
  * leaves the provider without an API key. TaskRuntime hands the worker its own environment, so the test
  * process gets the temp home too. */
-async function setup(t, { withKey = true } = {}) {
+async function setup(t, { withKey = true, contextWindow, maxTokens, settings } = {}) {
   const server = await startMagpieServer();
   const home = mkdtempSync(join(tmpdir(), "epi-task-worker-"));
   t.after(async () => {
@@ -31,9 +31,17 @@ async function setup(t, { withKey = true } = {}) {
   });
   const agentDir = join(home, ".epi", "pi");
   mkdirSync(agentDir, { recursive: true });
-  const provider = { baseUrl: `${server.baseUrl}/v1`, api: "openai-completions", models: [{ id: "echo" }] };
+  const model = { id: "echo" };
+  if (contextWindow !== undefined) model.contextWindow = contextWindow;
+  if (maxTokens !== undefined) model.maxTokens = maxTokens;
+  const provider = { baseUrl: `${server.baseUrl}/v1`, api: "openai-completions", models: [model] };
   if (withKey) provider.apiKey = "other-key";
   writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { other: provider } }));
+  // A user's global settings, e.g. compaction turned off for the parent (which a child must not
+  // inherit: it has no human to run /compact).
+  if (settings !== undefined) {
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify(settings));
+  }
   const env = { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_TEST_MAGPIE_URL: server.baseUrl };
   const saved = { ...process.env };
   t.after(() => {
@@ -136,23 +144,282 @@ test("a failed model request is a failed task: ok:false with the request's error
   const failed = await runWorker(fixture);
   assert.equal(failed.code, 1, failed.context);
   assert.equal(failed.result.ok, false, failed.context);
+  assert.equal(failed.result.partial, undefined, "a non-overflow error is a failure, not a partial run");
   assert.match(failed.result.error, /invalid x-api-key/, failed.context);
   const task = await runTask(t, fixture);
   assert.equal(task.status, "failed", JSON.stringify(task));
+  assert.equal(task.stoppedBy, undefined);
   assert.match(task.error, /invalid x-api-key/);
 });
 
-test("D85: overflow omitted by recovery is a failed worker and task, not empty success", async (t) => {
+/** One openai-completions agent request answered with a bash call whose output is 50 KB, so a child
+ * with a small window accumulates enough context for Pi to compact. The summarization request
+ * carries no tools, so it is answered with a short summary. */
+function compactingHandler() {
+  let agentRequests = 0;
+  return (_request, response, body) => {
+    if (!Array.isArray(body.tools) || body.tools.length === 0) {
+      streamChunks(response, [
+        openaiChunk({ role: "assistant", content: "SUMMARY" }, null),
+        openaiChunk({}, "stop"),
+      ]);
+      return;
+    }
+    agentRequests += 1;
+    if (agentRequests <= 3) {
+      streamChunks(response, [
+        openaiChunk({
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            index: 0,
+            id: `call_${agentRequests}`,
+            type: "function",
+            function: {
+              name: "bash",
+              arguments: JSON.stringify({ command: "node -e \"process.stdout.write('x'.repeat(50000))\"" }),
+            },
+          }],
+        }, null),
+        openaiChunk({}, "tool_calls"),
+      ]);
+      return;
+    }
+    streamChunks(response, [
+      openaiChunk({ role: "assistant", content: "DONE" }, null),
+      openaiChunk({}, "stop"),
+    ]);
+  };
+}
+
+const compactionProgress = (events) =>
+  events.filter((event) => event.type === "progress" && event.phase === "compaction");
+
+// The child half of auto-compaction (docs/development.md §12.4): a long-running subagent crosses its
+// own context window and Pi compacts it, exactly as it does for the parent, and the parent sees it.
+test("a child with a small window compacts itself and finishes", async (t) => {
+  const fixture = await setup(t, { contextWindow: 40000 });
+  fixture.server.state.inferenceHandler = compactingHandler();
+  const events = [];
+  const result = await runWorker(fixture, () => {}, { tools: ["bash"] }, (event) => events.push(event));
+  assert.equal(result.code, 0, result.context);
+  assert.equal(result.result.ok, true, result.context);
+  assert.equal(result.result.output, "DONE", result.context);
+
+  const compactions = compactionProgress(events);
+  assert.equal(compactions.length >= 1, true, `no compaction progress line: ${result.context}`);
+  const threshold = compactions.find((event) => event.reason === "threshold");
+  assert.notEqual(threshold, undefined, `no threshold compaction: ${JSON.stringify(compactions)}`);
+  assert.equal(threshold.ok, true);
+  assert.equal(typeof threshold.tokensBefore, "number");
+  assert.equal(typeof threshold.tokensAfter, "number");
+});
+
+// A child has no human to run /compact, so it must compact whatever the user's global settings say
+// about the parent. The override is in memory only; the settings file is never written.
+test("a child compacts even when the user's global settings disable compaction", async (t) => {
+  // The token settings are deliberately larger than the child's window: a `reserveTokens` at or
+  // above the window would compact on every turn, and a `keepRecentTokens` that fills it leaves
+  // nothing to cut, so the child could never compact its way out (round-2 review item 5).
+  const fixture = await setup(t, {
+    contextWindow: 40000,
+    settings: { compaction: { enabled: false, reserveTokens: 100000, keepRecentTokens: 100000 } },
+  });
+  fixture.server.state.inferenceHandler = compactingHandler();
+  const events = [];
+  const result = await runWorker(fixture, () => {}, { tools: ["bash"] }, (event) => events.push(event));
+  assert.equal(result.code, 0, result.context);
+  assert.equal(result.result.ok, true, result.context);
+  const compactions = compactionProgress(events);
+  assert.equal(compactions.length >= 1, true, `no compaction with compaction disabled: ${result.context}`);
+  assert.equal(compactions.some((event) => event.ok === true), true, result.context);
+  assert.equal(
+    JSON.parse(readFileSync(join(fixture.agentDir, "settings.json"), "utf8")).compaction.enabled,
+    false,
+    "the worker must not rewrite the user's settings file",
+  );
+});
+
+test("D85: a context overflow compaction cannot fix ends partial, keeping the reason and session", async (t) => {
   const fixture = await setup(t);
   fixture.server.state.inferenceStatus = 400;
   fixture.server.state.inferenceError = "prompt is too long: context_length_exceeded";
-  const failed = await runWorker(fixture);
-  assert.equal(failed.code, 1, failed.context);
-  assert.equal(failed.result.ok, false, failed.context);
-  assert.match(failed.result.error, /context_length_exceeded/, failed.context);
+  const events = [];
+  const partial = await runWorker(fixture, () => {}, {}, (event) => events.push(event));
+  assert.equal(partial.code, 0, partial.context);
+  assert.equal(partial.result.ok, true, partial.context);
+  assert.equal(partial.result.partial, true, partial.context);
+  assert.equal(partial.result.stopped, "context", partial.context);
+  // The worker sends only the work; the parent appends the stop reason after it truncates, so a
+  // long answer cannot push the reason off the end (round-2 review P2-1).
+  assert.doesNotMatch(partial.result.output, /\[Stopped:/, partial.context);
+  assert.equal(typeof partial.result.usage, "object", partial.context);
+  // Pi may have had nothing to summarize (a tiny context), in which case it emits no compaction
+  // event at all; when it does, the attempt is reported as failed.
+  const compactions = compactionProgress(events);
+  for (const event of compactions) assert.equal(event.ok, false, JSON.stringify(event));
+  // The session file survives, so package 2b can resume from it.
+  const sessionDir = join(fixture.home, "runtime", "task", "sessions");
+  assert.equal(
+    readdirSync(sessionDir).some((name) => name.endsWith(".jsonl")),
+    true,
+    partial.context,
+  );
+
   const task = await runTask(t, fixture);
-  assert.equal(task.status, "failed", JSON.stringify(task));
-  assert.match(task.error, /context_length_exceeded/);
+  assert.equal(task.status, "partial", JSON.stringify(task));
+  assert.equal(task.stoppedBy, "context");
+  // The stop reason itself is the parent's to add, after it truncates the answer; the parent-level
+  // test lives in test/task-progress.test.mjs.
+});
+
+// Round-2 review P1 (both reviewers): usage was read from the projected messages, so every turn a
+// compaction summarized -- and the summarization calls themselves -- vanished from the report. The
+// probe's shape: every request reports 30k input tokens, and 4 agent requests plus 2 summarization
+// requests must all be counted.
+test("a child that compacts still reports every request it made, summaries included", async (t) => {
+  const fixture = await setup(t, { contextWindow: 40000 });
+  const input = 30000;
+  const output = 7;
+  const usage = { prompt_tokens: input, completion_tokens: output, total_tokens: input + output };
+  let agent = 0;
+  fixture.server.state.inferenceHandler = (_request, response, body) => {
+    if (!Array.isArray(body.tools) || body.tools.length === 0) {
+      streamChunks(response, [
+        openaiChunk({ role: "assistant", content: "SUMMARY" }, null),
+        openaiChunk({}, "stop", usage),
+      ]);
+      return;
+    }
+    agent += 1;
+    if (agent <= 3) {
+      streamChunks(response, [
+        openaiChunk({
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            index: 0,
+            id: `call_${agent}`,
+            type: "function",
+            function: {
+              name: "bash",
+              arguments: JSON.stringify({ command: "node -e \"process.stdout.write('x'.repeat(50000))\"" }),
+            },
+          }],
+        }, null),
+        openaiChunk({}, "tool_calls", usage),
+      ]);
+      return;
+    }
+    streamChunks(response, [
+      openaiChunk({ role: "assistant", content: "DONE" }, null),
+      openaiChunk({}, "stop", usage),
+    ]);
+  };
+
+  const events = [];
+  const result = await runWorker(fixture, () => {}, { tools: ["bash"] }, (event) => events.push(event));
+  assert.equal(result.code, 0, result.context);
+  assert.equal(result.result.ok, true, result.context);
+  assert.equal(result.result.output, "DONE", result.context);
+  assert.equal(
+    compactionProgress(events).some((event) => event.ok === true),
+    true,
+    `the run must have compacted at least once: ${result.context}`,
+  );
+  const requests = fixture.server.state.requests
+    .filter((request) => request.url.includes("/chat/completions"));
+  assert.equal(requests.length >= 5, true, result.context);
+  assert.equal(result.result.usage.inputTokens, input * requests.length, result.context);
+  assert.equal(result.result.usage.outputTokens, output * requests.length, result.context);
+});
+
+// Round-2 review P1: a `context: "fork"` child is seeded with the parent's session entries, and
+// the parent's spend is not the child's.
+test("a fork child does not count the entries it inherited", async (t) => {
+  const fixture = await setup(t);
+  const first = await runWorker(fixture);
+  assert.equal(first.code, 0, first.context);
+  assert.equal(first.result.usage.inputTokens, 10, first.context);
+
+  const sessionDir = join(fixture.home, "runtime", "task", "sessions");
+  const [parentFile] = readdirSync(sessionDir).filter((name) => name.endsWith(".jsonl"));
+  const parentEntries = readFileSync(join(sessionDir, parentFile), "utf8")
+    .trim().split("\n").map((line) => JSON.parse(line))
+    .filter((entry) => entry.type !== "session");
+  assert.equal(parentEntries.length > 0, true, first.context);
+
+  const forked = await runWorker(fixture, () => {}, { forkEntries: parentEntries });
+  assert.equal(forked.code, 0, forked.context);
+  assert.equal(forked.result.ok, true, forked.context);
+  // One request of its own: the parent's 10 input tokens must not be added again.
+  assert.equal(forked.result.usage.inputTokens, 10, forked.context);
+});
+
+// Round-2 review item 4: a recoverable length stop that Pi cannot compact away carries no
+// errorMessage, so the old check -- which required a request error -- reported it as a finished
+// run instead of a context stop.
+test("a length-stop overflow that compaction cannot fix also ends partial", async (t) => {
+  // `keepRecentTokens` small, so `prepareCompaction` has something to cut, and retries off so the
+  // summarization failure is immediate: the point is the overflow *recovery* failing, not the
+  // session being too small to compact.
+  const fixture = await setup(t, {
+    contextWindow: 40000,
+    maxTokens: 100,
+    settings: {
+      compaction: { keepRecentTokens: 1000, reserveTokens: 10000 },
+      retry: { enabled: false },
+    },
+  });
+  const usage = { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 };
+  let agent = 0;
+  fixture.server.state.inferenceHandler = (_request, response, body) => {
+    if (!Array.isArray(body.tools) || body.tools.length === 0) {
+      // The summarization call itself fails, so Pi cannot free space and gives up on recovery.
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(JSON.stringify({ type: "error", error: { type: "server_error", message: "summary backend down" } }));
+      return;
+    }
+    agent += 1;
+    if (agent === 1) {
+      // One big tool result, so the branch has something for compaction to cut.
+      streamChunks(response, [
+        openaiChunk({
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            index: 0,
+            id: "call_1",
+            type: "function",
+            function: {
+              name: "bash",
+              arguments: JSON.stringify({ command: "node -e \"process.stdout.write('x'.repeat(50000))\"" }),
+            },
+          }],
+        }, null),
+        openaiChunk({}, "tool_calls", usage),
+      ]);
+      return;
+    }
+    // A length stop below the model's max output: Pi's recoverable-length overflow, no errorMessage.
+    streamChunks(response, [
+      openaiChunk({ role: "assistant", content: "TRUNCATED ANSWER" }, null),
+      openaiChunk({}, "length", usage),
+    ]);
+  };
+
+  const events = [];
+  const result = await runWorker(fixture, () => {}, { tools: ["bash"] }, (event) => events.push(event));
+  assert.equal(result.code, 0, result.context);
+  assert.equal(result.result.ok, true, result.context);
+  assert.equal(result.result.partial, true, result.context);
+  assert.equal(result.result.stopped, "context", result.context);
+  assert.equal(result.result.output, "TRUNCATED ANSWER", result.context);
+  assert.equal(
+    compactionProgress(events).some((event) => event.reason === "overflow" && event.ok === false),
+    true,
+    `no failed overflow compaction: ${JSON.stringify(compactionProgress(events))}`,
+  );
 });
 
 test("an interrupted task still reports the interruption with exit 143, not the aborted request", async (t) => {
@@ -242,13 +509,14 @@ test("Pi's login guidance in a failed request's error reaches the model as Epi's
   assert.doesNotMatch(task.error, PI_DOCS);
 });
 
-/** One openai-completions streaming chunk. */
-function openaiChunk(delta, finish) {
+/** One openai-completions streaming chunk. `usage` goes on the final chunk, as OpenAI sends it. */
+function openaiChunk(delta, finish, usage) {
   return {
     id: "chat_test",
     object: "chat.completion.chunk",
     model: "echo",
     choices: [{ index: 0, delta, finish_reason: finish }],
+    ...(usage === undefined ? {} : { usage }),
   };
 }
 

@@ -163,6 +163,13 @@ function isMessageEntry(entry) {
 function isToolCall(part) {
     return typeof part === "object" && part !== null && "type" in part && part.type === "toolCall";
 }
+/** A token count as the parent prints it in a recent-event line: `182000` -> `182k`, small counts
+ * stay exact, a missing count prints as the empty string. */
+function formatTokenCount(tokens) {
+    if (tokens === undefined || !Number.isFinite(tokens))
+        return "";
+    return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : `${Math.trunc(tokens)}`;
+}
 class BoundedOutput {
     limit;
     artifactRoot;
@@ -377,6 +384,8 @@ export class TaskRuntime {
             currentActivity: undefined,
             lastSummary: undefined,
             recentEvents: [],
+            compactions: 0,
+            stoppedBy: undefined,
             protocolError: undefined,
             completion,
             resolveCompletion,
@@ -611,6 +620,7 @@ export class TaskRuntime {
         // A worker's own count wins, but a worker that reported none must not erase the turns its
         // progress lines already established.
         job.turns = job.workerResult?.turns ?? job.turns;
+        job.stoppedBy = job.workerResult?.stopped;
         if (job.terminationCause === "cancelled") {
             job.status = "cancelled";
             return;
@@ -768,6 +778,17 @@ export class TaskRuntime {
                 this.pushRecentEvent(job, `✓ ${label}`);
             }
         }
+        else if (event.phase === "compaction") {
+            // A child compacting itself is progress the parent must be able to see: how often it worked,
+            // and how much window it got back. A failed attempt still gets a recent-event line, but only
+            // a successful one counts towards `· N compactions` (review round 2 item 6).
+            if (event.ok === true)
+                job.compactions += 1;
+            const before = formatTokenCount(event.tokensBefore);
+            const after = formatTokenCount(event.tokensAfter);
+            const compacted = event.ok === true && before.length > 0 && after.length > 0;
+            this.pushRecentEvent(job, compacted ? `⟲ compacted ${before}→${after}` : "⟲ compaction failed");
+        }
     }
     pushRecentEvent(job, entry) {
         job.recentEvents.push(entry);
@@ -828,6 +849,8 @@ export class TaskRuntime {
             ...(job.currentActivity === undefined ? {} : { currentActivity: job.currentActivity }),
             ...(job.lastSummary === undefined ? {} : { lastSummary: job.lastSummary }),
             recentEvents: [...job.recentEvents],
+            ...(job.compactions > 0 ? { compactions: job.compactions } : {}),
+            ...(job.stoppedBy === undefined ? {} : { stoppedBy: job.stoppedBy }),
             ...(job.stdoutArtifact === undefined ? {} : { stdoutArtifact: job.stdoutArtifact }),
             ...(job.stderrArtifact === undefined ? {} : { stderrArtifact: job.stderrArtifact }),
         };

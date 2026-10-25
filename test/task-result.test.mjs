@@ -5,6 +5,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { collectUsage, finalAssistantText, singleLine } from "../dist/task-result.js";
+// Namespace import: the entry-based readers are new, and a named import would fail this whole file
+// on the commit before they existed instead of failing the two tests that exercise them.
+import * as taskResult from "../dist/task-result.js";
 
 // Round-1 review P3: folding only C0 left C1 controls (U+009B is the single-character CSI) and bidi
 // overrides in the text a tool argument puts on the TUI line and in the model's context.
@@ -65,4 +68,53 @@ test("usage sums every assistant message and defaults to zero", () => {
     reasoningTokens: 0,
     costUsd: 0,
   });
+});
+
+// Round-2 review P1: after compaction the projected messages no longer contain the summarized
+// turns, and a summarization call's usage lives on the `compaction` entry, never on an assistant
+// message. Usage must be read from the session's raw entries instead.
+test("usage is read from the raw session entries, summarization calls included", () => {
+  const entries = [
+    { type: "message", message: { role: "assistant", usage: { input: 999, output: 99 } } },
+    { type: "message", message: { role: "user", content: "hi" } },
+    { type: "compaction", usage: { input: 7, output: 1 } },
+    { type: "message", message: { role: "assistant", usage: { input: 10, output: 2 } } },
+  ];
+  assert.deepEqual(taskResult.collectEntryUsage(entries), {
+    inputTokens: 999 + 7 + 10,
+    outputTokens: 99 + 1 + 2,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    costUsd: 0,
+  });
+  // A `context: "fork"` child is seeded with the parent's entries: only what this run appended
+  // after the baseline belongs to it.
+  assert.deepEqual(taskResult.collectEntryUsage(entries, 3), {
+    inputTokens: 10,
+    outputTokens: 2,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    costUsd: 0,
+  });
+});
+
+// Round-2 review P2: the answer must survive compaction too. The newest assistant message entry
+// wins, and a tool-call-only turn is skipped the same way as in the projected-message reader.
+test("the answer is read from the raw entries, past a compaction summary", () => {
+  const entries = [
+    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "the real answer" }] } },
+    { type: "compaction", summary: "earlier work" },
+    { type: "message", message: { role: "assistant", content: [{ type: "toolCall", name: "read", id: "r1" }] } },
+  ];
+  assert.equal(taskResult.finalAssistantTextFromEntries(entries), "the real answer");
+  assert.equal(taskResult.finalAssistantTextFromEntries(entries, 1), "");
+  assert.equal(
+    taskResult.finalAssistantTextFromEntries([
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "half done" }] } },
+      { type: "message", message: { role: "assistant", stopReason: "aborted", content: [] } },
+    ], 0, true),
+    "half done",
+  );
 });

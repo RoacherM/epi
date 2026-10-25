@@ -128,6 +128,11 @@ export interface TaskJobSnapshot {
     lastSummary?: string;
     /** The last 10 one-line actions, oldest first, e.g. `✓ read src/host.ts` / `▸ bash npm test`. */
     recentEvents?: string[];
+    /** How many times the child compacted (or tried to) its own window; absent when never. */
+    compactions?: number;
+    /** Why a partial job stopped: the `maxTurns` budget, or a context window compaction could not
+     * free enough of. Absent for a finished job. */
+    stoppedBy?: "maxTurns" | "context";
     stdoutArtifact?: string;
     stderrArtifact?: string;
 }
