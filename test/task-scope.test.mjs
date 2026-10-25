@@ -13,6 +13,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { readPreloadedSkills, scopeAssemblyForTask } from "../dist/assembly.js";
 import { createTaskInlineExtension } from "../dist/extensions/task.js";
+import { loadTaskAgents } from "../dist/task-agents.js";
 import { defaultTaskConcurrency, forkableBranch } from "../dist/task-runtime.js";
 
 const fakeWorker = fileURLToPath(new URL("./fixtures/fake-task-worker.mjs", import.meta.url));
@@ -107,6 +108,81 @@ test("skills: [name] resolves through Pi's own discovery and preloads only that 
   assert.equal(preloaded.length, 1);
   assert.match(preloaded[0].text, /BETA BODY/);
   assert.doesNotMatch(preloaded[0].text, /ALPHA BODY/);
+});
+
+// stage-1 review P1-3a: manifest.ts allows a single SKILL.md file as a skill entry, but
+// availableSkills only looked at directories, so `skills: ["name"]` failed and preloading returned
+// the file path as if it were the skill name.
+test("a Manifest may name a single SKILL.md, and preloading reports the skill's name", (t) => {
+  const root = fixture(t);
+  const dir = join(root, "standalone-skill");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "SKILL.md");
+  writeFileSync(
+    file,
+    "---\nname: standalone\ndescription: A single-file skill.\n---\nSTANDALONE BODY\n",
+  );
+  const base = {
+    ...assembly(root),
+    skills: [{ kind: "skill", value: file, source: "global", declaredIn: join(root, "epi.json") }],
+  };
+  const scoped = scopeAssemblyForTask(base, { skills: ["standalone"] });
+
+  assert.equal(scoped.skills.length, 1);
+  assert.match(scoped.skills[0].value, /standalone-skill[/\\]SKILL\.md$/);
+  const preloaded = readPreloadedSkills(scoped);
+  assert.equal(preloaded.length, 1);
+  assert.equal(preloaded[0].name, "standalone", "the preload must carry the skill name, not its path");
+  assert.match(preloaded[0].text, /STANDALONE BODY/);
+});
+
+// stage-1 review P1-3b: a Manifest extension may be `npm:`, `git:` or a path, and the caller
+// naturally writes the package or directory short name. An exact value wins; a short name that
+// fits two extensions must fail rather than guess.
+test("extensions resolve by Manifest value or short name, and an ambiguous short name is an error", (t) => {
+  const base = {
+    ...assembly(fixture(t)),
+    externalExtensions: [
+      { kind: "extension", value: "npm:some-pi-extension", source: "global", declaredIn: "epi.json" },
+      { kind: "extension", value: "npm:@scope/pkg@1.2", source: "global", declaredIn: "epi.json" },
+      { kind: "extension", value: "git:https://github.com/x/y.git", source: "global", declaredIn: "epi.json" },
+      { kind: "extension", value: "/ext/one/index.mjs", source: "global", declaredIn: "epi.json" },
+      { kind: "extension", value: "/ext/two/index.mjs", source: "global", declaredIn: "epi.json" },
+    ],
+  };
+  const values = (name) =>
+    scopeAssemblyForTask(base, { extensions: [name] }).externalExtensions.map((extension) => extension.value);
+
+  assert.deepEqual(values("npm:some-pi-extension"), ["npm:some-pi-extension"]);
+  assert.deepEqual(values("some-pi-extension"), ["npm:some-pi-extension"]);
+  assert.deepEqual(values("npm:@scope/pkg@1.2"), ["npm:@scope/pkg@1.2"]);
+  assert.deepEqual(values("pkg"), ["npm:@scope/pkg@1.2"]);
+  assert.deepEqual(values("y"), ["git:https://github.com/x/y.git"]);
+  assert.deepEqual(values("/ext/one/index.mjs"), ["/ext/one/index.mjs"]);
+  assert.deepEqual(values("one"), ["/ext/one/index.mjs"]);
+  assert.deepEqual(values("two"), ["/ext/two/index.mjs"]);
+  assert.throws(
+    () => scopeAssemblyForTask(base, { extensions: ["index.mjs"] }),
+    /ambiguous extension "index\.mjs".*\/ext\/one\/index\.mjs, \/ext\/two\/index\.mjs/s,
+  );
+});
+
+// stage-1 review P1-3b: the `agents/*.md` frontmatter pattern rejected the `:` and `@` a Manifest
+// extension source contains, so no spelling could pass both this parser and the assembly matcher.
+test("an agents/*.md extensions entry accepts npm:, git: and path sources", (t) => {
+  const root = fixture(t);
+  const dir = join(root, "agents");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "ext.md"),
+    "---\nname: ext\ndescription: Uses extensions\nextensions:\n  - npm:@scope/pkg@1.2\n  - git:https://github.com/x/y.git\n  - /abs/path/my-ext/index.mjs\n---\nBody\n",
+  );
+  const agents = loadTaskAgents({ globalAgentsDir: dir, projectAgentsDir: undefined });
+  assert.deepEqual(agents[0].extensions, [
+    "npm:@scope/pkg@1.2",
+    "git:https://github.com/x/y.git",
+    "/abs/path/my-ext/index.mjs",
+  ]);
 });
 
 test("an unknown skill, MCP server or extension name fails loudly instead of starting without it", (t) => {

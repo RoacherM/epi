@@ -4,7 +4,7 @@
 // guidance, a path into Pi's docs. Offline: temp HOME/EPI_HOME, the gateway on loopback.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -151,6 +151,41 @@ test("an interrupted task still reports the interruption with exit 143, not the 
   const { usage, ...reported } = interrupted.result;
   assert.deepEqual(reported, { type: "result", ok: false, error: "task worker was interrupted" }, interrupted.context);
   assert.equal(typeof usage, "object", interrupted.context);
+});
+
+// stage-1 review P2: a subagent inherits hooks.json, but a `type: "agent"` handler there used to
+// spawn a grandchild worker (docs/subagents-design.md §9.4). The child's epi:hooks must drop agent
+// handlers; session_start fires deterministically, so a surviving handler is observable as a
+// grandchild session. The tool_call event is covered by hooksForChild's unit test in
+// test/hooks.test.mjs.
+test("a subagent's inherited agent hook does not spawn a grandchild worker", async (t) => {
+  const fixture = await setup(t);
+  const epiHome = join(fixture.home, ".epi");
+  mkdirSync(join(epiHome, "agents"), { recursive: true });
+  writeFileSync(
+    join(epiHome, "agents", "hook-guard.md"),
+    "---\nname: hook-guard\ndescription: Hook agent\nmodel: other/echo\ntools: []\n---\nReturn continue.\n",
+  );
+  writeFileSync(
+    join(epiHome, "hooks.json"),
+    JSON.stringify({
+      version: 1,
+      hooks: [{
+        event: "session_start",
+        handlers: [{ type: "agent", agent: "hook-guard", prompt: "Reply with {\"action\":\"continue\"}", timeoutMs: 2000 }],
+      }],
+    }),
+  );
+
+  const result = await runWorker(fixture, () => {}, { hooks: true });
+  assert.equal(result.code, 0, result.context);
+  const grandchildDir = join(epiHome, "runtime", "hooks-task", "sessions");
+  const grandchildSessions = existsSync(grandchildDir) ? readdirSync(grandchildDir) : [];
+  assert.equal(
+    grandchildSessions.length,
+    0,
+    `a subagent must not spawn agent-hook workers: ${grandchildSessions.join(", ")}`,
+  );
 });
 
 // A `maxTurns` budget stops between turns, but a turn that issued no tool call is the model's final

@@ -157,6 +157,22 @@ function compactPayload(event, context) {
 function blockReason(decision) {
     return decision.reason ?? "Blocked by Epi hook";
 }
+/**
+ * The hooks a subagent's own `epi:hooks` may run (docs/subagents-design.md §9.4, hard rule:
+ * subagents do not spawn subagents). A child inherits `hooks.json` so its tool calls are still
+ * guarded, but `type: "agent"` handlers would start a grandchild worker, and `task_start` /
+ * `task_stop` only exist for a parent that owns a TaskRuntime. A hook left with no handler is
+ * dropped rather than registered as a no-op.
+ */
+export function hooksForChild(hooks) {
+    return hooks
+        .filter((hook) => hook.event !== "task_start" && hook.event !== "task_stop")
+        .map((hook) => ({
+        ...hook,
+        handlers: hook.handlers.filter((handler) => handler.type !== "agent"),
+    }))
+        .filter((hook) => hook.handlers.length > 0);
+}
 export function createHooksInlineExtension(options) {
     // Agent files are only read for a hooks.json that has an agent handler: epi:hooks is on by default
     // (decision H3/K4), and with no such hook it must not fail on, or even read, agents/ -- which

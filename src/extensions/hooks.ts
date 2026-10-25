@@ -223,6 +223,23 @@ function blockReason(decision: HookDecision): string {
   return decision.reason ?? "Blocked by Epi hook";
 }
 
+/**
+ * The hooks a subagent's own `epi:hooks` may run (docs/subagents-design.md §9.4, hard rule:
+ * subagents do not spawn subagents). A child inherits `hooks.json` so its tool calls are still
+ * guarded, but `type: "agent"` handlers would start a grandchild worker, and `task_start` /
+ * `task_stop` only exist for a parent that owns a TaskRuntime. A hook left with no handler is
+ * dropped rather than registered as a no-op.
+ */
+export function hooksForChild(hooks: readonly ResolvedHook[]): ResolvedHook[] {
+  return hooks
+    .filter((hook) => hook.event !== "task_start" && hook.event !== "task_stop")
+    .map((hook) => ({
+      ...hook,
+      handlers: hook.handlers.filter((handler) => handler.type !== "agent"),
+    }))
+    .filter((hook) => hook.handlers.length > 0);
+}
+
 export function createHooksInlineExtension(
   options: HooksExtensionOptions,
 ): InlineExtension {

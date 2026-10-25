@@ -78,7 +78,29 @@ function parseNameList(
 
 const TOOL_NAME = /^[+-]?[a-z][a-z0-9_-]*$/;
 const TOOL_PATTERN = /^[+-]?[a-z][a-z0-9_*-]*$/;
-const RESOURCE_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+/** A `skills`/`mcp`/`extensions` entry. Loose enough for a Manifest extension source -- `npm:pkg`,
+ * `npm:@scope/pkg@1.2`, `git:https://...`, an absolute or `./`-relative path -- since those are the
+ * exact values a Manifest declares (src/manifest.ts). A name that matches nothing is rejected later,
+ * when it is resolved against the assembly (src/assembly.ts). */
+const RESOURCE_NAME = /^[A-Za-z0-9@./~_:][A-Za-z0-9@./~_:#+-]*$/;
+
+/** The only frontmatter keys an `agents/*.md` file may carry (docs/subagents-design.md §7). A typo
+ * or an unimplemented design field must fail loudly, not be silently dropped. */
+const AGENT_KEYS: Readonly<Record<string, true>> = {
+  name: true,
+  description: true,
+  model: true,
+  tools: true,
+  excludeTools: true,
+  timeoutSeconds: true,
+  maxTurns: true,
+  context: true,
+  rules: true,
+  skills: true,
+  mcp: true,
+  hooks: true,
+  extensions: true,
+};
 
 /** A frontmatter switch that is either a boolean or a name list (`skills`, `mcp`, `extensions`):
  * `true`/`false` as written, otherwise the names. */
@@ -120,6 +142,31 @@ function parseContext(value: unknown, filePath: string): "fresh" | "fork" | unde
   return value;
 }
 
+/** Reads one agent file's frontmatter, wrapping a YAML syntax error and rejecting any key outside
+ * the documented set (hard rule 4: a typo or an unimplemented design field must not be silently
+ * dropped). */
+function parseAgentFrontmatter(filePath: string): { frontmatter: AgentFrontmatter; body: string } {
+  let parsed: { frontmatter: AgentFrontmatter; body: string };
+  try {
+    parsed = parseFrontmatter<AgentFrontmatter>(readFileSync(filePath, "utf8"));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new EpiConfigError(`${filePath}: invalid frontmatter: ${detail}`);
+  }
+  const { frontmatter } = parsed;
+  if (typeof frontmatter !== "object" || frontmatter === null || Array.isArray(frontmatter)) {
+    throw new EpiConfigError(`${filePath}: frontmatter must be a mapping of agent fields`);
+  }
+  for (const key of Object.keys(frontmatter)) {
+    if (AGENT_KEYS[key] !== true) {
+      throw new EpiConfigError(
+        `${filePath}: unknown field ${JSON.stringify(key)}; allowed: ${Object.keys(AGENT_KEYS).join(", ")}`,
+      );
+    }
+  }
+  return parsed;
+}
+
 function loadAgentDirectory(
   directory: string,
   source: ResourceSource,
@@ -137,9 +184,7 @@ function loadAgentDirectory(
 
   for (const entry of entries) {
     const filePath = join(canonicalDirectory, entry.name);
-    const parsed = parseFrontmatter<AgentFrontmatter>(
-      readFileSync(filePath, "utf8"),
-    );
+    const parsed = parseAgentFrontmatter(filePath);
     const { name, description, model } = parsed.frontmatter;
     const timeoutSeconds = parsePositiveInteger(parsed.frontmatter.timeoutSeconds, filePath, "timeoutSeconds");
 
