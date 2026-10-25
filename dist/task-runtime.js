@@ -33,7 +33,10 @@ export const DEFAULT_TASK_TIMEOUT_SECONDS = 600;
 export function forkableBranch(entries) {
     const cut = unfinishedToolCallIndex(entries);
     const kept = entries.slice(0, cut);
-    dropTrailingPrompt(kept);
+    // Only a real cut has the parent's prompt in front of it; a branch with no unfinished call ends
+    // in a closed turn whose last user message is history, not a prompt.
+    if (cut < entries.length)
+        dropTrailingPrompt(kept);
     return relinkParents(kept.filter((entry) => roleOf(entry) !== "system"));
 }
 /**

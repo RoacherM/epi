@@ -184,6 +184,9 @@ function resultText(job: TaskJobSnapshot): string {
   return result.trim().length > 0 ? result : "(no output)";
 }
 
+/** How long a settled job's completion promise stays available to task_wait/task_cancel. */
+const COMPLETION_RETENTION_MS = 10 * 60_000;
+
 function jobResult(job: TaskJobSnapshot): AgentToolResult<TaskJobSnapshot> {
   // A partial run stopped at maxTurns: the model gets the work done so far plus why it stopped.
   // It is not promised a resume (steering and resuming are not implemented yet), so the footer
@@ -370,6 +373,10 @@ export function createTaskInlineExtension(
     factory(pi) {
       const todos = new SessionTodoStore();
       current.pi = pi;
+      // Until this session starts, the previous session's ctx is stale (Pi invalidates it); an
+      // unset ctx makes a job that finishes in that window skip its task_stop hook instead of
+      // calling a dead ctx.
+      delete current.ctx;
       pi.on("session_start", (_event, ctx) => {
         current.ctx = ctx;
       });
@@ -465,6 +472,14 @@ export function createTaskInlineExtension(
               return job;
             });
             completionHooks.set(started.id, completion);
+            // The registry lives for the whole process now; drop settled entries so it does not
+            // grow by one promise per job forever. A grace period keeps the hook's outcome for a
+            // task_wait/task_cancel that arrives just after the job settles.
+            void completion.finally(() => {
+              setTimeout(() => {
+                if (completionHooks.get(started.id) === completion) completionHooks.delete(started.id);
+              }, COMPLETION_RETENTION_MS).unref();
+            }).catch(() => {});
             // A background job's completion has no one awaiting it here; surface a failure instead
             // of swallowing it. A foreground caller gets the same error through `completion`.
             void completion.catch((error: unknown) => {

@@ -349,3 +349,14 @@ test("a background task start tells the model only the job id; the TUI keeps the
   assert.ok(usage.data.createdAt <= usage.data.startedAt && usage.data.startedAt <= usage.data.finishedAt,
     "timestamps let a runner see queueing and the critical path");
 });
+
+// Round-2 review P3: with no unfinished tool call there is no cut, so the last user message is
+// history and must stay.
+test("fork keeps the last user message when the branch has no unfinished tool call", () => {
+  const entries = [
+    { type: "message", id: "a", parentId: null, message: { role: "user", content: [{ type: "text", text: "q" }] } },
+    { type: "message", id: "b", parentId: "a", message: { role: "assistant", content: [{ type: "text", text: "ans" }] } },
+    { type: "message", id: "c", parentId: "b", message: { role: "user", content: [{ type: "text", text: "next" }] } },
+  ];
+  assert.deepEqual(forkableBranch(entries).map((entry) => entry.id), ["a", "b", "c"]);
+});
