@@ -30,6 +30,7 @@ const RECENT_EVENTS_LIMIT = 10;
 const PROGRESS_TARGET_LIMIT = 120;
 const PROGRESS_TOOL_LIMIT = 40;
 const PROGRESS_SUMMARY_LIMIT = 200;
+const DROPPED_STEER_LIMIT = 200;
 /**
  * Pi's valid thinking suffixes (`cli/args.js`'s `VALID_THINKING_LEVELS`). Kept as a local copy so
  * the runtime does not take a deep import into Pi's CLI internals; test/task.test.mjs cross-checks
@@ -170,24 +171,21 @@ function formatTokenCount(tokens) {
         return "";
     return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : `${Math.trunc(tokens)}`;
 }
-/**
- * Two runs' spend added together: a resume accumulates across runs, and each worker reports only
- * its own run (it records a baseline when it opens the session file).
- */
+/** One run's spend added to the job's running total; a worker reports only its own run. */
 function addTaskUsage(total, run) {
     if (run === undefined)
         return total;
     if (total === undefined)
         return { ...run };
-    return {
-        inputTokens: total.inputTokens + run.inputTokens,
-        outputTokens: total.outputTokens + run.outputTokens,
-        cacheReadTokens: total.cacheReadTokens + run.cacheReadTokens,
-        cacheWriteTokens: total.cacheWriteTokens + run.cacheWriteTokens,
-        reasoningTokens: total.reasoningTokens + run.reasoningTokens,
-        costUsd: total.costUsd + run.costUsd,
-    };
+    const sum = { ...total };
+    for (const field of Object.keys(sum))
+        sum[field] += run[field];
+    return sum;
 }
+/** The per-run snapshot fields; kept out of `snapshot` to stay under its complexity cap. */
+const runFields = (job) => ({
+    ...(job.runUsage === undefined ? {} : { runUsage: job.runUsage }), ...(job.artifactError === undefined ? {} : { artifactError: job.artifactError }),
+});
 class BoundedOutput {
     limit;
     artifactRoot;
@@ -195,27 +193,35 @@ class BoundedOutput {
     preview = Buffer.alloc(0);
     totalBytes = 0;
     artifactPath;
+    /** Why the artifact could not be written; `append` runs in a stream `data` listener, where a
+     * throw is an uncaught exception in the parent process (round-1 review P0-1). */
+    artifactError;
     constructor(limit, artifactRoot, artifactName) {
         this.limit = limit;
         this.artifactRoot = artifactRoot;
         this.artifactName = artifactName;
     }
     append(chunk) {
-        const previousPreview = this.preview;
+        const combined = Buffer.concat([this.preview, chunk]);
         this.totalBytes += chunk.length;
-        const combined = Buffer.concat([previousPreview, chunk]);
         this.preview = Buffer.from(combined.subarray(Math.max(0, combined.length - this.limit)));
-        if (this.artifactPath !== undefined) {
-            appendFileSync(this.artifactPath, chunk);
+        if (this.artifactError !== undefined)
             return;
+        try {
+            if (this.artifactPath !== undefined) {
+                appendFileSync(this.artifactPath, chunk);
+            }
+            else if (this.totalBytes > this.limit) {
+                mkdirSync(this.artifactRoot, { recursive: true, mode: 0o700 });
+                chmodSync(this.artifactRoot, 0o700);
+                this.artifactPath = join(this.artifactRoot, this.artifactName);
+                writeFileSync(this.artifactPath, combined, { mode: 0o600, flag: "wx" });
+            }
         }
-        if (this.totalBytes <= this.limit) {
-            return;
+        catch (error) {
+            this.artifactError = error instanceof Error ? error.message : String(error);
+            this.artifactPath = undefined;
         }
-        mkdirSync(this.artifactRoot, { recursive: true, mode: 0o700 });
-        chmodSync(this.artifactRoot, 0o700);
-        this.artifactPath = join(this.artifactRoot, this.artifactName);
-        writeFileSync(this.artifactPath, combined, { mode: 0o600, flag: "wx" });
     }
     text() {
         return this.preview.toString("utf8");
@@ -389,6 +395,7 @@ export class TaskRuntime {
             error: undefined,
             stdoutArtifact: undefined,
             stderrArtifact: undefined,
+            artifactError: undefined,
             process: undefined,
             capsuleDir: undefined,
             terminationCause: undefined,
@@ -396,6 +403,8 @@ export class TaskRuntime {
             killTimer: undefined,
             workerResult: undefined,
             usage: undefined,
+            runUsage: undefined,
+            run: 0,
             turns: undefined,
             progressTurns: 0,
             stepsBase: 0,
@@ -450,9 +459,8 @@ export class TaskRuntime {
         return this.snapshot(job);
     }
     /**
-     * Start another run on a settled job, in place (docs/subagents-design.md §2.3): the job keeps its
-     * id, `createdAt` and session file, and the worker reopens that file. The original request is the
-     * capsule's settings -- a `jobId` call ignores every other field.
+     * Start another run on a settled job, in place (design §2.3): same id, `createdAt` and session
+     * file; a `jobId` call ignores every other field.
      */
     resume(jobId, task) {
         if (this.shuttingDown) {
@@ -466,33 +474,24 @@ export class TaskRuntime {
         if (task.trim().length === 0) {
             throw new Error("task must be a non-empty string");
         }
-        // A job that failed before its session was created has nothing to continue from; say why
-        // instead of spawning a worker that would start a second, empty conversation.
+        // A job that failed before its session was created has nothing to continue from.
         if (!existsSync(job.sessionPath)) {
             throw new Error(`job ${shortId} has no session file at ${job.sessionPath}; nothing to resume`);
         }
-        job.isResume = true;
-        job.task = task;
-        job.status = "queued";
-        job.result = undefined;
-        job.workerResult = undefined;
-        job.protocolError = undefined;
-        job.terminationCause = undefined;
-        job.currentActivity = undefined;
-        job.progressTurns = 0;
-        job.stepsBase = job.steps;
-        job.droppedSteers.length = 0;
-        job.settled = false;
+        // No previous-run field may leak into the new run while it is queued or running (review P3).
+        Object.assign(job, {
+            isResume: true, task, status: "queued", result: undefined, error: undefined,
+            finishedAt: undefined, stoppedBy: undefined, workerResult: undefined, protocolError: undefined,
+            terminationCause: undefined, currentActivity: undefined, progressTurns: 0, stepsBase: job.steps,
+            runUsage: undefined, stdoutArtifact: undefined, stderrArtifact: undefined,
+            artifactError: undefined, settled: false,
+        });
         const { promise: completion, resolve: resolveCompletion } = Promise.withResolvers();
         job.completion = completion;
         job.resolveCompletion = resolveCompletion;
         this.queue.push(job.id);
         queueMicrotask(() => this.pump());
         return this.snapshot(job);
-    }
-    /** The steers a settled worker reported as undelivered, consumed once each. */
-    takeDroppedSteers(jobId) {
-        return this.findJob(jobId).droppedSteers.splice(0);
     }
     /**
      * Wait for a job to settle, or stop waiting on `timeoutMs` / `signal`. Aborting this wait never
@@ -581,8 +580,10 @@ export class TaskRuntime {
     async run(job) {
         job.status = "running";
         job.startedAt = Date.now();
-        const stdout = new BoundedOutput(this.maxOutputBytes, this.options.artifactRoot, `${job.id}.stdout.jsonl`);
-        const stderr = new BoundedOutput(this.maxOutputBytes, this.options.artifactRoot, `${job.id}.stderr.txt`);
+        // Per-run artifact names: a resumed job reuses its id, so `wx` would throw EEXIST (review P0-1).
+        job.run += 1;
+        const stdout = new BoundedOutput(this.maxOutputBytes, this.options.artifactRoot, `${job.id}.run${job.run}.stdout.jsonl`);
+        const stderr = new BoundedOutput(this.maxOutputBytes, this.options.artifactRoot, `${job.id}.run${job.run}.stderr.txt`);
         try {
             const capsulePath = this.writeCapsule(job);
             // stdin is a pipe now, not `ignore`: it is the steer/abort channel, and its EOF is what stops
@@ -651,6 +652,7 @@ export class TaskRuntime {
             }
             job.stdoutArtifact = stdout.path();
             job.stderrArtifact = stderr.path();
+            job.artifactError = stdout.artifactError ?? stderr.artifactError;
             this.settleOutcome(job, exit, stderr.text().trim());
         }
         catch (error) {
@@ -681,9 +683,9 @@ export class TaskRuntime {
      * certainty: how Epi stopped it, then how the process died, then what it reported.
      */
     settleOutcome(job, exit, stderrText) {
-        // Reported even for a failed or partial run: those tokens were still spent. Each run's spend is
-        // added to the job's total, so a resume accumulates instead of replacing (development.md §12.3).
-        job.usage = addTaskUsage(job.usage, job.workerResult?.usage);
+        // Those tokens were spent even on a failed run; each run's spend adds to the total (§12.3).
+        job.runUsage = job.workerResult?.usage;
+        job.usage = addTaskUsage(job.usage, job.runUsage);
         // A worker's own count wins, but a worker that reported none must not erase the turns its
         // progress lines already established. The count is this run's, so it adds to the job's total.
         const runTurns = job.workerResult?.turns ?? (job.progressTurns > 0 ? job.progressTurns : undefined);
@@ -693,6 +695,7 @@ export class TaskRuntime {
         job.stoppedBy = job.workerResult?.stopped;
         if (job.terminationCause === "cancelled") {
             job.status = "cancelled";
+            this.noteDroppedSteers(job);
             return;
         }
         job.status = "failed";
@@ -722,6 +725,21 @@ export class TaskRuntime {
             job.error = undefined;
             job.result = this.boundedResult(job, job.workerResult.output ?? "");
         }
+        this.noteDroppedSteers(job);
+    }
+    /**
+     * A steer that reached the worker after its agent loop had ended was never applied (defect 5).
+     * Note it on the answer, after `boundedResult`; the model decides whether to resume.
+     */
+    noteDroppedSteers(job) {
+        const dropped = job.droppedSteers.splice(0);
+        if (dropped.length === 0)
+            return;
+        const note = dropped
+            .map((text) => `[Not applied: a steer arrived after the job finished: "${singleLine(text, DROPPED_STEER_LIMIT)}". Resume with task({ jobId, task }) to apply it.]`)
+            .join("\n");
+        const field = job.result === undefined && job.error !== undefined ? "error" : "result";
+        job[field] = job[field] === undefined ? note : `${job[field]}\n${note}`;
     }
     /** The worker's answer, cut to the output budget with a pointer to the full artifact. The cut is
      * made on a UTF-8 boundary, so a multi-byte code point is never split into U+FFFD. */
@@ -812,14 +830,9 @@ export class TaskRuntime {
             job.workerResult = event;
             return;
         }
-        if (typeof event === "object" &&
-            event !== null &&
-            "type" in event &&
-            event.type === "steer_dropped" &&
-            "message" in event &&
-            typeof event.message === "string") {
-            const dropped = event;
-            job.droppedSteers.push(dropped.message);
+        if (typeof event === "object" && event !== null && "type" in event &&
+            event.type === "steer_dropped" && "message" in event && typeof event.message === "string") {
+            job.droppedSteers.push(event.message);
         }
     }
     /**
@@ -832,7 +845,6 @@ export class TaskRuntime {
             job.progressTurns = Math.max(0, Math.trunc(event.turns));
         }
         if (typeof event.steps === "number" && Number.isFinite(event.steps)) {
-            // Steps accumulate across runs: a resumed worker counts its own run from zero.
             job.steps = job.stepsBase + Math.max(0, Math.trunc(event.steps));
         }
         if (typeof event.summary === "string") {
@@ -914,10 +926,9 @@ export class TaskRuntime {
         }
     }
     snapshot(job) {
-        // While a run is live its progress lines count on top of the turns earlier runs finished; once
-        // it settles, `turns` is the job's accumulated total.
-        const live = job.progressTurns > 0 ? (job.turns ?? 0) + job.progressTurns : job.turns;
-        const turns = job.status === "queued" || job.status === "running" ? live : job.turns;
+        // While a run is live its progress turns count on top of earlier runs' finished turns.
+        const running = job.status === "queued" || job.status === "running";
+        const turns = running && job.progressTurns > 0 ? (job.turns ?? 0) + job.progressTurns : job.turns;
         return {
             id: job.id,
             ...(job.agent === undefined ? {} : { agent: job.agent.name, agentSource: job.agent.source }),
@@ -931,6 +942,7 @@ export class TaskRuntime {
             ...(job.result === undefined ? {} : { result: job.result }),
             ...(job.error === undefined ? {} : { error: job.error }),
             ...(job.usage === undefined ? {} : { usage: job.usage }),
+            ...runFields(job),
             ...(turns === undefined ? {} : { turns }),
             steps: job.steps,
             ...(job.currentActivity === undefined ? {} : { currentActivity: job.currentActivity }),

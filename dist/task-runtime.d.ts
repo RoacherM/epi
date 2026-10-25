@@ -117,6 +117,8 @@ export interface TaskJobSnapshot {
     error?: string;
     /** Absent when the child died before reporting (a crash or a kill). */
     usage?: TaskUsage;
+    /** Per-run spend; `usage` is the total across runs, and one `epi:task-usage` entry holds this. */
+    runUsage?: TaskUsage;
     /** Turns the child completed; present for a partial (`maxTurns`) run, so the model can be told
      * how far it got. While a job runs this is the turn count reported by its progress lines. */
     turns?: number;
@@ -135,6 +137,7 @@ export interface TaskJobSnapshot {
     stoppedBy?: "maxTurns" | "context";
     stdoutArtifact?: string;
     stderrArtifact?: string;
+    artifactError?: string;
 }
 export interface TaskRuntimeOptions {
     workerPath: string;
@@ -228,13 +231,10 @@ export declare class TaskRuntime {
      */
     steer(jobId: string, message: string): TaskJobSnapshot;
     /**
-     * Start another run on a settled job, in place (docs/subagents-design.md §2.3): the job keeps its
-     * id, `createdAt` and session file, and the worker reopens that file. The original request is the
-     * capsule's settings -- a `jobId` call ignores every other field.
+     * Start another run on a settled job, in place (design §2.3): same id, `createdAt` and session
+     * file; a `jobId` call ignores every other field.
      */
     resume(jobId: string, task: string): TaskJobSnapshot;
-    /** The steers a settled worker reported as undelivered, consumed once each. */
-    takeDroppedSteers(jobId: string): string[];
     /**
      * Wait for a job to settle, or stop waiting on `timeoutMs` / `signal`. Aborting this wait never
      * touches the job: a parent that aborts its own turn (Esc, `/compact`) must not kill a subagent
@@ -252,6 +252,11 @@ export declare class TaskRuntime {
      * certainty: how Epi stopped it, then how the process died, then what it reported.
      */
     private settleOutcome;
+    /**
+     * A steer that reached the worker after its agent loop had ended was never applied (defect 5).
+     * Note it on the answer, after `boundedResult`; the model decides whether to resume.
+     */
+    private noteDroppedSteers;
     /** The worker's answer, cut to the output budget with a pointer to the full artifact. The cut is
      * made on a UTF-8 boundary, so a multi-byte code point is never split into U+FFFD. */
     private boundedResult;

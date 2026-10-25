@@ -203,10 +203,7 @@ function contextStopText(job: TaskJobSnapshot): string {
 /** How long a settled job's completion promise stays available to task_wait/task_cancel. */
 const COMPLETION_RETENTION_MS = 10 * 60_000;
 
-/**
- * Background jobs that settle within this window of each other share one push wake, so a fan-out
- * does not become one message per child (docs/subagents-design.md §2.2).
- */
+/** Background jobs that settle within this window share one push wake (design §2.2). */
 const NOTIFY_COALESCE_MS = 300;
 
 /** The part of a settled job's answer a push wake carries, one line and bounded. */
@@ -244,8 +241,7 @@ function jobListLine(job: TaskJobSnapshot): string {
 
 function jobResult(job: TaskJobSnapshot): AgentToolResult<TaskJobSnapshot> {
   // A partial run stopped at maxTurns: the model gets the work done so far plus why it stopped.
-  // It is not promised a resume (steering and resuming are not implemented yet), so the footer
-  // says only what happened.
+  // The footer says only what happened; resuming is the model's call (`task({ jobId, task })`).
   const text = job.status === "completed"
     ? resultText(job)
     : job.status === "partial"
@@ -426,7 +422,9 @@ export function createTaskInlineExtension(
    * usage in B (docs/development.md §12.3).
    */
   const recordChildUsage = (job: TaskJobSnapshot): void => {
-    if (job.usage === undefined) return;
+    // One entry per run, holding that run's own spend: `job.usage` is the running total, and
+    // writing it here would make anyone summing the entries count every earlier run again.
+    if (job.runUsage === undefined) return;
     const pi = current.pi;
     if (pi === undefined) return;
     try {
@@ -438,7 +436,7 @@ export function createTaskInlineExtension(
         createdAt: job.createdAt,
         ...(job.startedAt === undefined ? {} : { startedAt: job.startedAt }),
         ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
-        ...job.usage,
+        ...job.runUsage,
       });
     } catch (error) {
       // Best-effort: a failed usage record must not turn a finished job into an error result.
@@ -446,10 +444,7 @@ export function createTaskInlineExtension(
     }
   };
 
-  /**
-   * Jobs a `task_wait`/`task_cancel` already handed back to the model: a background job that then
-   * settles must not also be pushed (design §2.2).
-   */
+  /** Jobs `task_wait`/`task_cancel` already handed back: a background settle must not re-push. */
   const delivered = new Set<string>();
   const pendingNotify: TaskJobSnapshot[] = [];
   let notifyTimer: NodeJS.Timeout | undefined;
@@ -461,11 +456,8 @@ export function createTaskInlineExtension(
     return `Job ${id} ${job.status}: ${summary}\ntask_status({ jobId: "${id}" }) for details`;
   };
 
-  /**
-   * The micro-batch wake (design §2.2): everything that settled in the window goes out as one
-   * `epi:task-notify` follow-up that starts a turn. Read through the *current* `pi`: after a session
-   * switch the old one is stale.
-   */
+  /** The micro-batch wake (design §2.2): everything settled in the window goes out as one
+   * `epi:task-notify` follow-up. Read through the *current* `pi`: after a switch the old is stale. */
   const flushNotify = (): void => {
     notifyTimer = undefined;
     const fresh = pendingNotify.splice(0).filter((job) => !delivered.has(job.id));
@@ -495,44 +487,22 @@ export function createTaskInlineExtension(
   };
 
   /**
-   * A steer that arrived after its worker's loop ended is reported as `steer_dropped`; resume the
-   * job with it so the `task({ jobId, task })` the model was told "Steered" for always lands. The
-   * resumed run has nobody waiting on it, so it pushes its result.
-   */
-  const resumeWithDropped = (job: TaskJobSnapshot, dropped: string[]): void => {
-    try {
-      const resumed = runtime.resume(job.id, dropped.join("\n\n"));
-      delivered.delete(resumed.id);
-      void trackCompletion(resumed.id, true).catch((error: unknown) => {
-        reportCompletionError("resuming a job with a dropped steer", error);
-      });
-    } catch (error) {
-      reportCompletionError("resuming a job with a dropped steer", error);
-    }
-  };
-
-  /**
-   * Completion bookkeeping for one run: record the child's usage, run the `task_stop` hook through
-   * the live `pi`/`ctx`, then push the result (a background job nobody is waiting on) or resume the
-   * job if its worker reported an undelivered steer. Shared by a start and a resume.
+   * "Delivered" belongs to a run, not a job: a resume's result is new and must be pushed even when
+   * an earlier run's was already handed to the model (round-2 review P2).
    */
   const trackCompletion = (jobId: string, notify: boolean): Promise<TaskJobSnapshot> => {
     const completion = runtime.wait(jobId).then(async (job) => {
       recordChildUsage(job);
-      // Read the live `pi`/`ctx` now, not the pair captured when the job started: a session switch
-      // between start and completion leaves the captured pair stale.
+      // Read the live `pi`/`ctx` now, not the pair captured at start: a session switch leaves it stale.
       const pi = current.pi;
       const ctx = current.ctx;
-      if (pi === undefined || ctx === undefined) return job;
-      const stopDecision = await emitTaskHook(pi.events, { type: "task_stop", job }, ctx);
-      if (stopDecision.action !== "continue") {
-        throw new Error(stopDecision.reason ?? "task stop hook returned an invalid decision");
+      if (pi !== undefined && ctx !== undefined) {
+        const stopDecision = await emitTaskHook(pi.events, { type: "task_stop", job }, ctx);
+        if (stopDecision.action !== "continue") {
+          throw new Error(stopDecision.reason ?? "task stop hook returned an invalid decision");
+        }
       }
-      return job;
-    }).then((job) => {
-      const dropped = runtime.takeDroppedSteers(job.id);
-      if (dropped.length > 0) resumeWithDropped(job, dropped);
-      else if (notify) scheduleNotify(job);
+      if (notify) scheduleNotify(job);
       return job;
     });
     completionHooks.set(jobId, completion);
@@ -552,15 +522,18 @@ export function createTaskInlineExtension(
     return completion;
   };
 
-  /**
-   * Start (or resume) a job and hand the model its result: a background job gets the short receipt,
-   * a foreground one waits for the answer (and leaves the job running if its own turn is aborted).
-   */
+  /** Start (or resume) a job and hand the model its result: a background job gets the receipt, a
+   * foreground one waits for the answer (and leaves the job running if its own turn is aborted). */
   const runJob = async (
     job: TaskJobSnapshot,
     background: boolean,
     signal: AbortSignal | undefined,
   ): Promise<AgentToolResult<unknown>> => {
+    // This run's result is new, whatever an earlier run's delivery state was.
+    delivered.delete(job.id);
+    for (let index = pendingNotify.length - 1; index >= 0; index -= 1) {
+      if (pendingNotify[index]?.id === job.id) pendingNotify.splice(index, 1);
+    }
     const completion = trackCompletion(job.id, background);
     if (background) return startedResult(job);
     const waited = await runtime.wait(job.id, undefined, signal);
