@@ -59,9 +59,8 @@ export interface HooksRuntimeOptions {
   artifactRoot: string;
   sessionRoot: string;
   projectTrusted: boolean;
-  /** The parent's trusted project root, when the caller knows it. `epi:hooks` does not pass one
-   * yet, so hook agent children resolve untrusted (the safe direction) instead of re-reading
-   * `trust.json` for whatever project their cwd lands in. */
+  /** The parent's trusted project root (`epi:hooks` passes the parent of `.epi/agents`). A child
+   * whose cwd lies in another project resolves untrusted instead of re-reading `trust.json`. */
   projectRoot?: string | undefined;
 }
 

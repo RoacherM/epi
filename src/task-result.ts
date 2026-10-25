@@ -80,7 +80,10 @@ export function collectEntryUsage(entries: readonly unknown[], sinceIndex = 0): 
   const own = entries.slice(sinceIndex);
   const total = collectUsage(own.map((entry) => entryMessage(entry)));
   for (const entry of own) {
-    if (entryType(entry) === "compaction") addUsage(total, (entry as { usage?: unknown }).usage);
+    // `compaction`: the summarization request. `usage`: Pi's own accounting entries, such as a
+    // cache-warming refresh (N6 review P2-2) -- billed, but never an assistant message.
+    const type = entryType(entry);
+    if (type === "compaction" || type === "usage") addUsage(total, (entry as { usage?: unknown }).usage);
   }
   return total;
 }

@@ -49,7 +49,7 @@ export interface TaskExtensionOptions {
  */
 const TaskToolParameters = Type.Object({
   task: Type.String({ description: "What the subagent must do, in full: it cannot see this conversation. With jobId, the steering or resume instruction instead" }),
-  jobId: Type.Optional(Type.String({ description: "Steer this running job, or resume this stopped one; every other setting is ignored. A resume is foreground unless background is true" })),
+  jobId: Type.Optional(Type.String({ description: "Steer this running job, or resume this stopped one; other settings are ignored except background, which makes a resume return at once" })),
   agent: Type.Optional(Type.String({ description: "Preset from agents/*.md; omit for a plain subagent" })),
   cwd: Type.Optional(Type.String({ description: "Absolute or session-relative working directory" })),
   background: Type.Optional(Type.Boolean({ default: false, description: "Return only a job id and keep working; collect it later with task_wait. Not needed for parallelism: several task calls in one turn already run at once" })),
@@ -490,6 +490,9 @@ export function createTaskInlineExtension(
    * "Delivered" belongs to a run, not a job: a resume's result is new and must be pushed even when
    * an earlier run's was already handed to the model (round-2 review P2).
    */
+  /** Jobs whose foreground caller was interrupted (Esc, /compact): nobody is waiting any more, so
+   * they get the same wake as a background job (N6 review P2-1). */
+  const wakeOnSettle = new Set<string>();
   const trackCompletion = (jobId: string, notify: boolean): Promise<TaskJobSnapshot> => {
     const completion = runtime.wait(jobId).then(async (job) => {
       recordChildUsage(job);
@@ -502,7 +505,7 @@ export function createTaskInlineExtension(
           throw new Error(stopDecision.reason ?? "task stop hook returned an invalid decision");
         }
       }
-      if (notify) scheduleNotify(job);
+      if (notify || wakeOnSettle.delete(job.id)) scheduleNotify(job);
       return job;
     });
     completionHooks.set(jobId, completion);
@@ -541,6 +544,7 @@ export function createTaskInlineExtension(
       signal?.aborted === true &&
       (waited.status === "queued" || waited.status === "running")
     ) {
+      wakeOnSettle.add(job.id);
       return {
         content: [{
           type: "text",
