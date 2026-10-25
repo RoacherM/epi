@@ -22,6 +22,14 @@ export interface McpConfigSource {
  * the project entry wins, matching Pi's own project-overrides-global rule.
  */
 export declare function loadNativeMcpConfig(source: McpConfigSource, cwd: string): LoadedMcpConfig;
+/**
+ * A subagent's `mcp: ["name"]` filter, checked against the configured servers. Shared by
+ * `createEpiMcpExtension`'s own `loadConfig` and by the eager preflight in `buildInlineExtensions`
+ * (src/extensions/index.ts): Pi's `session_start` emit catches a throw from a handler, so a filter
+ * validated only inside `loadConfig` would let a child start with a silently empty server set.
+ * An unknown name is an error, not a missing tool (hard rule 4).
+ */
+export declare function filterMcpServers(config: LoadedMcpConfig, serverFilter: readonly string[] | undefined): LoadedMcpConfig;
 /** Shared by `/mcp` and `epi mcp list` (src/commands/mcp-cli.ts): what to run, in one sentence. `-l`
  * writes `<cwd>/.epi/mcp.json`, so it's offered only where `cwd` has a project Manifest (dogfood D47). */
 export declare function emptyStateMessage(epiHome: string, cwd: string): string;

@@ -128,7 +128,13 @@ async function startChildSession(capsule) {
     });
     const extensionFactories = [
         createMagpieInlineExtension(),
-        ...buildInlineExtensions(assembly, capsule.epiHome, identity, () => assembly, undefined, false, Array.isArray(capsule.mcp) ? capsule.mcp : undefined),
+        ...buildInlineExtensions(assembly, capsule.epiHome, identity, () => assembly, undefined, false, 
+        // This process *is* a subagent: `child` makes epi:hooks drop the handlers a child may not
+        // run (docs/subagents-design.md §9.4); mcpServerFilter narrows its MCP connections.
+        {
+            child: true,
+            ...(Array.isArray(capsule.mcp) ? { mcpServerFilter: capsule.mcp } : {}),
+        }),
         outcome.extension,
     ];
     const { modelRuntime, resourceLoader, diagnostics } = await createAgentSessionServices({

@@ -186,7 +186,12 @@ async function startChildSession(capsule: TaskCapsule): Promise<AgentSession> {
       () => assembly,
       undefined,
       false,
-      Array.isArray(capsule.mcp) ? capsule.mcp : undefined,
+      // This process *is* a subagent: `child` makes epi:hooks drop the handlers a child may not
+      // run (docs/subagents-design.md §9.4); mcpServerFilter narrows its MCP connections.
+      {
+        child: true,
+        ...(Array.isArray(capsule.mcp) ? { mcpServerFilter: capsule.mcp } : {}),
+      },
     ),
     outcome.extension,
   ];

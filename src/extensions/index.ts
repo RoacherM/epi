@@ -10,11 +10,11 @@ import { builtInOffInstruction, type ResolvedAssembly } from "../assembly.js";
 import { EpiConfigError } from "../errors.js";
 import type { ResolvedInlineExtension } from "../manifest.js";
 import { resolveEffectiveHooks } from "../hooks-config.js";
-import { createHooksInlineExtension } from "./hooks.js";
+import { createHooksInlineExtension, hooksForChild } from "./hooks.js";
 import { createTaskInlineExtension } from "./task.js";
 import { createEpiRuntimeExtensions } from "./runtime.js";
 import type { EpiRuntimeIdentity } from "../runtime-identity.js";
-import { createEpiMcpExtension, loadNativeMcpConfig } from "./mcp.js";
+import { createEpiMcpExtension, filterMcpServers, loadNativeMcpConfig } from "./mcp.js";
 import { createWebInlineExtension } from "./web.js";
 import type { UpdateCheckOptions } from "./runtime.js";
 
@@ -37,6 +37,29 @@ function withDisableHint(
   }
 }
 
+/** What a subagent's own process needs beyond a normal run: `mcpServerFilter` narrows the MCP
+ * servers it connects to, `child` drops the hook handlers a child may not run. */
+export interface SubagentBuildOptions {
+  mcpServerFilter?: readonly string[];
+  child?: boolean;
+}
+
+/** Whether the subagent argument is the bare filter array rather than an options object. A helper
+ * because `Array.isArray` does not narrow a `readonly string[]` union member on its own. */
+function isFilterArray(value: readonly string[] | SubagentBuildOptions): value is readonly string[] {
+  return Array.isArray(value);
+}
+
+/** The subagent options, accepting a bare filter array (the shape this call had before `child`). */
+function subagentOptions(
+  value: readonly string[] | SubagentBuildOptions | undefined,
+): SubagentBuildOptions {
+  if (value === undefined) {
+    return {};
+  }
+  return isFilterArray(value) ? { mcpServerFilter: value } : value;
+}
+
 export function buildInlineExtensions(
   assembly: ResolvedAssembly,
   epiHome: string,
@@ -44,10 +67,13 @@ export function buildInlineExtensions(
   resolveAssembly: () => ResolvedAssembly = () => assembly,
   updateCheck?: UpdateCheckOptions,
   verbose = false,
-  /** A subagent's `mcp: ["name"]`: only these servers connect in that child process
-   * (docs/subagents-design.md §3). Undefined in a normal run, which loads every configured one. */
-  mcpServerFilter?: readonly string[],
+  /** A subagent's own process (src/worker.ts): `{ mcpServerFilter: ["name"] }` narrows the MCP
+   * servers it connects to (docs/subagents-design.md §3), `{ child: true }` drops the hook handlers
+   * a child may not run (docs/subagents-design.md §9.4). A bare array is the pre-`child` shorthand
+   * for `{ mcpServerFilter: array }`. Undefined in a normal run. */
+  subagent?: readonly string[] | SubagentBuildOptions,
 ): InlineExtension[] {
+  const { mcpServerFilter, child = false } = subagentOptions(subagent);
   const epiRuntime = createEpiRuntimeExtensions(runtimeIdentity, assembly, resolveAssembly, updateCheck, verbose);
   const extensions: InlineExtension[] = [epiRuntime.runtime];
   for (const extension of assembly.inlineExtensions) {
@@ -78,6 +104,10 @@ export function buildInlineExtensions(
           if (preflight.errors.length > 0) {
             throw new EpiConfigError(`epi:mcp: ${preflight.errors.join("; ")}`);
           }
+          // Fail here, before the child session starts: Pi's `session_start` emit swallows a throw
+          // from createMcpExtension's own loadConfig, so a bad filter would otherwise let the
+          // child run with a silently empty server set (stage-1 review P1-1).
+          filterMcpServers(preflight, mcpServerFilter);
           extensions.push(createEpiMcpExtension(mcpConfigSource, mcpServerFilter));
           // Both required alongside epi:mcp (docs/mcp-design.md §2): codemode for the default
           // exposure: "codemode" servers, tool-search for "deferred" exposure. Neither is Pi's own
@@ -109,7 +139,7 @@ export function buildInlineExtensions(
           });
           extensions.push(
             createHooksInlineExtension({
-              hooks: effective.hooks,
+              hooks: child ? hooksForChild(effective.hooks) : effective.hooks,
               epiHome,
               agentDir: assembly.agentDir,
               projectAgentsDir:

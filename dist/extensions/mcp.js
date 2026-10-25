@@ -99,6 +99,24 @@ export function loadNativeMcpConfig(source, cwd) {
         errors: [...global.errors, ...project.errors],
     };
 }
+/**
+ * A subagent's `mcp: ["name"]` filter, checked against the configured servers. Shared by
+ * `createEpiMcpExtension`'s own `loadConfig` and by the eager preflight in `buildInlineExtensions`
+ * (src/extensions/index.ts): Pi's `session_start` emit catches a throw from a handler, so a filter
+ * validated only inside `loadConfig` would let a child start with a silently empty server set.
+ * An unknown name is an error, not a missing tool (hard rule 4).
+ */
+export function filterMcpServers(config, serverFilter) {
+    if (serverFilter === undefined) {
+        return config;
+    }
+    const unknown = serverFilter.filter((name) => !config.servers.some((server) => server.name === name));
+    if (unknown.length > 0) {
+        const available = config.servers.map((server) => server.name).join(", ") || "none";
+        throw new EpiConfigError(`unknown MCP server ${unknown.map((name) => JSON.stringify(name)).join(", ")}; configured: ${available}`);
+    }
+    return { ...config, servers: config.servers.filter((server) => serverFilter.includes(server.name)) };
+}
 /** Shared by `/mcp` and `epi mcp list` (src/commands/mcp-cli.ts): what to run, in one sentence. `-l`
  * writes `<cwd>/.epi/mcp.json`, so it's offered only where `cwd` has a project Manifest (dogfood D47). */
 export function emptyStateMessage(epiHome, cwd) {
@@ -181,17 +199,7 @@ export function createEpiMcpExtension(source,
  * name is an error at load, not a silently missing tool. */
 serverFilter) {
     const { epiHome } = source;
-    const loadConfig = (ctx) => {
-        const config = loadNativeMcpConfig(source, ctx.cwd);
-        if (serverFilter === undefined)
-            return config;
-        const unknown = serverFilter.filter((name) => !config.servers.some((server) => server.name === name));
-        if (unknown.length > 0) {
-            const available = config.servers.map((server) => server.name).join(", ") || "none";
-            throw new EpiConfigError(`unknown MCP server ${unknown.map((name) => JSON.stringify(name)).join(", ")}; configured: ${available}`);
-        }
-        return { ...config, servers: config.servers.filter((server) => serverFilter.includes(server.name)) };
-    };
+    const loadConfig = (ctx) => filterMcpServers(loadNativeMcpConfig(source, ctx.cwd), serverFilter);
     const logPath = join(epiHome, "pi", "mcp.log");
     const transports = trackingTransportFactory();
     const startupWaitMs = mcpStartupWaitMs();

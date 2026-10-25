@@ -151,6 +151,43 @@ test("agent definitions validate and trusted project agents override global agen
   assert.match(agents[0].systemPrompt, /PROJECT/);
 });
 
+// stage-1 review P2: a typo or an unimplemented design field in `agents/*.md` was silently ignored,
+// so the agent ran without the setting the user wrote (hard rule 4).
+test("an agent file with an unknown frontmatter key fails loudly and names the key", (t) => {
+  const root = createFixture(t);
+  const dir = join(root, "agents");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "typo.md");
+  writeFileSync(file, "---\nname: typo\ndescription: Typo agent\nexclude_tools: bash\n---\nBody\n");
+
+  assert.throws(
+    () => loadTaskAgents({ globalAgentsDir: dir, projectAgentsDir: undefined }),
+    (error) =>
+      error.name === "EpiConfigError" &&
+      error.message.includes(file) &&
+      error.message.includes('"exclude_tools"') &&
+      error.message.includes("allowed:"),
+  );
+});
+
+// stage-1 review P2: a YAML syntax error escaped as a raw YAMLParseError, so buildInlineExtensions'
+// withDisableHint never added the "turn epi:task off" line (docs/development.md §3.4).
+test("a broken agent frontmatter is an EpiConfigError naming the file", (t) => {
+  const root = createFixture(t);
+  const dir = join(root, "agents");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "broken.md");
+  writeFileSync(file, "---\nname: broken\ndescription: [unterminated\n---\nBody\n");
+
+  assert.throws(
+    () => loadTaskAgents({ globalAgentsDir: dir, projectAgentsDir: undefined }),
+    (error) =>
+      error.name === "EpiConfigError" &&
+      error.message.includes(file) &&
+      error.message.includes("frontmatter"),
+  );
+});
+
 test("foreground jobs complete through the package worker entry", async (t) => {
   const root = createFixture(t);
   const runtime = createRuntime(root);
