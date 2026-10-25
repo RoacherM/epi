@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { availableParallelism } from "node:os";
 import { EpiConfigError } from "./errors.js";
 import { rewritePiText } from "./pi-output.js";
+import { singleLine } from "./task-result.js";
 /** Used when neither the call nor an `agents/*.md` preset sets one. */
 export const DEFAULT_TASK_TIMEOUT_SECONDS = 600;
 /**
@@ -23,6 +24,12 @@ const MAX_PROTOCOL_LINE_BYTES = 16 * 1024 * 1024;
 /** How long stdout/stderr are drained after the worker exits, so a `result` line already written is
  * still parsed before the pipes are destroyed (review pack A P2: settle on `exit`, not `close`). */
 const OUTPUT_DRAIN_MS = 500;
+/** The recent-event ring buffer is bounded, so a long run costs the same memory as a short one
+ * (docs/subagents-design.md §5.1); the progress bounds are applied again here, on the way in. */
+const RECENT_EVENTS_LIMIT = 10;
+const PROGRESS_TARGET_LIMIT = 120;
+const PROGRESS_TOOL_LIMIT = 40;
+const PROGRESS_SUMMARY_LIMIT = 200;
 /**
  * Pi's valid thinking suffixes (`cli/args.js`'s `VALID_THINKING_LEVELS`). Kept as a local copy so
  * the runtime does not take a deep import into Pi's CLI internals; test/task.test.mjs cross-checks
@@ -156,35 +163,6 @@ function isMessageEntry(entry) {
 function isToolCall(part) {
     return typeof part === "object" && part !== null && "type" in part && part.type === "toolCall";
 }
-/**
- * Worker process groups that are still alive, SIGKILLed if Epi itself exits. A real quit cancels
- * every job through the shared `TaskRuntime`, but an uncaught error or an exit that skips
- * `session_shutdown` must not leave detached subagent processes behind (they would keep spending
- * tokens with no one to report to). A SIGKILL, or a signal Node does not handle, cannot run this
- * handler; it is a net for the ordinary crash path, not a guarantee.
- */
-const liveWorkerPids = new Set();
-let exitSafetyNetInstalled = false;
-function installExitSafetyNet() {
-    if (exitSafetyNetInstalled)
-        return;
-    exitSafetyNetInstalled = true;
-    process.once("exit", () => {
-        for (const pid of liveWorkerPids) {
-            try {
-                if (process.platform !== "win32") {
-                    process.kill(-pid, "SIGKILL");
-                }
-                else {
-                    process.kill(pid, "SIGKILL");
-                }
-            }
-            catch {
-                // The worker already exited.
-            }
-        }
-    });
-}
 class BoundedOutput {
     limit;
     artifactRoot;
@@ -282,6 +260,28 @@ export function defaultTaskConcurrency(env = process.env, cpus = availableParall
     }
     return Math.max(2, Math.min(16, cpus));
 }
+/** The shortest id prefix `findJobId` accepts: the 8-character form `task_status` lists and the
+ * model copies back into another tool call (review round 1 P1-2). */
+export const MIN_JOB_ID_PREFIX = 8;
+/**
+ * Resolve what the model typed to a job id: the full uuid, or a unique prefix of at least
+ * `MIN_JOB_ID_PREFIX` characters -- the 8-character form `task_status({})` lists. An ambiguous
+ * prefix is an error naming the jobs it matched, never a silent pick.
+ */
+export function findJobId(ids, id) {
+    if (ids.includes(id))
+        return id;
+    const matches = id.length >= MIN_JOB_ID_PREFIX
+        ? ids.filter((candidate) => candidate.startsWith(id))
+        : [];
+    if (matches.length === 1)
+        return matches[0];
+    if (matches.length > 1) {
+        // The 8-character forms are equal here by definition; full ids are the only useful answer.
+        throw new Error(`ambiguous task job ${id}; matches ${matches.join(", ")}`);
+    }
+    throw new Error(`unknown task job ${id}`);
+}
 export class TaskRuntime {
     options;
     agentsByName;
@@ -372,6 +372,11 @@ export class TaskRuntime {
             workerResult: undefined,
             usage: undefined,
             turns: undefined,
+            progressTurns: 0,
+            steps: 0,
+            currentActivity: undefined,
+            lastSummary: undefined,
+            recentEvents: [],
             protocolError: undefined,
             completion,
             resolveCompletion,
@@ -383,10 +388,35 @@ export class TaskRuntime {
         return this.snapshot(job);
     }
     status(jobId) {
-        const job = this.jobs.get(jobId);
-        if (job === undefined) {
-            throw new Error(`unknown task job ${jobId}`);
+        return this.snapshot(this.findJob(jobId));
+    }
+    /** Every job this runtime knows, oldest first (insertion order), including jobs started before a
+     * session switch: the registry lives for the process, not the session (docs/development.md §12.3). */
+    list() {
+        return [...this.jobs.values()].map((job) => this.snapshot(job));
+    }
+    /**
+     * Steer a job (docs/subagents-design.md §5.2). A running job gets `{"type":"steer"}` on its
+     * worker's stdin, which delivers it verbatim to Pi's agent for the child to pick up after the tool
+     * call it is executing (development.md §12.1). This returns at once, so steering cannot deadlock a
+     * parent. A queued job has no process to talk to yet, so its task text is replaced before it
+     * starts (development.md §12.4); a finished job cannot be steered at all.
+     */
+    steer(jobId, message) {
+        const job = this.findJob(jobId);
+        const shortId = job.id.slice(0, 8);
+        if (job.status === "queued") {
+            job.task = message;
+            return this.snapshot(job);
         }
+        if (job.status !== "running") {
+            throw new Error(`job ${shortId} is ${job.status}; resume is not supported yet`);
+        }
+        const stdin = job.process?.stdin;
+        if (stdin === undefined || !stdin.writable) {
+            throw new Error(`job ${shortId} is running but its worker is no longer accepting input`);
+        }
+        stdin.write(`${JSON.stringify({ type: "steer", message })}\n`);
         return this.snapshot(job);
     }
     /**
@@ -395,10 +425,7 @@ export class TaskRuntime {
      * it started. Only `cancel` and process exit stop a job.
      */
     async wait(jobId, timeoutMs, signal) {
-        const job = this.jobs.get(jobId);
-        if (job === undefined) {
-            throw new Error(`unknown task job ${jobId}`);
-        }
+        const job = this.findJob(jobId);
         if (job.settled) {
             return this.snapshot(job);
         }
@@ -430,10 +457,7 @@ export class TaskRuntime {
         return this.snapshot(job);
     }
     async cancel(jobId) {
-        const job = this.jobs.get(jobId);
-        if (job === undefined) {
-            throw new Error(`unknown task job ${jobId}`);
-        }
+        const job = this.findJob(jobId);
         if (job.settled) {
             return this.snapshot(job);
         }
@@ -457,6 +481,10 @@ export class TaskRuntime {
             .filter((job) => !job.settled)
             .map((job) => this.cancel(job.id));
         await Promise.all(active);
+    }
+    /** The job a `jobId` names: the 8-character id `task_status` prints works everywhere a jobId does. */
+    findJob(jobId) {
+        return this.jobs.get(findJobId([...this.jobs.keys()], jobId));
     }
     pump() {
         while (!this.shuttingDown && this.running < this.maxConcurrency) {
@@ -482,6 +510,8 @@ export class TaskRuntime {
         const stderr = new BoundedOutput(this.maxOutputBytes, this.options.artifactRoot, `${job.id}.stderr.txt`);
         try {
             const capsulePath = this.writeCapsule(job);
+            // stdin is a pipe now, not `ignore`: it is the steer/abort channel, and its EOF is what stops
+            // an orphaned worker when this process dies (docs/development.md §12.4).
             const worker = spawn(process.execPath, [this.options.workerPath, capsulePath], {
                 cwd: job.cwd,
                 detached: process.platform !== "win32",
@@ -490,13 +520,11 @@ export class TaskRuntime {
                     PI_CODING_AGENT_DIR: this.options.agentDir,
                 },
                 shell: false,
-                stdio: ["ignore", "pipe", "pipe"],
+                stdio: ["pipe", "pipe", "pipe"],
             });
             job.process = worker;
-            if (worker.pid !== undefined) {
-                liveWorkerPids.add(worker.pid);
-                installExitSafetyNet();
-            }
+            // A write after the child exited would otherwise be an unhandled 'error' event on the pipe.
+            worker.stdin.on("error", () => { });
             const decoder = new StringDecoder("utf8");
             let lineBuffer = "";
             worker.stdout.on("data", (chunk) => {
@@ -557,8 +585,12 @@ export class TaskRuntime {
         finally {
             clearTimeout(job.timeoutTimer);
             clearTimeout(job.killTimer);
-            if (job.process?.pid !== undefined) {
-                liveWorkerPids.delete(job.process.pid);
+            // Release the write end: an open pipe held by a finished job is a handle nobody reads.
+            try {
+                job.process?.stdin?.end();
+            }
+            catch {
+                // The worker already exited and the pipe is gone.
             }
             job.process = undefined;
             if (job.capsuleDir !== undefined) {
@@ -576,7 +608,9 @@ export class TaskRuntime {
     settleOutcome(job, exit, stderrText) {
         // Reported even for a failed or partial run: those tokens were still spent.
         job.usage = job.workerResult?.usage;
-        job.turns = job.workerResult?.turns;
+        // A worker's own count wins, but a worker that reported none must not erase the turns its
+        // progress lines already established.
+        job.turns = job.workerResult?.turns ?? job.turns;
         if (job.terminationCause === "cancelled") {
             job.status = "cancelled";
             return;
@@ -681,10 +715,64 @@ export class TaskRuntime {
         if (typeof event === "object" &&
             event !== null &&
             "type" in event &&
+            event.type === "progress") {
+            this.applyProgress(job, event);
+            return;
+        }
+        if (typeof event === "object" &&
+            event !== null &&
+            "type" in event &&
             event.type === "result" &&
             "ok" in event &&
             typeof event.ok === "boolean") {
             job.workerResult = event;
+        }
+    }
+    /**
+     * One progress line into the job's live fields. A `tool_end` upgrades the `▸` entry its
+     * `tool_start` left, so the ring buffer holds ten distinct actions instead of ten half-lines.
+     * Unknown phases still update the counters they carry: the protocol is additive.
+     */
+    applyProgress(job, event) {
+        if (typeof event.turns === "number" && Number.isFinite(event.turns)) {
+            job.progressTurns = Math.max(0, Math.trunc(event.turns));
+        }
+        if (typeof event.steps === "number" && Number.isFinite(event.steps)) {
+            job.steps = Math.max(0, Math.trunc(event.steps));
+        }
+        if (typeof event.summary === "string") {
+            job.lastSummary = singleLine(event.summary, PROGRESS_SUMMARY_LIMIT);
+        }
+        const tool = typeof event.tool === "string"
+            ? singleLine(event.tool, PROGRESS_TOOL_LIMIT)
+            : "";
+        const target = typeof event.target === "string"
+            ? singleLine(event.target, PROGRESS_TARGET_LIMIT)
+            : "";
+        const label = [tool, target].filter((part) => part.length > 0).join(" ");
+        if (event.phase === "tool_start") {
+            job.currentActivity = [tool, target].filter((part) => part.length > 0).join(": ");
+            if (label.length > 0)
+                this.pushRecentEvent(job, `▸ ${label}`);
+        }
+        else if (event.phase === "tool_end") {
+            job.currentActivity = undefined;
+            const last = job.recentEvents[job.recentEvents.length - 1];
+            if (label.length === 0) {
+                // Nothing to name; the in-progress activity is still cleared.
+            }
+            else if (last === `▸ ${label}`) {
+                job.recentEvents[job.recentEvents.length - 1] = `✓ ${label}`;
+            }
+            else {
+                this.pushRecentEvent(job, `✓ ${label}`);
+            }
+        }
+    }
+    pushRecentEvent(job, entry) {
+        job.recentEvents.push(entry);
+        if (job.recentEvents.length > RECENT_EVENTS_LIMIT) {
+            job.recentEvents.splice(0, job.recentEvents.length - RECENT_EVENTS_LIMIT);
         }
     }
     terminateWorker(job, cause) {
@@ -720,11 +808,14 @@ export class TaskRuntime {
         }
     }
     snapshot(job) {
+        // Progress turns stand in until, or unless, the worker reports its own count.
+        const turns = job.turns ?? (job.progressTurns > 0 ? job.progressTurns : undefined);
         return {
             id: job.id,
             ...(job.agent === undefined ? {} : { agent: job.agent.name, agentSource: job.agent.source }),
             status: job.status,
             cwd: job.cwd,
+            task: job.task,
             sessionPath: job.sessionPath,
             createdAt: job.createdAt,
             ...(job.startedAt === undefined ? {} : { startedAt: job.startedAt }),
@@ -732,7 +823,11 @@ export class TaskRuntime {
             ...(job.result === undefined ? {} : { result: job.result }),
             ...(job.error === undefined ? {} : { error: job.error }),
             ...(job.usage === undefined ? {} : { usage: job.usage }),
-            ...(job.turns === undefined ? {} : { turns: job.turns }),
+            ...(turns === undefined ? {} : { turns }),
+            steps: job.steps,
+            ...(job.currentActivity === undefined ? {} : { currentActivity: job.currentActivity }),
+            ...(job.lastSummary === undefined ? {} : { lastSummary: job.lastSummary }),
+            recentEvents: [...job.recentEvents],
             ...(job.stdoutArtifact === undefined ? {} : { stdoutArtifact: job.stdoutArtifact }),
             ...(job.stderrArtifact === undefined ? {} : { stderrArtifact: job.stderrArtifact }),
         };

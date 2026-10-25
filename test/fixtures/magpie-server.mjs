@@ -36,7 +36,7 @@ function responsesEvents(model) {
 }
 
 export async function startMagpieServer() {
-  const state = { catalog: structuredClone(magpieCatalog), requests: [], catalogStatus: 200, catalogBody: undefined, catalogHandler: undefined, hang: false, toolCall: false, hangInference: false, malformedStream: false, inferenceStatus: 200, inferenceError: "prompt is too long: context_length_exceeded" };
+  const state = { catalog: structuredClone(magpieCatalog), requests: [], catalogStatus: 200, catalogBody: undefined, catalogHandler: undefined, hang: false, toolCall: false, hangInference: false, malformedStream: false, inferenceStatus: 200, inferenceError: "prompt is too long: context_length_exceeded", inferenceHandler: undefined };
   const server = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -52,6 +52,9 @@ export async function startMagpieServer() {
       return;
     }
     if (state.hangInference) return;
+    // A test that needs a shaped conversation (a tool call, then an answer) supplies its own
+    // handler; it owns the response, exactly like catalogHandler.
+    if (state.inferenceHandler) return state.inferenceHandler(request, response, parsed);
     if (state.inferenceStatus !== 200) {
       response.writeHead(state.inferenceStatus, { "content-type": "application/json" });
       response.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: state.inferenceError } }));

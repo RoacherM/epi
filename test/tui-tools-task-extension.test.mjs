@@ -155,6 +155,48 @@ test("a long todo item text is truncated to the viewport width, not left to over
   }
 });
 
+test("task tools: a running job's collapsed line shows its turn and current activity", (t) => {
+  const tools = loadTools(t);
+  const job = {
+    id: "job-1",
+    agent: "reviewer",
+    status: "running",
+    cwd: "/work",
+    createdAt: 0,
+    turns: 3,
+    steps: 7,
+    currentActivity: "bash: npm test",
+  };
+  const result = { content: [{ type: "text", text: "running · turn 3 · 7 steps · now: bash: npm test" }], details: job };
+
+  for (const name of ["task", "task_status", "task_wait", "task_cancel"]) {
+    const collapsed = tools.get(name).renderResult(result, { expanded: false, isPartial: false }, theme, {}).render(80);
+    assert.equal(collapsed.length, 1);
+    assert.match(collapsed[0], /reviewer/);
+    assert.match(collapsed[0], /running/);
+    assert.match(collapsed[0], /turn 3/, `${name}: the collapsed line lost the turn counter`);
+    assert.match(collapsed[0], /now: bash: npm test/, `${name}: the collapsed line lost the current activity`);
+  }
+});
+
+test("task_status with no jobId renders a count collapsed and one line per job expanded", (t) => {
+  const tools = loadTools(t);
+  const jobs = [
+    { id: "job-1", status: "running", cwd: "/work", createdAt: 0, turns: 1, steps: 2, task: "one" },
+    { id: "job-2", status: "completed", cwd: "/work", createdAt: 1, task: "two" },
+    { id: "job-3", status: "running", cwd: "/work", createdAt: 2, turns: 0, steps: 1, task: "three" },
+  ];
+  const result = { content: [{ type: "text", text: "listed" }], details: { jobs } };
+
+  const collapsed = tools.get("task_status").renderResult(result, { expanded: false, isPartial: false }, theme, {}).render(80);
+  assert.equal(collapsed.length, 1);
+  assert.match(collapsed[0], /2 running, 1 completed/);
+
+  const expanded = tools.get("task_status").renderResult(result, { expanded: true, isPartial: false }, theme, {}).render(80);
+  assert.equal(expanded.length, 3);
+  assert.match(expanded.join("\n"), /job-3/);
+});
+
 test("todo: a bad action (errorResult's {error} shape) renders the error message, not \"No items.\"", async (t) => {
   const tools = loadTools(t);
   const todo = tools.get("todo");

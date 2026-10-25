@@ -4,7 +4,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { collectUsage, finalAssistantText } from "../dist/task-result.js";
+import { collectUsage, finalAssistantText, singleLine } from "../dist/task-result.js";
+
+// Round-1 review P3: folding only C0 left C1 controls (U+009B is the single-character CSI) and bidi
+// overrides in the text a tool argument puts on the TUI line and in the model's context.
+test("singleLine folds C1 and bidi controls too, not just C0", () => {
+  assert.equal(singleLine("a\u009b31mb\u009d c\u202ed\u2069e\u0007f", 200), "a 31mb c d e f");
+  assert.equal(singleLine("tab\tand\nnewline", 200), "tab and newline");
+  assert.equal(singleLine("x".repeat(50), 10), "x".repeat(10));
+});
 
 test("the child's answer is the newest assistant text, not the empty tail of a tool-call turn", () => {
   const messages = [

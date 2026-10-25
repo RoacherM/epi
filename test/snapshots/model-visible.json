@@ -85,7 +85,7 @@
       }
     },
     {
-      "description": "Delegate work to a subagent: a separate Epi process with its own context window, which reports back only its conclusion. Use it for work that would otherwise fill this context (wide searches, long builds, independent branches of a job), and run independent subagents at once. A subagent starts with no skills, no MCP and no rules unless asked for. To fan out, issue several task calls in the same turn: they run concurrently and each returns its result, so no task_wait is needed. Each subagent costs a fresh system prompt and process start, so give each one a sizeable share (several files, not one tiny one). Presets: worker (Deterministic full-runtime acceptance worker.).",
+      "description": "Delegate work to a subagent: a separate Epi process with its own context window, which reports back only its conclusion. Use it for work that would otherwise fill this context (wide searches, long builds, independent branches of a job), and run independent subagents at once. A subagent starts with no skills, no MCP and no rules unless asked for. To fan out, issue several task calls in the same turn: they run concurrently and each returns its result, so no task_wait is needed. Each subagent costs a fresh system prompt and process start, so give each one a sizeable share (several files, not one tiny one). Pass jobId to steer a running job instead of starting one. Presets: worker (Deterministic full-runtime acceptance worker.).",
       "name": "task",
       "parameters": {
         "properties": {
@@ -140,6 +140,10 @@
             "description": "Apply this run's hooks.json inside the subagent. Default true",
             "type": "boolean"
           },
+          "jobId": {
+            "description": "Steer this running job instead of starting one; every other setting is ignored",
+            "type": "string"
+          },
           "maxTurns": {
             "description": "Stop after this many turns and return what is done",
             "minimum": 1,
@@ -186,7 +190,7 @@
             "type": "string"
           },
           "task": {
-            "description": "What the subagent must do, in full: it cannot see this conversation",
+            "description": "What the subagent must do, in full: it cannot see this conversation. With jobId, the steering instruction instead",
             "type": "string"
           },
           "timeoutSeconds": {
@@ -225,17 +229,15 @@
       }
     },
     {
-      "description": "Return the current state of one Epi task job.",
+      "description": "Return the current state of one Epi task job, or list every job when jobId is omitted.",
       "name": "task_status",
       "parameters": {
         "properties": {
           "jobId": {
+            "description": "The job to inspect; omit to list every job of this runtime",
             "type": "string"
           }
         },
-        "required": [
-          "jobId"
-        ],
         "type": "object"
       }
     },

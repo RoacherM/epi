@@ -106,6 +106,8 @@ export interface TaskJobSnapshot {
     agentSource?: "global" | "project";
     status: TaskJobStatus;
     cwd: string;
+    /** The task text this job runs. `task_status` with no jobId lists it, truncated. */
+    task?: string;
     /** The child's own conversation file, kept so the job can be resumed by id. */
     sessionPath: string;
     createdAt: number;
@@ -116,8 +118,16 @@ export interface TaskJobSnapshot {
     /** Absent when the child died before reporting (a crash or a kill). */
     usage?: TaskUsage;
     /** Turns the child completed; present for a partial (`maxTurns`) run, so the model can be told
-     * how far it got. */
+     * how far it got. While a job runs this is the turn count reported by its progress lines. */
     turns?: number;
+    /** Tool calls the child has started so far (progress lines). */
+    steps?: number;
+    /** What the child is doing right now, e.g. `bash: npm test`; cleared when the tool ends. */
+    currentActivity?: string;
+    /** The last turn's assistant text, one line and bounded; empty when that turn said nothing. */
+    lastSummary?: string;
+    /** The last 10 one-line actions, oldest first, e.g. `✓ read src/host.ts` / `▸ bash npm test`. */
+    recentEvents?: string[];
     stdoutArtifact?: string;
     stderrArtifact?: string;
 }
@@ -177,6 +187,15 @@ export interface StartTaskRequest {
  * `EPI_TASK_MAX_CONCURRENCY` overrides it.
  */
 export declare function defaultTaskConcurrency(env?: NodeJS.ProcessEnv, cpus?: number): number;
+/** The shortest id prefix `findJobId` accepts: the 8-character form `task_status` lists and the
+ * model copies back into another tool call (review round 1 P1-2). */
+export declare const MIN_JOB_ID_PREFIX = 8;
+/**
+ * Resolve what the model typed to a job id: the full uuid, or a unique prefix of at least
+ * `MIN_JOB_ID_PREFIX` characters -- the 8-character form `task_status({})` lists. An ambiguous
+ * prefix is an error naming the jobs it matched, never a silent pick.
+ */
+export declare function findJobId(ids: readonly string[], id: string): string;
 export declare class TaskRuntime {
     private readonly options;
     private readonly agentsByName;
@@ -192,6 +211,17 @@ export declare class TaskRuntime {
     availableAgents(): Array<Pick<TaskAgentDefinition, "name" | "description" | "source">>;
     start(request: StartTaskRequest): TaskJobSnapshot;
     status(jobId: string): TaskJobSnapshot;
+    /** Every job this runtime knows, oldest first (insertion order), including jobs started before a
+     * session switch: the registry lives for the process, not the session (docs/development.md §12.3). */
+    list(): TaskJobSnapshot[];
+    /**
+     * Steer a job (docs/subagents-design.md §5.2). A running job gets `{"type":"steer"}` on its
+     * worker's stdin, which delivers it verbatim to Pi's agent for the child to pick up after the tool
+     * call it is executing (development.md §12.1). This returns at once, so steering cannot deadlock a
+     * parent. A queued job has no process to talk to yet, so its task text is replaced before it
+     * starts (development.md §12.4); a finished job cannot be steered at all.
+     */
+    steer(jobId: string, message: string): TaskJobSnapshot;
     /**
      * Wait for a job to settle, or stop waiting on `timeoutMs` / `signal`. Aborting this wait never
      * touches the job: a parent that aborts its own turn (Esc, `/compact`) must not kill a subagent
@@ -200,6 +230,8 @@ export declare class TaskRuntime {
     wait(jobId: string, timeoutMs?: number, signal?: AbortSignal): Promise<TaskJobSnapshot>;
     cancel(jobId: string): Promise<TaskJobSnapshot>;
     shutdown(): Promise<void>;
+    /** The job a `jobId` names: the 8-character id `task_status` prints works everywhere a jobId does. */
+    private findJob;
     private pump;
     private run;
     /**
@@ -215,6 +247,13 @@ export declare class TaskRuntime {
     private capsuleFor;
     private writeCapsule;
     private parseWorkerLine;
+    /**
+     * One progress line into the job's live fields. A `tool_end` upgrades the `▸` entry its
+     * `tool_start` left, so the ring buffer holds ten distinct actions instead of ten half-lines.
+     * Unknown phases still update the counters they carry: the protocol is additive.
+     */
+    private applyProgress;
+    private pushRecentEvent;
     private terminateWorker;
     private signalWorker;
     private finish;

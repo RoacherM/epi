@@ -13,8 +13,10 @@ import { magpieCatalog, startMagpieServer } from "./fixtures/magpie-server.mjs";
 
 function run(command, args, options) {
   return new Promise((resolve, reject) => {
-    // There is no piped input in these tests; use /dev/null rather than a macOS socketpair.
-    const child = spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+    // There is no piped input in these tests; use /dev/null rather than a macOS socketpair. A
+    // caller that does need a stdin (the task worker, whose stdin is its steer/abort channel and
+    // whose EOF is its orphan net) passes `stdio` explicitly.
+    const child = spawn(command, args, { ...options, stdio: options.stdio ?? ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
@@ -665,7 +667,7 @@ test("a gateway that is not running is named when settings or a pattern select M
   writeFileSync(capsulePath, JSON.stringify(taskCapsule(fixture, { systemPrompt: "" })));
   // In the worker's reported error (what the task tool passes on), not only on stderr.
   await assert.rejects(
-    run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000 }),
+    run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000, stdio: ["pipe", "pipe", "pipe"] }),
     new RegExp(`"error":"No model available; Model list refresh failed for magpie: Magpie is not running at ${absent}`),
   );
 });
@@ -736,7 +738,7 @@ test("isolated Task worker calls Magpie, and refreshes the catalog like every ot
   const runWorker = async (model) => {
     const capsulePath = join(fixture.home, "capsule.json");
     writeFileSync(capsulePath, JSON.stringify(taskCapsule(fixture, { systemPrompt: "Be concise.", model })));
-    const output = await run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000 });
+    const output = await run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000, stdio: ["pipe", "pipe", "pipe"] });
     const events = output.stdout.trim().split("\n").map((line) => JSON.parse(line));
     assert.equal(events.at(-1).ok, true, output.stdout + output.stderr);
     assert.equal(events.at(-1).output, "MAGPIE_OK 你好");

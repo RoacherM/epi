@@ -1,4 +1,4 @@
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 // Just the pure text-width helper, not pi-tui's Component classes: this extension has none of the
 // "must be Pi's exact installed copy" concerns src/tui/pi-tui.ts exists for (no instanceof checks).
@@ -13,7 +13,8 @@ import { forkableBranch, inheritedModelReference, MAX_TASK_TIMEOUT_SECONDS, Task
  * paid for only when asked for. An `agent` preset supplies defaults these override.
  */
 const TaskToolParameters = Type.Object({
-    task: Type.String({ description: "What the subagent must do, in full: it cannot see this conversation" }),
+    task: Type.String({ description: "What the subagent must do, in full: it cannot see this conversation. With jobId, the steering instruction instead" }),
+    jobId: Type.Optional(Type.String({ description: "Steer this running job instead of starting one; every other setting is ignored" })),
     agent: Type.Optional(Type.String({ description: "Preset from agents/*.md; omit for a plain subagent" })),
     cwd: Type.Optional(Type.String({ description: "Absolute or session-relative working directory" })),
     background: Type.Optional(Type.Boolean({ default: false, description: "Return only a job id and keep working; collect it later with task_wait. Not needed for parallelism: several task calls in one turn already run at once" })),
@@ -138,6 +139,32 @@ function resultText(job) {
 }
 /** How long a settled job's completion promise stays available to task_wait/task_cancel. */
 const COMPLETION_RETENTION_MS = 10 * 60_000;
+/** The id the model sees and can copy back: the full uuid is 36 characters of noise per mention. */
+function shortJobId(id) {
+    return id.slice(0, 8);
+}
+/**
+ * The compact state of a job that has not settled yet: a *pull* view the model asked for, not the
+ * whole snapshot, which stays in `details` for the TUI.
+ */
+function runningStatusText(job) {
+    const lines = [
+        `${job.status} · turn ${job.turns ?? 0} · ${job.steps ?? 0} steps` +
+            (job.currentActivity === undefined ? "" : ` · now: ${job.currentActivity}`),
+    ];
+    if (job.lastSummary !== undefined && job.lastSummary.length > 0) {
+        lines.push(`last: ${job.lastSummary}`);
+    }
+    if (job.recentEvents !== undefined && job.recentEvents.length > 0) {
+        lines.push("recent:", ...job.recentEvents);
+    }
+    return lines.join("\n");
+}
+/** One line per job in `task_status` with no jobId. */
+function jobListLine(job) {
+    const task = (job.task ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+    return `${shortJobId(job.id)} ${job.status} ${job.agent ?? "task"} · ${job.turns ?? 0}t ${job.steps ?? 0}s · ${task}`;
+}
 function jobResult(job) {
     // A partial run stopped at maxTurns: the model gets the work done so far plus why it stopped.
     // It is not promised a resume (steering and resuming are not implemented yet), so the footer
@@ -174,7 +201,15 @@ function jobSummaryLine(theme, job) {
             : job.status === "cancelled" || job.status === "partial" ? "warning"
                 : job.status === "running" ? "accent"
                     : "muted";
-    return `${theme.fg("accent", job.agent ?? "task")} ${theme.fg(tone, job.status)} ${theme.fg("muted", job.id)}`;
+    // A running job says where it is: the same pull view the model gets, when known.
+    let suffix = "";
+    if (job.status === "running") {
+        if (job.turns !== undefined)
+            suffix += ` · turn ${job.turns}`;
+        if (job.currentActivity !== undefined)
+            suffix += ` · now: ${job.currentActivity}`;
+    }
+    return `${theme.fg("accent", job.agent ?? "task")} ${theme.fg(tone, job.status)} ${theme.fg("muted", job.id)}${suffix}`;
 }
 /**
  * Shared by task/task_status/task_wait/task_cancel: all resolve to a TaskJobSnapshot via
@@ -184,6 +219,20 @@ function renderTaskResult(result, options, theme) {
     const details = result.details;
     if (details === undefined)
         return toolLines([]);
+    // `task_status` with no jobId: a one-line summary collapsed, one job per line expanded.
+    if ("jobs" in details) {
+        if (details.jobs.length === 0)
+            return toolLines([theme.fg("muted", "No task jobs.")]);
+        if (!options.expanded) {
+            const counts = new Map();
+            for (const job of details.jobs)
+                counts.set(job.status, (counts.get(job.status) ?? 0) + 1);
+            return toolLines([
+                theme.fg("muted", [...counts].map(([status, count]) => `${count} ${status}`).join(", ")),
+            ]);
+        }
+        return toolLines(capLines(theme, details.jobs.map((job) => jobSummaryLine(theme, job))));
+    }
     // A failed TaskJobSnapshot also has an `error` field, so discriminate on `status` (only the
     // snapshot has one), not on `error`'s presence -- errorResult()'s `{ error }` never has it.
     if (!("status" in details)) {
@@ -333,6 +382,7 @@ export function createTaskInlineExtension(options) {
                     "To fan out, issue several task calls in the same turn: they run concurrently and each",
                     "returns its result, so no task_wait is needed. Each subagent costs a fresh system prompt",
                     "and process start, so give each one a sizeable share (several files, not one tiny one).",
+                    "Pass jobId to steer a running job instead of starting one.",
                     availableAgents.length === 0
                         ? ""
                         : `Presets: ${availableAgents.map((agent) => `${agent.name} (${agent.description})`).join(", ")}.`,
@@ -344,11 +394,41 @@ export function createTaskInlineExtension(options) {
                 async execute(_toolCallId, params, signal, _onUpdate, ctx) {
                     current.ctx = ctx;
                     try {
-                        const cwd = params.cwd === undefined
-                            ? ctx.cwd
-                            : isAbsolute(params.cwd)
-                                ? params.cwd
-                                : resolve(ctx.cwd, params.cwd);
+                        // `task({ jobId, task })` is a steer, not a start: no job is created and every other
+                        // field is ignored (the schema says so). It returns at once.
+                        if (params.jobId !== undefined) {
+                            // Whatever the job's state, the text becomes instructions the child will act on (a
+                            // queued job's replacement task, a running job's steer, which the worker delivers
+                            // verbatim past the child's input hooks), so `task_start` must see it, or a hook
+                            // that blocks by text is bypassed in two steps (review P2-2, round 2 P2-A). A
+                            // finished job is refused by runtime.steer below, after the hook.
+                            const known = runtime.status(params.jobId);
+                            if (known.status === "queued" || known.status === "running") {
+                                const replaceDecision = await emitTaskHook(pi.events, {
+                                    type: "task_start",
+                                    ...(known.agent === undefined ? {} : { agent: known.agent }),
+                                    task: params.task,
+                                    cwd: known.cwd,
+                                }, ctx);
+                                if (replaceDecision.action === "block" ||
+                                    replaceDecision.action === "cancel") {
+                                    throw new Error(replaceDecision.reason ?? "task start blocked by Epi hook");
+                                }
+                            }
+                            const steered = runtime.steer(params.jobId, params.task);
+                            return {
+                                content: [{
+                                        type: "text",
+                                        text: steered.status === "running"
+                                            ? `Steered job ${shortJobId(steered.id)}; it applies after the current tool call.\n\n${runningStatusText(steered)}`
+                                            : `Replaced job ${shortJobId(steered.id)}'s task before it started.`,
+                                    }],
+                                details: steered,
+                            };
+                        }
+                        // `resolve` handles both cases: an absolute `cwd` wins outright, a relative one joins
+                        // the session's, and `runtime.start` realpaths whatever comes out.
+                        const cwd = params.cwd === undefined ? ctx.cwd : resolve(ctx.cwd, params.cwd);
                         const startDecision = await emitTaskHook(pi.events, {
                             type: "task_start",
                             ...(params.agent === undefined ? {} : { agent: params.agent }),
@@ -429,14 +509,30 @@ export function createTaskInlineExtension(options) {
             pi.registerTool({
                 name: "task_status",
                 label: "Task status",
-                description: "Return the current state of one Epi task job.",
+                description: "Return the current state of one Epi task job, or list every job when jobId is omitted.",
                 executionMode: "parallel",
                 renderResult: renderTaskResult,
-                parameters: Type.Object({ jobId: Type.String() }),
+                parameters: Type.Object({
+                    jobId: Type.Optional(Type.String({ description: "The job to inspect; omit to list every job of this runtime" })),
+                }),
                 async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
                     current.ctx = ctx;
                     try {
-                        return jobResult(runtime.status(params.jobId));
+                        if (params.jobId === undefined) {
+                            const jobs = runtime.list();
+                            return {
+                                content: [{
+                                        type: "text",
+                                        text: jobs.length === 0 ? "No task jobs." : jobs.map(jobListLine).join("\n"),
+                                    }],
+                                details: { jobs },
+                            };
+                        }
+                        const job = runtime.status(params.jobId);
+                        // A live job gets the compact progress block; a settled one still gets its answer.
+                        return job.status === "queued" || job.status === "running"
+                            ? { content: [{ type: "text", text: runningStatusText(job) }], details: job }
+                            : jobResult(job);
                     }
                     catch (error) {
                         return errorResult(error);
@@ -463,7 +559,9 @@ export function createTaskInlineExtension(options) {
                         // hook. Pi always passes an abort signal, so branching on `signal === undefined` (as
                         // this once did) skipped both on every real call.
                         const waited = await runtime.wait(params.jobId, timeoutMs, signal);
-                        const completion = completionHooks.get(params.jobId);
+                        // Looked up by the id the wait resolved, not the text the caller typed: the model may
+                        // have copied the 8-character form out of `task_status` (review round 1 P1-2).
+                        const completion = completionHooks.get(waited.id);
                         if (completion !== undefined &&
                             waited.status !== "queued" &&
                             waited.status !== "running") {
@@ -487,7 +585,7 @@ export function createTaskInlineExtension(options) {
                     current.ctx = ctx;
                     try {
                         const cancelled = await runtime.cancel(params.jobId);
-                        const completion = completionHooks.get(params.jobId);
+                        const completion = completionHooks.get(cancelled.id);
                         if (completion !== undefined) {
                             await completion;
                         }

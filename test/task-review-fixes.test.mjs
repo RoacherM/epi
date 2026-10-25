@@ -454,7 +454,8 @@ test("5c. SIGTERM during startup does not run a turn", async (t) => {
   const child = spawn(process.execPath, [realWorker, capsulePath], {
     cwd: root,
     env: { PATH: process.env.PATH, HOME: root, EPI_HOME: epiHome },
-    stdio: ["ignore", "pipe", "pipe"],
+    // A pipe, like the real parent: this worker's stdin is its steer/abort channel.
+    stdio: ["pipe", "pipe", "pipe"],
   });
   let stdout = "";
   child.stdout.on("data", (chunk) => {
