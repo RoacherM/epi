@@ -4,9 +4,10 @@
 // guidance, a path into Pi's docs. Offline: temp HOME/EPI_HOME, the gateway on loopback.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -15,6 +16,7 @@ import { TaskRuntime } from "../dist/task-runtime.js";
 import { startMagpieServer } from "./fixtures/magpie-server.mjs";
 
 const worker = fileURLToPath(new URL("../dist/worker.js", import.meta.url));
+const taskParent = fileURLToPath(new URL("./fixtures/task-parent.mjs", import.meta.url));
 const PI_DOCS = /pi-coding-agent[\\/]+docs/;
 
 /** A temp home whose `other` provider (models.json) talks to the fake gateway; `withKey: false`
@@ -41,9 +43,9 @@ async function setup(t, { withKey = true } = {}) {
   return { server, home, agentDir, env };
 }
 
-/** The worker run directly: its events and exit code. `onStarted` runs once it reports "started".
- * `overrides` patches the capsule (e.g. `maxTurns`), so a budget can be exercised on a real run. */
-function runWorker(fixture, onStarted = () => {}, overrides = {}) {
+/** The worker's capsule, as TaskRuntime writes it. Kept in one place so a test that spawns the
+ * worker itself (the orphan test) runs the same job shape. */
+function writeCapsule(fixture, overrides = {}) {
   const capsule = join(fixture.home, "capsule.json");
   const sessionDir = join(fixture.home, "runtime", "task", "sessions");
   mkdirSync(sessionDir, { recursive: true });
@@ -65,13 +67,31 @@ function runWorker(fixture, onStarted = () => {}, overrides = {}) {
     projectTrusted: false,
     ...overrides,
   }));
-  const child = spawn(process.execPath, [worker, capsule], { cwd: fixture.home, env: fixture.env, stdio: ["ignore", "pipe", "pipe"] });
+  return capsule;
+}
+
+/** The worker run directly: its events and exit code. `onStarted` runs once it reports "started".
+ * `overrides` patches the capsule (e.g. `maxTurns`), so a budget can be exercised on a real run.
+ * `onEvent` sees every protocol line as it arrives, with the child in hand, which is how a test
+ * steers a run mid-turn. */
+function runWorker(fixture, onStarted = () => {}, overrides = {}, onEvent = () => {}) {
+  const capsule = writeCapsule(fixture, overrides);
+  const child = spawn(process.execPath, [worker, capsule], { cwd: fixture.home, env: fixture.env, stdio: ["pipe", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
+  let pending = "";
   child.stdout.on("data", (chunk) => {
     const first = !stdout.includes('"started"');
     stdout += chunk;
     if (first && stdout.includes('"started"')) onStarted(child);
+    pending += chunk;
+    let newline = pending.indexOf("\n");
+    while (newline >= 0) {
+      const line = pending.slice(0, newline);
+      pending = pending.slice(newline + 1);
+      if (line.trim().length > 0) onEvent(JSON.parse(line), child);
+      newline = pending.indexOf("\n");
+    }
   });
   child.stderr.on("data", (chunk) => { stderr += chunk; });
   const timer = setTimeout(() => child.kill("SIGKILL"), 25_000);
@@ -218,4 +238,140 @@ test("Pi's login guidance in a failed request's error reaches the model as Epi's
   assert.equal(task.status, "failed", JSON.stringify(task));
   assert.ok(task.error.includes(JSON.stringify(PROVIDER_LOGIN_HELP).slice(1, -1)), task.error);
   assert.doesNotMatch(task.error, PI_DOCS);
+});
+
+/** One openai-completions streaming chunk. */
+function openaiChunk(delta, finish) {
+  return {
+    id: "chat_test",
+    object: "chat.completion.chunk",
+    model: "echo",
+    choices: [{ index: 0, delta, finish_reason: finish }],
+  };
+}
+
+function streamChunks(response, chunks) {
+  response.writeHead(200, { "content-type": "text/event-stream" });
+  response.end(chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n");
+}
+
+// The child half of the progress/steer protocol (docs/subagents-design.md §5.1-5.2): it emits
+// progress lines for a real tool call and turn, and a steer sent while the tool runs has to reach
+// Pi's session.steer -- the proof is that the request *after* the tool carries the steer text, not
+// just that a byte reached a pipe.
+test("the real worker reports progress and applies a steer sent while its tool runs", async (t) => {
+  const fixture = await setup(t);
+  fixture.server.state.inferenceHandler = (request, response, body) => {
+    const sawToolResult = body.messages.some((message) => message.role === "tool");
+    if (!sawToolResult) {
+      streamChunks(response, [
+        openaiChunk({
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            index: 0,
+            id: "call_1",
+            type: "function",
+            function: { name: "bash", arguments: JSON.stringify({ command: "sleep 2" }) },
+          }],
+        }, null),
+        openaiChunk({}, "tool_calls"),
+      ]);
+    } else {
+      streamChunks(response, [
+        openaiChunk({ role: "assistant", content: "STEERED" }, null),
+        openaiChunk({}, "stop"),
+      ]);
+    }
+  };
+
+  const events = [];
+  const result = await runWorker(fixture, () => {}, { tools: ["bash"] }, (event, child) => {
+    events.push(event);
+    if (event.type === "progress" && event.phase === "tool_start") {
+      // A line the worker cannot parse is ignored with a note; the next line must still land.
+      child.stdin.write("this is not json\n");
+      child.stdin.write(`${JSON.stringify({ type: "steer", message: "PLEASE_STEER" })}\n`);
+    }
+  });
+
+  assert.equal(result.code, 0, result.context);
+  assert.equal(result.result.output, "STEERED", result.context);
+
+  const progress = events.filter((event) => event.type === "progress");
+  const toolStart = progress.find((event) => event.phase === "tool_start");
+  assert.notEqual(toolStart, undefined, `no tool_start progress line: ${result.context}`);
+  assert.equal(toolStart.tool, "bash");
+  assert.equal(toolStart.target, "sleep 2");
+  assert.equal(toolStart.steps, 1);
+  assert.equal(toolStart.turns, 0);
+  assert.equal(
+    progress.some((event) => event.phase === "tool_end" && event.tool === "bash"),
+    true,
+    result.context,
+  );
+  const lastTurn = progress.filter((event) => event.phase === "turn_end").at(-1);
+  assert.equal(lastTurn.turns, 2);
+  assert.equal(lastTurn.summary, "STEERED");
+
+  const followUp = fixture.server.state.requests
+    .filter((request) => request.url.includes("/chat/completions"))
+    .at(-1);
+  assert.match(JSON.stringify(followUp.body.messages), /PLEASE_STEER/);
+  // The malformed line was ignored with a note rather than killing the run.
+  assert.match(result.context, /ignoring malformed stdin line/, result.context);
+});
+
+// The orphan net (docs/development.md §12.4): the parent's stdin pipe closing is the only signal a
+// SIGKILLed parent can still send, so EOF has to stop the worker by itself.
+test("closing the worker's stdin stops it, even mid-request", async (t) => {
+  const fixture = await setup(t);
+  fixture.server.state.hangInference = true;
+  let pid;
+  const result = await runWorker(fixture, (child) => {
+    pid = child.pid;
+    setTimeout(() => child.stdin.end(), 50);
+  });
+  assert.notEqual(pid, undefined, result.context);
+  assert.equal(result.code, 143, result.context);
+  assert.equal(result.result.error, "task worker was interrupted", result.context);
+  assert.throws(() => process.kill(pid, 0), /ESRCH/, "the worker process must be gone");
+});
+
+// The same net against a parent that is killed outright: an intermediate process holds the worker's
+// stdin, the test SIGKILLs it, and the worker (whose pid it recorded) must not outlive it.
+test("a SIGKILLed parent leaves no worker running", async (t) => {
+  const fixture = await setup(t);
+  fixture.server.state.hangInference = true;
+  const capsule = writeCapsule(fixture);
+  const pidFile = join(fixture.home, "worker.pid");
+  const parent = spawn(process.execPath, [taskParent, worker, capsule, pidFile], {
+    cwd: fixture.home,
+    env: fixture.env,
+    stdio: ["ignore", "ignore", "inherit"],
+  });
+  t.after(() => parent.kill("SIGKILL"));
+
+  const deadline = Date.now() + 10_000;
+  while (!existsSync(pidFile) && Date.now() < deadline) {
+    await delay(25);
+  }
+  assert.equal(existsSync(pidFile), true, "the parent never reported the worker's pid");
+  const workerPid = Number(readFileSync(pidFile, "utf8"));
+  assert.doesNotThrow(() => process.kill(workerPid, 0), "the worker must be alive before the kill");
+
+  parent.kill("SIGKILL");
+  await new Promise((resolve) => parent.once("close", resolve));
+  const goneBy = Date.now() + 10_000;
+  let gone = false;
+  while (Date.now() < goneBy) {
+    try {
+      process.kill(workerPid, 0);
+    } catch {
+      gone = true;
+      break;
+    }
+    await delay(25);
+  }
+  assert.equal(gone, true, `worker ${workerPid} outlived its SIGKILLed parent`);
 });

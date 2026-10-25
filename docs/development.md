@@ -610,6 +610,10 @@ task_cancel
 todo
 ```
 
+- `task_status` 省略 `jobId` 时列出本 runtime 的全部 Job（每行 `<id8> <status> <agent|task> · <turns>t <steps>s · <task 前 60 字>`）；给 `jobId` 时，未落定的 Job 返回紧凑进度块，已落定的 Job 仍返回其结果。
+- `task({ jobId, task })` 是中途转向（steer），不是新建 Job：running 的 Job 收到 `{"type":"steer","message":…}` 后交给 Pi 的 `session.steer`，在「当前工具执行完、下一次请求模型前」生效，调用立刻返回（绝不等待子进程）；queued 的 Job 尚无进程可谈，因此**替换其 task 文本**，在它启动时按新文本运行；已落定的 Job 返回 `job <id8> is <status>; resume is not supported yet`。给了 `jobId` 时其余设置字段一律忽略。
+- 子代理的进度是 **Pull** 视图：父进程从 worker 的 `progress` 行维护 `turns`/`steps`/`currentActivity`/`lastSummary`/`recentEvents`（10 条环形缓冲，与运行时长无关），随 `TaskJobSnapshot` 暴露；TUI 折叠行对 running 的 Job 追加 `· turn N · now: <activity>`。
+
 ### 12.2 可调能力（正交，默认全关）
 
 每个参数控制一个维度；`agents/*.md` 预设提供默认值，显式参数优先。
@@ -661,7 +665,7 @@ Job Registry 属于扩展对象（真实运行中即一进程一份），跨 `/n
 - Worker 首行调 `takeOverStdout()`：插件/MCP 的 `console.log` 一律改道 stderr，只有协议 JSONL 走真 stdout；
 - Hook 的 `type: "agent"` handler 所用的 TaskRuntime 固定 `allowHooks: false`，避免 `tool_call` hook 派生的子代理再次触发 hook 形成死循环；
 - 只有 `session_shutdown` 的 `reason === "quit"` 取消并回收 Child；`new`/`resume`/`fork`/`reload` 只是换会话，进程仍在，Child 继续跑，且共享的 Job Registry（§12.3）让新会话仍能 `task_status`/`task_wait`/`task_cancel` 它们（父会话 abort 自己的轮次，如 Esc 或 `/compact`，同样不杀 Child）；`quit` 由任一存活 `factory` 收到即关停共享 Registry，回收全部 Child；
-- 进程退出兜底：`process.once("exit")` 对仍在运行的 worker 进程组发 `SIGKILL`。它覆盖「异常退出/未发 `session_shutdown`」的常见崩溃路径，但 `SIGKILL` 或 Node 未处理的信号不触发 `exit` 事件，因此不承诺任何情况下都不留孤儿；
+- 子代理的 stdin 是**双向管道**：`{"type":"steer","message":…}` 调 `session.steer`，`{"type":"abort"}` 与 SIGTERM 同路径；解析不了的行只写 stderr 提示，绝不让 worker 崩溃。stdin **EOF 或 error**（父进程关闭管道，或被 SIGKILL 后内核关闭）即调 `interrupt()`：这是唯一的孤儿兜底，且它覆盖了旧的 `process.once("exit")` 兜底覆盖不了的 SIGKILL 情形（被 SIGKILL 的进程不执行任何 handler），因此模块级的 `liveWorkerPids` + exit 兜底已删除；worker 报完结果后 `unref` stdin，不让管道把它留在原地；
 - stdout/stderr 和最终结果有明确上限，超出后写 artifact；一个 Job 失败不破坏其他 Job；
 - capsule 文件权限仅当前用户可读写，Child 读取后立即删除。
 

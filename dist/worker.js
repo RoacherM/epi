@@ -10,7 +10,7 @@ import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readPreloadedSkills, resolveAssembly, scopeAssemblyForTask, } from "./assembly.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { childProjectTrust } from "./project.js";
-import { collectUsage, finalAssistantText } from "./task-result.js";
+import { collectUsage, finalAssistantText, singleLine } from "./task-result.js";
 import { trackRequestOutcome } from "./request-outcome.js";
 import { notRunningWarnings, settleRegisteredProviders } from "./provider-startup.js";
 import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
@@ -23,6 +23,10 @@ import { EPI_VERSION } from "./version.js";
 const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
 const { takeOverStdout, writeRawStdout } = (await import(pathToFileURL(join(piDist, "core", "output-guard.js")).href));
 takeOverStdout();
+/** A progress line's own caps. The parent caps again on the way in. */
+const PROGRESS_TARGET_LIMIT = 120;
+const PROGRESS_TOOL_LIMIT = 40;
+const PROGRESS_SUMMARY_LIMIT = 200;
 let activeSession;
 let interrupted = false;
 // Set just before the session is disposed, so the failure path can still report what was spent.
@@ -32,6 +36,18 @@ let spentUsage;
 const outcome = trackRequestOutcome();
 function emit(event) {
     writeRawStdout(`${JSON.stringify(event)}\n`);
+}
+/** The first of the tool's own argument names a progress line can show, one line and bounded. */
+function toolTarget(args) {
+    if (typeof args !== "object" || args === null)
+        return "";
+    for (const key of ["path", "command", "pattern", "url"]) {
+        const value = args[key];
+        if (typeof value === "string" && value.trim().length > 0) {
+            return singleLine(value, PROGRESS_TARGET_LIMIT);
+        }
+    }
+    return "";
 }
 function readCapsule(capsulePath) {
     let parsed;
@@ -70,6 +86,66 @@ function readCapsule(capsulePath) {
 async function interrupt() {
     interrupted = true;
     await activeSession?.abort();
+}
+/**
+ * The parent's control channel (docs/subagents-design.md §5.2): a steer reaches the running session
+ * through Pi's `session.steer` (after the current tool call, before the next model request) and an
+ * abort takes the SIGTERM path. EOF or an error on stdin means the parent is gone -- it closed the
+ * pipe, or it was SIGKILLed and the kernel closed it -- so the child stops itself. That is the whole
+ * orphan net (docs/development.md §12.4): it covers the SIGKILL case a `process.once("exit")`
+ * handler in the parent never could, because a killed process runs no handlers.
+ */
+function listenToParent() {
+    process.stdin.setEncoding("utf8");
+    let buffer = "";
+    process.stdin.on("data", (chunk) => {
+        buffer += chunk;
+        let newline = buffer.indexOf("\n");
+        while (newline >= 0) {
+            const line = buffer.slice(0, newline);
+            buffer = buffer.slice(newline + 1);
+            handleParentCommand(line);
+            newline = buffer.indexOf("\n");
+        }
+    });
+    process.stdin.on("end", () => void interrupt());
+    process.stdin.on("error", () => void interrupt());
+}
+function handleParentCommand(line) {
+    if (line.trim().length === 0)
+        return;
+    let command;
+    try {
+        command = JSON.parse(line);
+    }
+    catch {
+        process.stderr.write("task worker: ignoring malformed stdin line\n");
+        return;
+    }
+    if (typeof command !== "object" || command === null || !("type" in command)) {
+        process.stderr.write("task worker: ignoring stdin command without a type\n");
+        return;
+    }
+    const { type, message } = command;
+    if (type === "abort") {
+        void interrupt();
+        return;
+    }
+    if (type !== "steer") {
+        process.stderr.write(`task worker: ignoring unknown stdin command ${JSON.stringify(type)}\n`);
+        return;
+    }
+    if (typeof message !== "string" || message.length === 0) {
+        process.stderr.write("task worker: ignoring a steer without a message\n");
+        return;
+    }
+    // A line can arrive while the session is still being assembled: there is nothing to steer yet,
+    // and dropping it beats crashing.
+    if (activeSession === undefined) {
+        process.stderr.write("task worker: ignoring a steer before the session was ready\n");
+        return;
+    }
+    void activeSession.steer(message);
 }
 /**
  * The child's session file. `context: "fork"` writes the parent's already-closed entries into it
@@ -216,6 +292,9 @@ async function main() {
     if (capsulePath === undefined) {
         throw new Error("task worker requires a capsule path");
     }
+    // Before anything can take time: an EOF that arrives while the session is still starting must
+    // still stop this child, or a parent that died mid-startup would leave a full run behind.
+    listenToParent();
     process.umask(0o077);
     const capsule = readCapsule(capsulePath);
     process.env.PI_CODING_AGENT_DIR = capsule.agentDir;
@@ -229,8 +308,30 @@ async function main() {
     }
     emit({ type: "started", pid: process.pid });
     let turns = 0;
+    let steps = 0;
     let stoppedAtMaxTurns = false;
+    // `tool_execution_end` carries no args, so the target a start line reported is remembered per
+    // call id and repeated on the end line -- that is what lets the parent upgrade `▸` to `✓`.
+    const toolTargets = new Map();
     const unsubscribe = session.subscribe((event) => {
+        if (event.type === "tool_execution_start") {
+            steps += 1;
+            const tool = singleLine(event.toolName, PROGRESS_TOOL_LIMIT);
+            const target = toolTarget(event.args);
+            toolTargets.set(event.toolCallId, { tool, target });
+            emit({ type: "progress", turns, steps, phase: "tool_start", tool, target });
+            return;
+        }
+        if (event.type === "tool_execution_end") {
+            const known = toolTargets.get(event.toolCallId);
+            toolTargets.delete(event.toolCallId);
+            emit({
+                type: "progress", turns, steps, phase: "tool_end",
+                tool: known?.tool ?? singleLine(event.toolName, PROGRESS_TOOL_LIMIT),
+                target: known?.target ?? "",
+            });
+            return;
+        }
         if (event.type !== "turn_end")
             return;
         // The turn the abort cuts short still emits turn_end; counting it would report more turns than
@@ -238,6 +339,12 @@ async function main() {
         if (stoppedAtMaxTurns)
             return;
         turns += 1;
+        // `turn_end.message` is this turn's assistant message; a turn that only called tools has no
+        // text, which is a legitimate empty summary.
+        emit({
+            type: "progress", turns, steps, phase: "turn_end",
+            summary: singleLine(finalAssistantText([event.message]), PROGRESS_SUMMARY_LIMIT),
+        });
         // Design §3 (execution budget): stop *between* turns, so the work already done and the session
         // file both survive and the job can be resumed with another `task` on the same job. A turn with
         // no tool results is the model's final answer -- the run is over, and calling it partial would
@@ -296,4 +403,7 @@ catch (error) {
     });
     process.exitCode = interrupted ? 143 : 1;
 }
+// The parent holds the write end of stdin for the whole run; once this child has reported its
+// result, an open pipe must not keep it alive (Node would wait on it forever).
+process.stdin.unref();
 //# sourceMappingURL=worker.js.map

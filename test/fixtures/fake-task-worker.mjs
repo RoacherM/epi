@@ -11,8 +11,73 @@ unlinkSync(capsulePath);
 process.once("SIGTERM", () => process.exit(143));
 process.once("SIGINT", () => process.exit(130));
 
+function emit(event) {
+  process.stdout.write(`${JSON.stringify(event)}\n`);
+}
+
+/** The first command the parent sends on stdin, or undefined when it closes the pipe first. Lines
+ * that are not JSON are ignored, the way the real worker ignores them. */
+function readFirstCommand() {
+  return new Promise((resolve) => {
+    let buffer = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      buffer += chunk;
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        newline = buffer.indexOf("\n");
+        if (line.trim().length === 0) continue;
+        try {
+          resolve(JSON.parse(line));
+          // The fake worker has what it needs; an open pipe must not keep it alive afterwards.
+          process.stdin.unref();
+          return;
+        } catch {
+          process.stderr.write("fake worker: ignoring malformed stdin line\n");
+        }
+      }
+    });
+    process.stdin.on("end", () => {
+      process.stdin.unref();
+      resolve(undefined);
+    });
+  });
+}
+
 if (capsule.task === "sleep") {
   await delay(30_000);
+} else if (capsule.task === "progress") {
+  // More lines than the parent's ring buffer holds: 12 tool starts, then a turn end with a summary.
+  for (let index = 1; index <= 12; index += 1) {
+    emit({ type: "progress", turns: 1, steps: index, phase: "tool_start", tool: "read", target: `src/f${index}.ts` });
+  }
+  emit({ type: "progress", turns: 2, steps: 12, phase: "turn_end", summary: "did the thing" });
+  emit({ type: "result", ok: true, output: "progress done" });
+} else if (capsule.task === "steer-wait") {
+  // Runs "forever" until a steer arrives, so a test can observe a running job and steer it.
+  emit({ type: "progress", turns: 0, steps: 1, phase: "tool_start", tool: "bash", target: "npm test" });
+  const command = await readFirstCommand();
+  emit({ type: "progress", turns: 0, steps: 1, phase: "tool_end", tool: "bash", target: "npm test" });
+  emit({
+    type: "result",
+    ok: true,
+    output: command?.type === "steer" ? `steered:${command.message}` : `no-steer:${command?.type ?? "eof"}`,
+  });
+} else if (capsule.task === "malformed-then-steer") {
+  // A line that is not JSON must not stop this worker from handling the next one.
+  const command = await readFirstCommand();
+  emit({ type: "result", ok: true, output: `after-malformed:${command?.message ?? command?.type ?? "eof"}` });
+} else if (capsule.task === "exit-on-stdin-close") {
+  // Reports its pid, then waits for the parent's pipe to close; only then does it exit.
+  process.stderr.write(`pid:${process.pid}\n`);
+  await new Promise((resolve) => {
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", () => {});
+    process.stdin.on("end", resolve);
+  });
+  emit({ type: "result", ok: true, output: "stdin closed" });
 } else if (capsule.task === "fail") {
   process.stdout.write(`${JSON.stringify({ type: "result", ok: false, error: "fixture failure" })}\n`);
   process.exitCode = 1;

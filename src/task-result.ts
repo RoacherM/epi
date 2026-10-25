@@ -3,6 +3,20 @@
 // are unit-testable, and so `worker.ts` stays the assembly and protocol, not the arithmetic.
 import type { TaskUsage } from "./task-runtime.js";
 
+/**
+ * One line, bounded. Progress travels through the same JSONL protocol as the result, so a newline
+ * in a tool argument or a summary must not become a second protocol line, and neither must grow
+ * without limit. Control characters are folded into spaces rather than dropped, so a line stays
+ * readable in a TUI that would otherwise be driven by it.
+ */
+export function singleLine(text: string, limit: number): string {
+  return text
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit);
+}
+
 /** Every assistant message's usage in this child's own session, summed. */
 export function collectUsage(messages: readonly unknown[]): TaskUsage {
   const total: TaskUsage = {
