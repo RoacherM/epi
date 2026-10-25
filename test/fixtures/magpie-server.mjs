@@ -1,10 +1,10 @@
 import { createServer } from "node:http";
 
 export const magpieCatalog = [
-  { id: "claude/claude-opus-test", display_name: "Claude Test", context_window: 1000000, max_output_tokens: 16384, modalities: { input: ["text", "image"] }, reasoning: true, supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }, { effort: "max" }] },
-  { id: "codex/gpt-test", native_endpoints: ["/v1/responses"], context_window: 272000, max_output_tokens: 8192, reasoning: true },
+  { id: "claude/claude-opus-test", display_name: "Claude Test", context_window: 1000000, max_output_tokens: 16384, modalities: { input: ["text", "image"] }, reasoning: true, supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }, { effort: "max" }], pricing: { prompt: "0.000004", completion: "0.00002", input_cache_read: "0.0000002", input_cache_write: "0.000005" } },
+  { id: "codex/gpt-test", native_endpoints: ["/v1/responses"], context_window: 272000, max_output_tokens: 8192, reasoning: true, pricing: { prompt: "0.000002", completion: "0.00001", input_cache_read: "0.0000004" } },
   { id: "antigravity/gemini-3-flash", context_window: 1000000, max_output_tokens: 8192 },
-  { id: "other/chat", native_endpoints: ["/v1/chat/completions"] },
+  { id: "other/chat", native_endpoints: ["/v1/chat/completions"], pricing: { prompt: "0.0000005", input_cache_write: "0.000002" } },
 ];
 
 function anthropicEvents(model, toolCall) {

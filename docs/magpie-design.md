@@ -33,7 +33,7 @@
 
 ## 模型目录与协议
 
-请求 `/v1/models`，保持 upstream 模型 ID（含 provider 前缀）不变。转换名称、上下文、输出上限、输入能力、reasoning 档位；无费用信息时填全零，明确这是未知价格而不是免费。
+请求 `/v1/models`，保持 upstream 模型 ID（含 provider 前缀）不变。转换名称、上下文、输出上限、输入能力、reasoning 档位和价格（见下节）；无费用信息时填全零，明确这是未知价格而不是免费。
 
 协议优先级：`native_endpoints` 中首个已支持端点 > Claude 用 Messages、Codex/GPT 用 Responses、Gemini 用 Gemini > 其他模型用网关的 Chat Completions。后两项是针对 Magpie 分发接口的默认策略，不是对任意代理的通用猜测。
 
@@ -45,6 +45,14 @@
 | gemini | google-generative-ai | root/v1beta |
 
 允许目录分页；重复 ID、错误 schema、未识别的目录响应和循环分页要报错，不发布部分列表。合理缺省值用于未提供的 token 上限。
+
+## 价格与 prompt cache 生命周期（D90）
+
+目录里的 `pricing` 是可选对象，值是字符串、单位是 USD per token：`prompt`、`completion`、`input_cache_read`、`input_cache_write`。转成 Pi 的 `cost`（USD per **million** tokens）：input = prompt×1e6，output = completion×1e6，cacheRead = input_cache_read×1e6，cacheWrite = input_cache_write×1e6；缺字段为 0，结果用 `Number((x*1e6).toPrecision(12))` 去掉浮点噪声（`0.0000002×1e6` 二进制下是 `0.19999999999999998`）。非数字、负数或空字符串按目录 schema 错误处理（zod，和其他非法目录数据一样整份拒绝），不静默当 0。17 个实时模型没有 `pricing`，保持全零。
+
+`promptCache` 只在已知 provider 用 5 分钟缓存时设为 `{ short: 300 }`：协议是 `anthropic`（claude id），或目录给了 `input_cache_write` 价格。不设 `long`：网关没有公布 1 小时档，猜一个会让 Pi 去预热它留不住的条目。原因：Pi 的 `CacheWarmer` 需要 `model.promptCache[retention]`（秒）才会预热，否则停在 "cache lifetime unavailable"；5 分钟是 Anthropic 已公布范围里保守的一端（Pi 的 `docs/models.md` "Prompt cache lifetimes"）。目录以后若带显式生命周期字段，另开任务处理。
+
+保存的列表不需要额外版本号：Pi 只在新鲜列表和保存的 JSON 不同时才写（`changedCatalogEntry` 逐字节比较整份 models，etag 只是网关地址标记），所以改动前的旧条目（全零 cost、无 promptCache）在下一次联网刷新时就会被替换，不会被永久保留。
 
 ## 保存的列表
 
