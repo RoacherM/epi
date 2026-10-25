@@ -416,9 +416,14 @@ timeoutSeconds: 600
 - **push 唤醒（§2.2）**：`background: true` 的 Job 落定且无人等待时，父会话收到一条 `epi:task-notify` follow-up（`deliverAs: "followUp"`, `triggerTurn: true`）；300ms 内落定的多个 Job 合并成一条；已被 `task_wait`/`task_cancel` 收回的 Job 不重复推送；`-p`/json 模式下进程可能先于后台 Job 落定退出，此限制已知且不阻塞退出。
 - **agent loop 结束后到达的 steer 不再丢字（§9 缺陷 5）**：worker 报 `{"type":"steer_dropped","message":…}`，父进程把 `[Not applied: … Resume with task({ jobId, task }) to apply it.]` 追加到该 Job 的结果文本后，由模型决定是否续跑；不自动续跑（自动续跑会与 `task_wait` 竞态，并可能复活已取消的 Job，2026-10-25 主会话决定）。
 
-### 10.3 计划中
+### 10.3 包 2 已实现（2026-10-25 合入）
 
-（无）
+- **子代理自己压缩**（用户决定）：子代理的 auto-compaction 永远开启（内存覆盖，不写用户 settings；`/reload` 后重新套用；`reserveTokens`、`keepRecentTokens` 按窗口比例夹住，含 per-model 覆盖）。压缩救不回来时（溢出错误，或输出远低于上限就因 `length` 停下）以 `partial` 结束：保留已完成的回答，父进程在截断之后补一行停止原因，会话文件保留可续跑。父进程看得到 `⟲ compacted 42k→13k` 与压缩次数。用量按会话原始条目累计，包含被压缩掉的轮次与摘要请求本身。
+- **按 jobId 续跑**：`task({ jobId, task })` 对已结束的任务在同一个会话文件上继续；用量按"每次运行"上报、父进程累加；产物文件按运行编号区分。
+- **push 唤醒**：`background: true` 的任务结束且无人等待时，经当前会话发一条 `epi:task-notify`（300 ms 合并，已被 `task_wait` 收走的不再推送）。`epi -p` 下进程可能先退出，不阻塞退出。
+- **最后一轮之后到达的 steer**：不自动续跑（避免隐藏的第二次运行与竞态），在结果里写明"未应用"，由模型决定是否续跑。
+
+实测（真实模型 deepseek-v4.1-flash，`.dev/probes/live-*.mjs`）：续跑后子代理不读文件也答出上一轮读到的内容；声明 40k 窗口时读 6 个文件、压缩 2 次后给出正确答案；声明 10k 窗口时以 `partial context` 结束。
 
 ### 10.4 明确不做（用户决定）
 
