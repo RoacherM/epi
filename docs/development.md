@@ -594,11 +594,11 @@ const extensionFactories: InlineExtension[] = [
 - Hook secret；
 - Task capsule 的私密内容。
 
-## 12. Task Extension
+## 12. Task Extension（Subagents）
 
-不直接采用完整 `pi-subagents`。当前实现包含 chains、profiles、fleet、intercom、background orchestration、agent memory、workflows 和 RPC，超出 Epi 边界。
+不直接采用完整 `pi-subagents`（其 chains、fleet、intercom、workflows 超出 Epi 边界）。设计见 [subagents-design.md](subagents-design.md)。
 
-可以参考 Pi 官方最小 Subagent 示例，但只保留已确定的能力。
+**子代理 = 作用域受限的一次 Epi 运行**：`src/worker.ts` 走与其他入口相同的 `resolveAssembly` → `scopeAssemblyForTask` → `buildInlineExtensions` 管线（架构 §2），不另写一条装配路径。能力按需逐项打开，默认全关。
 
 ### 12.1 工具面
 
@@ -610,12 +610,32 @@ task_cancel
 todo
 ```
 
-### 12.2 状态
+### 12.2 可调能力（正交，默认全关）
+
+每个参数控制一个维度；`agents/*.md` 预设提供默认值，显式参数优先。
+
+| 参数 | 默认 | 语义 |
+|---|---|---|
+| `agent` | 无 | 可选预设；不传就是无名子代理（开箱即用，不再要求先写 `agents/*.md`） |
+| `context` | `fresh` | `fork` 复制父会话当前分支（裁剪规则见 §12.5） |
+| `model` | 继承 | `provider/id`、`provider/id:thinking` |
+| `systemPrompt` | 空 | 追加给子代理的系统指令 |
+| `rules` | `false` | 注入本次运行的 `# Epi Rules` |
+| `skills` | `false` | `true` 列出全部技能根；`["name"]` 把该 `SKILL.md` 正文预载进系统提示词（省掉第一轮 `read`），名字经 Pi 自己的 `loadSkillsFromDir` 解析 |
+| `mcp` | `false` | `true` 连接全部；`["name"]` 只连指定服务（未配置的名字直接报错） |
+| `tools` / `excludeTools` | 继承默认 | 透传 Pi `createAgentSession` 的白名单/黑名单 |
+| `hooks` | `true` | 子代理内的工具调用同受 `hooks.json` 约束 |
+| `extensions` | `true` | Manifest 外部扩展，可传名字数组裁剪 |
+| `maxTurns` | 无 | 到达后在轮次边界优雅停止并返回已有产出（`status: "partial"`，会话文件保留可续跑） |
+| `timeoutSeconds` | 600 | 超时终止进程组 |
+
+### 12.3 状态
 
 ```ts
 interface TaskJob {
   id: string;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  status: "queued" | "running" | "completed" | "partial" | "failed" | "cancelled";
+  sessionPath: string;   // 子会话 .jsonl，停止后可原地续跑
   process?: ChildProcess;
   result?: string;
   error?: string;
@@ -626,29 +646,35 @@ interface TaskJob {
 
 Job Registry 必须属于当前 Pi Session，不允许 process-global singleton。
 
-### 12.3 Child 约束
+### 12.4 Child 约束
 
-- 每个 Child 是独立 Node.js process；
-- Child 启动包内 `dist/worker.js`，不能查找或启动 PATH 中的 `pi`；
-- Worker 使用锁定的 Pi SDK 创建独立 in-memory AgentSession，并输出稳定 JSON events；
-- 只接收 task capsule、cwd、agent prompt 和明确工具列表；
-- 不加载 `epi:task`，因此不能递归产生 Child；
-- 不自动继承 Parent 的所有 Extensions；
-- MCP 只有 agent manifest 明确允许时才加载；
-- 不共享 Parent MCP connection；
+- 每个 Child 是独立 Node.js process，启动包内 `dist/worker.js`，不查找 PATH 中的 `pi`；
+- **永不加载 `epi:task`**（`scopeAssemblyForTask` 强制剔除），因此不能递归派生 Child；
+- 资源是父会话装配的**子集**：未被父会话信任的项目配置不可能进入 Child（硬规则 1、2）；项目信任由父进程判定后随 capsule 下传，Child 不自行决定；
+- 子会话落在 `~/.epi/runtime/task/sessions/<jobId>.jsonl`（`0600`），**不进 Pi 的 session 目录**：后台子代理不会劫持 `epi -c`，也不出现在 `/resume` 列表；
+- Worker 首行调 `takeOverStdout()`：插件/MCP 的 `console.log` 一律改道 stderr，只有协议 JSONL 走真 stdout；
+- Hook 的 `type: "agent"` handler 所用的 TaskRuntime 固定 `allowHooks: false`，避免 `tool_call` hook 派生的子代理再次触发 hook 形成死循环；
 - Parent Session shutdown 时取消并回收所有 Child；
-- stdout/stderr 和最终结果有明确上限，超出后写 artifact；
-- 一个 Job 失败不破坏其他独立 Job；
-- capsule 文件权限仅当前用户可读写，Child 退出后删除。
+- stdout/stderr 和最终结果有明确上限，超出后写 artifact；一个 Job 失败不破坏其他 Job；
+- capsule 文件权限仅当前用户可读写，Child 读取后立即删除。
 
-### 12.4 Agent 资源
+### 12.5 `context: "fork"` 的两条裁剪规则
+
+Pi 在执行工具**之前**就把含本次 `task` 调用的 assistant 消息写进会话（`core/agent-session.js` 的 `message_end`），所以分支末尾是一条没有 `toolResult` 的 `toolCall`，原样复制会被模型 API 判 HTTP 400。`forkableBranch()` 因此：
+
+1. 从那条未闭合的 assistant 消息起截断（已完成的工具调用与其结果保留）；
+2. 滤掉父会话的 `system` 消息——它描述的是父会话的工具、Rules 和技能，子代理要按自己的作用域重建（实测中继承会让子代理以「我没有这些工具」为由拒绝干活）。
+
+另外不调用 `ctx.sessionManager.createBranchedSession()`：它会就地改写调用方自身的 `sessionId`/`sessionFile`，污染父会话。
+
+### 12.6 Agent 资源（可选预设）
 
 ```text
 ~/.epi/agents/<name>.md
 <repo>/.epi/agents/<name>.md
 ```
 
-最小 frontmatter：
+只有 `name` 和 `description` 必填；frontmatter 可为 §12.2 的每个维度提供默认值（`model`、`tools`、`excludeTools`、`skills`、`mcp`、`rules`、`hooks`、`extensions`、`context`、`maxTurns`、`timeoutSeconds`），正文是子代理的系统提示词：
 
 ```yaml
 ---
@@ -656,6 +682,8 @@ name: reviewer
 description: Reviews a bounded code change
 model: optional/provider-model
 tools: read,grep,bash
+skills: code-review
+mcp: false
 timeoutSeconds: 600
 ---
 ```

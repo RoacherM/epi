@@ -28,6 +28,9 @@ export interface HooksExtensionOptions {
   epiHome: string;
   agentDir: string;
   projectAgentsDir: string | undefined;
+  /** Whether this run trusts the project Manifest; a hook's agent child inherits that decision
+   * rather than making its own (hard rule 2). Absent means untrusted: the safe direction. */
+  projectTrusted?: boolean;
   workerPath?: string;
 }
 
@@ -254,10 +257,13 @@ export function createHooksInlineExtension(
       const runtime = new HooksRuntime({
         hooks: options.hooks,
         agentDir: options.agentDir,
+        epiHome: options.epiHome,
         agents,
         workerPath,
         capsuleRoot: join(options.epiHome, "runtime", "hooks-task"),
         artifactRoot: join(options.epiHome, "artifacts", "hooks-task"),
+        sessionRoot: join(options.epiHome, "runtime", "hooks-task", "sessions"),
+        projectTrusted: options.projectTrusted === true,
       });
       const unsubscribeTaskHooks = pi.events.on(
         EPI_TASK_HOOK_CHANNEL,

@@ -3,8 +3,50 @@ import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { randomUUID } from "node:crypto";
+import { availableParallelism } from "node:os";
 import { EpiConfigError } from "./errors.js";
 import { rewritePiText } from "./pi-output.js";
+/** Used when neither the call nor an `agents/*.md` preset sets one. */
+export const DEFAULT_TASK_TIMEOUT_SECONDS = 600;
+/**
+ * The parent entries a `context: "fork"` child may start from: the current branch, minus the
+ * unfinished tail of this very turn.
+ *
+ * Design §9.1 (defect 1): Pi persists the assistant message holding the `task` tool call *before*
+ * running the tool (core/agent-session.js's message_end handler), so the branch's last entries are
+ * a `toolCall` with no matching `toolResult`. Anthropic and OpenAI both reject that shape with
+ * HTTP 400, so every trailing entry from the open assistant message on is dropped. Reading the
+ * branch instead of calling `createBranchedSession` also avoids mutating the parent's own
+ * SessionManager, whose `createBranchedSession` reassigns the caller's `sessionId`/`sessionFile`.
+ *
+ * The parent's `system` messages are dropped too: they describe the parent's tools, Rules and
+ * skills. A child builds its own system prompt from its own scope, and inheriting the parent's
+ * made children refuse work by citing tools they did not have (observed in a live fork run).
+ */
+export function forkableBranch(entries) {
+    let cut = entries.length;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const entry = entries[index];
+        if (!isMessageEntry(entry))
+            continue;
+        const { role, content } = entry.message;
+        if (role === "assistant" && Array.isArray(content) && content.some((part) => isToolCall(part))) {
+            cut = index;
+            break;
+        }
+        // A completed assistant turn (no tool call) ends the search: everything before it is closed.
+        if (role === "assistant")
+            break;
+    }
+    return entries.slice(0, cut).filter((entry) => !(isMessageEntry(entry) && entry.message.role === "system"));
+}
+function isMessageEntry(entry) {
+    return (typeof entry === "object" && entry !== null &&
+        "type" in entry && entry.type === "message" && "message" in entry);
+}
+function isToolCall(part) {
+    return typeof part === "object" && part !== null && "type" in part && part.type === "toolCall";
+}
 class BoundedOutput {
     limit;
     artifactRoot;
@@ -41,6 +83,24 @@ class BoundedOutput {
         return this.artifactPath;
     }
 }
+/**
+ * How many subagents run at once when the caller does not say. A child is mostly waiting on its
+ * model, not the CPU, so the cap is about process count, not cores; but each one is a Node process
+ * (~0.6 s startup, ~100 MB), so it stays bounded by the machine. The old fixed 4 made a 15-way
+ * fan-out run in four waves (.dev/bench/subagents-2026-10-23: 13 s of a 53 s run was queueing).
+ * `EPI_TASK_MAX_CONCURRENCY` overrides it.
+ */
+export function defaultTaskConcurrency(env = process.env, cpus = availableParallelism()) {
+    const raw = env.EPI_TASK_MAX_CONCURRENCY;
+    if (raw !== undefined && raw.trim() !== "") {
+        const value = Number(raw);
+        if (!Number.isInteger(value) || value <= 0) {
+            throw new EpiConfigError("EPI_TASK_MAX_CONCURRENCY must be a positive integer");
+        }
+        return value;
+    }
+    return Math.max(2, Math.min(16, cpus));
+}
 export class TaskRuntime {
     options;
     agentsByName;
@@ -49,14 +109,16 @@ export class TaskRuntime {
     maxConcurrency;
     maxOutputBytes;
     killGraceMs;
+    allowHooks;
     running = 0;
     shuttingDown = false;
     constructor(options) {
         this.options = options;
         this.agentsByName = new Map(options.agents.map((agent) => [agent.name, agent]));
-        this.maxConcurrency = options.maxConcurrency ?? 4;
+        this.maxConcurrency = options.maxConcurrency ?? defaultTaskConcurrency();
         this.maxOutputBytes = options.maxOutputBytes ?? 64 * 1024;
         this.killGraceMs = options.killGraceMs ?? 2_000;
+        this.allowHooks = options.allowHooks ?? true;
         if (this.maxConcurrency <= 0 || !Number.isInteger(this.maxConcurrency)) {
             throw new EpiConfigError("task maxConcurrency must be a positive integer");
         }
@@ -75,8 +137,10 @@ export class TaskRuntime {
         if (this.shuttingDown) {
             throw new Error("task runtime is shutting down");
         }
-        const agent = this.agentsByName.get(request.agent);
-        if (agent === undefined) {
+        // A preset is optional now (design §1.1): `task({ task })` runs a nameless subagent. A named
+        // one that does not exist is still an error, never a silent fallback to the default.
+        const agent = request.agent === undefined ? undefined : this.agentsByName.get(request.agent);
+        if (request.agent !== undefined && agent === undefined) {
             const available = [...this.agentsByName.keys()].join(", ") || "none";
             throw new Error(`unknown task agent ${JSON.stringify(request.agent)}; available: ${available}`);
         }
@@ -94,9 +158,13 @@ export class TaskRuntime {
             throw new Error(`task cwd is not a directory: ${request.cwd}`);
         }
         const { promise: completion, resolve: resolveCompletion, } = Promise.withResolvers();
+        const id = randomUUID();
         const job = {
-            id: randomUUID(),
+            id,
             agent,
+            request,
+            timeoutSeconds: request.timeoutSeconds ?? agent?.timeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS,
+            sessionPath: join(this.options.sessionRoot, `${id}.jsonl`),
             task: request.task,
             cwd,
             status: "queued",
@@ -113,6 +181,7 @@ export class TaskRuntime {
             timeoutTimer: undefined,
             killTimer: undefined,
             workerResult: undefined,
+            usage: undefined,
             protocolError: undefined,
             completion,
             resolveCompletion,
@@ -249,7 +318,7 @@ export class TaskRuntime {
                 }
             });
             worker.stderr.on("data", (chunk) => stderr.append(chunk));
-            job.timeoutTimer = setTimeout(() => this.terminateWorker(job, "timeout"), job.agent.timeoutSeconds * 1_000);
+            job.timeoutTimer = setTimeout(() => this.terminateWorker(job, "timeout"), job.timeoutSeconds * 1_000);
             const exitWaiter = Promise.withResolvers();
             let spawnError;
             worker.once("error", (error) => {
@@ -268,41 +337,7 @@ export class TaskRuntime {
             }
             job.stdoutArtifact = stdout.path();
             job.stderrArtifact = stderr.path();
-            if (job.terminationCause === "cancelled") {
-                job.status = "cancelled";
-            }
-            else if (job.terminationCause === "timeout") {
-                job.status = "failed";
-                job.error = `task timed out after ${job.agent.timeoutSeconds}s`;
-            }
-            else if (exit.error !== undefined) {
-                job.status = "failed";
-                job.error = `failed to start task worker: ${exit.error.message}`;
-            }
-            else if (job.protocolError !== undefined) {
-                job.status = "failed";
-                job.error = job.protocolError;
-            }
-            else if (exit.code !== 0) {
-                job.status = "failed";
-                // Pi's errors in the worker ("No API key found ...") end with Pi's login guidance, a path
-                // into Pi's docs; the model gets Epi's (D84).
-                job.error =
-                    rewritePiText(job.workerResult?.error ?? stderr.text().trim()) ||
-                        `task worker exited with code ${exit.code}`;
-            }
-            else if (job.workerResult?.ok !== true) {
-                job.status = "failed";
-                job.error = rewritePiText(job.workerResult?.error ?? "task worker returned no successful result");
-            }
-            else {
-                job.status = "completed";
-                const output = job.workerResult.output ?? "";
-                const outputBytes = Buffer.from(output);
-                job.result = outputBytes.length <= this.maxOutputBytes
-                    ? output
-                    : `${outputBytes.subarray(0, this.maxOutputBytes).toString("utf8")}\n[truncated; full worker event: ${job.stdoutArtifact ?? "unavailable"}]`;
-            }
+            this.settleOutcome(job, exit, stderr.text().trim());
         }
         catch (error) {
             job.status = job.terminationCause === "cancelled" ? "cancelled" : "failed";
@@ -320,21 +355,90 @@ export class TaskRuntime {
             this.finish(job);
         }
     }
-    writeCapsule(job) {
-        mkdirSync(this.options.capsuleRoot, { recursive: true, mode: 0o700 });
-        chmodSync(this.options.capsuleRoot, 0o700);
-        const capsuleDir = mkdtempSync(join(this.options.capsuleRoot, `${job.id}-`));
-        chmodSync(capsuleDir, 0o700);
-        const capsulePath = join(capsuleDir, "capsule.json");
-        const capsule = {
+    /**
+     * How the run ended, from the worker's exit and its last protocol event. Checked in order of
+     * certainty: how Epi stopped it, then how the process died, then what it reported.
+     */
+    settleOutcome(job, exit, stderrText) {
+        // Reported even for a failed or partial run: those tokens were still spent.
+        job.usage = job.workerResult?.usage;
+        if (job.terminationCause === "cancelled") {
+            job.status = "cancelled";
+            return;
+        }
+        job.status = "failed";
+        if (job.terminationCause === "timeout") {
+            job.error = `task timed out after ${job.timeoutSeconds}s`;
+        }
+        else if (exit.error !== undefined) {
+            job.error = `failed to start task worker: ${exit.error.message}`;
+        }
+        else if (job.protocolError !== undefined) {
+            job.error = job.protocolError;
+        }
+        else if (exit.code !== 0) {
+            // Pi's errors in the worker ("No API key found ...") end with Pi's login guidance, a path
+            // into Pi's docs; the model gets Epi's (D84).
+            job.error =
+                rewritePiText(job.workerResult?.error ?? stderrText) ||
+                    `task worker exited with code ${exit.code}`;
+        }
+        else if (job.workerResult?.ok !== true) {
+            job.error = rewritePiText(job.workerResult?.error ?? "task worker returned no successful result");
+        }
+        else {
+            job.status = job.workerResult.partial === true ? "partial" : "completed";
+            job.error = undefined;
+            job.result = this.boundedResult(job, job.workerResult.output ?? "");
+        }
+    }
+    /** The worker's answer, cut to the output budget with a pointer to the full artifact. */
+    boundedResult(job, output) {
+        const bytes = Buffer.from(output);
+        return bytes.length <= this.maxOutputBytes
+            ? output
+            : `${bytes.subarray(0, this.maxOutputBytes).toString("utf8")}\n[truncated; full worker event: ${job.stdoutArtifact ?? "unavailable"}]`;
+    }
+    /** One setting's value: what the call said, else what the `agents/*.md` preset said, else the
+     * subagent default (design §3: an explicit argument always outranks a preset). */
+    capsuleFor(job) {
+        const { request, agent } = job;
+        const pick = (key) => request[key] ?? agent?.[key];
+        const systemPrompt = [agent?.systemPrompt, request.systemPrompt]
+            .filter((part) => part !== undefined && part.trim().length > 0)
+            .join("\n\n");
+        return {
             version: 1,
             task: job.task,
             cwd: job.cwd,
             agentDir: this.options.agentDir,
-            systemPrompt: job.agent.systemPrompt,
-            model: job.agent.model,
-            tools: job.agent.tools,
+            epiHome: this.options.epiHome,
+            systemPrompt,
+            // Precedence: explicit call argument, then the preset, then the parent's model.
+            model: pick("model") ?? request.inheritedModel,
+            tools: pick("tools"),
+            excludeTools: pick("excludeTools"),
+            sessionPath: job.sessionPath,
+            forkEntries: (pick("context") ?? "fresh") === "fork" ? [...(request.forkEntries ?? [])] : undefined,
+            rules: pick("rules") ?? false,
+            skills: pick("skills") ?? false,
+            mcp: pick("mcp") ?? false,
+            // `allowHooks: false` wins over any request: a hook's own agent child may not run hooks.
+            hooks: (pick("hooks") ?? true) && this.allowHooks,
+            extensions: pick("extensions") ?? true,
+            projectTrusted: this.options.projectTrusted,
+            maxTurns: pick("maxTurns"),
         };
+    }
+    writeCapsule(job) {
+        mkdirSync(this.options.capsuleRoot, { recursive: true, mode: 0o700 });
+        chmodSync(this.options.capsuleRoot, 0o700);
+        mkdirSync(this.options.sessionRoot, { recursive: true, mode: 0o700 });
+        chmodSync(this.options.sessionRoot, 0o700);
+        const capsuleDir = mkdtempSync(join(this.options.capsuleRoot, `${job.id}-`));
+        chmodSync(capsuleDir, 0o700);
+        const capsulePath = join(capsuleDir, "capsule.json");
+        const capsule = this.capsuleFor(job);
         writeFileSync(capsulePath, `${JSON.stringify(capsule)}\n`, {
             mode: 0o600,
             flag: "wx",
@@ -398,15 +502,16 @@ export class TaskRuntime {
     snapshot(job) {
         return {
             id: job.id,
-            agent: job.agent.name,
-            agentSource: job.agent.source,
+            ...(job.agent === undefined ? {} : { agent: job.agent.name, agentSource: job.agent.source }),
             status: job.status,
             cwd: job.cwd,
+            sessionPath: job.sessionPath,
             createdAt: job.createdAt,
             ...(job.startedAt === undefined ? {} : { startedAt: job.startedAt }),
             ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
             ...(job.result === undefined ? {} : { result: job.result }),
             ...(job.error === undefined ? {} : { error: job.error }),
+            ...(job.usage === undefined ? {} : { usage: job.usage }),
             ...(job.stdoutArtifact === undefined ? {} : { stdoutArtifact: job.stdoutArtifact }),
             ...(job.stderrArtifact === undefined ? {} : { stderrArtifact: job.stderrArtifact }),
         };

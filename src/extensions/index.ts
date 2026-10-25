@@ -44,6 +44,9 @@ export function buildInlineExtensions(
   resolveAssembly: () => ResolvedAssembly = () => assembly,
   updateCheck?: UpdateCheckOptions,
   verbose = false,
+  /** A subagent's `mcp: ["name"]`: only these servers connect in that child process
+   * (docs/subagents-design.md §3). Undefined in a normal run, which loads every configured one. */
+  mcpServerFilter?: readonly string[],
 ): InlineExtension[] {
   const epiRuntime = createEpiRuntimeExtensions(runtimeIdentity, assembly, resolveAssembly, updateCheck, verbose);
   const extensions: InlineExtension[] = [epiRuntime.runtime];
@@ -59,6 +62,7 @@ export function buildInlineExtensions(
                 assembly.projectManifest?.loaded === true
                   ? join(assembly.projectManifest.root, ".epi", "agents")
                   : undefined,
+              projectTrusted: assembly.projectManifest?.loaded === true,
             }),
           );
           break;
@@ -74,7 +78,7 @@ export function buildInlineExtensions(
           if (preflight.errors.length > 0) {
             throw new EpiConfigError(`epi:mcp: ${preflight.errors.join("; ")}`);
           }
-          extensions.push(createEpiMcpExtension(mcpConfigSource));
+          extensions.push(createEpiMcpExtension(mcpConfigSource, mcpServerFilter));
           // Both required alongside epi:mcp (docs/mcp-design.md §2): codemode for the default
           // exposure: "codemode" servers, tool-search for "deferred" exposure. Neither is Pi's own
           // builtin (those are never loaded -- Epi always runs with noExtensions, which in 0.99 also
@@ -112,6 +116,7 @@ export function buildInlineExtensions(
                 assembly.projectManifest?.loaded === true
                   ? join(assembly.projectManifest.root, ".epi", "agents")
                   : undefined,
+              projectTrusted: assembly.projectManifest?.loaded === true,
             }),
           );
           break;

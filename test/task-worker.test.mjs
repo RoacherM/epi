@@ -44,7 +44,25 @@ async function setup(t, { withKey = true } = {}) {
 /** The worker run directly: its events and exit code. `onStarted` runs once it reports "started". */
 function runWorker(fixture, onStarted = () => {}) {
   const capsule = join(fixture.home, "capsule.json");
-  writeFileSync(capsule, JSON.stringify({ version: 1, task: "hi", cwd: fixture.home, agentDir: fixture.agentDir, systemPrompt: "", model: "other/echo", tools: [] }));
+  const sessionDir = join(fixture.home, "runtime", "task", "sessions");
+  mkdirSync(sessionDir, { recursive: true });
+  writeFileSync(capsule, JSON.stringify({
+    version: 1,
+    task: "hi",
+    cwd: fixture.home,
+    agentDir: fixture.agentDir,
+    epiHome: join(fixture.home, ".epi"),
+    systemPrompt: "",
+    model: "other/echo",
+    tools: [],
+    sessionPath: join(sessionDir, `direct-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`),
+    rules: false,
+    skills: false,
+    mcp: false,
+    hooks: false,
+    extensions: false,
+    projectTrusted: false,
+  }));
   const child = spawn(process.execPath, [worker, capsule], { cwd: fixture.home, env: fixture.env, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
@@ -67,9 +85,12 @@ async function runTask(t, fixture) {
   const runtime = new TaskRuntime({
     workerPath: worker,
     agentDir: fixture.agentDir,
+    epiHome: join(fixture.home, ".epi"),
     capsuleRoot: join(fixture.home, "runtime", "task"),
     artifactRoot: join(fixture.home, "artifacts", "task"),
-    agents: [{ name: "worker", description: "Test worker", model: "other/echo", tools: [], timeoutSeconds: 20, systemPrompt: "", source: "global", filePath: "/fixture/worker.md" }],
+    sessionRoot: join(fixture.home, "runtime", "task", "sessions"),
+    agents: [{ name: "worker", description: "Test worker", model: "other/echo", tools: [], excludeTools: undefined, timeoutSeconds: 20, maxTurns: undefined, context: undefined, rules: undefined, skills: undefined, mcp: undefined, hooks: undefined, extensions: undefined, systemPrompt: "", source: "global", filePath: "/fixture/worker.md" }],
+    projectTrusted: false,
     killGraceMs: 100,
   });
   t.after(() => runtime.shutdown());
@@ -80,7 +101,11 @@ test("a failed model request is a failed task: ok:false with the request's error
   const fixture = await setup(t);
   const ok = await runWorker(fixture);
   assert.equal(ok.code, 0, ok.context);
-  assert.deepEqual(ok.result, { type: "result", ok: true, output: "MAGPIE_OK 你好" }, ok.context);
+  // A child's tokens are spent in its own process, so the worker reports them up: without this
+  // the parent (and any benchmark) counts delegation as free.
+  assert.equal(ok.result.usage.outputTokens > 0, true, ok.context);
+  const { usage, ...reported } = ok.result;
+  assert.deepEqual(reported, { type: "result", ok: true, turns: 1, output: "MAGPIE_OK 你好" }, ok.context);
 
   fixture.server.state.inferenceStatus = 401;
   fixture.server.state.inferenceError = "invalid x-api-key";

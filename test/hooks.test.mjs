@@ -68,10 +68,13 @@ function createRuntime(t, root, hooks, agents = []) {
   const runtime = new HooksRuntime({
     hooks,
     agentDir: join(root, "pi"),
+    epiHome: root,
     agents,
     workerPath: fakeWorker,
     capsuleRoot: join(root, "runtime", "hooks-task"),
     artifactRoot: join(root, "artifacts", "hooks-task"),
+    sessionRoot: join(root, "runtime", "hooks-task", "sessions"),
+    projectTrusted: false,
   });
   t.after(() => runtime.close());
   return runtime;

@@ -48,5 +48,9 @@ export declare function emptyStateMessage(epiHome: string, cwd: string): string;
  * default-already-correct shortcut concern (it is a plain string), so it is passed explicitly for
  * auditability, matching the design.
  */
-export declare function createEpiMcpExtension(source: McpConfigSource): InlineExtension;
+export declare function createEpiMcpExtension(source: McpConfigSource, 
+/** A subagent's `mcp: ["name"]`: only these servers connect in the child, so a task that needs
+ * one server does not pay for every configured one (docs/subagents-design.md §3). An unknown
+ * name is an error at load, not a silently missing tool. */
+serverFilter?: readonly string[]): InlineExtension;
 //# sourceMappingURL=mcp.d.ts.map

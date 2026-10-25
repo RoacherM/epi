@@ -9,7 +9,8 @@ export const EPI_TASK_HOOK_CHANNEL = "epi/hooks/task/v1";
 
 export interface TaskStartHookEvent {
   type: "task_start";
-  agent: string;
+  /** Absent for a nameless subagent: a hook matching on `agent` then simply does not match. */
+  agent?: string;
   task: string;
   cwd: string;
 }

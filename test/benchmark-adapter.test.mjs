@@ -111,6 +111,9 @@ test("benchmark adapter emits reproducible isolated trial artifacts without glob
       sessionFiles: [],
       trustFilePresent: false,
       capsuleFiles: [],
+      // Kept subagent conversations are intended state, not a leak, so they are reported apart
+      // from capsules (which must always be gone).
+      subagentSessionFiles: [],
     });
     assert.equal(existsSync(join(first.outputDir, "epi-home", "pi", "auth.json")), false);
     assert.equal(existsSync(join(first.outputDir, "epi-home", "pi", "trust.json")), false);

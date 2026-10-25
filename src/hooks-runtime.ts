@@ -52,10 +52,13 @@ export type HookPayload = Record<string, unknown> & {
 export interface HooksRuntimeOptions {
   hooks: readonly ResolvedHook[];
   agentDir: string;
+  epiHome: string;
   agents: readonly TaskAgentDefinition[];
   workerPath: string;
   capsuleRoot: string;
   artifactRoot: string;
+  sessionRoot: string;
+  projectTrusted: boolean;
 }
 
 function terminateProcess(processHandle: ChildProcessWithoutNullStreams): void {
@@ -331,11 +334,17 @@ export class HooksRuntime {
     this.taskRuntime = new TaskRuntime({
       workerPath: options.workerPath,
       agentDir: options.agentDir,
+      epiHome: options.epiHome,
       capsuleRoot: options.capsuleRoot,
       artifactRoot: options.artifactRoot,
+      sessionRoot: options.sessionRoot,
       agents: options.agents,
+      projectTrusted: options.projectTrusted,
       maxConcurrency: 2,
       maxOutputBytes: MAX_HOOK_OUTPUT_BYTES,
+      // Design §9 (defect 4): a hook's agent handler must not itself trigger hooks, or a
+      // tool_call hook that runs an agent would recurse without bound.
+      allowHooks: false,
     });
   }
 

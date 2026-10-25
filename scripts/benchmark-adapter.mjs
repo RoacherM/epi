@@ -513,6 +513,21 @@ function createMetricsCollector() {
     toolCalls: 0,
     toolErrors: 0,
     compactions: 0,
+    // Subagents run in their own process, so their tokens never appear as assistant messages in
+    // this stream. epi:task reports them as an `epi:task-usage` entry; counted into the totals
+    // above (it is the same bill) and kept separately so delegation's own cost stays visible.
+    subagents: 0,
+    subagentInputTokens: 0,
+    subagentOutputTokens: 0,
+    subagentCacheReadTokens: 0,
+    subagentCost: 0,
+    /**
+     * The largest context any single parent request carried (`input + cacheRead` of one assistant
+     * message). This is what delegation is supposed to buy: a subagent reads the haystack in its
+     * own window, so the parent's peak stays low. Totals cannot show it -- a long run and a fat
+     * single request add up the same way.
+     */
+    peakParentContextTokens: 0,
   };
   const state = {
     metrics,
@@ -553,6 +568,8 @@ function createMetricsCollector() {
       }
       if (event.type === "message_end" && event.message?.role === "assistant") {
         addUsage(event.message.usage);
+        const context = Number(event.message.usage?.input ?? 0) + Number(event.message.usage?.cacheRead ?? 0);
+        metrics.peakParentContextTokens = Math.max(metrics.peakParentContextTokens, context);
         if (typeof event.message.provider === "string" && typeof event.message.model === "string") {
           state.resolvedModels.add(`${event.message.provider}/${event.message.model}`);
         }
@@ -560,6 +577,20 @@ function createMetricsCollector() {
           state.modelErrors.push(String(event.message.errorMessage ?? "model error"));
         }
         state.lastAssistantStopReason = event.message.stopReason;
+      }
+      if (event.type === "entry_appended" && event.entry?.customType === "epi:task-usage") {
+        const data = event.entry.data ?? {};
+        metrics.subagents += 1;
+        metrics.subagentInputTokens += Number(data.inputTokens ?? 0);
+        metrics.subagentOutputTokens += Number(data.outputTokens ?? 0);
+        metrics.subagentCacheReadTokens += Number(data.cacheReadTokens ?? 0);
+        metrics.subagentCost += Number(data.costUsd ?? 0);
+        metrics.inputTokens += Number(data.inputTokens ?? 0);
+        metrics.outputTokens += Number(data.outputTokens ?? 0);
+        metrics.cacheReadTokens += Number(data.cacheReadTokens ?? 0);
+        metrics.cacheWriteTokens += Number(data.cacheWriteTokens ?? 0);
+        metrics.reasoningTokens += Number(data.reasoningTokens ?? 0);
+        metrics.cost += Number(data.costUsd ?? 0);
       }
       if (event.type === "compaction_end" && event.aborted !== true) {
         metrics.compactions += 1;
@@ -853,10 +884,17 @@ async function main(argv) {
   if (orphanCheck.pids.length > 0 && failureCategory === null) {
     failureCategory = "infra";
   }
+  // A subagent's conversation is kept on purpose, so the job can be resumed by id
+  // (docs/subagents-design.md §2.3); it lives under runtime/task/sessions/ and is not a leak.
+  // A capsule holds the task text and is deleted as the worker reads it: one surviving a run is a
+  // real leak and still fails the trial.
+  const runtimeFiles = listRelativeFiles(join(trialHome, "runtime"));
+  const isSubagentSession = (path) => /(^|\/)sessions\/[^/]+\.jsonl$/.test(path);
   const isolationCheck = {
     sessionFiles: listRelativeFiles(join(trialHome, "pi", "sessions")),
     trustFilePresent: existsSync(join(trialHome, "pi", "trust.json")),
-    capsuleFiles: listRelativeFiles(join(trialHome, "runtime")),
+    capsuleFiles: runtimeFiles.filter((path) => !isSubagentSession(path)),
+    subagentSessionFiles: runtimeFiles.filter(isSubagentSession),
   };
   if (
     failureCategory === null &&

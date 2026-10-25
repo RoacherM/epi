@@ -9,10 +9,13 @@ export type HookPayload = Record<string, unknown> & {
 export interface HooksRuntimeOptions {
     hooks: readonly ResolvedHook[];
     agentDir: string;
+    epiHome: string;
     agents: readonly TaskAgentDefinition[];
     workerPath: string;
     capsuleRoot: string;
     artifactRoot: string;
+    sessionRoot: string;
+    projectTrusted: boolean;
 }
 export declare class HooksRuntime {
     private readonly hooks;

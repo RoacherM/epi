@@ -21,7 +21,10 @@ function withDisableHint(extension, assembly, build) {
         throw new EpiConfigError(`${error.message}\nFix that file, or turn ${extension.name} off: ${builtInOffInstruction(extension.name, assembly)}.`);
     }
 }
-export function buildInlineExtensions(assembly, epiHome, runtimeIdentity, resolveAssembly = () => assembly, updateCheck, verbose = false) {
+export function buildInlineExtensions(assembly, epiHome, runtimeIdentity, resolveAssembly = () => assembly, updateCheck, verbose = false, 
+/** A subagent's `mcp: ["name"]`: only these servers connect in that child process
+ * (docs/subagents-design.md §3). Undefined in a normal run, which loads every configured one. */
+mcpServerFilter) {
     const epiRuntime = createEpiRuntimeExtensions(runtimeIdentity, assembly, resolveAssembly, updateCheck, verbose);
     const extensions = [epiRuntime.runtime];
     for (const extension of assembly.inlineExtensions) {
@@ -34,6 +37,7 @@ export function buildInlineExtensions(assembly, epiHome, runtimeIdentity, resolv
                         projectAgentsDir: assembly.projectManifest?.loaded === true
                             ? join(assembly.projectManifest.root, ".epi", "agents")
                             : undefined,
+                        projectTrusted: assembly.projectManifest?.loaded === true,
                     }));
                     break;
                 case "epi:mcp": {
@@ -48,7 +52,7 @@ export function buildInlineExtensions(assembly, epiHome, runtimeIdentity, resolv
                     if (preflight.errors.length > 0) {
                         throw new EpiConfigError(`epi:mcp: ${preflight.errors.join("; ")}`);
                     }
-                    extensions.push(createEpiMcpExtension(mcpConfigSource));
+                    extensions.push(createEpiMcpExtension(mcpConfigSource, mcpServerFilter));
                     // Both required alongside epi:mcp (docs/mcp-design.md §2): codemode for the default
                     // exposure: "codemode" servers, tool-search for "deferred" exposure. Neither is Pi's own
                     // builtin (those are never loaded -- Epi always runs with noExtensions, which in 0.99 also
@@ -80,6 +84,7 @@ export function buildInlineExtensions(assembly, epiHome, runtimeIdentity, resolv
                         projectAgentsDir: assembly.projectManifest?.loaded === true
                             ? join(assembly.projectManifest.root, ".epi", "agents")
                             : undefined,
+                        projectTrusted: assembly.projectManifest?.loaded === true,
                     }));
                     break;
                 }

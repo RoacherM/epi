@@ -35,7 +35,15 @@ function createAgent(overrides = {}) {
     description: "Test worker",
     model: undefined,
     tools: ["read"],
+    excludeTools: undefined,
     timeoutSeconds: 10,
+    maxTurns: undefined,
+    context: undefined,
+    rules: undefined,
+    skills: undefined,
+    mcp: undefined,
+    hooks: undefined,
+    extensions: undefined,
     systemPrompt: "WORKER_PROMPT",
     source: "global",
     filePath: "/fixture/worker.md",
@@ -47,9 +55,12 @@ function createRuntime(root, overrides = {}) {
   return new TaskRuntime({
     workerPath: fakeWorker,
     agentDir: join(root, "pi"),
+    epiHome: root,
     capsuleRoot: join(root, "runtime", "task"),
     artifactRoot: join(root, "artifacts", "task"),
+    sessionRoot: join(root, "runtime", "task", "sessions"),
     agents: [createAgent()],
+    projectTrusted: false,
     killGraceMs: 100,
     ...overrides,
   });
@@ -89,7 +100,8 @@ test("foreground jobs complete through the package worker entry", async (t) => {
 
   assert.equal(completed.status, "completed");
   assert.equal(completed.result, "fake:complete:WORKER_PROMPT");
-  assert.equal(readdirSync(join(root, "runtime", "task")).length, 0);
+  // Only the sessions/ directory is left behind: every capsule dir is removed as its job ends.
+  assert.deepEqual(readdirSync(join(root, "runtime", "task")), ["sessions"]);
   await runtime.shutdown();
 });
 
@@ -117,7 +129,7 @@ test("queued and running jobs cancel without leaving worker processes", async (t
   assert.equal(runtime.status(queued.id).status, "queued");
   assert.equal((await runtime.cancel(queued.id)).status, "cancelled");
   assert.equal((await runtime.cancel(running.id)).status, "cancelled");
-  assert.equal(readdirSync(join(root, "runtime", "task")).length, 0);
+  assert.deepEqual(readdirSync(join(root, "runtime", "task")), ["sessions"]);
 });
 
 test("task_wait timeout returns current state without cancelling the job", async (t) => {
@@ -183,6 +195,7 @@ test("inline extension registers task lifecycle and session-scoped todo tools", 
     epiHome: root,
     agentDir: join(root, "pi"),
     projectAgentsDir: undefined,
+    projectTrusted: false,
     workerPath: fakeWorker,
     killGraceMs: 100,
   });
