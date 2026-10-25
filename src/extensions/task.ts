@@ -469,11 +469,13 @@ export function createTaskInlineExtension(
             // `task({ jobId, task })` is a steer, not a start: no job is created and every other
             // field is ignored (the schema says so). It returns at once.
             if (params.jobId !== undefined) {
-              // A queued job has not started yet, so replacing its text is what will run: the
-              // `task_start` hook has to see it, or a hook that blocks by text is bypassed
-              // (review round 1 P2-2).
+              // Whatever the job's state, the text becomes instructions the child will act on (a
+              // queued job's replacement task, a running job's steer, which the worker delivers
+              // verbatim past the child's input hooks), so `task_start` must see it, or a hook
+              // that blocks by text is bypassed in two steps (review P2-2, round 2 P2-A). A
+              // finished job is refused by runtime.steer below, after the hook.
               const known = runtime.status(params.jobId);
-              if (known.status === "queued") {
+              if (known.status === "queued" || known.status === "running") {
                 const replaceDecision = await emitTaskHook(
                   pi.events,
                   {

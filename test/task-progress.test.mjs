@@ -310,10 +310,40 @@ test("replacing a queued job's task runs task_start, so a hook can block the rep
   assert.deepEqual(seen, ["steer-wait", "queued work", "HOOK_BLOCKED"]);
 
   // The replacement never happened: once the queue drains, the job runs the text it started with.
+  // The steer to the running job also passes through task_start (round-2 review P2-A).
   await tools.get("task").execute(
     "c4", { jobId: running.details.id, task: "GO LEFT" }, undefined, undefined, context);
   const replacement = await tools.get("task_wait").execute(
     "c5", { jobId: queued.details.id }, undefined, undefined, context);
   assert.equal(replacement.details.task, "queued work");
   assert.equal(replacement.details.result, "fake:queued work:");
+  assert.deepEqual(seen, ["steer-wait", "queued work", "HOOK_BLOCKED", "GO LEFT"]);
+});
+
+// Round-2 review P2-A: the worker delivers a steer verbatim, past the child's own input hooks, so a
+// steer to a RUNNING job must pass task_start on the parent side, or a text-blocking hook is walked
+// around by starting something harmless and steering it.
+test("steering a running job runs task_start, so a hook can block the steer", async (t) => {
+  const root = createFixture(t);
+  const events = {
+    emit(channel, request) {
+      if (request?.event?.type === "task_start" && request.event.task === "HOOK_BLOCKED") {
+        request.run = async () => ({ action: "block", reason: "blocked:HOOK_BLOCKED" });
+      }
+    },
+    on: () => () => {},
+  };
+  const { tools, context } = await createHarness(t, root, {}, events);
+  const running = await tools.get("task").execute(
+    "c1", { task: "steer-wait", background: true }, undefined, undefined, context);
+  for (let i = 0; i < 100 && (await tools.get("task_status").execute("s", { jobId: running.details.id }, undefined, undefined, context)).details.status !== "running"; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const blocked = await tools.get("task").execute(
+    "c2", { jobId: running.details.id, task: "HOOK_BLOCKED" }, undefined, undefined, context);
+  assert.equal(blocked.details.error, "blocked:HOOK_BLOCKED");
+  await tools.get("task").execute("c3", { jobId: running.details.id, task: "GO LEFT" }, undefined, undefined, context);
+  const done = await tools.get("task_wait").execute("c4", { jobId: running.details.id }, undefined, undefined, context);
+  assert.doesNotMatch(done.details.result, /HOOK_BLOCKED/, "the blocked text never reached the worker");
+  assert.match(done.details.result, /GO LEFT/);
 });
