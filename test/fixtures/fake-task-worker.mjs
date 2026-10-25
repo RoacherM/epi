@@ -1,12 +1,20 @@
 #!/usr/bin/env node
 
-import { readFileSync, unlinkSync } from "node:fs";
+import { appendFileSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 const capsulePath = process.argv[2];
 const capsule = JSON.parse(readFileSync(capsulePath, "utf8"));
 unlinkSync(capsulePath);
+
+// The real worker's SessionManager.open creates this file; the fake one has to as well, or a resume
+// has nothing to reopen (test/task-resume.test.mjs). Appending the task also proves the same file
+// is reused across runs.
+appendFileSync(
+  capsule.sessionPath,
+  `${JSON.stringify({ type: "message", message: { role: "user", content: capsule.task } })}\n`,
+);
 
 process.once("SIGTERM", () => process.exit(143));
 process.once("SIGINT", () => process.exit(130));
@@ -113,6 +121,13 @@ if (capsule.task === "sleep") {
   emit({ type: "progress", turns: 1, steps: 1, phase: "compaction", reason: "overflow", ok: false });
   const command = await readFirstCommand();
   emit({ type: "result", ok: true, output: command?.type === "steer" ? `steered:${command.message}` : "compaction done" });
+} else if (capsule.task === "late-steer") {
+  // Reports a result, then a steer that arrived too late to deliver: the parent must resume the
+  // job with that text rather than lose it (test/task-resume.test.mjs).
+  emit({ type: "progress", turns: 1, steps: 1, phase: "tool_start", tool: "bash", target: "sleep 1" });
+  const command = await readFirstCommand();
+  emit({ type: "result", ok: true, turns: 1, output: "first-run" });
+  emit({ type: "steer_dropped", message: command?.message ?? "" });
 } else if (capsule.task === "partial") {
   process.stdout.write(`${JSON.stringify({ type: "result", ok: true, partial: true, turns: 3, output: "half done" })}\n`);
 } else if (capsule.task === "context-stop-large") {

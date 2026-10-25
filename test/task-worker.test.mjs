@@ -114,6 +114,12 @@ function runWorker(fixture, onStarted = () => {}, overrides = {}, onEvent = () =
 
 /** The same task through TaskRuntime, as the task tool runs it: what the model is handed. */
 async function runTask(t, fixture) {
+  const runtime = createWorkerRuntime(t, fixture);
+  return runtime.wait(runtime.start({ agent: "worker", task: "hi", cwd: fixture.home }).id);
+}
+
+/** One TaskRuntime over the real worker, with the fixture's temp home. */
+function createWorkerRuntime(t, fixture) {
   const runtime = new TaskRuntime({
     workerPath: worker,
     agentDir: fixture.agentDir,
@@ -126,7 +132,7 @@ async function runTask(t, fixture) {
     killGraceMs: 100,
   });
   t.after(() => runtime.shutdown());
-  return runtime.wait(runtime.start({ agent: "worker", task: "hi", cwd: fixture.home }).id);
+  return runtime;
 }
 
 test("a failed model request is a failed task: ok:false with the request's error, exit 1", async (t) => {
@@ -487,6 +493,56 @@ test("maxTurns does not mark a finished run partial when the last turn called no
   const { usage, ...reported } = result.result;
   assert.deepEqual(reported, { type: "result", ok: true, turns: 1, output: "MAGPIE_OK 你好" }, result.context);
   assert.equal(typeof usage, "object", result.context);
+});
+
+// Package 2b (docs/subagents-design.md §2.3): a settled job resumes on its own session file, so the
+// second run's request carries the first run's messages -- proof the conversation was reused, not
+// restarted, and that usage is added per run instead of re-summed from the session.
+test("resuming a real job reuses its session: the second request carries the first run's messages", async (t) => {
+  const fixture = await setup(t);
+  const runtime = createWorkerRuntime(t, fixture);
+  const started = runtime.start({ agent: "worker", task: "hi", cwd: fixture.home });
+  const first = await runtime.wait(started.id);
+  assert.equal(first.status, "completed", first.error);
+
+  runtime.resume(first.id, "again");
+  const second = await runtime.wait(first.id);
+  assert.equal(second.status, "completed", second.error);
+  assert.equal(second.sessionPath, first.sessionPath);
+  assert.equal(second.turns, 2, "turns accumulate across runs");
+  assert.equal(second.usage.inputTokens, first.usage.inputTokens * 2, JSON.stringify(second.usage));
+
+  const requests = fixture.server.state.requests
+    .filter((request) => request.url.includes("/chat/completions"));
+  assert.equal(requests.length >= 2, true, JSON.stringify(fixture.server.state.requests.map((r) => r.url)));
+  const messages = JSON.stringify(requests.at(-1).body.messages);
+  assert.match(messages, /MAGPIE_OK/, "the first run's answer is still in the conversation");
+  assert.match(messages, /again/);
+});
+
+// task-p2a review P3: a per-model override outranks the top-level setting in Pi's lookup, so the
+// child's clamp has to land in `modelOverrides` too or a user's large per-model value cancels it and
+// the child can never compact its way out.
+test("a child clamps a per-model compaction override, not only the top-level setting", async (t) => {
+  const fixture = await setup(t, {
+    contextWindow: 40000,
+    settings: {
+      compaction: {
+        enabled: true,
+        modelOverrides: { "other/echo": { reserveTokens: 100000, keepRecentTokens: 100000 } },
+      },
+    },
+  });
+  fixture.server.state.inferenceHandler = compactingHandler();
+  const events = [];
+  const result = await runWorker(fixture, () => {}, { tools: ["bash"] }, (event) => events.push(event));
+  assert.equal(result.code, 0, result.context);
+  assert.equal(result.result.ok, true, result.context);
+  assert.equal(
+    compactionProgress(events).some((event) => event.ok === true),
+    true,
+    `the child must still compact: ${JSON.stringify(compactionProgress(events))}`,
+  );
 });
 
 test("Pi's \"No API key found\", thrown before any request, reaches the model with Epi's guidance", async (t) => {

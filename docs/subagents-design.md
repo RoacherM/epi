@@ -1,6 +1,6 @@
 # Epi 内置 Subagents 设计（`epi:task` 2.0）
 
-状态：**部分实现**（2026-10-25 更新）。第 10 节是实现状态与范围修订，**以第 10 节为准**；第 1–9 节保留原始设计，其中标为"不做"或"未实现"的承诺不对用户和模型生效。
+状态：**包 1、包 2 已实现**（2026-10-25 更新）。第 10 节是实现状态与范围修订，**以第 10 节为准**；第 1–9 节保留原始设计，其中标为"不做"或"未实现"的承诺不对用户和模型生效。
 
 本文定义如何将 Epi 现有的内置扩展 `epi:task`（当前约 840 行）升级为完整的、简约风格的内置 Subagents 系统，从而直接替代外部 98,113 行的 `npm:pi-subagents`。
 
@@ -376,9 +376,9 @@ timeoutSeconds: 600
 
 ### 缺陷 5（P1）：运行中 `steer` 在轮次边界（Turn Boundary）的竞态丢消息
 - **源码根因**：若主代理调用 `task({ jobId, task: "补充指令" })` 时，Worker 恰好刚跑完 `await session.prompt(initialTask)` 准备退出进程，写入 `stdin` 的 `steer` 消息会因进程退出而丢失。
-- **规避方案**：
-  - Worker 在 `session.prompt()` 返回后，循环检查 `while (session.pendingMessageCount > 0 || session.isStreaming || session.isCompacting)`；
-  - 若 `steer` 到达时 Worker 进程已经关闭 stdin 准备退出，父进程捕获 `EPIPE` / 进程退出后，自动退化为终态续跑（用 `SessionManager.open(job.sessionPath)` 重新拉起 Worker 执行该消息），保证任何时刻发给 `jobId` 的消息 100% 送达。
+- **规避方案（2026-10-25 修订）**：
+  - Worker 在 `session.prompt()` 返回后置 `loopFinished`；此后到达的 steer 无法投递，worker 逐字上报 `{"type":"steer_dropped","message":…}`（不是静默丢弃，也不再循环等 `pendingMessageCount`）。
+  - 父进程**不自动续跑**：自动续跑会与 `task_wait` 竞态（等待者拿到旧一轮结果、新一轮的 push 被吞），且会把已 `cancelled` 的 Job 复活。改为把一行 `[Not applied: a steer arrived after the job finished: "…". Resume with task({ jobId, task }) to apply it.]` 追加到该 Job 的结果文本，由模型决定是否显式续跑。worker 已退出导致的 stdin `EPIPE` 仍是窄竞态（见 development.md §12.4）。
 
 ### 缺陷 6（P1）：子目录 `cwd` 下开启 `isolation: "worktree"` 导致相对路径错位
 - **源码根因**：若父会话 `cwd` 位于仓库子目录（如 `<repo>/packages/core`），`git worktree add <wtRoot> HEAD` 检出的是仓库根目录 `<wtRoot>`；如果直接把 `<wtRoot>` 当作 Worker 的 `cwd`，子代理内部的相对路径就会偏离 `packages/core`。
@@ -410,9 +410,15 @@ timeoutSeconds: 600
 - progress 事件 → `task_status({jobId})` 显示当前轮次、步数、正在做什么、最近 10 步；`task_status({})` 列出全部任务；id 可用 8 位以上的唯一前缀。
 - 运行中 steer：`task({ jobId, task })`，经 `session.agent.steer` 逐字投递（不做命令展开，`/epi …` 不再能打挂 worker）；session 就绪前到达的 steer 先缓存再投递；queued 任务改为替换文本。steer 与替换文本都先过父进程的 `task_start` hook。
 
+### 10.2b 包 2 已实现（2026-10-25 合入）
+
+- **结束后按 `jobId` 续跑（§2.3）**：对 `completed`/`partial`/`failed`/`cancelled` 的 Job 调用 `task({ jobId, task })`，用 `SessionManager.open(job.sessionPath)` 重开原会话文件续跑；Job 保持 id/`createdAt`/`sessionPath`，`turns`/`steps`/`compactions`/`usage` 跨轮累加（worker 只报本轮，父进程逐轮相加；`epi:task-usage` 条目只含该轮自身的消耗）；capsule 复用原设置，不再写 fork entries；会话文件缺失则报错不启动；续跑默认前台，`background: true` 时只回执；续跑文本先过 `task_start` hook；artifact 按轮命名，`delivered` 按轮清除。
+- **push 唤醒（§2.2）**：`background: true` 的 Job 落定且无人等待时，父会话收到一条 `epi:task-notify` follow-up（`deliverAs: "followUp"`, `triggerTurn: true`）；300ms 内落定的多个 Job 合并成一条；已被 `task_wait`/`task_cancel` 收回的 Job 不重复推送；`-p`/json 模式下进程可能先于后台 Job 落定退出，此限制已知且不阻塞退出。
+- **agent loop 结束后到达的 steer 不再丢字（§9 缺陷 5）**：worker 报 `{"type":"steer_dropped","message":…}`，父进程把 `[Not applied: … Resume with task({ jobId, task }) to apply it.]` 追加到该 Job 的结果文本后，由模型决定是否续跑；不自动续跑（自动续跑会与 `task_wait` 竞态，并可能复活已取消的 Job，2026-10-25 主会话决定）。
+
 ### 10.3 计划中
 
-- 包 2：结束后按 `jobId` 续跑（§2.3）+ push 唤醒（§2.2）。
+（无）
 
 ### 10.4 明确不做（用户决定）
 

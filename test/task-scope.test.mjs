@@ -409,6 +409,8 @@ test("a background task start tells the model only the job id; the TUI keeps the
     on() {},
     appendEntry(type, data) { entries.push({ type, data }); },
     registerTool(definition) { tools.set(definition.name, definition); },
+    // A real `pi` always has this; a background job's push wake calls it on settle.
+    sendMessage() {},
   });
   const ctx = { cwd: root, model: undefined, sessionManager: { getBranch: () => [] } };
   const started = await tools.get("task").execute("c1", { task: "with-usage", background: true }, undefined, undefined, ctx);
