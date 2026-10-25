@@ -22,23 +22,71 @@ export const DEFAULT_TASK_TIMEOUT_SECONDS = 600;
  * The parent's `system` messages are dropped too: they describe the parent's tools, Rules and
  * skills. A child builds its own system prompt from its own scope, and inheriting the parent's
  * made children refuse work by citing tools they did not have (observed in a live fork run).
+ *
+ * Dropping entries breaks the `parentId` chain, and Pi's SessionManager walks that chain back from
+ * the leaf and stops at the first id it cannot find (session-manager.js `getBranch`), so a child
+ * whose branch held a system entry would silently lose every entry before it. Each survivor is
+ * relinked to the previous survivor. The parent's own prompt (the `user` message right before the
+ * cut) is dropped as well: the child appends its task as a user message, and two consecutive user
+ * messages confuse the model.
  */
 export function forkableBranch(entries) {
-    let cut = entries.length;
+    const cut = unfinishedToolCallIndex(entries);
+    const kept = entries.slice(0, cut);
+    // Only a real cut has the parent's prompt in front of it; a branch with no unfinished call ends
+    // in a closed turn whose last user message is history, not a prompt.
+    if (cut < entries.length)
+        dropTrailingPrompt(kept);
+    return relinkParents(kept.filter((entry) => roleOf(entry) !== "system"));
+}
+/**
+ * The parent's own prompt sits right before the cut; the child appends its task as a user message,
+ * and two consecutive user messages confuse the model. Non-message entries (`model_change`,
+ * `custom`, ...) may sit between the prompt and the cut, so the search skips over them to the last
+ * *message* entry; those entries are kept, they just are not the prompt.
+ */
+function dropTrailingPrompt(entries) {
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+        if (!isMessageEntry(entries[index]))
+            continue;
+        if (roleOf(entries[index]) === "user") {
+            entries.splice(index, 1);
+        }
+        return;
+    }
+}
+/** Index of the assistant message holding the unfinished `task` tool call (the cut point), or
+ * `entries.length` when the branch has no such message. */
+function unfinishedToolCallIndex(entries) {
     for (let index = entries.length - 1; index >= 0; index -= 1) {
         const entry = entries[index];
         if (!isMessageEntry(entry))
             continue;
         const { role, content } = entry.message;
         if (role === "assistant" && Array.isArray(content) && content.some((part) => isToolCall(part))) {
-            cut = index;
-            break;
+            return index;
         }
         // A completed assistant turn (no tool call) ends the search: everything before it is closed.
         if (role === "assistant")
             break;
     }
-    return entries.slice(0, cut).filter((entry) => !(isMessageEntry(entry) && entry.message.role === "system"));
+    return entries.length;
+}
+/** Rebuild the `parentId` chain after entries were dropped, so Pi's leaf-to-root walk reaches the
+ * first surviving entry instead of stopping at a removed id. */
+function relinkParents(entries) {
+    let previousId = null;
+    return entries.map((entry) => {
+        const id = entry.id;
+        if (typeof id !== "string")
+            return entry;
+        const relinked = { ...entry, parentId: previousId };
+        previousId = id;
+        return relinked;
+    });
+}
+function roleOf(entry) {
+    return isMessageEntry(entry) ? entry.message.role : undefined;
 }
 function isMessageEntry(entry) {
     return (typeof entry === "object" && entry !== null &&
@@ -46,6 +94,35 @@ function isMessageEntry(entry) {
 }
 function isToolCall(part) {
     return typeof part === "object" && part !== null && "type" in part && part.type === "toolCall";
+}
+/**
+ * Worker process groups that are still alive, SIGKILLed if Epi itself exits. A real quit cancels
+ * every job through the shared `TaskRuntime`, but an uncaught error or an exit that skips
+ * `session_shutdown` must not leave detached subagent processes behind (they would keep spending
+ * tokens with no one to report to). A SIGKILL, or a signal Node does not handle, cannot run this
+ * handler; it is a net for the ordinary crash path, not a guarantee.
+ */
+const liveWorkerPids = new Set();
+let exitSafetyNetInstalled = false;
+function installExitSafetyNet() {
+    if (exitSafetyNetInstalled)
+        return;
+    exitSafetyNetInstalled = true;
+    process.once("exit", () => {
+        for (const pid of liveWorkerPids) {
+            try {
+                if (process.platform !== "win32") {
+                    process.kill(-pid, "SIGKILL");
+                }
+                else {
+                    process.kill(pid, "SIGKILL");
+                }
+            }
+            catch {
+                // The worker already exited.
+            }
+        }
+    });
 }
 class BoundedOutput {
     limit;
@@ -182,6 +259,7 @@ export class TaskRuntime {
             killTimer: undefined,
             workerResult: undefined,
             usage: undefined,
+            turns: undefined,
             protocolError: undefined,
             completion,
             resolveCompletion,
@@ -199,12 +277,20 @@ export class TaskRuntime {
         }
         return this.snapshot(job);
     }
+    /**
+     * Wait for a job to settle, or stop waiting on `timeoutMs` / `signal`. Aborting this wait never
+     * touches the job: a parent that aborts its own turn (Esc, `/compact`) must not kill a subagent
+     * it started. Only `cancel` and process exit stop a job.
+     */
     async wait(jobId, timeoutMs, signal) {
         const job = this.jobs.get(jobId);
         if (job === undefined) {
             throw new Error(`unknown task job ${jobId}`);
         }
         if (job.settled) {
+            return this.snapshot(job);
+        }
+        if (signal?.aborted === true) {
             return this.snapshot(job);
         }
         let timeout;
@@ -228,9 +314,6 @@ export class TaskRuntime {
         clearTimeout(timeout);
         if (signal !== undefined && abortHandler !== undefined) {
             signal.removeEventListener("abort", abortHandler);
-        }
-        if (signal?.aborted === true && !job.settled) {
-            return this.cancel(jobId);
         }
         return this.snapshot(job);
     }
@@ -298,6 +381,10 @@ export class TaskRuntime {
                 stdio: ["ignore", "pipe", "pipe"],
             });
             job.process = worker;
+            if (worker.pid !== undefined) {
+                liveWorkerPids.add(worker.pid);
+                installExitSafetyNet();
+            }
             const decoder = new StringDecoder("utf8");
             let lineBuffer = "";
             worker.stdout.on("data", (chunk) => {
@@ -346,6 +433,9 @@ export class TaskRuntime {
         finally {
             clearTimeout(job.timeoutTimer);
             clearTimeout(job.killTimer);
+            if (job.process?.pid !== undefined) {
+                liveWorkerPids.delete(job.process.pid);
+            }
             job.process = undefined;
             if (job.capsuleDir !== undefined) {
                 rmSync(job.capsuleDir, { recursive: true, force: true });
@@ -362,6 +452,7 @@ export class TaskRuntime {
     settleOutcome(job, exit, stderrText) {
         // Reported even for a failed or partial run: those tokens were still spent.
         job.usage = job.workerResult?.usage;
+        job.turns = job.workerResult?.turns;
         if (job.terminationCause === "cancelled") {
             job.status = "cancelled";
             return;
@@ -512,6 +603,7 @@ export class TaskRuntime {
             ...(job.result === undefined ? {} : { result: job.result }),
             ...(job.error === undefined ? {} : { error: job.error }),
             ...(job.usage === undefined ? {} : { usage: job.usage }),
+            ...(job.turns === undefined ? {} : { turns: job.turns }),
             ...(job.stdoutArtifact === undefined ? {} : { stdoutArtifact: job.stdoutArtifact }),
             ...(job.stderrArtifact === undefined ? {} : { stderrArtifact: job.stderrArtifact }),
         };

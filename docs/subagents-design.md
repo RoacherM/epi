@@ -145,7 +145,7 @@
 | 6 | **MCP 服务** | `mcp?: boolean \| string[]` | `false` | `false`：不启动 MCP 连接（零冷启动开销）；`true`：加载全部已配置服务（`epi:mcp` + `codemode` + `tool-search`）；`["lark"]`：仅按名称过滤加载指定 MCP 服务 |
 | 7 | **工具集与过滤** | `tools?: string[]`<br>`excludeTools?: string[]` | `undefined`<br>`undefined` | 直接透传给 Pi `createAgentSession`（`dist/core/sdk.js:147-162`）：<br>• `tools` 支持精确白名单（如 `["read", "grep", "find", "ls"]`）或增减修饰符（如 `["-edit", "-write", "-bash"]`）；<br>• `excludeTools` 支持黑名单及 MCP 通配（如 `["mcp__github__*"]`）；<br>• `epi:web` 默认随 `scopeAssemblyForTask` 挂载，可用 `excludeTools: ["web_search", "web_fetch"]` 屏蔽 |
 | 8 | **Hooks 与外部插件** | `hooks?: boolean`<br>`extensions?: boolean \| string[]` | `true`<br>`true` | 默认继承 `epi:hooks`（子代理内的 `tool_call` / `tool_result` 受同一份 `hooks.json` 约束）与 `epi.json` 中的 `externalExtensions`；可传 `false` 或插件名数组裁剪 |
-| 9 | **执行预算** | `maxTurns?: number`<br>`timeoutSeconds?: number` | `undefined`<br>`600` | 达到 `maxTurns` 时优雅中止当前轮并返回已有产出（`status: "partial"`）；达到 `timeoutSeconds` 时终止进程组（若已有已完成轮次则保留部分产出与会话文件供续跑） |
+| 9 | **执行预算** | `maxTurns?: number`<br>`timeoutSeconds?: number` | `undefined`<br>`600` | 达到 `maxTurns` 时优雅中止当前轮并返回已有产出（`status: "partial"`，带 `turns`）；该轮没有工具结果说明模型已收尾，按 `completed` 结束，不算 partial；达到 `timeoutSeconds` 时终止进程组（若已有已完成轮次则保留部分产出与会话文件供续跑） |
 
 ---
 
@@ -358,6 +358,7 @@ timeoutSeconds: 600
 - **规避方案**：
   - 所有子代理会话文件统一存放在独立的 `~/.epi/runtime/task/sessions/<jobId>.jsonl`（权限 `0600`），不进入 `~/.epi/pi/sessions/`，从根源上杜绝污染 `epi -c` 和 `/resume` 列表。
   - 构造 `fork` 时不调 `ctx.sessionManager.createBranchedSession`，而是读取 `ctx.sessionManager.getBranch()` 内存副本（同时天然支持 `--no-session` 内存模式下的父会话），**从尾部剥离当前未闭合的这一轮 `assistant` `toolCall`（及同轮已产生的兄弟 `toolResult`）**，再写入 `<jobId>.jsonl`。
+  - 剥离后必须**重连 `parentId` 链**：Pi 的 `SessionManager` 从叶子沿 `parentId` 回溯，遇到不存在的 id 就停（`session-manager.js` `getBranch`），所以滤掉 `system` 条目、丢掉父会话当前 `user` prompt 后，每个幸存条目都要改接到前一个幸存条目的 `id`（第一个接 `null`），否则子代理会静默丢掉被删条目之前的全部历史。
 
 ### 缺陷 2（P0）：Worker 加载扩展后，第三方插件或 MCP 的 `console.log` 会污染 `stdout` JSONL 协议
 - **源码根因**：`src/task-runtime.ts:365-370` 将 `worker.stdout` 的每一行都作 `JSON.parse`，一旦出现非 JSON 行就判定 `task worker emitted invalid JSONL` 并令任务失败。此前 `worker.ts` 设了 `noExtensions: true` 所以没暴露；现在接入 `buildInlineExtensions` 与外部插件后，任何插件调 `console.log` 都会直接打崩 Worker 协议。

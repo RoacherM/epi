@@ -15,6 +15,13 @@ export declare const DEFAULT_TASK_TIMEOUT_SECONDS = 600;
  * The parent's `system` messages are dropped too: they describe the parent's tools, Rules and
  * skills. A child builds its own system prompt from its own scope, and inheriting the parent's
  * made children refuse work by citing tools they did not have (observed in a live fork run).
+ *
+ * Dropping entries breaks the `parentId` chain, and Pi's SessionManager walks that chain back from
+ * the leaf and stops at the first id it cannot find (session-manager.js `getBranch`), so a child
+ * whose branch held a system entry would silently lose every entry before it. Each survivor is
+ * relinked to the previous survivor. The parent's own prompt (the `user` message right before the
+ * cut) is dropped as well: the child appends its task as a user message, and two consecutive user
+ * messages confuse the model.
  */
 export declare function forkableBranch(entries: readonly unknown[]): unknown[];
 export type TaskJobStatus = "queued" | "running" | "completed"
@@ -80,6 +87,9 @@ export interface TaskJobSnapshot {
     error?: string;
     /** Absent when the child died before reporting (a crash or a kill). */
     usage?: TaskUsage;
+    /** Turns the child completed; present for a partial (`maxTurns`) run, so the model can be told
+     * how far it got. */
+    turns?: number;
     stdoutArtifact?: string;
     stderrArtifact?: string;
 }
@@ -150,6 +160,11 @@ export declare class TaskRuntime {
     availableAgents(): Array<Pick<TaskAgentDefinition, "name" | "description" | "source">>;
     start(request: StartTaskRequest): TaskJobSnapshot;
     status(jobId: string): TaskJobSnapshot;
+    /**
+     * Wait for a job to settle, or stop waiting on `timeoutMs` / `signal`. Aborting this wait never
+     * touches the job: a parent that aborts its own turn (Esc, `/compact`) must not kill a subagent
+     * it started. Only `cancel` and process exit stop a job.
+     */
     wait(jobId: string, timeoutMs?: number, signal?: AbortSignal): Promise<TaskJobSnapshot>;
     cancel(jobId: string): Promise<TaskJobSnapshot>;
     shutdown(): Promise<void>;

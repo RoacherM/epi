@@ -25,7 +25,7 @@ async function setup(t, { withKey = true } = {}) {
   const home = mkdtempSync(join(tmpdir(), "epi-task-worker-"));
   t.after(async () => {
     await server.close();
-    rmSync(home, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true, maxRetries: 3 });
   });
   const agentDir = join(home, ".epi", "pi");
   mkdirSync(agentDir, { recursive: true });
@@ -41,8 +41,9 @@ async function setup(t, { withKey = true } = {}) {
   return { server, home, agentDir, env };
 }
 
-/** The worker run directly: its events and exit code. `onStarted` runs once it reports "started". */
-function runWorker(fixture, onStarted = () => {}) {
+/** The worker run directly: its events and exit code. `onStarted` runs once it reports "started".
+ * `overrides` patches the capsule (e.g. `maxTurns`), so a budget can be exercised on a real run. */
+function runWorker(fixture, onStarted = () => {}, overrides = {}) {
   const capsule = join(fixture.home, "capsule.json");
   const sessionDir = join(fixture.home, "runtime", "task", "sessions");
   mkdirSync(sessionDir, { recursive: true });
@@ -62,6 +63,7 @@ function runWorker(fixture, onStarted = () => {}) {
     hooks: false,
     extensions: false,
     projectTrusted: false,
+    ...overrides,
   }));
   const child = spawn(process.execPath, [worker, capsule], { cwd: fixture.home, env: fixture.env, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
@@ -144,7 +146,23 @@ test("an interrupted task still reports the interruption with exit 143, not the 
   };
   const interrupted = await runWorker(fixture, waitForRequest);
   assert.equal(interrupted.code, 143, interrupted.context);
-  assert.deepEqual(interrupted.result, { type: "result", ok: false, error: "task worker was interrupted" }, interrupted.context);
+  // A cancelled child still spent tokens (or at least has a session to account for); reporting no
+  // usage made a killed job look free.
+  const { usage, ...reported } = interrupted.result;
+  assert.deepEqual(reported, { type: "result", ok: false, error: "task worker was interrupted" }, interrupted.context);
+  assert.equal(typeof usage, "object", interrupted.context);
+});
+
+// A `maxTurns` budget stops between turns, but a turn that issued no tool call is the model's final
+// answer: the run is already over. Marking that partial reported a finished job as unfinished and
+// threw away its answer.
+test("maxTurns does not mark a finished run partial when the last turn called no tool", async (t) => {
+  const fixture = await setup(t);
+  const result = await runWorker(fixture, () => {}, { maxTurns: 1 });
+  assert.equal(result.code, 0, result.context);
+  const { usage, ...reported } = result.result;
+  assert.deepEqual(reported, { type: "result", ok: true, turns: 1, output: "MAGPIE_OK 你好" }, result.context);
+  assert.equal(typeof usage, "object", result.context);
 });
 
 test("Pi's \"No API key found\", thrown before any request, reaches the model with Epi's guidance", async (t) => {

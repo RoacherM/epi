@@ -9,6 +9,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+
 import { readPreloadedSkills, scopeAssemblyForTask } from "../dist/assembly.js";
 import { createTaskInlineExtension } from "../dist/extensions/task.js";
 import { defaultTaskConcurrency, forkableBranch } from "../dist/task-runtime.js";
@@ -128,13 +130,12 @@ test("fork drops the unfinished tool call that is the task call itself", () => {
   ];
   const forked = forkableBranch(branch);
 
-  assert.equal(forked.length, 3);
-  const trailing = forked.at(-1).message;
-  assert.equal(trailing.role, "user");
+  assert.equal(forked.length, 2, "the unfinished task call and the current prompt are both gone");
   assert.ok(
     !forked.some((entry) => entry.message.content.some?.((part) => part.type === "toolCall")),
     "no tool call may survive without its result",
   );
+  assert.equal(forked.at(-1).message.content[0].text, "sure");
 });
 
 test("fork keeps completed tool calls, and never copies the parent's system prompt", () => {
@@ -151,11 +152,86 @@ test("fork keeps completed tool calls, and never copies the parent's system prom
 
   // The finished read call and its result stay: that is the history worth forking.
   assert.ok(forked.some((entry) => entry.message.role === "toolResult"));
-  assert.equal(forked.at(-1).message.content[0].text, "now delegate");
+  // The parent's own prompt ("now delegate") is dropped: the child appends its own task as a user
+  // message, and two consecutive user messages confuse the model.
+  assert.equal(forked.at(-1).message.content[0].text, "done");
   // The parent's system message describes the parent's tools and rules; a child builds its own.
   assert.ok(
     !forked.some((entry) => entry.message.role === "system"),
     "a forked child must not inherit the parent's system prompt",
+  );
+});
+
+// Pi's SessionManager walks parentId back from the leaf and stops at the first id it cannot find
+// (session-manager.js getBranch). Dropping the parent's system entries therefore has to relink the
+// chain: without it a forked child silently loses every entry before the first removed one. The
+// surviving entries after the dropped `system` entry are what make the relink observable -- with
+// only pre-system survivors, no parentId ever pointed at a removed id and the test passed with the
+// relink deleted.
+test("a forked child keeps its history when a system entry is dropped mid-branch", (t) => {
+  const root = fixture(t);
+  const stamp = new Date().toISOString();
+  const entry = (id, parentId, message) => ({ type: "message", id, parentId, timestamp: stamp, message });
+  const branch = [
+    entry("a", null, { role: "user", content: [{ type: "text", text: "the first question" }] }),
+    entry("b", "a", { role: "assistant", content: [{ type: "text", text: "the first answer" }] }),
+    entry("c", "b", { role: "system", content: "PARENT SYSTEM PROMPT" }),
+    entry("d", "c", { role: "user", content: [{ type: "text", text: "the second question" }] }),
+    entry("e", "d", { role: "assistant", content: [{ type: "text", text: "the second answer" }] }),
+    entry("f", "e", { role: "user", content: [{ type: "text", text: "now delegate" }] }),
+    entry("g", "f", { role: "assistant", content: [{ type: "toolCall", name: "task", id: "c1" }] }),
+  ];
+  const forked = forkableBranch(branch);
+
+  assert.deepEqual(
+    forked.map((item) => item.id),
+    ["a", "b", "d", "e"],
+    "the system entry, the current prompt and the unfinished tool call are gone",
+  );
+  // "d" and "e" come after the dropped system entry: their relinked parents are what this test is
+  // for. Without relinkParents, d still points at the removed "c" and the walk stops there.
+  assert.deepEqual(
+    forked.map((item) => item.parentId),
+    [null, "a", "b", "d"],
+    "each survivor links to the previous survivor, not to a dropped id",
+  );
+
+  // The same file the worker writes: reopened, the leaf's parentId walk must reach the first user
+  // message. On the old chain (e -> d -> c missing) SessionManager stops at "c" and loses it.
+  const sessionPath = join(root, "child.jsonl");
+  const header = { type: "session", version: 3, id: "child", timestamp: stamp, cwd: root };
+  writeFileSync(sessionPath, `${[header, ...forked].map((item) => JSON.stringify(item)).join("\n")}\n`);
+  const reopened = SessionManager.open(sessionPath, root, root);
+  const context = JSON.stringify(reopened.buildSessionContext().messages);
+  assert.match(context, /the first question/, "history before the dropped system entry survives");
+  assert.match(context, /the first answer/);
+  assert.match(context, /the second answer/, "history after the dropped system entry survives");
+  assert.doesNotMatch(context, /PARENT SYSTEM PROMPT/);
+  assert.doesNotMatch(context, /now delegate/, "the parent's current prompt is dropped");
+});
+
+// The trailing-prompt drop must skip non-message entries (`model_change`, `custom`, ...) that can
+// sit between the prompt and the cut; a plain `kept.at(-1)` check leaves the prompt in place and
+// the child gets two consecutive user messages.
+test("fork drops the current prompt even when a non-message entry sits between it and the cut", () => {
+  const branch = [
+    { type: "message", message: { role: "user", content: [{ type: "text", text: "first" }] } },
+    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "answer" }] } },
+    { type: "message", message: { role: "user", content: [{ type: "text", text: "now delegate" }] } },
+    { type: "model_change", model: "other/model" },
+    { type: "message", message: { role: "assistant", content: [{ type: "toolCall", name: "task", id: "c1" }] } },
+  ];
+  const forked = forkableBranch(branch);
+
+  assert.equal(forked.at(-1).type, "model_change", "the non-message entry itself stays");
+  assert.ok(
+    !forked.some((entry) => entry.message?.content?.[0]?.text === "now delegate"),
+    "the parent's current prompt is dropped even with a non-message entry after it",
+  );
+  assert.equal(
+    forked.filter((entry) => entry.message?.role === "user").length,
+    1,
+    "only the earlier user message survives",
   );
 });
 
@@ -272,4 +348,15 @@ test("a background task start tells the model only the job id; the TUI keeps the
   assert.equal(usage.data.inputTokens, 10);
   assert.ok(usage.data.createdAt <= usage.data.startedAt && usage.data.startedAt <= usage.data.finishedAt,
     "timestamps let a runner see queueing and the critical path");
+});
+
+// Round-2 review P3: with no unfinished tool call there is no cut, so the last user message is
+// history and must stay.
+test("fork keeps the last user message when the branch has no unfinished tool call", () => {
+  const entries = [
+    { type: "message", id: "a", parentId: null, message: { role: "user", content: [{ type: "text", text: "q" }] } },
+    { type: "message", id: "b", parentId: "a", message: { role: "assistant", content: [{ type: "text", text: "ans" }] } },
+    { type: "message", id: "c", parentId: "b", message: { role: "user", content: [{ type: "text", text: "next" }] } },
+  ];
+  assert.deepEqual(forkableBranch(entries).map((entry) => entry.id), ["a", "b", "c"]);
 });
