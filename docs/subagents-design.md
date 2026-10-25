@@ -1,6 +1,6 @@
 # Epi 内置 Subagents 设计（`epi:task` 2.0）
 
-状态：**设计定稿（已做设计功能审查）**（2026-10-23）。
+状态：**部分实现**（2026-10-25 更新）。第 10 节是实现状态与范围修订，**以第 10 节为准**；第 1–9 节保留原始设计，其中标为"不做"或"未实现"的承诺不对用户和模型生效。
 
 本文定义如何将 Epi 现有的内置扩展 `epi:task`（当前约 840 行）升级为完整的、简约风格的内置 Subagents 系统，从而直接替代外部 98,113 行的 `npm:pi-subagents`。
 
@@ -387,3 +387,43 @@ timeoutSeconds: 600
 ### 缺陷 7（P2）：合并工具名会导致 `/trace` 将「等待」误计为「新建子任务」
 - **源码根因**：`docs/trace-design.md:233` 明确规定：*「后台 task 的提交、等待、取消是各自步骤，不能把 wait 次数当子任务次数」*。若把 `wait` 和 `cancel` 全塞进 `task({ action: "wait" })`，`/trace` 时间轴会把每次等待和查询都画成一次新的 `task` 工具调用，且破坏现有测试与快照基线。
 - **规避方案**：保持 `task`（创建/发信）、`task_status`（查询）、`task_wait`（等待屏障）、`task_cancel`（取消）、`todo` 五个工具名字各自独立，既保持单职责清晰，又与 `/trace` 零冲突。
+
+---
+
+## 10. 实现状态与范围修订（2026-10-25）
+
+### 10.1 已实现（已合入 `main`）
+
+| 能力 | 位置 | 说明 |
+|---|---|---|
+| 统一装配管线 + 8 项原子能力（§3，`isolation` 除外） | `src/worker.ts`、`src/assembly.ts` | 子代理走 `resolveAssembly → scopeAssemblyForTask → buildInlineExtensions`；Rules/Skills/MCP 默认关（用户确认可接受） |
+| 模型优先级 调用 > 预设 > 父会话，`":thinking"` 保留基础模型 | `src/task-runtime.ts` `childModelReference` | 测评发现预设 `model:` 被父模型覆盖、`":low"` 丢模型，均已修 |
+| 子代理用量计账 `epi:task-usage` | `src/extensions/task.ts` | 带 `createdAt/startedAt/finishedAt`；失败、超时也上报 |
+| 并发默认 = CPU 核数（2..16），`EPI_TASK_MAX_CONCURRENCY` | `src/task-runtime.ts` | |
+| 生命周期解耦 | `src/extensions/task.ts` | `/compact`、Esc 只停等待不杀子代理；`/new` `/resume` `/fork` `/reload` 不杀；只有 quit 和 `task_cancel` 杀。job 注册表跨会话切换共享 |
+| 信任按项目根判定 | `src/project.ts` `childProjectTrust` | 子代理 `cwd` 进入另一个项目时按不信任处理 |
+| 子代理里过滤 `type: "agent"` hook 与 `task_start/stop` | `src/extensions/hooks.ts` `hooksForChild` | 即缺陷 4 第 2 条 |
+
+### 10.2 包 1 已实现（2026-10-25 合入）
+
+- stdin 双工管道：父进程 SIGKILL 后 worker 读到 EOF 自行退出，工具子进程一并回收（取代旧的 `process.once("exit")` 兜底，它覆盖不了 SIGKILL）。
+- progress 事件 → `task_status({jobId})` 显示当前轮次、步数、正在做什么、最近 10 步；`task_status({})` 列出全部任务；id 可用 8 位以上的唯一前缀。
+- 运行中 steer：`task({ jobId, task })`，经 `session.agent.steer` 逐字投递（不做命令展开，`/epi …` 不再能打挂 worker）；session 就绪前到达的 steer 先缓存再投递；queued 任务改为替换文本。steer 与替换文本都先过父进程的 `task_start` hook。
+
+### 10.3 计划中
+
+- 包 2：结束后按 `jobId` 续跑（§2.3）+ push 唤醒（§2.2）。
+
+### 10.4 明确不做（用户决定）
+
+| 项 | 原因 |
+|---|---|
+| 孙代理（子代理再派子代理） | 用户决定；子代理里永不加载 `epi:task` |
+| `ask_parent`（子代理阻塞问父代理）、`waiting` 状态 | 父子互等带来死锁与超时策略，正是 §1.2 要砍掉的 `contact_supervisor` 双向锁 |
+| 界面代办（子代理的 `ui.confirm/select` 转到主 TUI） | 子代理按 `-p` 规则运行，无界面时取默认值已够用 |
+| `background` 默认 `true` | 同一轮多个前台 `task` 已经并发且一次返回，比后台 + `task_wait` 少一轮请求 |
+
+### 10.5 实测发现（`.dev/bench/subagents-2026-10-23/report.md`）
+
+- 委派的收益是父上下文（峰值降 63–82%）和墙钟（并发后最快），**省钱只在父模型比子模型贵时成立**。
+- **便宜父模型不会主动委派**：flash 在测评自由组、5 个开发任务中 4 个（含规则里写明"必须委派"的 2 个）都是 0 次委派；只有 1 个任务派了 2 次。光靠工具描述和规则不够，需要机制（例如父上下文超阈值时提示），待设计。
