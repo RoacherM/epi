@@ -39,23 +39,56 @@ export const DEFAULT_TASK_TIMEOUT_SECONDS = 600;
  * The parent's `system` messages are dropped too: they describe the parent's tools, Rules and
  * skills. A child builds its own system prompt from its own scope, and inheriting the parent's
  * made children refuse work by citing tools they did not have (observed in a live fork run).
+ *
+ * Dropping entries breaks the `parentId` chain, and Pi's SessionManager walks that chain back from
+ * the leaf and stops at the first id it cannot find (session-manager.js `getBranch`), so a child
+ * whose branch held a system entry would silently lose every entry before it. Each survivor is
+ * relinked to the previous survivor. The parent's own prompt (the `user` message right before the
+ * cut) is dropped as well: the child appends its task as a user message, and two consecutive user
+ * messages confuse the model.
  */
 export function forkableBranch(entries: readonly unknown[]): unknown[] {
-  let cut = entries.length;
+  const cut = unfinishedToolCallIndex(entries);
+  const kept = entries.slice(0, cut);
+  // The parent's own prompt sits right before the cut; the child appends its task as a user
+  // message, and two consecutive user messages confuse the model.
+  if (cut < entries.length && roleOf(kept[kept.length - 1]) === "user") {
+    kept.pop();
+  }
+  return relinkParents(kept.filter((entry) => roleOf(entry) !== "system"));
+}
+
+/** Index of the assistant message holding the unfinished `task` tool call (the cut point), or
+ * `entries.length` when the branch has no such message. */
+function unfinishedToolCallIndex(entries: readonly unknown[]): number {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (!isMessageEntry(entry)) continue;
     const { role, content } = entry.message as { role?: unknown; content?: unknown };
     if (role === "assistant" && Array.isArray(content) && content.some((part) => isToolCall(part))) {
-      cut = index;
-      break;
+      return index;
     }
     // A completed assistant turn (no tool call) ends the search: everything before it is closed.
     if (role === "assistant") break;
   }
-  return entries.slice(0, cut).filter(
-    (entry) => !(isMessageEntry(entry) && (entry.message as { role?: unknown }).role === "system"),
-  );
+  return entries.length;
+}
+
+/** Rebuild the `parentId` chain after entries were dropped, so Pi's leaf-to-root walk reaches the
+ * first surviving entry instead of stopping at a removed id. */
+function relinkParents(entries: readonly unknown[]): unknown[] {
+  let previousId: string | null = null;
+  return entries.map((entry) => {
+    const id = (entry as { id?: unknown }).id;
+    if (typeof id !== "string") return entry;
+    const relinked = { ...(entry as object), parentId: previousId };
+    previousId = id;
+    return relinked;
+  });
+}
+
+function roleOf(entry: unknown): unknown {
+  return isMessageEntry(entry) ? (entry.message as { role?: unknown }).role : undefined;
 }
 
 function isMessageEntry(entry: unknown): entry is { type: "message"; message: unknown } {
@@ -140,6 +173,9 @@ export interface TaskJobSnapshot {
   error?: string;
   /** Absent when the child died before reporting (a crash or a kill). */
   usage?: TaskUsage;
+  /** Turns the child completed; present for a partial (`maxTurns`) run, so the model can be told
+   * how far it got. */
+  turns?: number;
   stdoutArtifact?: string;
   stderrArtifact?: string;
 }
@@ -193,12 +229,39 @@ export interface StartTaskRequest {
 type WorkerProcess = ChildProcessByStdio<null, Readable, Readable>;
 type TerminationCause = "cancelled" | "timeout";
 
+/**
+ * Worker process groups that are still alive, SIGKILLed if Epi itself exits. `session_shutdown`
+ * with reason "quit" cancels jobs, but a crash or a signal that skips it must not leave detached
+ * subagent processes behind (they would keep spending tokens with no one to report to).
+ */
+const liveWorkerPids = new Set<number>();
+let exitSafetyNetInstalled = false;
+
+function installExitSafetyNet(): void {
+  if (exitSafetyNetInstalled) return;
+  exitSafetyNetInstalled = true;
+  process.once("exit", () => {
+    for (const pid of liveWorkerPids) {
+      try {
+        if (process.platform !== "win32") {
+          process.kill(-pid, "SIGKILL");
+        } else {
+          process.kill(pid, "SIGKILL");
+        }
+      } catch {
+        // The worker already exited.
+      }
+    }
+  });
+}
+
 interface WorkerResultEvent {
   type: "result";
   ok: boolean;
   output?: string;
   error?: string;
   partial?: boolean;
+  turns?: number;
   usage?: TaskUsage;
 }
 
@@ -226,6 +289,7 @@ interface InternalTaskJob {
   killTimer: NodeJS.Timeout | undefined;
   workerResult: WorkerResultEvent | undefined;
   usage: TaskUsage | undefined;
+  turns: number | undefined;
   protocolError: string | undefined;
   completion: Promise<void>;
   resolveCompletion: () => void;
@@ -382,6 +446,7 @@ export class TaskRuntime {
       killTimer: undefined,
       workerResult: undefined,
       usage: undefined,
+      turns: undefined,
       protocolError: undefined,
       completion,
       resolveCompletion,
@@ -401,6 +466,11 @@ export class TaskRuntime {
     return this.snapshot(job);
   }
 
+  /**
+   * Wait for a job to settle, or stop waiting on `timeoutMs` / `signal`. Aborting this wait never
+   * touches the job: a parent that aborts its own turn (Esc, `/compact`) must not kill a subagent
+   * it started. Only `cancel` and process exit stop a job.
+   */
   async wait(
     jobId: string,
     timeoutMs?: number,
@@ -411,6 +481,9 @@ export class TaskRuntime {
       throw new Error(`unknown task job ${jobId}`);
     }
     if (job.settled) {
+      return this.snapshot(job);
+    }
+    if (signal?.aborted === true) {
       return this.snapshot(job);
     }
 
@@ -436,9 +509,6 @@ export class TaskRuntime {
     clearTimeout(timeout);
     if (signal !== undefined && abortHandler !== undefined) {
       signal.removeEventListener("abort", abortHandler);
-    }
-    if (signal?.aborted === true && !job.settled) {
-      return this.cancel(jobId);
     }
     return this.snapshot(job);
   }
@@ -521,6 +591,10 @@ export class TaskRuntime {
         stdio: ["ignore", "pipe", "pipe"],
       });
       job.process = worker;
+      if (worker.pid !== undefined) {
+        liveWorkerPids.add(worker.pid);
+        installExitSafetyNet();
+      }
       const decoder = new StringDecoder("utf8");
       let lineBuffer = "";
 
@@ -576,6 +650,9 @@ export class TaskRuntime {
     } finally {
       clearTimeout(job.timeoutTimer);
       clearTimeout(job.killTimer);
+      if (job.process?.pid !== undefined) {
+        liveWorkerPids.delete(job.process.pid);
+      }
       job.process = undefined;
       if (job.capsuleDir !== undefined) {
         rmSync(job.capsuleDir, { recursive: true, force: true });
@@ -597,6 +674,7 @@ export class TaskRuntime {
   ): void {
     // Reported even for a failed or partial run: those tokens were still spent.
     job.usage = job.workerResult?.usage;
+    job.turns = job.workerResult?.turns;
     if (job.terminationCause === "cancelled") {
       job.status = "cancelled";
       return;
@@ -751,6 +829,7 @@ export class TaskRuntime {
       ...(job.result === undefined ? {} : { result: job.result }),
       ...(job.error === undefined ? {} : { error: job.error }),
       ...(job.usage === undefined ? {} : { usage: job.usage }),
+      ...(job.turns === undefined ? {} : { turns: job.turns }),
       ...(job.stdoutArtifact === undefined ? {} : { stdoutArtifact: job.stdoutArtifact }),
       ...(job.stderrArtifact === undefined ? {} : { stderrArtifact: job.stderrArtifact }),
     };

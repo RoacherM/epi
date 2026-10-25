@@ -176,13 +176,20 @@ function startedResult(job: TaskJobSnapshot): AgentToolResult<TaskJobSnapshot> {
   };
 }
 
+/** The answer text of a settled job, with an empty one made visible rather than rendered blank. */
+function resultText(job: TaskJobSnapshot): string {
+  const result = job.result ?? "";
+  return result.trim().length > 0 ? result : "(no output)";
+}
+
 function jobResult(job: TaskJobSnapshot): AgentToolResult<TaskJobSnapshot> {
-  // A partial run stopped at maxTurns: the model gets the work done so far plus how to continue,
-  // not a dump of the job record.
+  // A partial run stopped at maxTurns: the model gets the work done so far plus why it stopped.
+  // It is not promised a resume (steering and resuming are not implemented yet), so the footer
+  // says only what happened.
   const text = job.status === "completed"
-    ? job.result ?? "(no output)"
+    ? resultText(job)
     : job.status === "partial"
-      ? `${job.result ?? "(no output)"}\n\n[Stopped at maxTurns. Continue with task_wait/task_status on job ${job.id}.]`
+      ? `${resultText(job)}\n\n[Stopped at maxTurns after ${job.turns ?? 0} turns (job ${job.id}). The work so far is above.]`
       : JSON.stringify(job, null, 2);
   return {
     content: [{ type: "text", text }],
@@ -329,7 +336,11 @@ export function createTaskInlineExtension(
       const availableAgents = runtime.availableAgents();
       const completionHooks = new Map<string, Promise<TaskJobSnapshot>>();
 
-      pi.on("session_shutdown", async () => {
+      pi.on("session_shutdown", async (event) => {
+        // Only a real quit ends the subagents. A session switch (`/new`, `/resume`, fork, reload)
+        // tears down this extension runtime but not the process, and the jobs are detached Epi
+        // runs: killing them would silently discard work the user never asked to stop.
+        if (event.reason !== "quit") return;
         await runtime.shutdown();
         await Promise.allSettled(completionHooks.values());
       });
@@ -417,7 +428,15 @@ export function createTaskInlineExtension(
               signal?.aborted === true &&
               (waited.status === "queued" || waited.status === "running")
             ) {
-              await runtime.cancel(started.id);
+              // The parent aborted its own turn (Esc, `/compact`). That must not kill the child:
+              // hand back a background receipt and let `task_wait` collect it.
+              return {
+                content: [{
+                  type: "text",
+                  text: `Job ${started.id} keeps running in the background; collect it with task_wait.`,
+                }],
+                details: runtime.status(started.id),
+              };
             }
             return jobResult(await completion);
           } catch (error) {
@@ -457,11 +476,19 @@ export function createTaskInlineExtension(
             const timeoutMs = params.timeoutSeconds === undefined
               ? undefined
               : Math.ceil(params.timeoutSeconds * 1_000);
+            // Wait first, then let the completion promise run the usage record and `task_stop`
+            // hook. Pi always passes an abort signal, so branching on `signal === undefined` (as
+            // this once did) skipped both on every real call.
+            const waited = await runtime.wait(params.jobId, timeoutMs, signal);
             const completion = completionHooks.get(params.jobId);
-            if (timeoutMs === undefined && signal === undefined && completion !== undefined) {
+            if (
+              completion !== undefined &&
+              waited.status !== "queued" &&
+              waited.status !== "running"
+            ) {
               return jobResult(await completion);
             }
-            return jobResult(await runtime.wait(params.jobId, timeoutMs, signal));
+            return jobResult(waited);
           } catch (error) {
             return errorResult(error);
           }

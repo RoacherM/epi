@@ -9,6 +9,7 @@ import { createAgentSession, createAgentSessionServices, resolveCliModel, Sessio
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readPreloadedSkills, resolveAssembly, scopeAssemblyForTask, } from "./assembly.js";
 import { buildInlineExtensions } from "./extensions/index.js";
+import { collectUsage, finalAssistantText } from "./task-result.js";
 import { trackRequestOutcome } from "./request-outcome.js";
 import { notRunningWarnings, settleRegisteredProviders } from "./provider-startup.js";
 import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
@@ -21,35 +22,10 @@ import { EPI_VERSION } from "./version.js";
 const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
 const { takeOverStdout, writeRawStdout } = (await import(pathToFileURL(join(piDist, "core", "output-guard.js")).href));
 takeOverStdout();
-/** Every assistant message's usage in this child's own session, summed. */
-function collectUsage(messages) {
-    const total = {
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-        reasoningTokens: 0,
-        costUsd: 0,
-    };
-    for (const message of messages) {
-        if (typeof message !== "object" || message === null ||
-            !("role" in message) || message.role !== "assistant" || !("usage" in message)) {
-            continue;
-        }
-        const usage = message.usage;
-        if (usage === undefined)
-            continue;
-        total.inputTokens += usage.input ?? 0;
-        total.outputTokens += usage.output ?? 0;
-        total.cacheReadTokens += usage.cacheRead ?? 0;
-        total.cacheWriteTokens += usage.cacheWrite ?? 0;
-        total.reasoningTokens += usage.reasoning ?? 0;
-        total.costUsd += usage.cost?.total ?? 0;
-    }
-    return total;
-}
 let activeSession;
 let interrupted = false;
+// Set just before the session is disposed, so the failure path can still report what was spent.
+let spentUsage;
 // D84/D85: a request that failed leaves its error on the final message rather than throwing, so
 // the child must check for one before reporting success.
 const outcome = trackRequestOutcome();
@@ -86,45 +62,6 @@ function readCapsule(capsulePath) {
         }
     }
     return capsule;
-}
-/**
- * The subagent's answer: the newest assistant text. `skipAborted` is used after a `maxTurns` stop,
- * where the newest assistant message is the turn the abort cut off (`stopReason: "aborted"`, no
- * content): the useful answer is the last turn that actually finished, and returning "" instead
- * would throw away work the parent asked to keep.
- */
-function finalAssistantText(messages, skipAborted = false) {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const message = messages[index];
-        if (typeof message !== "object" ||
-            message === null ||
-            !("role" in message) ||
-            message.role !== "assistant" ||
-            !("content" in message)) {
-            continue;
-        }
-        if (skipAborted &&
-            "stopReason" in message &&
-            (message.stopReason === "aborted" || message.stopReason === "error")) {
-            continue;
-        }
-        if (typeof message.content === "string") {
-            return message.content;
-        }
-        if (!Array.isArray(message.content)) {
-            continue;
-        }
-        return message.content
-            .filter((content) => typeof content === "object" &&
-            content !== null &&
-            "type" in content &&
-            content.type === "text" &&
-            "text" in content &&
-            typeof content.text === "string")
-            .map((content) => content.text)
-            .join("\n");
-    }
-    return "";
 }
 async function interrupt() {
     interrupted = true;
@@ -282,8 +219,12 @@ async function main() {
             return;
         turns += 1;
         // Design §3 (execution budget): stop *between* turns, so the work already done and the session
-        // file both survive and the job can be resumed with another `task` on the same job.
-        if (capsule.maxTurns !== undefined && turns >= capsule.maxTurns) {
+        // file both survive and the job can be resumed with another `task` on the same job. A turn with
+        // no tool results is the model's final answer -- the run is over, and calling it partial would
+        // report a finished job as unfinished.
+        if (capsule.maxTurns !== undefined &&
+            turns >= capsule.maxTurns &&
+            event.toolResults.length > 0) {
             stoppedAtMaxTurns = true;
             void session.abort();
         }
@@ -308,6 +249,8 @@ async function main() {
     }
     finally {
         unsubscribe();
+        // Captured before dispose: the failure path below still has to report what this child spent.
+        spentUsage = collectUsage(session.messages);
         session.dispose();
         activeSession = undefined;
     }
@@ -323,7 +266,14 @@ try {
 }
 catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    emit({ type: "result", ok: false, error: message });
+    // A cancelled or timed-out child spent real tokens too; report them so the parent (and any cost
+    // report) does not count the failed run as free.
+    emit({
+        type: "result",
+        ok: false,
+        error: message,
+        ...(spentUsage === undefined ? {} : { usage: spentUsage }),
+    });
     process.exitCode = interrupted ? 143 : 1;
 }
 //# sourceMappingURL=worker.js.map

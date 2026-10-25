@@ -9,6 +9,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+
 import { readPreloadedSkills, scopeAssemblyForTask } from "../dist/assembly.js";
 import { createTaskInlineExtension } from "../dist/extensions/task.js";
 import { defaultTaskConcurrency, forkableBranch } from "../dist/task-runtime.js";
@@ -128,13 +130,12 @@ test("fork drops the unfinished tool call that is the task call itself", () => {
   ];
   const forked = forkableBranch(branch);
 
-  assert.equal(forked.length, 3);
-  const trailing = forked.at(-1).message;
-  assert.equal(trailing.role, "user");
+  assert.equal(forked.length, 2, "the unfinished task call and the current prompt are both gone");
   assert.ok(
     !forked.some((entry) => entry.message.content.some?.((part) => part.type === "toolCall")),
     "no tool call may survive without its result",
   );
+  assert.equal(forked.at(-1).message.content[0].text, "sure");
 });
 
 test("fork keeps completed tool calls, and never copies the parent's system prompt", () => {
@@ -151,12 +152,46 @@ test("fork keeps completed tool calls, and never copies the parent's system prom
 
   // The finished read call and its result stay: that is the history worth forking.
   assert.ok(forked.some((entry) => entry.message.role === "toolResult"));
-  assert.equal(forked.at(-1).message.content[0].text, "now delegate");
+  // The parent's own prompt ("now delegate") is dropped: the child appends its own task as a user
+  // message, and two consecutive user messages confuse the model.
+  assert.equal(forked.at(-1).message.content[0].text, "done");
   // The parent's system message describes the parent's tools and rules; a child builds its own.
   assert.ok(
     !forked.some((entry) => entry.message.role === "system"),
     "a forked child must not inherit the parent's system prompt",
   );
+});
+
+// Pi's SessionManager walks parentId back from the leaf and stops at the first id it cannot find
+// (session-manager.js getBranch). Dropping the parent's system entries therefore has to relink the
+// chain: without it a forked child silently loses every entry before the first removed one.
+test("a forked child keeps its history when a system entry is dropped mid-branch", (t) => {
+  const root = fixture(t);
+  const stamp = new Date().toISOString();
+  const entry = (id, parentId, message) => ({ type: "message", id, parentId, timestamp: stamp, message });
+  const branch = [
+    entry("a", null, { role: "user", content: [{ type: "text", text: "the first question" }] }),
+    entry("b", "a", { role: "assistant", content: [{ type: "text", text: "the first answer" }] }),
+    entry("c", "b", { role: "system", content: "PARENT SYSTEM PROMPT" }),
+    entry("d", "c", { role: "user", content: [{ type: "text", text: "now delegate" }] }),
+    entry("e", "d", { role: "assistant", content: [{ type: "toolCall", name: "task", id: "c1" }] }),
+  ];
+  const forked = forkableBranch(branch);
+
+  assert.deepEqual(forked.map((item) => item.id), ["a", "b"], "the system entry and the current prompt are gone");
+  assert.equal(forked[0].parentId, null, "the first survivor becomes the root");
+  assert.equal(forked[1].parentId, "a", "each survivor links to the previous survivor");
+
+  // The same file the worker writes: reopened, the leaf's parentId walk must reach the first user
+  // message. On the old chain (b -> a, but c removed) SessionManager stops at "c" and loses it.
+  const sessionPath = join(root, "child.jsonl");
+  const header = { type: "session", version: 3, id: "child", timestamp: stamp, cwd: root };
+  writeFileSync(sessionPath, `${[header, ...forked].map((item) => JSON.stringify(item)).join("\n")}\n`);
+  const reopened = SessionManager.open(sessionPath, root, root);
+  const context = JSON.stringify(reopened.buildSessionContext().messages);
+  assert.match(context, /the first question/, "history before the dropped system entry survives");
+  assert.match(context, /the first answer/);
+  assert.doesNotMatch(context, /PARENT SYSTEM PROMPT/);
 });
 
 // Found by the subagent benchmark (.dev/bench/subagents-2026-10-23): the child resolved its own

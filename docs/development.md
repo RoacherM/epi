@@ -626,7 +626,7 @@ todo
 | `tools` / `excludeTools` | 继承默认 | 透传 Pi `createAgentSession` 的白名单/黑名单 |
 | `hooks` | `true` | 子代理内的工具调用同受 `hooks.json` 约束 |
 | `extensions` | `true` | Manifest 外部扩展，可传名字数组裁剪 |
-| `maxTurns` | 无 | 到达后在轮次边界优雅停止并返回已有产出（`status: "partial"`，会话文件保留可续跑） |
+| `maxTurns` | 无 | 到达轮次边界且该轮还有工具结果（即还有后续工作）时优雅停止并返回已有产出（`status: "partial"`，带 `turns`，会话文件保留）；该轮没有任何工具结果说明模型已给出最终答复，按 `completed` 正常结束 |
 | `timeoutSeconds` | 600 | 超时终止进程组 |
 
 ### 12.3 状态
@@ -639,6 +639,8 @@ interface TaskJob {
   process?: ChildProcess;
   result?: string;
   error?: string;
+  /** 完成的轮数，`partial` 时用来告诉模型停在哪一步。 */
+  turns?: number;
   startedAt?: number;
   finishedAt?: number;
 }
@@ -654,16 +656,19 @@ Job Registry 必须属于当前 Pi Session，不允许 process-global singleton�
 - 子会话落在 `~/.epi/runtime/task/sessions/<jobId>.jsonl`（`0600`），**不进 Pi 的 session 目录**：后台子代理不会劫持 `epi -c`，也不出现在 `/resume` 列表；
 - Worker 首行调 `takeOverStdout()`：插件/MCP 的 `console.log` 一律改道 stderr，只有协议 JSONL 走真 stdout；
 - Hook 的 `type: "agent"` handler 所用的 TaskRuntime 固定 `allowHooks: false`，避免 `tool_call` hook 派生的子代理再次触发 hook 形成死循环；
-- Parent Session shutdown 时取消并回收所有 Child；
+- 只有 `session_shutdown` 的 `reason === "quit"` 取消并回收 Child；`new`/`resume`/`fork`/`reload` 只是换会话，进程仍在，Child 继续跑（父会话 abort 自己的轮次，如 Esc 或 `/compact`，同样不杀 Child）；
+- 进程退出兜底：`process.once("exit")` 对仍在运行的 worker 进程组发 `SIGKILL`，崩溃路径也不留孤儿；
 - stdout/stderr 和最终结果有明确上限，超出后写 artifact；一个 Job 失败不破坏其他 Job；
 - capsule 文件权限仅当前用户可读写，Child 读取后立即删除。
 
-### 12.5 `context: "fork"` 的两条裁剪规则
+### 12.5 `context: "fork"` 的裁剪规则
 
 Pi 在执行工具**之前**就把含本次 `task` 调用的 assistant 消息写进会话（`core/agent-session.js` 的 `message_end`），所以分支末尾是一条没有 `toolResult` 的 `toolCall`，原样复制会被模型 API 判 HTTP 400。`forkableBranch()` 因此：
 
 1. 从那条未闭合的 assistant 消息起截断（已完成的工具调用与其结果保留）；
-2. 滤掉父会话的 `system` 消息——它描述的是父会话的工具、Rules 和技能，子代理要按自己的作用域重建（实测中继承会让子代理以「我没有这些工具」为由拒绝干活）。
+2. 丢掉紧邻截断点的父会话 `user` 消息（父会话当前这条 prompt）——子代理自己的 task 会作为一条 `user` 消息追加，连续两条 `user` 会让模型困惑；
+3. 滤掉父会话的 `system` 消息——它描述的是父会话的工具、Rules 和技能，子代理要按自己的作用域重建（实测中继承会让子代理以「我没有这些工具」为由拒绝干活）；
+4. 重连 `parentId` 链：Pi 的 `SessionManager` 从叶子沿 `parentId` 回溯，遇到不存在的 id 就停（`session-manager.js` 的 `getBranch`），所以每删一条都必须把后继接到前一个幸存条目上（第一个接 `null`），否则子代理会丢掉被删条目之前的全部历史。
 
 另外不调用 `ctx.sessionManager.createBranchedSession()`：它会就地改写调用方自身的 `sessionId`/`sessionFile`，污染父会话。
 
