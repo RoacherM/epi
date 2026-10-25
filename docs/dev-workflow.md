@@ -10,12 +10,19 @@
 |---|---|---|
 | 主控 | epi 主会话 | 计划、N3 审查验证、合并、Orca 实测、汇报 |
 | worker | epi + magpie `claude-opus-5-5`（`devin/`、`auto/`、`factory/`），thinking `high`；独立 git worktree（`dev/<id>`），每任务每轮新开会话 | 实现（N2），写测试、提交、交 `report.md` |
-| 阅读子代理 | `epi -p` 只读会话，模型从 `epi --list-models` 的 `magpie` 段选（WF2） | 大范围读代码/查资料，结论须带 `文件:行号`，主控核对原文后才用 |
+| 阅读子代理 | 内置 `task` 工具 + 预设 `reader`（`~/.epi/agents/reader.md`，`factory/deepseek-v4.1-flash`，只读工具） | 大范围读代码/查资料，结论须带 `文件:行号`，主控核对原文后才用 |
+| 执行子代理 | 内置 `task` 工具 + 预设 `runner`（`~/.epi/agents/runner.md`，flash，可跑 `bash`、不改文件） | 跑全套测试、构建、基准，只回报结果与失败项 |
 | 审查子代理 | `epi -p` 只读会话，provider `magpie`，模型按 WF3 三级回退由 `scripts/dev/run-review.sh` 解析写入 `pack.md`，复查沿用同模型 | 阶段终审（大节点，N6）、审主控自己写的代码（G5） |
 | 顾问 | `epi -p` 独立只读会话（主控把背景材料写成文件交给它） | 仅在**同一个问题第二次出现 / 方案迟迟收不拢**时调用 |
 | 用户 | — | 需求歧义拍板；推送/PR/发布人工闸门（G2） |
 
 - **审查模型三级回退（WF3）**：① `gemini-4-argon`（`auto/` 优先，`devin/`、`factory/` 次之，排除 `-disabled`）；② `claude-opus-5-5`（thinking 固定 `medium`，禁 `high`）；③ `deepseek-v4.1-flash`（`factory/deepseek-v4.1-flash`、`devin/deepseek-v4-1-flash-1017`）。一律通过 `scripts/dev/run-review.sh` 启动与等待，禁止手写 `nohup epi -p` 或固定长 `sleep`。
+- **子代理（WF5，2026-10-25）**：主控与 worker 都用内置 `task` 工具委派，不再装 `npm:pi-subagents`。硬规则：
+  - 要读**不打算改的**文件（Pi 的 `node_modules` 源码、长文档、别的模块）时，`task(agent="reader", task="…问题…，用 文件:行号 回答")`；只在要改的文件、或 <150 行的文件才自己读。
+  - 跑全套测试（`node --test test/*.test.mjs`）、`precheck` 之外的长命令，用 `task(agent="runner", task="在 <目录> 跑 <命令>，报失败")`。
+  - 互不依赖的问题**同一轮并发发出**多个 `task`；每个子代理给一块像样的工作量（几个文件），不要一个小文件一个。
+  - 子代理跑偏用 `task({jobId, task})` 纠偏；结束后追问用同一个 `jobId` 续跑；`task_status({})` 查全部。
+  - 子代理自己会压缩上下文；压不下时以 `partial` 结束并保留已做的工作。
 - **启动 worker**：`orca terminal create --worktree <path> --title <id>`，运行 `epi --provider magpie --model devin/claude-opus-5-5 --thinking high`，发送 `Read .dev/tasks/<id>/brief.md and do the task. Write your report to .dev/tasks/<id>/report.md.`。
 
 ## 2. 一个任务（N1–N7）
