@@ -100,6 +100,20 @@ test("usage is read from the raw session entries, summarization calls included",
   });
 });
 
+// N6 review P2-2: Pi records a cache-warming refresh as a `usage` entry, not an assistant message.
+// Magpie models now have a cache lifetime and prices (D90), so a long tool call inside a child can
+// trigger one; it is billed and must be counted.
+test("usage counts Pi's own usage entries, such as a cache-warming refresh", () => {
+  const entries = [
+    { type: "message", message: { role: "assistant", usage: { input: 10, output: 2 } } },
+    { type: "usage", kind: "cache_warm", usage: { input: 0, output: 1, cacheRead: 5000, cost: { total: 0.01 } } },
+  ];
+  const total = taskResult.collectEntryUsage(entries);
+  assert.equal(total.outputTokens, 3);
+  assert.equal(total.cacheReadTokens, 5000);
+  assert.equal(total.costUsd, 0.01);
+});
+
 // Round-2 review P2: the answer must survive compaction too. The newest assistant message entry
 // wins, and a tool-call-only turn is skipped the same way as in the projected-message reader.
 test("the answer is read from the raw entries, past a compaction summary", () => {

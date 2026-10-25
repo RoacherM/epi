@@ -141,7 +141,7 @@
             "type": "boolean"
           },
           "jobId": {
-            "description": "Steer this running job, or resume this stopped one; every other setting is ignored. A resume is foreground unless background is true",
+            "description": "Steer this running job, or resume this stopped one; other settings are ignored except background, which makes a resume return at once",
             "type": "string"
           },
           "maxTurns": {

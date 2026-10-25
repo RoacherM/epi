@@ -355,3 +355,20 @@ test("a background job collected by task_wait is not pushed again", async (t) =>
   await delay(400);
   assert.equal(messages.length, 0, "the result was already handed to the model");
 });
+
+// N6 review P2-1: Esc or /compact turns a foreground task into a background one. Nobody waits for it
+// any more, so it must wake the parent when it settles, like a job started with background: true.
+test("a foreground task interrupted by the parent wakes the parent when it settles", async (t) => {
+  const root = createFixture(t);
+  const { tools, context, messages } = await createHarness(t, root);
+  const controller = new AbortController();
+  const pending = tools.get("task").execute(
+    "c1", { task: "slow-usage" }, controller.signal, undefined, context);
+  await delay(100);
+  controller.abort();
+  const receipt = await pending;
+  assert.match(receipt.content[0].text, /keeps running in the background/);
+  await waitFor(() => messages.length === 1, "the push wake after the interrupted job settles");
+  assert.equal(messages[0].message.customType, "epi:task-notify");
+  assert.match(messages[0].message.content, new RegExp(`Job ${receipt.details.id.slice(0, 8)} completed`));
+});
