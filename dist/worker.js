@@ -29,6 +29,9 @@ const PROGRESS_TOOL_LIMIT = 40;
 const PROGRESS_SUMMARY_LIMIT = 200;
 let activeSession;
 let interrupted = false;
+// Set when `session.prompt()` returns: the agent loop is over, so a later steer is reported back as
+// dropped instead of lost.
+let loopFinished = false;
 // Steers that arrived before there was a session to steer (review round 1 P2-1): the parent marks a
 // job `running` at spawn, so one can land while this child is still assembling. Held in arrival
 // order, delivered as soon as the session exists.
@@ -106,6 +109,12 @@ async function interrupt() {
  * at a prompt: it is not expanded, and it must never be able to take the run down.
  */
 function deliverSteer(text) {
+    if (loopFinished) {
+        // Report the text verbatim so the parent can resume this job with it; a steer that lands after
+        // the loop cannot be delivered. Not `singleLine`d: folding its newlines would change it.
+        emit({ type: "steer_dropped", message: text });
+        return;
+    }
     const session = activeSession;
     if (session === undefined) {
         pendingSteers.push(text);
@@ -204,11 +213,23 @@ function openChildSession(capsule) {
  */
 function applyChildCompactionSettings(manager, model) {
     const cap = (value, fraction) => model?.contextWindow === undefined ? value : Math.min(value, Math.floor(model.contextWindow * fraction));
+    const reserveTokens = cap(manager.getCompactionReserveTokens(model), 0.25);
+    const keepRecentTokens = cap(manager.getCompactionKeepRecentTokens(model), 0.4);
     manager.applyOverrides({
         compaction: {
             enabled: true,
-            reserveTokens: cap(manager.getCompactionReserveTokens(model), 0.25),
-            keepRecentTokens: cap(manager.getCompactionKeepRecentTokens(model), 0.4),
+            reserveTokens,
+            keepRecentTokens,
+            // A per-model override outranks the top-level setting in Pi's lookup
+            // (settings-manager.js getCompactionTokenSetting), so the clamp has to land there too or a
+            // user's `modelOverrides["provider/id"]` silently cancels it (task-p2a review P3).
+            ...(model === undefined
+                ? {}
+                : {
+                    modelOverrides: {
+                        [`${model.provider}/${model.id}`]: { reserveTokens, keepRecentTokens },
+                    },
+                }),
         },
     });
 }
@@ -447,6 +468,8 @@ async function main() {
     });
     try {
         await session.prompt(capsule.task);
+        // Everything after this point is reporting; a steer arriving now is undeliverable.
+        loopFinished = true;
         if (interrupted) {
             throw new Error("task worker was interrupted");
         }

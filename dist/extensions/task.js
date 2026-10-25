@@ -6,6 +6,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { emitTaskHook } from "../hook-events.js";
 import { loadTaskAgents } from "../task-agents.js";
+import { singleLine } from "../task-result.js";
 import { forkableBranch, inheritedModelReference, MAX_TASK_TIMEOUT_SECONDS, TaskRuntime, } from "../task-runtime.js";
 /**
  * The nine orthogonal subagent settings (docs/subagents-design.md §3). All optional: a plain
@@ -13,8 +14,8 @@ import { forkableBranch, inheritedModelReference, MAX_TASK_TIMEOUT_SECONDS, Task
  * paid for only when asked for. An `agent` preset supplies defaults these override.
  */
 const TaskToolParameters = Type.Object({
-    task: Type.String({ description: "What the subagent must do, in full: it cannot see this conversation. With jobId, the steering instruction instead" }),
-    jobId: Type.Optional(Type.String({ description: "Steer this running job instead of starting one; every other setting is ignored" })),
+    task: Type.String({ description: "What the subagent must do, in full: it cannot see this conversation. With jobId, the steering or resume instruction instead" }),
+    jobId: Type.Optional(Type.String({ description: "Steer this running job, or resume this stopped one; every other setting is ignored. A resume is foreground unless background is true" })),
     agent: Type.Optional(Type.String({ description: "Preset from agents/*.md; omit for a plain subagent" })),
     cwd: Type.Optional(Type.String({ description: "Absolute or session-relative working directory" })),
     background: Type.Optional(Type.Boolean({ default: false, description: "Return only a job id and keep working; collect it later with task_wait. Not needed for parallelism: several task calls in one turn already run at once" })),
@@ -149,6 +150,13 @@ function contextStopText(job) {
 }
 /** How long a settled job's completion promise stays available to task_wait/task_cancel. */
 const COMPLETION_RETENTION_MS = 10 * 60_000;
+/**
+ * Background jobs that settle within this window of each other share one push wake, so a fan-out
+ * does not become one message per child (docs/subagents-design.md §2.2).
+ */
+const NOTIFY_COALESCE_MS = 300;
+/** The part of a settled job's answer a push wake carries, one line and bounded. */
+const NOTIFY_SUMMARY_LIMIT = 400;
 /** The id the model sees and can copy back: the full uuid is 36 characters of noise per mention. */
 function shortJobId(id) {
     return id.slice(0, 8);
@@ -363,6 +371,132 @@ export function createTaskInlineExtension(options) {
             reportCompletionError("recording a child's usage", error);
         }
     };
+    /**
+     * Jobs a `task_wait`/`task_cancel` already handed back to the model: a background job that then
+     * settles must not also be pushed (design §2.2).
+     */
+    const delivered = new Set();
+    const pendingNotify = [];
+    let notifyTimer;
+    /** One line of a push wake: `Job <id8> <status>: <first 400 chars>`, plus the pull hint. */
+    const notifyText = (job) => {
+        const id = shortJobId(job.id);
+        const summary = singleLine(job.result ?? job.error ?? "", NOTIFY_SUMMARY_LIMIT);
+        return `Job ${id} ${job.status}: ${summary}\ntask_status({ jobId: "${id}" }) for details`;
+    };
+    /**
+     * The micro-batch wake (design §2.2): everything that settled in the window goes out as one
+     * `epi:task-notify` follow-up that starts a turn. Read through the *current* `pi`: after a session
+     * switch the old one is stale.
+     */
+    const flushNotify = () => {
+        notifyTimer = undefined;
+        const fresh = pendingNotify.splice(0).filter((job) => !delivered.has(job.id));
+        const pi = current.pi;
+        if (fresh.length === 0 || pi === undefined)
+            return;
+        try {
+            pi.sendMessage({
+                customType: "epi:task-notify",
+                content: fresh.map(notifyText).join("\n\n"),
+                display: true,
+            }, { deliverAs: "followUp", triggerTurn: true });
+        }
+        catch (error) {
+            reportCompletionError("notifying a settled task", error);
+        }
+    };
+    const scheduleNotify = (job) => {
+        pendingNotify.push(job);
+        if (notifyTimer !== undefined)
+            return;
+        // Unref'd: in `epi -p` a background job that has not settled by exit must not hold the process
+        // open (a documented limit -- there is no session left to notify).
+        notifyTimer = setTimeout(flushNotify, NOTIFY_COALESCE_MS);
+        notifyTimer.unref();
+    };
+    /**
+     * A steer that arrived after its worker's loop ended is reported as `steer_dropped`; resume the
+     * job with it so the `task({ jobId, task })` the model was told "Steered" for always lands. The
+     * resumed run has nobody waiting on it, so it pushes its result.
+     */
+    const resumeWithDropped = (job, dropped) => {
+        try {
+            const resumed = runtime.resume(job.id, dropped.join("\n\n"));
+            delivered.delete(resumed.id);
+            void trackCompletion(resumed.id, true).catch((error) => {
+                reportCompletionError("resuming a job with a dropped steer", error);
+            });
+        }
+        catch (error) {
+            reportCompletionError("resuming a job with a dropped steer", error);
+        }
+    };
+    /**
+     * Completion bookkeeping for one run: record the child's usage, run the `task_stop` hook through
+     * the live `pi`/`ctx`, then push the result (a background job nobody is waiting on) or resume the
+     * job if its worker reported an undelivered steer. Shared by a start and a resume.
+     */
+    const trackCompletion = (jobId, notify) => {
+        const completion = runtime.wait(jobId).then(async (job) => {
+            recordChildUsage(job);
+            // Read the live `pi`/`ctx` now, not the pair captured when the job started: a session switch
+            // between start and completion leaves the captured pair stale.
+            const pi = current.pi;
+            const ctx = current.ctx;
+            if (pi === undefined || ctx === undefined)
+                return job;
+            const stopDecision = await emitTaskHook(pi.events, { type: "task_stop", job }, ctx);
+            if (stopDecision.action !== "continue") {
+                throw new Error(stopDecision.reason ?? "task stop hook returned an invalid decision");
+            }
+            return job;
+        }).then((job) => {
+            const dropped = runtime.takeDroppedSteers(job.id);
+            if (dropped.length > 0)
+                resumeWithDropped(job, dropped);
+            else if (notify)
+                scheduleNotify(job);
+            return job;
+        });
+        completionHooks.set(jobId, completion);
+        // The registry lives for the whole process now; drop settled entries so it does not grow by one
+        // promise per job forever. A grace period keeps the hook's outcome for a task_wait/task_cancel
+        // that arrives just after the job settles.
+        void completion.finally(() => {
+            setTimeout(() => {
+                if (completionHooks.get(jobId) === completion)
+                    completionHooks.delete(jobId);
+            }, COMPLETION_RETENTION_MS).unref();
+        }).catch(() => { });
+        // A background job's completion has no one awaiting it here; surface a failure instead of
+        // swallowing it. A foreground caller gets the same error through `completion`.
+        void completion.catch((error) => {
+            reportCompletionError("task completion", error);
+        });
+        return completion;
+    };
+    /**
+     * Start (or resume) a job and hand the model its result: a background job gets the short receipt,
+     * a foreground one waits for the answer (and leaves the job running if its own turn is aborted).
+     */
+    const runJob = async (job, background, signal) => {
+        const completion = trackCompletion(job.id, background);
+        if (background)
+            return startedResult(job);
+        const waited = await runtime.wait(job.id, undefined, signal);
+        if (signal?.aborted === true &&
+            (waited.status === "queued" || waited.status === "running")) {
+            return {
+                content: [{
+                        type: "text",
+                        text: `Job ${job.id} keeps running in the background; collect it with task_wait.`,
+                    }],
+                details: runtime.status(job.id),
+            };
+        }
+        return jobResult(await completion);
+    };
     return {
         name: "epi:task",
         factory(pi) {
@@ -397,7 +531,7 @@ export function createTaskInlineExtension(options) {
                     "To fan out, issue several task calls in the same turn: they run concurrently and each",
                     "returns its result, so no task_wait is needed. Each subagent costs a fresh system prompt",
                     "and process start, so give each one a sizeable share (several files, not one tiny one).",
-                    "Pass jobId to steer a running job instead of starting one.",
+                    "Pass jobId to steer a running job or resume a stopped one instead of starting one.",
                     availableAgents.length === 0
                         ? ""
                         : `Presets: ${availableAgents.map((agent) => `${agent.name} (${agent.description})`).join(", ")}.`,
@@ -409,26 +543,28 @@ export function createTaskInlineExtension(options) {
                 async execute(_toolCallId, params, signal, _onUpdate, ctx) {
                     current.ctx = ctx;
                     try {
-                        // `task({ jobId, task })` is a steer, not a start: no job is created and every other
-                        // field is ignored (the schema says so). It returns at once.
+                        // `task({ jobId, task })` acts on an existing job, not a new one: a running job is
+                        // steered, a settled one resumed in place (design §2.3). Every other field is ignored.
                         if (params.jobId !== undefined) {
                             // Whatever the job's state, the text becomes instructions the child will act on (a
-                            // queued job's replacement task, a running job's steer, which the worker delivers
-                            // verbatim past the child's input hooks), so `task_start` must see it, or a hook
-                            // that blocks by text is bypassed in two steps (review P2-2, round 2 P2-A). A
-                            // finished job is refused by runtime.steer below, after the hook.
+                            // queued job's replacement task, a running job's steer, a resume's next message), so
+                            // `task_start` must see it, or a hook that blocks by text is bypassed in two steps
+                            // (review P2-2, round 2 P2-A).
                             const known = runtime.status(params.jobId);
-                            if (known.status === "queued" || known.status === "running") {
-                                const replaceDecision = await emitTaskHook(pi.events, {
-                                    type: "task_start",
-                                    ...(known.agent === undefined ? {} : { agent: known.agent }),
-                                    task: params.task,
-                                    cwd: known.cwd,
-                                }, ctx);
-                                if (replaceDecision.action === "block" ||
-                                    replaceDecision.action === "cancel") {
-                                    throw new Error(replaceDecision.reason ?? "task start blocked by Epi hook");
-                                }
+                            const decision = await emitTaskHook(pi.events, {
+                                type: "task_start",
+                                ...(known.agent === undefined ? {} : { agent: known.agent }),
+                                task: params.task,
+                                cwd: known.cwd,
+                            }, ctx);
+                            if (decision.action === "block" ||
+                                decision.action === "cancel") {
+                                throw new Error(decision.reason ?? "task start blocked by Epi hook");
+                            }
+                            if (known.status !== "queued" && known.status !== "running") {
+                                // A settled job resumes on the same session file, so the child remembers the run
+                                // that stopped; `jobId` calls ignore the other settings (the schema says so).
+                                return runJob(runtime.resume(params.jobId, params.task), params.background === true, signal);
                             }
                             const steered = runtime.steer(params.jobId, params.task);
                             return {
@@ -469,52 +605,7 @@ export function createTaskInlineExtension(options) {
                                 ? { forkEntries: forkableBranch(ctx.sessionManager.getBranch()) }
                                 : {}),
                         });
-                        const completion = runtime.wait(started.id).then(async (job) => {
-                            recordChildUsage(job);
-                            // Read the live `pi`/`ctx` now, not the pair captured when the job started: a session
-                            // switch between start and completion leaves the captured pair stale.
-                            const pi = current.pi;
-                            const ctx = current.ctx;
-                            if (pi === undefined || ctx === undefined)
-                                return job;
-                            const stopDecision = await emitTaskHook(pi.events, { type: "task_stop", job }, ctx);
-                            if (stopDecision.action !== "continue") {
-                                throw new Error(stopDecision.reason ?? "task stop hook returned an invalid decision");
-                            }
-                            return job;
-                        });
-                        completionHooks.set(started.id, completion);
-                        // The registry lives for the whole process now; drop settled entries so it does not
-                        // grow by one promise per job forever. A grace period keeps the hook's outcome for a
-                        // task_wait/task_cancel that arrives just after the job settles.
-                        void completion.finally(() => {
-                            setTimeout(() => {
-                                if (completionHooks.get(started.id) === completion)
-                                    completionHooks.delete(started.id);
-                            }, COMPLETION_RETENTION_MS).unref();
-                        }).catch(() => { });
-                        // A background job's completion has no one awaiting it here; surface a failure instead
-                        // of swallowing it. A foreground caller gets the same error through `completion`.
-                        void completion.catch((error) => {
-                            reportCompletionError("task completion", error);
-                        });
-                        if (params.background === true) {
-                            return startedResult(started);
-                        }
-                        const waited = await runtime.wait(started.id, undefined, signal);
-                        if (signal?.aborted === true &&
-                            (waited.status === "queued" || waited.status === "running")) {
-                            // The parent aborted its own turn (Esc, `/compact`). That must not kill the child:
-                            // hand back a background receipt and let `task_wait` collect it.
-                            return {
-                                content: [{
-                                        type: "text",
-                                        text: `Job ${started.id} keeps running in the background; collect it with task_wait.`,
-                                    }],
-                                details: runtime.status(started.id),
-                            };
-                        }
-                        return jobResult(await completion);
+                        return runJob(started, params.background === true, signal);
                     }
                     catch (error) {
                         return errorResult(error);
@@ -577,9 +668,11 @@ export function createTaskInlineExtension(options) {
                         // Looked up by the id the wait resolved, not the text the caller typed: the model may
                         // have copied the 8-character form out of `task_status` (review round 1 P1-2).
                         const completion = completionHooks.get(waited.id);
-                        if (completion !== undefined &&
-                            waited.status !== "queued" &&
-                            waited.status !== "running") {
+                        if (waited.status !== "queued" && waited.status !== "running") {
+                            // The result is in the model's context now; a push wake would repeat it.
+                            delivered.add(waited.id);
+                        }
+                        if (completion !== undefined && waited.status !== "queued" && waited.status !== "running") {
                             return jobResult(await completion);
                         }
                         return jobResult(waited);
@@ -600,6 +693,8 @@ export function createTaskInlineExtension(options) {
                     current.ctx = ctx;
                     try {
                         const cancelled = await runtime.cancel(params.jobId);
+                        // Cancelling is the model collecting the job; do not also push it.
+                        delivered.add(cancelled.id);
                         const completion = completionHooks.get(cancelled.id);
                         if (completion !== undefined) {
                             await completion;

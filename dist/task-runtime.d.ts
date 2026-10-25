@@ -228,6 +228,14 @@ export declare class TaskRuntime {
      */
     steer(jobId: string, message: string): TaskJobSnapshot;
     /**
+     * Start another run on a settled job, in place (docs/subagents-design.md §2.3): the job keeps its
+     * id, `createdAt` and session file, and the worker reopens that file. The original request is the
+     * capsule's settings -- a `jobId` call ignores every other field.
+     */
+    resume(jobId: string, task: string): TaskJobSnapshot;
+    /** The steers a settled worker reported as undelivered, consumed once each. */
+    takeDroppedSteers(jobId: string): string[];
+    /**
      * Wait for a job to settle, or stop waiting on `timeoutMs` / `signal`. Aborting this wait never
      * touches the job: a parent that aborts its own turn (Esc, `/compact`) must not kill a subagent
      * it started. Only `cancel` and process exit stop a job.

@@ -1,5 +1,5 @@
 import { spawn, } from "node:child_process";
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync, } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync, } from "node:fs";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { randomUUID } from "node:crypto";
@@ -169,6 +169,24 @@ function formatTokenCount(tokens) {
     if (tokens === undefined || !Number.isFinite(tokens))
         return "";
     return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : `${Math.trunc(tokens)}`;
+}
+/**
+ * Two runs' spend added together: a resume accumulates across runs, and each worker reports only
+ * its own run (it records a baseline when it opens the session file).
+ */
+function addTaskUsage(total, run) {
+    if (run === undefined)
+        return total;
+    if (total === undefined)
+        return { ...run };
+    return {
+        inputTokens: total.inputTokens + run.inputTokens,
+        outputTokens: total.outputTokens + run.outputTokens,
+        cacheReadTokens: total.cacheReadTokens + run.cacheReadTokens,
+        cacheWriteTokens: total.cacheWriteTokens + run.cacheWriteTokens,
+        reasoningTokens: total.reasoningTokens + run.reasoningTokens,
+        costUsd: total.costUsd + run.costUsd,
+    };
 }
 class BoundedOutput {
     limit;
@@ -380,7 +398,10 @@ export class TaskRuntime {
             usage: undefined,
             turns: undefined,
             progressTurns: 0,
+            stepsBase: 0,
             steps: 0,
+            droppedSteers: [],
+            isResume: false,
             currentActivity: undefined,
             lastSummary: undefined,
             recentEvents: [],
@@ -419,7 +440,7 @@ export class TaskRuntime {
             return this.snapshot(job);
         }
         if (job.status !== "running") {
-            throw new Error(`job ${shortId} is ${job.status}; resume is not supported yet`);
+            throw new Error(`job ${shortId} is ${job.status}; resume it with task({ jobId, task })`);
         }
         const stdin = job.process?.stdin;
         if (stdin === undefined || !stdin.writable) {
@@ -427,6 +448,51 @@ export class TaskRuntime {
         }
         stdin.write(`${JSON.stringify({ type: "steer", message })}\n`);
         return this.snapshot(job);
+    }
+    /**
+     * Start another run on a settled job, in place (docs/subagents-design.md §2.3): the job keeps its
+     * id, `createdAt` and session file, and the worker reopens that file. The original request is the
+     * capsule's settings -- a `jobId` call ignores every other field.
+     */
+    resume(jobId, task) {
+        if (this.shuttingDown) {
+            throw new Error("task runtime is shutting down");
+        }
+        const job = this.findJob(jobId);
+        const shortId = job.id.slice(0, 8);
+        if (job.status === "queued" || job.status === "running") {
+            throw new Error(`job ${shortId} is ${job.status}; it is already running`);
+        }
+        if (task.trim().length === 0) {
+            throw new Error("task must be a non-empty string");
+        }
+        // A job that failed before its session was created has nothing to continue from; say why
+        // instead of spawning a worker that would start a second, empty conversation.
+        if (!existsSync(job.sessionPath)) {
+            throw new Error(`job ${shortId} has no session file at ${job.sessionPath}; nothing to resume`);
+        }
+        job.isResume = true;
+        job.task = task;
+        job.status = "queued";
+        job.result = undefined;
+        job.workerResult = undefined;
+        job.protocolError = undefined;
+        job.terminationCause = undefined;
+        job.currentActivity = undefined;
+        job.progressTurns = 0;
+        job.stepsBase = job.steps;
+        job.droppedSteers.length = 0;
+        job.settled = false;
+        const { promise: completion, resolve: resolveCompletion } = Promise.withResolvers();
+        job.completion = completion;
+        job.resolveCompletion = resolveCompletion;
+        this.queue.push(job.id);
+        queueMicrotask(() => this.pump());
+        return this.snapshot(job);
+    }
+    /** The steers a settled worker reported as undelivered, consumed once each. */
+    takeDroppedSteers(jobId) {
+        return this.findJob(jobId).droppedSteers.splice(0);
     }
     /**
      * Wait for a job to settle, or stop waiting on `timeoutMs` / `signal`. Aborting this wait never
@@ -615,11 +681,15 @@ export class TaskRuntime {
      * certainty: how Epi stopped it, then how the process died, then what it reported.
      */
     settleOutcome(job, exit, stderrText) {
-        // Reported even for a failed or partial run: those tokens were still spent.
-        job.usage = job.workerResult?.usage;
+        // Reported even for a failed or partial run: those tokens were still spent. Each run's spend is
+        // added to the job's total, so a resume accumulates instead of replacing (development.md §12.3).
+        job.usage = addTaskUsage(job.usage, job.workerResult?.usage);
         // A worker's own count wins, but a worker that reported none must not erase the turns its
-        // progress lines already established.
-        job.turns = job.workerResult?.turns ?? job.turns;
+        // progress lines already established. The count is this run's, so it adds to the job's total.
+        const runTurns = job.workerResult?.turns ?? (job.progressTurns > 0 ? job.progressTurns : undefined);
+        if (runTurns !== undefined) {
+            job.turns = (job.turns ?? 0) + runTurns;
+        }
         job.stoppedBy = job.workerResult?.stopped;
         if (job.terminationCause === "cancelled") {
             job.status = "cancelled";
@@ -682,7 +752,11 @@ export class TaskRuntime {
             tools: pick("tools"),
             excludeTools: pick("excludeTools"),
             sessionPath: job.sessionPath,
-            forkEntries: (pick("context") ?? "fresh") === "fork" ? [...(request.forkEntries ?? [])] : undefined,
+            // A resume reopens a file that already holds the fork entries; writing them again would fail
+            // (`wx`) or duplicate the child's history.
+            forkEntries: !job.isResume && (pick("context") ?? "fresh") === "fork"
+                ? [...(request.forkEntries ?? [])]
+                : undefined,
             rules: pick("rules") ?? false,
             skills: pick("skills") ?? false,
             mcp: pick("mcp") ?? false,
@@ -736,6 +810,16 @@ export class TaskRuntime {
             "ok" in event &&
             typeof event.ok === "boolean") {
             job.workerResult = event;
+            return;
+        }
+        if (typeof event === "object" &&
+            event !== null &&
+            "type" in event &&
+            event.type === "steer_dropped" &&
+            "message" in event &&
+            typeof event.message === "string") {
+            const dropped = event;
+            job.droppedSteers.push(dropped.message);
         }
     }
     /**
@@ -748,7 +832,8 @@ export class TaskRuntime {
             job.progressTurns = Math.max(0, Math.trunc(event.turns));
         }
         if (typeof event.steps === "number" && Number.isFinite(event.steps)) {
-            job.steps = Math.max(0, Math.trunc(event.steps));
+            // Steps accumulate across runs: a resumed worker counts its own run from zero.
+            job.steps = job.stepsBase + Math.max(0, Math.trunc(event.steps));
         }
         if (typeof event.summary === "string") {
             job.lastSummary = singleLine(event.summary, PROGRESS_SUMMARY_LIMIT);
@@ -829,8 +914,10 @@ export class TaskRuntime {
         }
     }
     snapshot(job) {
-        // Progress turns stand in until, or unless, the worker reports its own count.
-        const turns = job.turns ?? (job.progressTurns > 0 ? job.progressTurns : undefined);
+        // While a run is live its progress lines count on top of the turns earlier runs finished; once
+        // it settles, `turns` is the job's accumulated total.
+        const live = job.progressTurns > 0 ? (job.turns ?? 0) + job.progressTurns : job.turns;
+        const turns = job.status === "queued" || job.status === "running" ? live : job.turns;
         return {
             id: job.id,
             ...(job.agent === undefined ? {} : { agent: job.agent.name, agentSource: job.agent.source }),

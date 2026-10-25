@@ -79,7 +79,18 @@ interface WorkerProgressEvent {
   ok?: boolean;
 }
 
-type WorkerEvent = WorkerResultEvent | WorkerProgressEvent | { type: "started"; pid: number };
+/** A steer that arrived after this run's agent loop ended: the parent is told so it can resume the
+ * job with the text instead of losing it (docs/subagents-design.md §9, defect 5). */
+interface WorkerSteerDroppedEvent {
+  type: "steer_dropped";
+  message: string;
+}
+
+type WorkerEvent =
+  | WorkerResultEvent
+  | WorkerProgressEvent
+  | WorkerSteerDroppedEvent
+  | { type: "started"; pid: number };
 
 /** A progress line's own caps. The parent caps again on the way in. */
 const PROGRESS_TARGET_LIMIT = 120;
@@ -88,6 +99,9 @@ const PROGRESS_SUMMARY_LIMIT = 200;
 
 let activeSession: AgentSession | undefined;
 let interrupted = false;
+// Set when `session.prompt()` returns: the agent loop is over, so a later steer is reported back as
+// dropped instead of lost.
+let loopFinished = false;
 // Steers that arrived before there was a session to steer (review round 1 P2-1): the parent marks a
 // job `running` at spawn, so one can land while this child is still assembling. Held in arrival
 // order, delivered as soon as the session exists.
@@ -169,6 +183,12 @@ async function interrupt(): Promise<void> {
  * at a prompt: it is not expanded, and it must never be able to take the run down.
  */
 function deliverSteer(text: string): void {
+  if (loopFinished) {
+    // Report the text verbatim so the parent can resume this job with it; a steer that lands after
+    // the loop cannot be delivered. Not `singleLine`d: folding its newlines would change it.
+    emit({ type: "steer_dropped", message: text });
+    return;
+  }
   const session = activeSession;
   if (session === undefined) {
     pendingSteers.push(text);
@@ -269,11 +289,23 @@ function openChildSession(capsule: TaskCapsule): SessionManager {
 function applyChildCompactionSettings(manager: SettingsManager, model: AgentSession["model"]): void {
   const cap = (value: number, fraction: number): number =>
     model?.contextWindow === undefined ? value : Math.min(value, Math.floor(model.contextWindow * fraction));
+  const reserveTokens = cap(manager.getCompactionReserveTokens(model), 0.25);
+  const keepRecentTokens = cap(manager.getCompactionKeepRecentTokens(model), 0.4);
   manager.applyOverrides({
     compaction: {
       enabled: true,
-      reserveTokens: cap(manager.getCompactionReserveTokens(model), 0.25),
-      keepRecentTokens: cap(manager.getCompactionKeepRecentTokens(model), 0.4),
+      reserveTokens,
+      keepRecentTokens,
+      // A per-model override outranks the top-level setting in Pi's lookup
+      // (settings-manager.js getCompactionTokenSetting), so the clamp has to land there too or a
+      // user's `modelOverrides["provider/id"]` silently cancels it (task-p2a review P3).
+      ...(model === undefined
+        ? {}
+        : {
+            modelOverrides: {
+              [`${model.provider}/${model.id}`]: { reserveTokens, keepRecentTokens },
+            },
+          }),
     },
   });
 }
@@ -542,6 +574,8 @@ async function main(): Promise<void> {
 
   try {
     await session.prompt(capsule.task);
+    // Everything after this point is reporting; a steer arriving now is undeliverable.
+    loopFinished = true;
     if (interrupted) {
       throw new Error("task worker was interrupted");
     }

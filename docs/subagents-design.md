@@ -1,6 +1,6 @@
 # Epi 内置 Subagents 设计（`epi:task` 2.0）
 
-状态：**部分实现**（2026-10-25 更新）。第 10 节是实现状态与范围修订，**以第 10 节为准**；第 1–9 节保留原始设计，其中标为"不做"或"未实现"的承诺不对用户和模型生效。
+状态：**包 1、包 2 已实现**（2026-10-25 更新）。第 10 节是实现状态与范围修订，**以第 10 节为准**；第 1–9 节保留原始设计，其中标为"不做"或"未实现"的承诺不对用户和模型生效。
 
 本文定义如何将 Epi 现有的内置扩展 `epi:task`（当前约 840 行）升级为完整的、简约风格的内置 Subagents 系统，从而直接替代外部 98,113 行的 `npm:pi-subagents`。
 
@@ -410,9 +410,15 @@ timeoutSeconds: 600
 - progress 事件 → `task_status({jobId})` 显示当前轮次、步数、正在做什么、最近 10 步；`task_status({})` 列出全部任务；id 可用 8 位以上的唯一前缀。
 - 运行中 steer：`task({ jobId, task })`，经 `session.agent.steer` 逐字投递（不做命令展开，`/epi …` 不再能打挂 worker）；session 就绪前到达的 steer 先缓存再投递；queued 任务改为替换文本。steer 与替换文本都先过父进程的 `task_start` hook。
 
+### 10.2b 包 2 已实现（2026-10-25 合入）
+
+- **结束后按 `jobId` 续跑（§2.3）**：对 `completed`/`partial`/`failed`/`cancelled` 的 Job 调用 `task({ jobId, task })`，用 `SessionManager.open(job.sessionPath)` 重开原会话文件续跑；Job 保持 id/`createdAt`/`sessionPath`，`turns`/`steps`/`compactions`/`usage` 跨轮累加（worker 只报本轮，父进程逐轮相加）；capsule 复用原设置，不再写 fork entries；会话文件缺失则报错不启动；默认前台，`background: true` 时只回执；续跑文本先过 `task_start` hook。
+- **push 唤醒（§2.2）**：`background: true` 的 Job 落定且无人等待时，父会话收到一条 `epi:task-notify` follow-up（`deliverAs: "followUp"`, `triggerTurn: true`）；300ms 内落定的多个 Job 合并成一条；已被 `task_wait`/`task_cancel` 收回的 Job 不重复推送；`-p`/json 模式下进程可能先于后台 Job 落定退出，此限制已知且不阻塞退出。
+- **agent loop 结束后到达的 steer 不再丢字（§9 缺陷 5）**：worker 报 `{"type":"steer_dropped","message":…}`，父进程在该 Job 落定后自动按续跑补投。
+
 ### 10.3 计划中
 
-- 包 2：结束后按 `jobId` 续跑（§2.3）+ push 唤醒（§2.2）。
+（无）
 
 ### 10.4 明确不做（用户决定）
 

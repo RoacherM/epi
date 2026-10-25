@@ -116,6 +116,8 @@ async function bindSession(extension, root, { failStopHook = false } = {}) {
       guard();
       tools.set(definition.name, definition);
     },
+    // A real `pi` always has this; a background job's push wake calls it on settle.
+    sendMessage() {},
   });
   const context = { cwd: root, model: undefined, sessionManager: { getBranch: () => [] } };
   return { tools, handlers, entries, context, state };

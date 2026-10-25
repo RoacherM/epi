@@ -68,6 +68,8 @@ async function createHarness(t, root, options = {}, events) {
     registerTool(definition) {
       tools.set(definition.name, definition);
     },
+    // A real `pi` always has this; a background job's push wake calls it on settle.
+    sendMessage() {},
   });
   t.after(async () => {
     await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, {});
@@ -222,7 +224,7 @@ test("task_status with no jobId lists every job; a running jobId returns the com
   assert.equal(queued.details.status, "queued");
 });
 
-test("task with a jobId steers a running job, replaces a queued one, and refuses a finished one", async (t) => {
+test("task with a jobId steers a running job, replaces a queued one, and resumes a finished one", async (t) => {
   const root = createFixture(t);
   const { tools, context } = await createHarness(t, root, { maxConcurrency: 1 });
   const running = await tools.get("task").execute(
@@ -258,18 +260,20 @@ test("task with a jobId steers a running job, replaces a queued one, and refuses
     "c7", { jobId: queued.details.id }, undefined, undefined, context);
   assert.equal(replacement.details.result, "fake:REPLACED:");
 
-  // A settled job cannot be steered: the model is told why instead of being left to retry.
-  const refused = await tools.get("task").execute(
+  // A settled job is resumed in place (design §2.3): same id, same session file, the new text as
+  // the next message; the child remembers everything it did.
+  const resumed = await tools.get("task").execute(
     "c8", { jobId: running.details.id, task: "again" }, undefined, undefined, context);
-  assert.equal(refused.details.error,
-    `job ${running.details.id.slice(0, 8)} is completed; resume is not supported yet`,
-  );
-  assert.doesNotMatch(refused.content[0].text, /Steered/);
+  assert.equal(resumed.details.status, "completed");
+  assert.equal(resumed.details.id, running.details.id);
+  assert.equal(resumed.details.sessionPath, running.details.sessionPath);
+  assert.equal(resumed.details.result, "fake:again:");
+  assert.doesNotMatch(resumed.content[0].text, /Steered/);
 
   // And a settled job's status is still its answer, not the progress block meant for a live one.
   const settled = await tools.get("task_status").execute(
     "c9", { jobId: running.details.id }, undefined, undefined, context);
-  assert.equal(settled.content[0].text, "steered:GO LEFT");
+  assert.equal(settled.content[0].text, "fake:again:");
   assert.doesNotMatch(settled.content[0].text, /recent:/);
 });
 
