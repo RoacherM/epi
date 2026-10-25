@@ -150,7 +150,8 @@ function shortJobId(id) {
 function runningStatusText(job) {
     const lines = [
         `${job.status} · turn ${job.turns ?? 0} · ${job.steps ?? 0} steps` +
-            (job.currentActivity === undefined ? "" : ` · now: ${job.currentActivity}`),
+            (job.currentActivity === undefined ? "" : ` · now: ${job.currentActivity}`) +
+            (job.compactions === undefined || job.compactions === 0 ? "" : ` · ${job.compactions} compactions`),
     ];
     if (job.lastSummary !== undefined && job.lastSummary.length > 0) {
         lines.push(`last: ${job.lastSummary}`);
@@ -172,7 +173,11 @@ function jobResult(job) {
     const text = job.status === "completed"
         ? resultText(job)
         : job.status === "partial"
-            ? `${resultText(job)}\n\n[Stopped at maxTurns after ${job.turns ?? 0} turns (job ${job.id}). The work so far is above.]`
+            // A context stop already carries its own reason line from the worker; only a maxTurns stop
+            // needs the parent to say how far the run got.
+            ? job.stoppedBy === "context"
+                ? resultText(job)
+                : `${resultText(job)}\n\n[Stopped at maxTurns after ${job.turns ?? 0} turns (job ${job.id}). The work so far is above.]`
             : JSON.stringify(job, null, 2);
     return {
         content: [{ type: "text", text }],

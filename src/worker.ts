@@ -51,6 +51,9 @@ interface WorkerResultEvent {
   /** True when the run stopped at `maxTurns` with work already done: the parent reports it as a
    * partial result rather than a failure, and the session file stays resumable. */
   partial?: boolean;
+  /** Why a partial run stopped: the `maxTurns` budget, or a context window compaction could not
+   * free enough of. */
+  stopped?: "maxTurns" | "context";
   turns?: number;
   /** What this child spent. A subagent runs in its own process, so its tokens never appear in the
    * parent's event stream; without this they are invisible and delegation looks free. */
@@ -65,10 +68,15 @@ interface WorkerProgressEvent {
   type: "progress";
   turns: number;
   steps: number;
-  phase: "tool_start" | "tool_end" | "turn_end";
+  phase: "tool_start" | "tool_end" | "turn_end" | "compaction";
   tool?: string;
   target?: string;
   summary?: string;
+  /** Compaction only: why Pi compacted, how large the window was, and whether it worked. */
+  reason?: "manual" | "threshold" | "overflow";
+  tokensBefore?: number;
+  tokensAfter?: number;
+  ok?: boolean;
 }
 
 type WorkerEvent = WorkerResultEvent | WorkerProgressEvent | { type: "started"; pid: number };
@@ -77,6 +85,10 @@ type WorkerEvent = WorkerResultEvent | WorkerProgressEvent | { type: "started"; 
 const PROGRESS_TARGET_LIMIT = 120;
 const PROGRESS_TOOL_LIMIT = 40;
 const PROGRESS_SUMMARY_LIMIT = 200;
+
+/** What a child that ran out of window says instead of a bare failure. Pi's own overflow text names
+ * a provider, not the situation; this is the one line the parent shows as the stop reason. */
+const CONTEXT_STOP_REASON = "[Stopped: context window full and compaction could not free enough space.]";
 
 let activeSession: AgentSession | undefined;
 let interrupted = false;
@@ -104,6 +116,12 @@ function toolTarget(args: unknown): string {
     }
   }
   return "";
+}
+
+/** The child's answer plus why it stopped, or just the reason when it never produced text. */
+function contextStopOutput(messages: readonly unknown[]): string {
+  const text = finalAssistantText(messages);
+  return text.length > 0 ? `${text}\n\n${CONTEXT_STOP_REASON}` : CONTEXT_STOP_REASON;
 }
 
 function readCapsule(capsulePath: string): TaskCapsule {
@@ -395,6 +413,11 @@ async function startChildSession(capsule: TaskCapsule): Promise<AgentSession> {
   if ((session.model === undefined || session.model.provider === "unknown") && notRunning() !== "") {
     throw new Error(`No model available${notRunning()}`);
   }
+  // A subagent has no human to run /compact, so it must always be able to compact its own window:
+  // whatever the user's global settings say about the parent. Applied last, because building the
+  // session reloads settings (resource-loader) and would otherwise discard the override. In-memory
+  // only -- the user's settings file is never written (docs/development.md §12.4).
+  settingsManager.applyOverrides({ compaction: { enabled: true } });
   return session;
 }
 
@@ -423,6 +446,9 @@ async function main(): Promise<void> {
   let turns = 0;
   let steps = 0;
   let stoppedAtMaxTurns = false;
+  // A context overflow Pi could not recover from by compacting. The final assistant message is the
+  // provider's overflow error, which would otherwise be reported as a bare failure (design §12.4).
+  let overflowUnrecoverable = false;
   // `tool_execution_end` carries no args, so the target a start line reported is remembered per
   // call id and repeated on the end line -- that is what lets the parent upgrade `▸` to `✓`.
   const toolTargets = new Map<string, { tool: string; target: string }>();
@@ -442,6 +468,20 @@ async function main(): Promise<void> {
         type: "progress", turns, steps, phase: "tool_end",
         tool: known?.tool ?? singleLine(event.toolName, PROGRESS_TOOL_LIMIT),
         target: known?.target ?? "",
+      });
+      return;
+    }
+    if (event.type === "compaction_end") {
+      const ok = event.result !== undefined && event.errorMessage === undefined;
+      if (!ok && event.reason === "overflow" && !event.aborted) overflowUnrecoverable = true;
+      emit({
+        type: "progress", turns, steps, phase: "compaction", reason: event.reason, ok,
+        ...(event.result === undefined ? {} : {
+          tokensBefore: event.result.tokensBefore,
+          ...(event.result.estimatedTokensAfter === undefined
+            ? {}
+            : { tokensAfter: event.result.estimatedTokensAfter }),
+        }),
       });
       return;
     }
@@ -476,16 +516,31 @@ async function main(): Promise<void> {
       throw new Error("task worker was interrupted");
     }
     const requestError = stoppedAtMaxTurns ? undefined : outcome.error(session.messages);
-    if (requestError !== undefined) throw new Error(requestError);
-    emit({
-      type: "result",
-      ok: true,
-      // Only when it happened: a plain finished run keeps the protocol line it always had.
-      ...(stoppedAtMaxTurns ? { partial: true } : {}),
-      turns,
-      usage: collectUsage(session.messages),
-      output: finalAssistantText(session.messages, stoppedAtMaxTurns),
-    });
+    // An overflow the child could not compact its way out of is not a failure: the session file
+    // survives, and the parent reports the work already done plus why it stopped. Any other request
+    // error (auth, network, 5xx) stays a failure.
+    if (requestError !== undefined && (overflowUnrecoverable || outcome.overflow(session.messages))) {
+      emit({
+        type: "result",
+        ok: true,
+        partial: true,
+        stopped: "context",
+        turns,
+        usage: collectUsage(session.messages),
+        output: contextStopOutput(session.messages),
+      });
+    } else {
+      if (requestError !== undefined) throw new Error(requestError);
+      emit({
+        type: "result",
+        ok: true,
+        // Only when it happened: a plain finished run keeps the protocol line it always had.
+        ...(stoppedAtMaxTurns ? { partial: true, stopped: "maxTurns" as const } : {}),
+        turns,
+        usage: collectUsage(session.messages),
+        output: finalAssistantText(session.messages, stoppedAtMaxTurns),
+      });
+    }
   } finally {
     unsubscribe();
     // Captured before dispose: the failure path below still has to report what this child spent.

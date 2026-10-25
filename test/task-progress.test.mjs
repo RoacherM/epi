@@ -131,6 +131,42 @@ test("a tool_end upgrades its tool_start entry instead of adding a second line",
   await runtime.shutdown();
 });
 
+// A long-running child compacts its own window (docs/development.md §12.4). The parent must be able
+// to see that: how often it happened, whether it worked, and how much window it freed.
+test("a child's compaction is counted and shown in the running status block", async (t) => {
+  const root = createFixture(t);
+  const { tools, context } = await createHarness(t, root);
+  const started = await tools.get("task").execute(
+    "c1", { task: "compact-wait", background: true }, undefined, undefined, context);
+
+  const running = await waitFor(async () => {
+    const status = await tools.get("task_status").execute(
+      "c2", { jobId: started.details.id }, undefined, undefined, context);
+    return status.details.compactions === undefined ? undefined : status;
+  }, "the compaction progress line");
+
+  assert.equal(running.details.compactions, 2, "one per compaction attempt, success or failure");
+  assert.deepEqual(running.details.recentEvents, [
+    "✓ read src/big.ts",
+    "⟲ compacted 182k→41k",
+    "⟲ compaction failed",
+  ]);
+  assert.equal(
+    running.content[0].text,
+    "running · turn 1 · 1 steps · 2 compactions\nrecent:\n" +
+      "✓ read src/big.ts\n⟲ compacted 182k→41k\n⟲ compaction failed",
+  );
+
+  // Let the waiting worker finish so its job settles and the fixture can shut down.
+  await tools.get("task").execute(
+    "c3", { jobId: started.details.id, task: "GO" }, undefined, undefined, context);
+  const done = await tools.get("task_wait").execute(
+    "c4", { jobId: started.details.id }, undefined, undefined, context);
+  assert.equal(done.details.status, "completed");
+  assert.equal(done.details.compactions, 2, "the count survives settling");
+  assert.equal(done.details.result, "steered:GO");
+});
+
 test("task_status with no jobId lists every job; a running jobId returns the compact block", async (t) => {
   const root = createFixture(t);
   const { tools, context } = await createHarness(t, root, { maxConcurrency: 1 });

@@ -4,5 +4,8 @@ import type { AgentSession, InlineExtension } from "@earendil-works/pi-coding-ag
 export declare function trackRequestOutcome(): {
     extension: InlineExtension;
     error: (messages: AgentSession["messages"]) => string | undefined;
+    /** True when that failed request was a context overflow, which a child reports as a partial run
+     * rather than a failure (docs/development.md §12.4): the session file survives and can resume. */
+    overflow: (messages: AgentSession["messages"]) => boolean;
 };
 //# sourceMappingURL=request-outcome.d.ts.map

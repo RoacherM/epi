@@ -22,7 +22,7 @@ const PI_DOCS = /pi-coding-agent[\\/]+docs/;
 /** A temp home whose `other` provider (models.json) talks to the fake gateway; `withKey: false`
  * leaves the provider without an API key. TaskRuntime hands the worker its own environment, so the test
  * process gets the temp home too. */
-async function setup(t, { withKey = true } = {}) {
+async function setup(t, { withKey = true, contextWindow, settings } = {}) {
   const server = await startMagpieServer();
   const home = mkdtempSync(join(tmpdir(), "epi-task-worker-"));
   t.after(async () => {
@@ -31,9 +31,15 @@ async function setup(t, { withKey = true } = {}) {
   });
   const agentDir = join(home, ".epi", "pi");
   mkdirSync(agentDir, { recursive: true });
-  const provider = { baseUrl: `${server.baseUrl}/v1`, api: "openai-completions", models: [{ id: "echo" }] };
+  const model = contextWindow === undefined ? { id: "echo" } : { id: "echo", contextWindow };
+  const provider = { baseUrl: `${server.baseUrl}/v1`, api: "openai-completions", models: [model] };
   if (withKey) provider.apiKey = "other-key";
   writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { other: provider } }));
+  // A user's global settings, e.g. compaction turned off for the parent (which a child must not
+  // inherit: it has no human to run /compact).
+  if (settings !== undefined) {
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify(settings));
+  }
   const env = { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_TEST_MAGPIE_URL: server.baseUrl };
   const saved = { ...process.env };
   t.after(() => {
@@ -136,23 +142,128 @@ test("a failed model request is a failed task: ok:false with the request's error
   const failed = await runWorker(fixture);
   assert.equal(failed.code, 1, failed.context);
   assert.equal(failed.result.ok, false, failed.context);
+  assert.equal(failed.result.partial, undefined, "a non-overflow error is a failure, not a partial run");
   assert.match(failed.result.error, /invalid x-api-key/, failed.context);
   const task = await runTask(t, fixture);
   assert.equal(task.status, "failed", JSON.stringify(task));
+  assert.equal(task.stoppedBy, undefined);
   assert.match(task.error, /invalid x-api-key/);
 });
 
-test("D85: overflow omitted by recovery is a failed worker and task, not empty success", async (t) => {
+/** One openai-completions agent request answered with a bash call whose output is 50 KB, so a child
+ * with a small window accumulates enough context for Pi to compact. The summarization request
+ * carries no tools, so it is answered with a short summary. */
+function compactingHandler() {
+  let agentRequests = 0;
+  return (_request, response, body) => {
+    if (!Array.isArray(body.tools) || body.tools.length === 0) {
+      streamChunks(response, [
+        openaiChunk({ role: "assistant", content: "SUMMARY" }, null),
+        openaiChunk({}, "stop"),
+      ]);
+      return;
+    }
+    agentRequests += 1;
+    if (agentRequests <= 3) {
+      streamChunks(response, [
+        openaiChunk({
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            index: 0,
+            id: `call_${agentRequests}`,
+            type: "function",
+            function: {
+              name: "bash",
+              arguments: JSON.stringify({ command: "node -e \"process.stdout.write('x'.repeat(50000))\"" }),
+            },
+          }],
+        }, null),
+        openaiChunk({}, "tool_calls"),
+      ]);
+      return;
+    }
+    streamChunks(response, [
+      openaiChunk({ role: "assistant", content: "DONE" }, null),
+      openaiChunk({}, "stop"),
+    ]);
+  };
+}
+
+const compactionProgress = (events) =>
+  events.filter((event) => event.type === "progress" && event.phase === "compaction");
+
+// The child half of auto-compaction (docs/development.md §12.4): a long-running subagent crosses its
+// own context window and Pi compacts it, exactly as it does for the parent, and the parent sees it.
+test("a child with a small window compacts itself and finishes", async (t) => {
+  const fixture = await setup(t, { contextWindow: 40000 });
+  fixture.server.state.inferenceHandler = compactingHandler();
+  const events = [];
+  const result = await runWorker(fixture, () => {}, { tools: ["bash"] }, (event) => events.push(event));
+  assert.equal(result.code, 0, result.context);
+  assert.equal(result.result.ok, true, result.context);
+  assert.equal(result.result.output, "DONE", result.context);
+
+  const compactions = compactionProgress(events);
+  assert.equal(compactions.length >= 1, true, `no compaction progress line: ${result.context}`);
+  const threshold = compactions.find((event) => event.reason === "threshold");
+  assert.notEqual(threshold, undefined, `no threshold compaction: ${JSON.stringify(compactions)}`);
+  assert.equal(threshold.ok, true);
+  assert.equal(typeof threshold.tokensBefore, "number");
+  assert.equal(typeof threshold.tokensAfter, "number");
+});
+
+// A child has no human to run /compact, so it must compact whatever the user's global settings say
+// about the parent. The override is in memory only; the settings file is never written.
+test("a child compacts even when the user's global settings disable compaction", async (t) => {
+  const fixture = await setup(t, { contextWindow: 40000, settings: { compaction: { enabled: false } } });
+  fixture.server.state.inferenceHandler = compactingHandler();
+  const events = [];
+  const result = await runWorker(fixture, () => {}, { tools: ["bash"] }, (event) => events.push(event));
+  assert.equal(result.code, 0, result.context);
+  assert.equal(result.result.ok, true, result.context);
+  const compactions = compactionProgress(events);
+  assert.equal(compactions.length >= 1, true, `no compaction with compaction disabled: ${result.context}`);
+  assert.equal(compactions.some((event) => event.ok === true), true, result.context);
+  assert.equal(
+    JSON.parse(readFileSync(join(fixture.agentDir, "settings.json"), "utf8")).compaction.enabled,
+    false,
+    "the worker must not rewrite the user's settings file",
+  );
+});
+
+test("D85: a context overflow compaction cannot fix ends partial, keeping the reason and session", async (t) => {
   const fixture = await setup(t);
   fixture.server.state.inferenceStatus = 400;
   fixture.server.state.inferenceError = "prompt is too long: context_length_exceeded";
-  const failed = await runWorker(fixture);
-  assert.equal(failed.code, 1, failed.context);
-  assert.equal(failed.result.ok, false, failed.context);
-  assert.match(failed.result.error, /context_length_exceeded/, failed.context);
+  const events = [];
+  const partial = await runWorker(fixture, () => {}, {}, (event) => events.push(event));
+  assert.equal(partial.code, 0, partial.context);
+  assert.equal(partial.result.ok, true, partial.context);
+  assert.equal(partial.result.partial, true, partial.context);
+  assert.equal(partial.result.stopped, "context", partial.context);
+  assert.match(
+    partial.result.output,
+    /\[Stopped: context window full and compaction could not free enough space\.\]/,
+    partial.context,
+  );
+  assert.equal(typeof partial.result.usage, "object", partial.context);
+  // Pi may have had nothing to summarize (a tiny context), in which case it emits no compaction
+  // event at all; when it does, the attempt is reported as failed.
+  const compactions = compactionProgress(events);
+  for (const event of compactions) assert.equal(event.ok, false, JSON.stringify(event));
+  // The session file survives, so package 2b can resume from it.
+  const sessionDir = join(fixture.home, "runtime", "task", "sessions");
+  assert.equal(
+    readdirSync(sessionDir).some((name) => name.endsWith(".jsonl")),
+    true,
+    partial.context,
+  );
+
   const task = await runTask(t, fixture);
-  assert.equal(task.status, "failed", JSON.stringify(task));
-  assert.match(task.error, /context_length_exceeded/);
+  assert.equal(task.status, "partial", JSON.stringify(task));
+  assert.equal(task.stoppedBy, "context");
+  assert.match(task.result, /\[Stopped: context window full/);
 });
 
 test("an interrupted task still reports the interruption with exit 143, not the aborted request", async (t) => {

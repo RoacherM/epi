@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { isContextOverflow, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSession, InlineExtension } from "@earendil-works/pi-coding-agent";
 
 /** D85: effective context can omit failed attempts before recovery itself fails. Keep the last
@@ -6,6 +6,9 @@ import type { AgentSession, InlineExtension } from "@earendil-works/pi-coding-ag
 export function trackRequestOutcome(): {
   extension: InlineExtension;
   error: (messages: AgentSession["messages"]) => string | undefined;
+  /** True when that failed request was a context overflow, which a child reports as a partial run
+   * rather than a failure (docs/development.md §12.4): the session file survives and can resume. */
+  overflow: (messages: AgentSession["messages"]) => boolean;
 } {
   let lastAssistant: AssistantMessage | undefined;
   const reset = (): void => { lastAssistant = undefined; };
@@ -30,6 +33,10 @@ export function trackRequestOutcome(): {
       return message?.role === "assistant" && (message.stopReason === "error" || message.stopReason === "aborted")
         ? message.errorMessage || `Request ${message.stopReason}`
         : undefined;
+    },
+    overflow(messages) {
+      const message = lastAssistant ?? messages[messages.length - 1];
+      return message?.role === "assistant" && message.stopReason === "error" && isContextOverflow(message);
     },
   };
 }

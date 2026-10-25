@@ -1,3 +1,4 @@
+import { isContextOverflow } from "@earendil-works/pi-ai";
 /** D85: effective context can omit failed attempts before recovery itself fails. Keep the last
  * completed request separately. Read only after prompt()/runPrintMode() has settled, not agent_end. */
 export function trackRequestOutcome() {
@@ -25,6 +26,10 @@ export function trackRequestOutcome() {
             return message?.role === "assistant" && (message.stopReason === "error" || message.stopReason === "aborted")
                 ? message.errorMessage || `Request ${message.stopReason}`
                 : undefined;
+        },
+        overflow(messages) {
+            const message = lastAssistant ?? messages[messages.length - 1];
+            return message?.role === "assistant" && message.stopReason === "error" && isContextOverflow(message);
         },
     };
 }

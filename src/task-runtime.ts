@@ -200,6 +200,13 @@ function isToolCall(part: unknown): boolean {
   return typeof part === "object" && part !== null && "type" in part && part.type === "toolCall";
 }
 
+/** A token count as the parent prints it in a recent-event line: `182000` -> `182k`, small counts
+ * stay exact, a missing count prints as the empty string. */
+function formatTokenCount(tokens: number | undefined): string {
+  if (tokens === undefined || !Number.isFinite(tokens)) return "";
+  return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : `${Math.trunc(tokens)}`;
+}
+
 export type TaskJobStatus =
   | "queued"
   | "running"
@@ -287,6 +294,11 @@ export interface TaskJobSnapshot {
   lastSummary?: string;
   /** The last 10 one-line actions, oldest first, e.g. `✓ read src/host.ts` / `▸ bash npm test`. */
   recentEvents?: string[];
+  /** How many times the child compacted (or tried to) its own window; absent when never. */
+  compactions?: number;
+  /** Why a partial job stopped: the `maxTurns` budget, or a context window compaction could not
+   * free enough of. Absent for a finished job. */
+  stoppedBy?: "maxTurns" | "context";
   stdoutArtifact?: string;
   stderrArtifact?: string;
 }
@@ -350,22 +362,28 @@ interface WorkerResultEvent {
   output?: string;
   error?: string;
   partial?: boolean;
+  stopped?: "maxTurns" | "context";
   turns?: number;
   usage?: TaskUsage;
 }
 
 /**
  * What the child tells the parent while it runs (docs/subagents-design.md §5.2): one line per tool
- * call and per turn, every field optional, all of them bounded again here on the way in.
+ * call, per turn and per compaction, every field optional, all of them bounded again here on the
+ * way in.
  */
 interface WorkerProgressEvent {
   type: "progress";
   turns?: number;
   steps?: number;
-  phase?: "tool_start" | "tool_end" | "turn_end";
+  phase?: "tool_start" | "tool_end" | "turn_end" | "compaction";
   tool?: string;
   target?: string;
   summary?: string;
+  reason?: "manual" | "threshold" | "overflow";
+  tokensBefore?: number;
+  tokensAfter?: number;
+  ok?: boolean;
 }
 
 interface InternalTaskJob {
@@ -400,6 +418,8 @@ interface InternalTaskJob {
   currentActivity: string | undefined;
   lastSummary: string | undefined;
   recentEvents: string[];
+  compactions: number;
+  stoppedBy: "maxTurns" | "context" | undefined;
   protocolError: string | undefined;
   completion: Promise<void>;
   resolveCompletion: () => void;
@@ -642,6 +662,8 @@ export class TaskRuntime {
       currentActivity: undefined,
       lastSummary: undefined,
       recentEvents: [],
+      compactions: 0,
+      stoppedBy: undefined,
       protocolError: undefined,
       completion,
       resolveCompletion,
@@ -913,6 +935,7 @@ export class TaskRuntime {
     // A worker's own count wins, but a worker that reported none must not erase the turns its
     // progress lines already established.
     job.turns = job.workerResult?.turns ?? job.turns;
+    job.stoppedBy = job.workerResult?.stopped;
     if (job.terminationCause === "cancelled") {
       job.status = "cancelled";
       return;
@@ -1075,6 +1098,14 @@ export class TaskRuntime {
       } else {
         this.pushRecentEvent(job, `✓ ${label}`);
       }
+    } else if (event.phase === "compaction") {
+      // A child compacting itself is progress the parent must be able to see: how often, and
+      // whether it worked. The tokens show how much window it got back.
+      job.compactions += 1;
+      const before = formatTokenCount(event.tokensBefore);
+      const after = formatTokenCount(event.tokensAfter);
+      const compacted = event.ok === true && before.length > 0 && after.length > 0;
+      this.pushRecentEvent(job, compacted ? `⟲ compacted ${before}→${after}` : "⟲ compaction failed");
     }
   }
 
@@ -1139,6 +1170,8 @@ export class TaskRuntime {
       ...(job.currentActivity === undefined ? {} : { currentActivity: job.currentActivity }),
       ...(job.lastSummary === undefined ? {} : { lastSummary: job.lastSummary }),
       recentEvents: [...job.recentEvents],
+      ...(job.compactions > 0 ? { compactions: job.compactions } : {}),
+      ...(job.stoppedBy === undefined ? {} : { stoppedBy: job.stoppedBy }),
       ...(job.stdoutArtifact === undefined ? {} : { stdoutArtifact: job.stdoutArtifact }),
       ...(job.stderrArtifact === undefined ? {} : { stderrArtifact: job.stderrArtifact }),
     };
