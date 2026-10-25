@@ -222,57 +222,94 @@ export function createTaskInlineExtension(options) {
         projectAgentsDir: options.projectAgentsDir,
     });
     const workerPath = options.workerPath ?? fileURLToPath(new URL("../worker.js", import.meta.url));
+    // One TaskRuntime per extension object, which in a real run is one per process. Pi re-runs every
+    // extension's factory on `/new`, `/resume`, `/fork` and `/reload` (right after `session_shutdown`)
+    // and invalidates the old `pi`/`ctx`, but the jobs this runtime started are detached Epi
+    // processes that a session switch must not kill. Building the runtime inside `factory` made them
+    // orphans: the replacement instance could not see them (`unknown task job`), completion called
+    // the stale `pi.appendEntry` (Pi's ctx guard throws, so the usage entry and the `task_stop` hook
+    // were lost), and a later quit shut down only the newest runtime. Deliberately not a
+    // module-global: one per extension object keeps tests isolated and gives the hooks runtime's own
+    // task runtime a separate registry.
+    const runtime = new TaskRuntime({
+        workerPath,
+        agentDir: options.agentDir,
+        epiHome: options.epiHome,
+        capsuleRoot: join(options.epiHome, "runtime", "task"),
+        artifactRoot: join(options.epiHome, "artifacts", "task"),
+        // Never Pi's own session directory: a background subagent must not become what `epi -c`
+        // continues or `/resume` lists (docs/subagents-design.md §9.1).
+        sessionRoot: join(options.epiHome, "runtime", "task", "sessions"),
+        agents,
+        projectTrusted: options.projectTrusted === true,
+        ...(options.maxConcurrency === undefined
+            ? {}
+            : { maxConcurrency: options.maxConcurrency }),
+        ...(options.maxOutputBytes === undefined
+            ? {}
+            : { maxOutputBytes: options.maxOutputBytes }),
+        ...(options.killGraceMs === undefined
+            ? {}
+            : { killGraceMs: options.killGraceMs }),
+    });
+    const availableAgents = runtime.availableAgents();
+    const completionHooks = new Map();
+    /**
+     * The live `pi` and `ctx` for this process, refreshed by every `factory(pi)` call, by
+     * `session_start`, and by every tool call. Completion bookkeeping reads them *at completion
+     * time*, never the pair captured when the job started: after a session switch the old pair is
+     * stale and every call on it throws Pi's "ctx is stale" error.
+     */
+    const current = {};
+    const reportCompletionError = (what, error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`epi:task: ${what} failed: ${message}\n`);
+    };
+    /**
+     * A subagent's tokens are billed to the same account but spent in another process, so they never
+     * reach the parent's own event stream. Recording them as a session entry puts them in the
+     * parent's JSONL where any runner (and scripts/benchmark-adapter.mjs) can total the real cost of
+     * delegating; without it, a subagent looks free. The entry goes to whichever session is live when
+     * the job finishes: a job started in session A and finished after switching to B records its
+     * usage in B (docs/development.md §12.3).
+     */
+    const recordChildUsage = (job) => {
+        if (job.usage === undefined)
+            return;
+        const pi = current.pi;
+        if (pi === undefined)
+            return;
+        try {
+            pi.appendEntry("epi:task-usage", {
+                jobId: job.id,
+                status: job.status,
+                // Timestamps let a runner see queueing (createdAt -> startedAt) and the critical path
+                // without replaying the child's session file.
+                createdAt: job.createdAt,
+                ...(job.startedAt === undefined ? {} : { startedAt: job.startedAt }),
+                ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
+                ...job.usage,
+            });
+        }
+        catch (error) {
+            // Best-effort: a failed usage record must not turn a finished job into an error result.
+            reportCompletionError("recording a child's usage", error);
+        }
+    };
     return {
         name: "epi:task",
         factory(pi) {
-            const runtime = new TaskRuntime({
-                workerPath,
-                agentDir: options.agentDir,
-                epiHome: options.epiHome,
-                capsuleRoot: join(options.epiHome, "runtime", "task"),
-                artifactRoot: join(options.epiHome, "artifacts", "task"),
-                // Never Pi's own session directory: a background subagent must not become what `epi -c`
-                // continues or `/resume` lists (docs/subagents-design.md §9.1).
-                sessionRoot: join(options.epiHome, "runtime", "task", "sessions"),
-                agents,
-                projectTrusted: options.projectTrusted === true,
-                ...(options.maxConcurrency === undefined
-                    ? {}
-                    : { maxConcurrency: options.maxConcurrency }),
-                ...(options.maxOutputBytes === undefined
-                    ? {}
-                    : { maxOutputBytes: options.maxOutputBytes }),
-                ...(options.killGraceMs === undefined
-                    ? {}
-                    : { killGraceMs: options.killGraceMs }),
-            });
             const todos = new SessionTodoStore();
-            /**
-             * A subagent's tokens are billed to the same account but spent in another process, so they
-             * never reach the parent's own event stream. Recording them as a session entry puts them in
-             * the parent's JSONL where any runner (and scripts/benchmark-adapter.mjs) can total the real
-             * cost of delegating; without it, a subagent looks free.
-             */
-            const recordChildUsage = (job) => {
-                if (job.usage === undefined)
-                    return;
-                pi.appendEntry("epi:task-usage", {
-                    jobId: job.id,
-                    status: job.status,
-                    // Timestamps let a runner see queueing (createdAt -> startedAt) and the critical path
-                    // without replaying the child's session file.
-                    createdAt: job.createdAt,
-                    ...(job.startedAt === undefined ? {} : { startedAt: job.startedAt }),
-                    ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
-                    ...job.usage,
-                });
-            };
-            const availableAgents = runtime.availableAgents();
-            const completionHooks = new Map();
+            current.pi = pi;
+            pi.on("session_start", (_event, ctx) => {
+                current.ctx = ctx;
+            });
             pi.on("session_shutdown", async (event) => {
                 // Only a real quit ends the subagents. A session switch (`/new`, `/resume`, fork, reload)
                 // tears down this extension runtime but not the process, and the jobs are detached Epi
-                // runs: killing them would silently discard work the user never asked to stop.
+                // runs: killing them would silently discard work the user never asked to stop. This
+                // handler is registered by every session, but only one is live at a time, and all of them
+                // share `runtime`, so whichever session quits shuts down every job in the process.
                 if (event.reason !== "quit")
                     return;
                 await runtime.shutdown();
@@ -298,6 +335,7 @@ export function createTaskInlineExtension(options) {
                 renderResult: renderTaskResult,
                 parameters: TaskToolParameters,
                 async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+                    current.ctx = ctx;
                     try {
                         const cwd = params.cwd === undefined
                             ? ctx.cwd
@@ -331,6 +369,12 @@ export function createTaskInlineExtension(options) {
                         });
                         const completion = runtime.wait(started.id).then(async (job) => {
                             recordChildUsage(job);
+                            // Read the live `pi`/`ctx` now, not the pair captured when the job started: a session
+                            // switch between start and completion leaves the captured pair stale.
+                            const pi = current.pi;
+                            const ctx = current.ctx;
+                            if (pi === undefined || ctx === undefined)
+                                return job;
                             const stopDecision = await emitTaskHook(pi.events, { type: "task_stop", job }, ctx);
                             if (stopDecision.action !== "continue") {
                                 throw new Error(stopDecision.reason ?? "task stop hook returned an invalid decision");
@@ -338,7 +382,11 @@ export function createTaskInlineExtension(options) {
                             return job;
                         });
                         completionHooks.set(started.id, completion);
-                        void completion.catch(() => { });
+                        // A background job's completion has no one awaiting it here; surface a failure instead
+                        // of swallowing it. A foreground caller gets the same error through `completion`.
+                        void completion.catch((error) => {
+                            reportCompletionError("task completion", error);
+                        });
                         if (params.background === true) {
                             return startedResult(started);
                         }
@@ -369,7 +417,8 @@ export function createTaskInlineExtension(options) {
                 executionMode: "parallel",
                 renderResult: renderTaskResult,
                 parameters: Type.Object({ jobId: Type.String() }),
-                async execute(_toolCallId, params) {
+                async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+                    current.ctx = ctx;
                     try {
                         return jobResult(runtime.status(params.jobId));
                     }
@@ -388,7 +437,8 @@ export function createTaskInlineExtension(options) {
                     jobId: Type.String(),
                     timeoutSeconds: Type.Optional(Type.Number({ minimum: 0.001 })),
                 }),
-                async execute(_toolCallId, params, signal) {
+                async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+                    current.ctx = ctx;
                     try {
                         const timeoutMs = params.timeoutSeconds === undefined
                             ? undefined
@@ -417,7 +467,8 @@ export function createTaskInlineExtension(options) {
                 executionMode: "parallel",
                 renderResult: renderTaskResult,
                 parameters: Type.Object({ jobId: Type.String() }),
-                async execute(_toolCallId, params) {
+                async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+                    current.ctx = ctx;
                     try {
                         const cancelled = await runtime.cancel(params.jobId);
                         const completion = completionHooks.get(params.jobId);
@@ -447,7 +498,8 @@ export function createTaskInlineExtension(options) {
                     id: Type.Optional(Type.String()),
                     text: Type.Optional(Type.String()),
                 }),
-                async execute(_toolCallId, params) {
+                async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+                    current.ctx = ctx;
                     try {
                         const items = todos.apply(params.action, params.id, params.text);
                         return {

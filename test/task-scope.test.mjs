@@ -164,7 +164,10 @@ test("fork keeps completed tool calls, and never copies the parent's system prom
 
 // Pi's SessionManager walks parentId back from the leaf and stops at the first id it cannot find
 // (session-manager.js getBranch). Dropping the parent's system entries therefore has to relink the
-// chain: without it a forked child silently loses every entry before the first removed one.
+// chain: without it a forked child silently loses every entry before the first removed one. The
+// surviving entries after the dropped `system` entry are what make the relink observable -- with
+// only pre-system survivors, no parentId ever pointed at a removed id and the test passed with the
+// relink deleted.
 test("a forked child keeps its history when a system entry is dropped mid-branch", (t) => {
   const root = fixture(t);
   const stamp = new Date().toISOString();
@@ -173,17 +176,28 @@ test("a forked child keeps its history when a system entry is dropped mid-branch
     entry("a", null, { role: "user", content: [{ type: "text", text: "the first question" }] }),
     entry("b", "a", { role: "assistant", content: [{ type: "text", text: "the first answer" }] }),
     entry("c", "b", { role: "system", content: "PARENT SYSTEM PROMPT" }),
-    entry("d", "c", { role: "user", content: [{ type: "text", text: "now delegate" }] }),
-    entry("e", "d", { role: "assistant", content: [{ type: "toolCall", name: "task", id: "c1" }] }),
+    entry("d", "c", { role: "user", content: [{ type: "text", text: "the second question" }] }),
+    entry("e", "d", { role: "assistant", content: [{ type: "text", text: "the second answer" }] }),
+    entry("f", "e", { role: "user", content: [{ type: "text", text: "now delegate" }] }),
+    entry("g", "f", { role: "assistant", content: [{ type: "toolCall", name: "task", id: "c1" }] }),
   ];
   const forked = forkableBranch(branch);
 
-  assert.deepEqual(forked.map((item) => item.id), ["a", "b"], "the system entry and the current prompt are gone");
-  assert.equal(forked[0].parentId, null, "the first survivor becomes the root");
-  assert.equal(forked[1].parentId, "a", "each survivor links to the previous survivor");
+  assert.deepEqual(
+    forked.map((item) => item.id),
+    ["a", "b", "d", "e"],
+    "the system entry, the current prompt and the unfinished tool call are gone",
+  );
+  // "d" and "e" come after the dropped system entry: their relinked parents are what this test is
+  // for. Without relinkParents, d still points at the removed "c" and the walk stops there.
+  assert.deepEqual(
+    forked.map((item) => item.parentId),
+    [null, "a", "b", "d"],
+    "each survivor links to the previous survivor, not to a dropped id",
+  );
 
   // The same file the worker writes: reopened, the leaf's parentId walk must reach the first user
-  // message. On the old chain (b -> a, but c removed) SessionManager stops at "c" and loses it.
+  // message. On the old chain (e -> d -> c missing) SessionManager stops at "c" and loses it.
   const sessionPath = join(root, "child.jsonl");
   const header = { type: "session", version: 3, id: "child", timestamp: stamp, cwd: root };
   writeFileSync(sessionPath, `${[header, ...forked].map((item) => JSON.stringify(item)).join("\n")}\n`);
@@ -191,7 +205,34 @@ test("a forked child keeps its history when a system entry is dropped mid-branch
   const context = JSON.stringify(reopened.buildSessionContext().messages);
   assert.match(context, /the first question/, "history before the dropped system entry survives");
   assert.match(context, /the first answer/);
+  assert.match(context, /the second answer/, "history after the dropped system entry survives");
   assert.doesNotMatch(context, /PARENT SYSTEM PROMPT/);
+  assert.doesNotMatch(context, /now delegate/, "the parent's current prompt is dropped");
+});
+
+// The trailing-prompt drop must skip non-message entries (`model_change`, `custom`, ...) that can
+// sit between the prompt and the cut; a plain `kept.at(-1)` check leaves the prompt in place and
+// the child gets two consecutive user messages.
+test("fork drops the current prompt even when a non-message entry sits between it and the cut", () => {
+  const branch = [
+    { type: "message", message: { role: "user", content: [{ type: "text", text: "first" }] } },
+    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "answer" }] } },
+    { type: "message", message: { role: "user", content: [{ type: "text", text: "now delegate" }] } },
+    { type: "model_change", model: "other/model" },
+    { type: "message", message: { role: "assistant", content: [{ type: "toolCall", name: "task", id: "c1" }] } },
+  ];
+  const forked = forkableBranch(branch);
+
+  assert.equal(forked.at(-1).type, "model_change", "the non-message entry itself stays");
+  assert.ok(
+    !forked.some((entry) => entry.message?.content?.[0]?.text === "now delegate"),
+    "the parent's current prompt is dropped even with a non-message entry after it",
+  );
+  assert.equal(
+    forked.filter((entry) => entry.message?.role === "user").length,
+    1,
+    "only the earlier user message survives",
+  );
 });
 
 // Found by the subagent benchmark (.dev/bench/subagents-2026-10-23): the child resolved its own

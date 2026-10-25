@@ -50,12 +50,24 @@ export const DEFAULT_TASK_TIMEOUT_SECONDS = 600;
 export function forkableBranch(entries: readonly unknown[]): unknown[] {
   const cut = unfinishedToolCallIndex(entries);
   const kept = entries.slice(0, cut);
-  // The parent's own prompt sits right before the cut; the child appends its task as a user
-  // message, and two consecutive user messages confuse the model.
-  if (cut < entries.length && roleOf(kept[kept.length - 1]) === "user") {
-    kept.pop();
-  }
+  dropTrailingPrompt(kept);
   return relinkParents(kept.filter((entry) => roleOf(entry) !== "system"));
+}
+
+/**
+ * The parent's own prompt sits right before the cut; the child appends its task as a user message,
+ * and two consecutive user messages confuse the model. Non-message entries (`model_change`,
+ * `custom`, ...) may sit between the prompt and the cut, so the search skips over them to the last
+ * *message* entry; those entries are kept, they just are not the prompt.
+ */
+function dropTrailingPrompt(entries: unknown[]): void {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (!isMessageEntry(entries[index])) continue;
+    if (roleOf(entries[index]) === "user") {
+      entries.splice(index, 1);
+    }
+    return;
+  }
 }
 
 /** Index of the assistant message holding the unfinished `task` tool call (the cut point), or
@@ -230,9 +242,11 @@ type WorkerProcess = ChildProcessByStdio<null, Readable, Readable>;
 type TerminationCause = "cancelled" | "timeout";
 
 /**
- * Worker process groups that are still alive, SIGKILLed if Epi itself exits. `session_shutdown`
- * with reason "quit" cancels jobs, but a crash or a signal that skips it must not leave detached
- * subagent processes behind (they would keep spending tokens with no one to report to).
+ * Worker process groups that are still alive, SIGKILLed if Epi itself exits. A real quit cancels
+ * every job through the shared `TaskRuntime`, but an uncaught error or an exit that skips
+ * `session_shutdown` must not leave detached subagent processes behind (they would keep spending
+ * tokens with no one to report to). A SIGKILL, or a signal Node does not handle, cannot run this
+ * handler; it is a net for the ordinary crash path, not a guarantee.
  */
 const liveWorkerPids = new Set<number>();
 let exitSafetyNetInstalled = false;
