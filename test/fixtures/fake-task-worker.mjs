@@ -115,6 +115,10 @@ if (capsule.task === "sleep") {
   emit({ type: "result", ok: true, output: command?.type === "steer" ? `steered:${command.message}` : "compaction done" });
 } else if (capsule.task === "partial") {
   process.stdout.write(`${JSON.stringify({ type: "result", ok: true, partial: true, turns: 3, output: "half done" })}\n`);
+} else if (capsule.task === "context-stop-large") {
+  // A context stop whose answer is longer than the parent's output budget: the reason the parent
+  // adds must survive the truncation (review round 2 P2-1).
+  process.stdout.write(`${JSON.stringify({ type: "result", ok: true, partial: true, stopped: "context", turns: 3, output: "y".repeat(2000) })}\n`);
 } else if (capsule.task === "empty") {
   process.stdout.write(`${JSON.stringify({ type: "result", ok: true, output: "" })}\n`);
 } else if (capsule.task === "large") {

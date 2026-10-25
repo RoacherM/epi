@@ -145,7 +145,7 @@ test("a child's compaction is counted and shown in the running status block", as
     return status.details.compactions === undefined ? undefined : status;
   }, "the compaction progress line");
 
-  assert.equal(running.details.compactions, 2, "one per compaction attempt, success or failure");
+  assert.equal(running.details.compactions, 1, "only a successful compaction counts");
   assert.deepEqual(running.details.recentEvents, [
     "✓ read src/big.ts",
     "⟲ compacted 182k→41k",
@@ -153,7 +153,7 @@ test("a child's compaction is counted and shown in the running status block", as
   ]);
   assert.equal(
     running.content[0].text,
-    "running · turn 1 · 1 steps · 2 compactions\nrecent:\n" +
+    "running · turn 1 · 1 steps · 1 compactions\nrecent:\n" +
       "✓ read src/big.ts\n⟲ compacted 182k→41k\n⟲ compaction failed",
   );
 
@@ -163,8 +163,27 @@ test("a child's compaction is counted and shown in the running status block", as
   const done = await tools.get("task_wait").execute(
     "c4", { jobId: started.details.id }, undefined, undefined, context);
   assert.equal(done.details.status, "completed");
-  assert.equal(done.details.compactions, 2, "the count survives settling");
+  assert.equal(done.details.compactions, 1, "the count survives settling");
   assert.equal(done.details.result, "steered:GO");
+});
+
+// Round-2 review P2-1: a child that stops on a full window is exactly the child with a long answer.
+// The reason must be added after `boundedResult` truncates, the way the maxTurns footer is.
+test("a context stop's reason survives the parent's output truncation", async (t) => {
+  const root = createFixture(t);
+  const { tools, context } = await createHarness(t, root, { maxOutputBytes: 512 });
+  const result = await tools.get("task").execute(
+    "c1", { task: "context-stop-large" }, undefined, undefined, context);
+
+  assert.equal(result.details.status, "partial");
+  assert.equal(result.details.stoppedBy, "context");
+  const text = result.content[0].text;
+  assert.match(text, /\[truncated; full worker event:/, text);
+  assert.equal(
+    text.endsWith("[Stopped: context window full and compaction could not free enough space.]"),
+    true,
+    text,
+  );
 });
 
 test("task_status with no jobId lists every job; a running jobId returns the compact block", async (t) => {

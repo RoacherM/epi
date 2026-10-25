@@ -31,6 +31,10 @@ export function trackRequestOutcome() {
             const message = lastAssistant ?? messages[messages.length - 1];
             return message?.role === "assistant" && message.stopReason === "error" && isContextOverflow(message);
         },
+        stopReason(messages) {
+            const message = lastAssistant ?? messages[messages.length - 1];
+            return message?.role === "assistant" ? message.stopReason : undefined;
+        },
     };
 }
 //# sourceMappingURL=request-outcome.js.map

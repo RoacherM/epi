@@ -10,7 +10,7 @@ import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readPreloadedSkills, resolveAssembly, scopeAssemblyForTask, } from "./assembly.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { childProjectTrust } from "./project.js";
-import { collectUsage, finalAssistantText, singleLine } from "./task-result.js";
+import { collectEntryUsage, finalAssistantText, finalAssistantTextFromEntries, singleLine } from "./task-result.js";
 import { trackRequestOutcome } from "./request-outcome.js";
 import { notRunningWarnings, settleRegisteredProviders } from "./provider-startup.js";
 import { createMagpieInlineExtension } from "./providers/magpie-extension.js";
@@ -27,9 +27,6 @@ takeOverStdout();
 const PROGRESS_TARGET_LIMIT = 120;
 const PROGRESS_TOOL_LIMIT = 40;
 const PROGRESS_SUMMARY_LIMIT = 200;
-/** What a child that ran out of window says instead of a bare failure. Pi's own overflow text names
- * a provider, not the situation; this is the one line the parent shows as the stop reason. */
-const CONTEXT_STOP_REASON = "[Stopped: context window full and compaction could not free enough space.]";
 let activeSession;
 let interrupted = false;
 // Steers that arrived before there was a session to steer (review round 1 P2-1): the parent marks a
@@ -38,6 +35,10 @@ let interrupted = false;
 const pendingSteers = [];
 // Set just before the session is disposed, so the failure path can still report what was spent.
 let spentUsage;
+// How many session entries already existed when this run started. Usage is summed from the raw
+// entries (compaction drops a summarized turn's usage from the projected messages), and a
+// `context: "fork"` child is seeded with the parent's entries: only what this run appended counts.
+let usageBaseline = 0;
 // D84/D85: a request that failed leaves its error on the final message rather than throwing, so
 // the child must check for one before reporting success.
 const outcome = trackRequestOutcome();
@@ -55,11 +56,6 @@ function toolTarget(args) {
         }
     }
     return "";
-}
-/** The child's answer plus why it stopped, or just the reason when it never produced text. */
-function contextStopOutput(messages) {
-    const text = finalAssistantText(messages);
-    return text.length > 0 ? `${text}\n\n${CONTEXT_STOP_REASON}` : CONTEXT_STOP_REASON;
 }
 function readCapsule(capsulePath) {
     let parsed;
@@ -199,6 +195,34 @@ function openChildSession(capsule) {
     }
     return SessionManager.open(capsule.sessionPath, dirname(capsule.sessionPath), capsule.cwd);
 }
+/**
+ * A subagent has no human to run /compact, so its own window must always be compactable: whatever
+ * the user's global settings say about the parent. In memory only -- the user's settings file is
+ * never written (docs/development.md §12.4). The token settings are clamped too: a `reserveTokens`
+ * at or above the window compacts on every turn, and a `keepRecentTokens` that fills it leaves
+ * `prepareCompaction` nothing to cut, so the child could never compact its way out (round-2 item 5).
+ */
+function applyChildCompactionSettings(manager, model) {
+    const cap = (value, fraction) => model?.contextWindow === undefined ? value : Math.min(value, Math.floor(model.contextWindow * fraction));
+    manager.applyOverrides({
+        compaction: {
+            enabled: true,
+            reserveTokens: cap(manager.getCompactionReserveTokens(model), 0.25),
+            keepRecentTokens: cap(manager.getCompactionKeepRecentTokens(model), 0.4),
+        },
+    });
+}
+/** Re-applies the child's compaction override after a reload. `session.reload()` (an extension's
+ * `ctx.reload()`) rebuilds settings from disk and drops the in-memory override; Pi reloads settings
+ * *before* it emits `session_start` (agent-session.js reload()), so a handler here is the last word. */
+function childCompactionGuard(manager) {
+    return {
+        name: "epi:child-compaction",
+        factory(pi) {
+            pi.on("session_start", () => applyChildCompactionSettings(manager, activeSession?.model));
+        },
+    };
+}
 /** The extra system text a child gets: its own instructions, plus any preloaded SKILL.md bodies
  * (design §3, skills Preload mode), which save the child its first `read` turn. */
 function appendSystemPrompt(capsule, preloaded) {
@@ -243,6 +267,7 @@ async function startChildSession(capsule) {
     });
     const extensionFactories = [
         createMagpieInlineExtension(),
+        childCompactionGuard(settingsManager),
         ...buildInlineExtensions(assembly, capsule.epiHome, identity, () => assembly, undefined, false, 
         // This process *is* a subagent: `child` makes epi:hooks drop the handlers a child may not
         // run (docs/subagents-design.md §9.4); mcpServerFilter narrows its MCP connections.
@@ -293,13 +318,17 @@ async function startChildSession(capsule) {
     if (resolvedModel?.error !== undefined) {
         throw new Error(`${resolvedModel.error}${notRunning()}`);
     }
+    const sessionManager = openChildSession(capsule);
+    // Everything already in the file belongs to a previous run: a fork child is seeded with the
+    // parent's entries, and this child must not report the parent's spend as its own.
+    usageBaseline = sessionManager.getEntries().length;
     const { session } = await createAgentSession({
         cwd: capsule.cwd,
         agentDir: capsule.agentDir,
         modelRuntime,
         resourceLoader,
         settingsManager,
-        sessionManager: openChildSession(capsule),
+        sessionManager,
         ...(resolvedModel?.model === undefined ? {} : { model: resolvedModel.model }),
         ...(resolvedModel?.thinkingLevel === undefined
             ? {}
@@ -326,7 +355,7 @@ async function startChildSession(capsule) {
     // whatever the user's global settings say about the parent. Applied last, because building the
     // session reloads settings (resource-loader) and would otherwise discard the override. In-memory
     // only -- the user's settings file is never written (docs/development.md §12.4).
-    settingsManager.applyOverrides({ compaction: { enabled: true } });
+    applyChildCompactionSettings(settingsManager, session.model);
     return session;
 }
 async function main() {
@@ -423,17 +452,24 @@ async function main() {
         }
         const requestError = stoppedAtMaxTurns ? undefined : outcome.error(session.messages);
         // An overflow the child could not compact its way out of is not a failure: the session file
-        // survives, and the parent reports the work already done plus why it stopped. Any other request
-        // error (auth, network, 5xx) stays a failure.
-        if (requestError !== undefined && (overflowUnrecoverable || outcome.overflow(session.messages))) {
+        // survives, and the parent reports the work already done plus why it stopped. Pi reports it
+        // either as the provider's overflow error, or -- for a recoverable length stop -- as a bare
+        // `length` finish with no error at all (review round 2 item 4). Any other request error (auth,
+        // network, 5xx) stays a failure.
+        const contextStop = !stoppedAtMaxTurns && (outcome.overflow(session.messages) ||
+            (overflowUnrecoverable && outcome.stopReason(session.messages) !== "stop"));
+        const entries = session.sessionManager.getEntries();
+        if (contextStop) {
             emit({
                 type: "result",
                 ok: true,
                 partial: true,
                 stopped: "context",
                 turns,
-                usage: collectUsage(session.messages),
-                output: contextStopOutput(session.messages),
+                usage: collectEntryUsage(entries, usageBaseline),
+                // Only the work: the parent appends the stop reason after it truncates (review round 2
+                // P2-1), so a long answer cannot push it off the end.
+                output: finalAssistantTextFromEntries(entries, usageBaseline),
             });
         }
         else {
@@ -445,15 +481,15 @@ async function main() {
                 // Only when it happened: a plain finished run keeps the protocol line it always had.
                 ...(stoppedAtMaxTurns ? { partial: true, stopped: "maxTurns" } : {}),
                 turns,
-                usage: collectUsage(session.messages),
-                output: finalAssistantText(session.messages, stoppedAtMaxTurns),
+                usage: collectEntryUsage(entries, usageBaseline),
+                output: finalAssistantTextFromEntries(entries, usageBaseline, stoppedAtMaxTurns),
             });
         }
     }
     finally {
         unsubscribe();
         // Captured before dispose: the failure path below still has to report what this child spent.
-        spentUsage = collectUsage(session.messages);
+        spentUsage = collectEntryUsage(session.sessionManager.getEntries(), usageBaseline);
         session.dispose();
         activeSession = undefined;
     }

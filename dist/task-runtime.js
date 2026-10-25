@@ -779,9 +779,11 @@ export class TaskRuntime {
             }
         }
         else if (event.phase === "compaction") {
-            // A child compacting itself is progress the parent must be able to see: how often, and
-            // whether it worked. The tokens show how much window it got back.
-            job.compactions += 1;
+            // A child compacting itself is progress the parent must be able to see: how often it worked,
+            // and how much window it got back. A failed attempt still gets a recent-event line, but only
+            // a successful one counts towards `· N compactions` (review round 2 item 6).
+            if (event.ok === true)
+                job.compactions += 1;
             const before = formatTokenCount(event.tokensBefore);
             const after = formatTokenCount(event.tokensAfter);
             const compacted = event.ok === true && before.length > 0 && after.length > 0;

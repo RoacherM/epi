@@ -187,6 +187,18 @@ function resultText(job: TaskJobSnapshot): string {
   return result.trim().length > 0 ? result : "(no output)";
 }
 
+/** What a child that ran out of window reports. The parent adds this line *after* `boundedResult`
+ * truncates the answer, the way the maxTurns footer is added, so a long answer cannot push the
+ * reason off the end -- the child that stops on a full window is exactly the child with a long
+ * answer to report (review round 2 P2-1). */
+const CONTEXT_STOP_REASON = "[Stopped: context window full and compaction could not free enough space.]";
+
+/** A context stop's result: the work the child did, then why it stopped. */
+function contextStopText(job: TaskJobSnapshot): string {
+  const result = job.result ?? "";
+  return result.trim().length > 0 ? `${result}\n\n${CONTEXT_STOP_REASON}` : CONTEXT_STOP_REASON;
+}
+
 /** How long a settled job's completion promise stays available to task_wait/task_cancel. */
 const COMPLETION_RETENTION_MS = 10 * 60_000;
 
@@ -227,10 +239,10 @@ function jobResult(job: TaskJobSnapshot): AgentToolResult<TaskJobSnapshot> {
   const text = job.status === "completed"
     ? resultText(job)
     : job.status === "partial"
-      // A context stop already carries its own reason line from the worker; only a maxTurns stop
-      // needs the parent to say how far the run got.
+      // A context stop's reason is the parent's to add, after truncation; only a maxTurns stop needs
+      // the parent to say how far the run got as well.
       ? job.stoppedBy === "context"
-        ? resultText(job)
+        ? contextStopText(job)
         : `${resultText(job)}\n\n[Stopped at maxTurns after ${job.turns ?? 0} turns (job ${job.id}). The work so far is above.]`
       : JSON.stringify(job, null, 2);
   return {
