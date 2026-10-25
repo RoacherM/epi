@@ -95,7 +95,9 @@ export function childModelReference(
   if (picked === undefined || !picked.startsWith(":")) {
     return picked ?? inheritedModel;
   }
-  const base = callPicked ? presetModel ?? inheritedModel : inheritedModel;
+  // A preset that is itself only a thinking suffix names no model, so it cannot be the base.
+  const presetBase = presetModel !== undefined && !presetModel.startsWith(":") ? presetModel : undefined;
+  const base = callPicked ? presetBase ?? inheritedModel : inheritedModel;
   return base === undefined ? picked : `${baseModelReference(base)}${picked}`;
 }
 
@@ -851,9 +853,11 @@ export class TaskRuntime {
       job.error = `task timed out after ${job.timeoutSeconds}s`;
     } else if (exit.error !== undefined) {
       job.error = `failed to start task worker: ${exit.error.message}`;
-    } else if (job.protocolError !== undefined) {
+    } else if (job.protocolError !== undefined && exit.code === 0) {
       job.error = job.protocolError;
     } else if (exit.code !== 0) {
+      // A worker that died mid-line also leaves a broken last line; its exit and stderr are the
+      // cause, the broken line only a symptom, so they win over the protocol error.
       // Pi's errors in the worker ("No API key found ...") end with Pi's login guidance, a path
       // into Pi's docs; the model gets Epi's (D84).
       job.error =

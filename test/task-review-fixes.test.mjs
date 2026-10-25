@@ -484,3 +484,59 @@ test("5c. SIGTERM during startup does not run a turn", async (t) => {
     "an interrupted startup must not send a request",
   );
 });
+
+// Round-2 review (s1-runtime-b) regressions.
+test("6a. a call's `:x` on a preset that is only `:y` keeps the parent's model", () => {
+  assert.equal(
+    taskRuntime.childModelReference(":high", ":low", "anthropic/claude-opus-4-8:medium", true),
+    "anthropic/claude-opus-4-8:high",
+  );
+});
+
+test("6b. a worker that dies mid-line reports its own cause, not invalid JSONL", async (t) => {
+  const root = createFixture(t);
+  const runtime = createRuntime(root);
+  const started = runtime.start({ task: "crash-midline", cwd: root });
+  const failed = await runtime.wait(started.id);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.error, "FATAL: out of memory in child");
+  await runtime.shutdown();
+});
+
+test("6c. a hook agent in the trusted project carries that project root", async (t) => {
+  const { createHooksInlineExtension } = await import("../dist/extensions/hooks.js");
+  const root = createFixture(t);
+  const spy = capsuleSpy(root);
+  t.after(() => spy.restore());
+  const projectRoot = join(root, "proj");
+  mkdirSync(join(projectRoot, ".epi", "agents"), { recursive: true });
+  writeFileSync(join(projectRoot, ".epi", "agents", "worker.md"), "---\nname: worker\ndescription: Test worker\n---\nBody\n");
+  const handlers = new Map();
+  const inline = createHooksInlineExtension({
+    hooks: [{
+      event: "session_start",
+      handlers: [{ type: "agent", agent: "worker", prompt: "check", timeoutMs: 5_000 }],
+      source: "project",
+      declaredIn: join(projectRoot, ".epi", "hooks.json"),
+    }],
+    epiHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: join(projectRoot, ".epi", "agents"),
+    projectTrusted: true,
+    workerPath: fakeWorker,
+  });
+  await inline.factory({
+    on(name, handler) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
+    events: { on: () => () => {}, emit() {} },
+    registerTool() {},
+    appendEntry() {},
+  });
+  for (const handler of handlers.get("session_start") ?? []) {
+    await handler({ type: "session_start", reason: "startup" }, {
+      cwd: projectRoot, signal: undefined, hasUI: false, ui: { notify() {} },
+      model: undefined, sessionManager: { getSessionFile: () => undefined },
+    });
+  }
+  assert.equal(spy.read().projectRoot, projectRoot);
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler({ type: "session_shutdown", reason: "quit" }, {});
+});

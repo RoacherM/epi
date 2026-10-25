@@ -36,6 +36,11 @@ if (capsule.task === "huge") {
   const grandchild = spawn("sleep", ["6"], { detached: false, stdio: ["ignore", "ignore", "inherit"] });
   grandchild.unref();
   emit({ type: "result", ok: true, output: "done" });
+} else if (capsule.task === "crash-midline") {
+  // Dies mid-line with a real cause on stderr: the broken line is a symptom, not the error.
+  process.stdout.write('{"type":"result","ok":tr');
+  process.stderr.write("FATAL: out of memory in child\n");
+  process.exit(9);
 } else if (capsule.task === "hook-continue" || capsule.task.includes("Return exactly one JSON decision object")) {
   emit({ type: "result", ok: true, output: JSON.stringify({ action: "continue" }) });
 } else {

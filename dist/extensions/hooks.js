@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EpiConfigError } from "../errors.js";
 import { EPI_TASK_HOOK_CHANNEL, isTaskHookBridgeRequest, } from "../hook-events.js";
@@ -206,6 +206,11 @@ export function createHooksInlineExtension(options) {
                 artifactRoot: join(options.epiHome, "artifacts", "hooks-task"),
                 sessionRoot: join(options.epiHome, "runtime", "hooks-task", "sessions"),
                 projectTrusted: options.projectTrusted === true,
+                // The trust decision above was made for this project; a hook's agent child applies it only
+                // there (same rule as epi:task: the root is the parent of `.epi/agents`).
+                ...(options.projectAgentsDir === undefined
+                    ? {}
+                    : { projectRoot: dirname(dirname(options.projectAgentsDir)) }),
             });
             const unsubscribeTaskHooks = pi.events.on(EPI_TASK_HOOK_CHANNEL, (value) => {
                 if (!isTaskHookBridgeRequest(value)) {
