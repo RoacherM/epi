@@ -11,10 +11,10 @@ resolve_model() {
   for t in "$tier" 1 2 3; do
     (( t < tier )) && continue
     case $t in
-      1) for m in devin/gemini-4-argon auto/gemini-4-argon factory/gemini-4-argon; do
+      1) for m in auto/gemini-4-argon devin/gemini-4-argon factory/gemini-4-argon; do
            grep -qx "$m" <<<"$models" && { echo "$m"; return 0; }
          done; m=$(grep -E '(^|/)gemini-4-argon$' <<<"$models" | grep -v 'disabled' | head -1 || true) ;;
-      2) for m in devin/claude-opus-5-5 auto/claude-opus-5-5 factory/claude-opus-5-5; do
+      2) for m in auto/claude-opus-5-5 devin/claude-opus-5-5 factory/claude-opus-5-5; do
            grep -qx "$m" <<<"$models" && { echo "$m"; return 0; }
          done; m=$(grep -E '(^|/)claude-opus-5-5$' <<<"$models" | head -1 || true) ;;
       3) for m in factory/deepseek-v4.1-flash devin/deepseek-v4-1-flash-1017; do

@@ -15,7 +15,7 @@
 | 顾问 | `epi -p` 独立只读会话（主控把背景材料写成文件交给它） | 仅在**同一个问题第二次出现 / 方案迟迟收不拢**时调用 |
 | 用户 | — | 需求歧义拍板；推送/PR/发布人工闸门（G2） |
 
-- **审查模型三级回退（WF3）**：① `gemini-4-argon`（`devin/` 优先，`auto/`、`factory/` 次之，排除 `-disabled`）；② `claude-opus-5-5`（thinking 固定 `medium`，禁 `high`）；③ `deepseek-v4.1-flash`（`factory/deepseek-v4.1-flash`、`devin/deepseek-v4-1-flash-1017`）。一律通过 `scripts/dev/run-review.sh` 启动与等待，禁止手写 `nohup epi -p` 或固定长 `sleep`。
+- **审查模型三级回退（WF3）**：① `gemini-4-argon`（`auto/` 优先，`devin/`、`factory/` 次之，排除 `-disabled`）；② `claude-opus-5-5`（thinking 固定 `medium`，禁 `high`）；③ `deepseek-v4.1-flash`（`factory/deepseek-v4.1-flash`、`devin/deepseek-v4-1-flash-1017`）。一律通过 `scripts/dev/run-review.sh` 启动与等待，禁止手写 `nohup epi -p` 或固定长 `sleep`。
 - **启动 worker**：`orca terminal create --worktree <path> --title <id>`，运行 `epi --provider magpie --model devin/claude-opus-5-5 --thinking high`，发送 `Read .dev/tasks/<id>/brief.md and do the task. Write your report to .dev/tasks/<id>/report.md.`。
 
 ## 2. 一个任务（N1–N7）
