@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
-import { createHooksInlineExtension } from "../dist/extensions/hooks.js";
+import { createHooksInlineExtension, hooksForChild } from "../dist/extensions/hooks.js";
 import {
   loadHooksConfig,
   resolveEffectiveHooks,
@@ -68,10 +68,13 @@ function createRuntime(t, root, hooks, agents = []) {
   const runtime = new HooksRuntime({
     hooks,
     agentDir: join(root, "pi"),
+    epiHome: root,
     agents,
     workerPath: fakeWorker,
     capsuleRoot: join(root, "runtime", "hooks-task"),
     artifactRoot: join(root, "artifacts", "hooks-task"),
+    sessionRoot: join(root, "runtime", "hooks-task", "sessions"),
+    projectTrusted: false,
   });
   t.after(() => runtime.close());
   return runtime;
@@ -1085,4 +1088,24 @@ test("hook extension rejects unknown agent handlers before Pi starts", (t) => {
     }),
     /hook references unknown agent "missing-agent"/,
   );
+});
+
+// stage-1 review P2: a subagent inherits hooks.json so its tool calls stay guarded, but it may not
+// run `type: "agent"` handlers (they spawn a grandchild worker) or the task lifecycle events, which
+// only exist for a parent that owns a TaskRuntime (docs/subagents-design.md §9.4).
+test("hooksForChild drops agent handlers and the task lifecycle events", () => {
+  const filtered = hooksForChild([
+    hook("tool_call", [command("continue")]),
+    hook("session_start", [
+      command("continue"),
+      { type: "agent", agent: "guard", prompt: "decide", timeoutMs: 1000 },
+    ]),
+    hook("task_start", [command("continue")]),
+    hook("task_stop", [command("continue")]),
+    hook("tool_call", [{ type: "agent", agent: "guard", prompt: "decide", timeoutMs: 1000 }]),
+  ]);
+
+  assert.deepEqual(filtered.map((entry) => entry.event), ["tool_call", "session_start"]);
+  assert.deepEqual(filtered[0].handlers.map((handler) => handler.type), ["command"]);
+  assert.deepEqual(filtered[1].handlers.map((handler) => handler.type), ["command"]);
 });

@@ -594,11 +594,11 @@ const extensionFactories: InlineExtension[] = [
 - Hook secret；
 - Task capsule 的私密内容。
 
-## 12. Task Extension
+## 12. Task Extension（Subagents）
 
-不直接采用完整 `pi-subagents`。当前实现包含 chains、profiles、fleet、intercom、background orchestration、agent memory、workflows 和 RPC，超出 Epi 边界。
+不直接采用完整 `pi-subagents`（其 chains、fleet、intercom、workflows 超出 Epi 边界）。设计见 [subagents-design.md](subagents-design.md)。
 
-可以参考 Pi 官方最小 Subagent 示例，但只保留已确定的能力。
+**子代理 = 作用域受限的一次 Epi 运行**：`src/worker.ts` 走与其他入口相同的 `resolveAssembly` → `scopeAssemblyForTask` → `buildInlineExtensions` 管线（架构 §2），不另写一条装配路径。能力按需逐项打开，默认全关。
 
 ### 12.1 工具面
 
@@ -610,45 +610,80 @@ task_cancel
 todo
 ```
 
-### 12.2 状态
+### 12.2 可调能力（正交，默认全关）
+
+每个参数控制一个维度；`agents/*.md` 预设提供默认值，显式参数优先。
+
+| 参数 | 默认 | 语义 |
+|---|---|---|
+| `agent` | 无 | 可选预设；不传就是无名子代理（开箱即用，不再要求先写 `agents/*.md`） |
+| `context` | `fresh` | `fork` 复制父会话当前分支（裁剪规则见 §12.5） |
+| `model` | 继承 | `provider/id`、`provider/id:thinking` |
+| `systemPrompt` | 空 | 追加给子代理的系统指令 |
+| `rules` | `false` | 注入本次运行的 `# Epi Rules` |
+| `skills` | `false` | `true` 列出全部技能根；`["name"]` 把该 `SKILL.md` 正文预载进系统提示词（省掉第一轮 `read`），名字经 Pi 自己的 `loadSkillsFromDir` 解析 |
+| `mcp` | `false` | `true` 连接全部；`["name"]` 只连指定服务（未配置的名字直接报错） |
+| `tools` / `excludeTools` | 继承默认 | 透传 Pi `createAgentSession` 的白名单/黑名单 |
+| `hooks` | `true` | 子代理内的工具调用同受 `hooks.json` 约束 |
+| `extensions` | `true` | Manifest 外部扩展，可传名字数组裁剪 |
+| `maxTurns` | 无 | 到达轮次边界且该轮还有工具结果（即还有后续工作）时优雅停止并返回已有产出（`status: "partial"`，带 `turns`，会话文件保留）；该轮没有任何工具结果说明模型已给出最终答复，按 `completed` 正常结束 |
+| `timeoutSeconds` | 600 | 超时终止进程组 |
+
+### 12.3 状态
 
 ```ts
 interface TaskJob {
   id: string;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  status: "queued" | "running" | "completed" | "partial" | "failed" | "cancelled";
+  sessionPath: string;   // 子会话 .jsonl，停止后可原地续跑
   process?: ChildProcess;
   result?: string;
   error?: string;
+  /** 完成的轮数，`partial` 时用来告诉模型停在哪一步。 */
+  turns?: number;
   startedAt?: number;
   finishedAt?: number;
 }
 ```
 
-Job Registry 必须属于当前 Pi Session，不允许 process-global singleton。
+Job Registry 属于扩展对象（真实运行中即一进程一份），跨 `/new`、`/resume`、`/fork`、`/reload` 共用；既不是每个 Pi Session 一份，也不是 module-global 单例。
 
-### 12.3 Child 约束
+- Pi 在会话切换/重载时先发 `session_shutdown`，再 `invalidate()` 旧 `ExtensionRunner` 并重新执行每个扩展的 `factory(pi)`；之后旧 `pi`/`ctx` 上的任何调用都抛 "ctx is stale"。若 Registry 建在 `factory` 内，切换时保留下来的 Job 会变成孤儿：新实例查不到（`unknown task job`）、完成回调调旧 `pi.appendEntry` 抛错而丢掉 usage 与 `task_stop`、之后 `quit` 也只关掉最新那个 Registry。
+- 因此 `TaskRuntime` 与 `completionHooks` 建在 `createTaskInlineExtension()` 作用域（`src/extensions/task.ts`），同一扩展对象的所有 `factory(pi)` 调用共享；每个 `factory` 把当前 `pi` 写入可变 `current`，`session_start` 与每次工具 `execute` 更新 `current.ctx`。完成时的 usage 记录与 `task_stop` hook 一律用完成时刻的 `current`，绝不用启动时捕获的 `pi`/`ctx`。
+- 后果：在会话 A 启动、切到 B 之后才完成的 Job，其 `epi:task-usage` 条目记录在 B。没有存活的 `ctx` 时跳过 `task_stop` hook，usage 仍尽量记录；记录失败写 stderr，不静默吞掉。
 
-- 每个 Child 是独立 Node.js process；
-- Child 启动包内 `dist/worker.js`，不能查找或启动 PATH 中的 `pi`；
-- Worker 使用锁定的 Pi SDK 创建独立 in-memory AgentSession，并输出稳定 JSON events；
-- 只接收 task capsule、cwd、agent prompt 和明确工具列表；
-- 不加载 `epi:task`，因此不能递归产生 Child；
-- 不自动继承 Parent 的所有 Extensions；
-- MCP 只有 agent manifest 明确允许时才加载；
-- 不共享 Parent MCP connection；
-- Parent Session shutdown 时取消并回收所有 Child；
-- stdout/stderr 和最终结果有明确上限，超出后写 artifact；
-- 一个 Job 失败不破坏其他独立 Job；
-- capsule 文件权限仅当前用户可读写，Child 退出后删除。
+### 12.4 Child 约束
 
-### 12.4 Agent 资源
+- 每个 Child 是独立 Node.js process，启动包内 `dist/worker.js`，不查找 PATH 中的 `pi`；
+- **永不加载 `epi:task`**（`scopeAssemblyForTask` 强制剔除），因此不能递归派生 Child；
+- 资源是父会话装配的**子集**：未被父会话信任的项目配置不可能进入 Child（硬规则 1、2）；项目信任由父进程判定后随 capsule 下传，Child 不自行决定；
+- 子会话落在 `~/.epi/runtime/task/sessions/<jobId>.jsonl`（`0600`），**不进 Pi 的 session 目录**：后台子代理不会劫持 `epi -c`，也不出现在 `/resume` 列表；
+- Worker 首行调 `takeOverStdout()`：插件/MCP 的 `console.log` 一律改道 stderr，只有协议 JSONL 走真 stdout；
+- Hook 的 `type: "agent"` handler 所用的 TaskRuntime 固定 `allowHooks: false`，避免 `tool_call` hook 派生的子代理再次触发 hook 形成死循环；
+- 只有 `session_shutdown` 的 `reason === "quit"` 取消并回收 Child；`new`/`resume`/`fork`/`reload` 只是换会话，进程仍在，Child 继续跑，且共享的 Job Registry（§12.3）让新会话仍能 `task_status`/`task_wait`/`task_cancel` 它们（父会话 abort 自己的轮次，如 Esc 或 `/compact`，同样不杀 Child）；`quit` 由任一存活 `factory` 收到即关停共享 Registry，回收全部 Child；
+- 进程退出兜底：`process.once("exit")` 对仍在运行的 worker 进程组发 `SIGKILL`。它覆盖「异常退出/未发 `session_shutdown`」的常见崩溃路径，但 `SIGKILL` 或 Node 未处理的信号不触发 `exit` 事件，因此不承诺任何情况下都不留孤儿；
+- stdout/stderr 和最终结果有明确上限，超出后写 artifact；一个 Job 失败不破坏其他 Job；
+- capsule 文件权限仅当前用户可读写，Child 读取后立即删除。
+
+### 12.5 `context: "fork"` 的裁剪规则
+
+Pi 在执行工具**之前**就把含本次 `task` 调用的 assistant 消息写进会话（`core/agent-session.js` 的 `message_end`），所以分支末尾是一条没有 `toolResult` 的 `toolCall`，原样复制会被模型 API 判 HTTP 400。`forkableBranch()` 因此：
+
+1. 从那条未闭合的 assistant 消息起截断（已完成的工具调用与其结果保留）；
+2. 丢掉截断点之前最后一条**消息**条目，若它是父会话的 `user` 消息（父会话当前这条 prompt）——子代理自己的 task 会作为一条 `user` 消息追加，连续两条 `user` 会让模型困惑；`model_change`、`custom` 等非消息条目可能夹在 prompt 与截断点之间，查找时跳过它们（条目本身保留）；
+3. 滤掉父会话的 `system` 消息——它描述的是父会话的工具、Rules 和技能，子代理要按自己的作用域重建（实测中继承会让子代理以「我没有这些工具」为由拒绝干活）；
+4. 重连 `parentId` 链：Pi 的 `SessionManager` 从叶子沿 `parentId` 回溯，遇到不存在的 id 就停（`session-manager.js` 的 `getBranch`），所以每删一条都必须把后继接到前一个幸存条目上（第一个接 `null`），否则子代理会丢掉被删条目之前的全部历史。
+
+另外不调用 `ctx.sessionManager.createBranchedSession()`：它会就地改写调用方自身的 `sessionId`/`sessionFile`，污染父会话。
+
+### 12.6 Agent 资源（可选预设）
 
 ```text
 ~/.epi/agents/<name>.md
 <repo>/.epi/agents/<name>.md
 ```
 
-最小 frontmatter：
+只有 `name` 和 `description` 必填；frontmatter 可为 §12.2 的每个维度提供默认值（`model`、`tools`、`excludeTools`、`skills`、`mcp`、`rules`、`hooks`、`extensions`、`context`、`maxTurns`、`timeoutSeconds`），正文是子代理的系统提示词：
 
 ```yaml
 ---
@@ -656,6 +691,8 @@ name: reviewer
 description: Reviews a bounded code change
 model: optional/provider-model
 tools: read,grep,bash
+skills: code-review
+mcp: false
 timeoutSeconds: 600
 ---
 ```
@@ -973,9 +1010,9 @@ Epi SDK Host 启动
 
 ### 生命周期
 
-- 不存在 process-global Job/MCP/Hook Registry；
-- Session 切换不会遗留旧 handler；
-- Child 不能在 Parent 退出后继续存活；
+- 不存在 module-global 单例 Registry：`epi:task` 的 Job Registry 属于扩展对象（一进程一份），跨会话切换共用，好让新会话仍能读取/取消旧 Job（§12.3）；
+- Session 切换不会遗留旧 handler：完成回调使用当前 `pi`/`ctx`，不捕获启动时的；
+- Child 不能在 Parent 退出后继续存活：`session_shutdown({ reason: "quit" })` 关停共享 Registry 并回收全部 Child；`process.once("exit")` 兜底未发 shutdown 的崩溃路径（`SIGKILL` 除外）；
 - MCP stdio server 必须被回收；
 - 失败的独立 Job 不影响其他 Job；
 - 主进程退出不遗留 Epi 临时配置目录。

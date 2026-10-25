@@ -28,6 +28,21 @@ if (capsule.task === "sleep") {
   ].join("\n");
   process.stdout.write(`${JSON.stringify({ type: "result", ok: false, error })}\n`);
   process.exitCode = Number(capsule.task.slice("pi-guidance-exit-".length));
+} else if (capsule.task === "echo-model") {
+  process.stdout.write(`${JSON.stringify({ type: "result", ok: true, output: String(capsule.model) })}\n`);
+} else if (capsule.task === "with-usage") {
+  const usage = { inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, costUsd: 0.001 };
+  process.stdout.write(`${JSON.stringify({ type: "result", ok: true, output: "done", usage })}\n`);
+} else if (capsule.task === "slow-usage") {
+  // Finishes only after a session switch has replaced the extension runtime, so the usage record
+  // has to go through the *live* pi (test/task.test.mjs).
+  await delay(300);
+  const usage = { inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, costUsd: 0.001 };
+  process.stdout.write(`${JSON.stringify({ type: "result", ok: true, output: "done", usage })}\n`);
+} else if (capsule.task === "partial") {
+  process.stdout.write(`${JSON.stringify({ type: "result", ok: true, partial: true, turns: 3, output: "half done" })}\n`);
+} else if (capsule.task === "empty") {
+  process.stdout.write(`${JSON.stringify({ type: "result", ok: true, output: "" })}\n`);
 } else if (capsule.task === "large") {
   process.stdout.write(`${JSON.stringify({ type: "result", ok: true, output: "x".repeat(4096) })}\n`);
 } else if (capsule.task.startsWith("HOOK_CONTINUE")) {

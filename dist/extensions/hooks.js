@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EpiConfigError } from "../errors.js";
 import { EPI_TASK_HOOK_CHANNEL, isTaskHookBridgeRequest, } from "../hook-events.js";
@@ -157,6 +157,22 @@ function compactPayload(event, context) {
 function blockReason(decision) {
     return decision.reason ?? "Blocked by Epi hook";
 }
+/**
+ * The hooks a subagent's own `epi:hooks` may run (docs/subagents-design.md §9.4, hard rule:
+ * subagents do not spawn subagents). A child inherits `hooks.json` so its tool calls are still
+ * guarded, but `type: "agent"` handlers would start a grandchild worker, and `task_start` /
+ * `task_stop` only exist for a parent that owns a TaskRuntime. A hook left with no handler is
+ * dropped rather than registered as a no-op.
+ */
+export function hooksForChild(hooks) {
+    return hooks
+        .filter((hook) => hook.event !== "task_start" && hook.event !== "task_stop")
+        .map((hook) => ({
+        ...hook,
+        handlers: hook.handlers.filter((handler) => handler.type !== "agent"),
+    }))
+        .filter((hook) => hook.handlers.length > 0);
+}
 export function createHooksInlineExtension(options) {
     // Agent files are only read for a hooks.json that has an agent handler: epi:hooks is on by default
     // (decision H3/K4), and with no such hook it must not fail on, or even read, agents/ -- which
@@ -183,10 +199,18 @@ export function createHooksInlineExtension(options) {
             const runtime = new HooksRuntime({
                 hooks: options.hooks,
                 agentDir: options.agentDir,
+                epiHome: options.epiHome,
                 agents,
                 workerPath,
                 capsuleRoot: join(options.epiHome, "runtime", "hooks-task"),
                 artifactRoot: join(options.epiHome, "artifacts", "hooks-task"),
+                sessionRoot: join(options.epiHome, "runtime", "hooks-task", "sessions"),
+                projectTrusted: options.projectTrusted === true,
+                // The trust decision above was made for this project; a hook's agent child applies it only
+                // there (same rule as epi:task: the root is the parent of `.epi/agents`).
+                ...(options.projectAgentsDir === undefined
+                    ? {}
+                    : { projectRoot: dirname(dirname(options.projectAgentsDir)) }),
             });
             const unsubscribeTaskHooks = pi.events.on(EPI_TASK_HOOK_CHANNEL, (value) => {
                 if (!isTaskHookBridgeRequest(value)) {

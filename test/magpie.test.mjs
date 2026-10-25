@@ -32,6 +32,28 @@ const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const worker = fileURLToPath(new URL("../dist/worker.js", import.meta.url));
 const signal = () => new AbortController().signal;
 
+/** A minimal task capsule for the worker: the isolated subagent defaults (no rules, skills, MCP,
+ * hooks or Manifest extensions), so these tests exercise the provider path only. */
+function taskCapsule(fixture, overrides = {}) {
+  return {
+    version: 1,
+    task: "hi",
+    cwd: fixture.home,
+    agentDir: join(fixture.epiHome, "pi"),
+    epiHome: fixture.epiHome,
+    systemPrompt: "",
+    tools: [],
+    sessionPath: join(fixture.home, `task-${Math.random().toString(36).slice(2)}.jsonl`),
+    rules: false,
+    skills: false,
+    mcp: false,
+    hooks: false,
+    extensions: false,
+    projectTrusted: false,
+    ...overrides,
+  };
+}
+
 function setup(t, baseUrl) {
   const home = mkdtempSync(join(tmpdir(), "epi-magpie-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
@@ -640,7 +662,7 @@ test("a gateway that is not running is named when settings or a pattern select M
   // The task worker, model from settings.
   const fixture = withSettings(magpieDefault, false);
   const capsulePath = join(fixture.home, "capsule.json");
-  writeFileSync(capsulePath, JSON.stringify({ version: 1, task: "hi", cwd: fixture.home, agentDir: join(fixture.epiHome, "pi"), systemPrompt: "", tools: [] }));
+  writeFileSync(capsulePath, JSON.stringify(taskCapsule(fixture, { systemPrompt: "" })));
   // In the worker's reported error (what the task tool passes on), not only on stderr.
   await assert.rejects(
     run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000 }),
@@ -713,7 +735,7 @@ test("isolated Task worker calls Magpie, and refreshes the catalog like every ot
   const fixture = setup(t, server.baseUrl);
   const runWorker = async (model) => {
     const capsulePath = join(fixture.home, "capsule.json");
-    writeFileSync(capsulePath, JSON.stringify({ version: 1, task: "hi", cwd: fixture.home, agentDir: join(fixture.epiHome, "pi"), systemPrompt: "Be concise.", model, tools: [] }));
+    writeFileSync(capsulePath, JSON.stringify(taskCapsule(fixture, { systemPrompt: "Be concise.", model })));
     const output = await run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000 });
     const events = output.stdout.trim().split("\n").map((line) => JSON.parse(line));
     assert.equal(events.at(-1).ok, true, output.stdout + output.stderr);

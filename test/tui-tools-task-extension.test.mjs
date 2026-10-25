@@ -25,6 +25,7 @@ function loadTools(t) {
     epiHome,
     agentDir: join(epiHome, "pi"),
     projectAgentsDir: undefined,
+    projectTrusted: false,
   });
   const tools = new Map();
   const fakePi = {

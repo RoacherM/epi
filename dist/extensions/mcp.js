@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createMcpExtension, } from "@earendil-works/pi-coding-agent";
+import { EpiConfigError } from "../errors.js";
 // Native MCP (docs/mcp-design.md, decision MCP2): Epi no longer ships its own MCP client
 // (pi-mcp-adapter, removed in the Pi 0.99 upgrade's stage 1) -- Pi's own createMcpExtension does
 // connections, OAuth, tool registration, and the /mcp panel. Epi only decides *which config files*
@@ -98,6 +99,24 @@ export function loadNativeMcpConfig(source, cwd) {
         errors: [...global.errors, ...project.errors],
     };
 }
+/**
+ * A subagent's `mcp: ["name"]` filter, checked against the configured servers. Shared by
+ * `createEpiMcpExtension`'s own `loadConfig` and by the eager preflight in `buildInlineExtensions`
+ * (src/extensions/index.ts): Pi's `session_start` emit catches a throw from a handler, so a filter
+ * validated only inside `loadConfig` would let a child start with a silently empty server set.
+ * An unknown name is an error, not a missing tool (hard rule 4).
+ */
+export function filterMcpServers(config, serverFilter) {
+    if (serverFilter === undefined) {
+        return config;
+    }
+    const unknown = serverFilter.filter((name) => !config.servers.some((server) => server.name === name));
+    if (unknown.length > 0) {
+        const available = config.servers.map((server) => server.name).join(", ") || "none";
+        throw new EpiConfigError(`unknown MCP server ${unknown.map((name) => JSON.stringify(name)).join(", ")}; configured: ${available}`);
+    }
+    return { ...config, servers: config.servers.filter((server) => serverFilter.includes(server.name)) };
+}
 /** Shared by `/mcp` and `epi mcp list` (src/commands/mcp-cli.ts): what to run, in one sentence. `-l`
  * writes `<cwd>/.epi/mcp.json`, so it's offered only where `cwd` has a project Manifest (dogfood D47). */
 export function emptyStateMessage(epiHome, cwd) {
@@ -174,9 +193,13 @@ async function mcpProblemLines(completions, { includeConnecting }) {
  * default-already-correct shortcut concern (it is a plain string), so it is passed explicitly for
  * auditability, matching the design.
  */
-export function createEpiMcpExtension(source) {
+export function createEpiMcpExtension(source, 
+/** A subagent's `mcp: ["name"]`: only these servers connect in the child, so a task that needs
+ * one server does not pay for every configured one (docs/subagents-design.md §3). An unknown
+ * name is an error at load, not a silently missing tool. */
+serverFilter) {
     const { epiHome } = source;
-    const loadConfig = (ctx) => loadNativeMcpConfig(source, ctx.cwd);
+    const loadConfig = (ctx) => filterMcpServers(loadNativeMcpConfig(source, ctx.cwd), serverFilter);
     const logPath = join(epiHome, "pi", "mcp.log");
     const transports = trackingTransportFactory();
     const startupWaitMs = mcpStartupWaitMs();

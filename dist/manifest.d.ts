@@ -23,6 +23,9 @@ export interface ResolvedResource {
     value: string;
     source: ResourceSource;
     declaredIn: string;
+    /** Set only when `scopeAssemblyForTask` preloads a single skill: `value` is then the skill's own
+     * SKILL.md path, so the name the model sees has to travel beside it. */
+    name?: string;
     /** Set only for an auto-discovered skill root (never for one declared in a Manifest). */
     discovered?: DiscoveredSkillProvenance;
 }

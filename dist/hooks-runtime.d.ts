@@ -9,10 +9,17 @@ export type HookPayload = Record<string, unknown> & {
 export interface HooksRuntimeOptions {
     hooks: readonly ResolvedHook[];
     agentDir: string;
+    epiHome: string;
     agents: readonly TaskAgentDefinition[];
     workerPath: string;
     capsuleRoot: string;
     artifactRoot: string;
+    sessionRoot: string;
+    projectTrusted: boolean;
+    /** The parent's trusted project root, when the caller knows it. `epi:hooks` does not pass one
+     * yet, so hook agent children resolve untrusted (the safe direction) instead of re-reading
+     * `trust.json` for whatever project their cwd lands in. */
+    projectRoot?: string | undefined;
 }
 export declare class HooksRuntime {
     private readonly hooks;

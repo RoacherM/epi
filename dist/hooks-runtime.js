@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { ModelRuntime, resolveCliModel, } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
-import { TaskRuntime } from "./task-runtime.js";
+import { inheritedModelReference, TaskRuntime } from "./task-runtime.js";
 const MAX_HOOK_PAYLOAD_BYTES = 64 * 1024;
 const MAX_HOOK_OUTPUT_BYTES = 64 * 1024;
 const MAX_HOOK_ERROR_TAIL_BYTES = 4 * 1024;
@@ -273,11 +273,18 @@ export class HooksRuntime {
         this.taskRuntime = new TaskRuntime({
             workerPath: options.workerPath,
             agentDir: options.agentDir,
+            epiHome: options.epiHome,
             capsuleRoot: options.capsuleRoot,
             artifactRoot: options.artifactRoot,
+            sessionRoot: options.sessionRoot,
             agents: options.agents,
+            projectTrusted: options.projectTrusted,
+            projectRoot: options.projectRoot,
             maxConcurrency: 2,
             maxOutputBytes: MAX_HOOK_OUTPUT_BYTES,
+            // Design §9 (defect 4): a hook's agent handler must not itself trigger hooks, or a
+            // tool_call hook that runs an agent would recurse without bound.
+            allowHooks: false,
         });
     }
     abortActive() {
@@ -384,7 +391,7 @@ export class HooksRuntime {
             case "prompt":
                 return this.executePrompt(handler, payload, context, signal);
             case "agent":
-                return this.executeAgent(handler, payload, context.cwd, signal);
+                return this.executeAgent(handler, payload, context, signal);
         }
     }
     async executeCommand(handler, payload, cwd, signal) {
@@ -515,7 +522,7 @@ export class HooksRuntime {
         }, { signal });
         return assistantText(result.content);
     }
-    async executeAgent(handler, payload, cwd, signal) {
+    async executeAgent(handler, payload, context, signal) {
         const started = this.taskRuntime.start({
             agent: handler.agent,
             task: [
@@ -523,7 +530,10 @@ export class HooksRuntime {
                 "Return exactly one JSON decision object and no Markdown fences.",
                 serializePayload(payload),
             ].join("\n\n"),
-            cwd,
+            cwd: context.cwd,
+            // The hook agent inherits the parent's model, as a `task` call does; without it a preset
+            // with `model: ":low"` would lose the model it is meant to keep (review pack A P1).
+            inheritedModel: inheritedModelReference(context.model, context.thinkingLevel),
         });
         const abort = () => {
             void this.taskRuntime.cancel(started.id);

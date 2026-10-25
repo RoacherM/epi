@@ -5,6 +5,7 @@ import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 import { EpiConfigError } from "./errors.js";
 import type { ResourceSource } from "./manifest.js";
+import { DEFAULT_TASK_TIMEOUT_SECONDS } from "./task-runtime.js";
 
 interface AgentFrontmatter extends Record<string, unknown> {
   name?: unknown;
@@ -14,12 +15,22 @@ interface AgentFrontmatter extends Record<string, unknown> {
   timeoutSeconds?: unknown;
 }
 
+/** An `agents/*.md` preset: defaults for the nine orthogonal subagent settings
+ * (docs/subagents-design.md §7). Every one is optional; an explicit `task` argument overrides it. */
 export interface TaskAgentDefinition {
   name: string;
   description: string;
   model: string | undefined;
   tools: string[] | undefined;
+  excludeTools: string[] | undefined;
   timeoutSeconds: number;
+  maxTurns: number | undefined;
+  context: "fresh" | "fork" | undefined;
+  rules: boolean | undefined;
+  skills: boolean | string[] | undefined;
+  mcp: boolean | string[] | undefined;
+  hooks: boolean | undefined;
+  extensions: boolean | string[] | undefined;
   systemPrompt: string;
   source: ResourceSource;
   filePath: string;
@@ -30,31 +41,130 @@ export interface LoadTaskAgentsOptions {
   projectAgentsDir: string | undefined;
 }
 
-function parseTools(value: unknown, filePath: string): string[] | undefined {
+/** YAML gives tool lists either as `read,grep` or as a real list; both become a name array.
+ * `pattern` keeps `tools` to plain tool names while letting `excludeTools` use Pi's wildcards
+ * (`mcp__github__*`) and the `+name`/`-name` modifiers `createAgentSession` accepts. */
+function parseNameList(
+  value: unknown,
+  filePath: string,
+  field: string,
+  pattern: RegExp,
+): string[] | undefined {
   if (value === undefined) {
     return undefined;
   }
 
-  const rawTools = typeof value === "string"
+  const raw = typeof value === "string"
     ? value.split(",")
     : Array.isArray(value)
       ? value
       : undefined;
-  if (rawTools === undefined) {
-    throw new EpiConfigError(`${filePath}: tools must be a string or string array`);
+  if (raw === undefined) {
+    throw new EpiConfigError(`${filePath}: ${field} must be a string or string array`);
   }
 
-  const tools = rawTools.map((tool, index) => {
-    if (typeof tool !== "string" || tool.trim().length === 0) {
-      throw new EpiConfigError(`${filePath}: tools[${index}] must be a non-empty string`);
+  const names = raw.map((name, index) => {
+    if (typeof name !== "string" || name.trim().length === 0) {
+      throw new EpiConfigError(`${filePath}: ${field}[${index}] must be a non-empty string`);
     }
-    const normalized = tool.trim();
-    if (!/^[a-z][a-z0-9_-]*$/.test(normalized)) {
-      throw new EpiConfigError(`${filePath}: invalid tool name ${JSON.stringify(normalized)}`);
+    const normalized = name.trim();
+    if (!pattern.test(normalized)) {
+      throw new EpiConfigError(`${filePath}: invalid ${field} entry ${JSON.stringify(normalized)}`);
     }
     return normalized;
   });
-  return [...new Set(tools)];
+  return [...new Set(names)];
+}
+
+const TOOL_NAME = /^[+-]?[a-z][a-z0-9_-]*$/;
+const TOOL_PATTERN = /^[+-]?[a-z][a-z0-9_*-]*$/;
+/** A `skills`/`mcp`/`extensions` entry. Loose enough for a Manifest extension source -- `npm:pkg`,
+ * `npm:@scope/pkg@1.2`, `git:https://...`, an absolute or `./`-relative path -- since those are the
+ * exact values a Manifest declares (src/manifest.ts). A name that matches nothing is rejected later,
+ * when it is resolved against the assembly (src/assembly.ts). */
+const RESOURCE_NAME = /^[A-Za-z0-9@./~_:][A-Za-z0-9@./~_:#+-]*$/;
+
+/** The only frontmatter keys an `agents/*.md` file may carry (docs/subagents-design.md §7). A typo
+ * or an unimplemented design field must fail loudly, not be silently dropped. */
+const AGENT_KEYS: Readonly<Record<string, true>> = {
+  name: true,
+  description: true,
+  model: true,
+  tools: true,
+  excludeTools: true,
+  timeoutSeconds: true,
+  maxTurns: true,
+  context: true,
+  rules: true,
+  skills: true,
+  mcp: true,
+  hooks: true,
+  extensions: true,
+};
+
+/** A frontmatter switch that is either a boolean or a name list (`skills`, `mcp`, `extensions`):
+ * `true`/`false` as written, otherwise the names. */
+function parseSwitchList(
+  value: unknown,
+  filePath: string,
+  field: string,
+): boolean | string[] | undefined {
+  if (value === undefined || typeof value === "boolean") {
+    return value;
+  }
+  return parseNameList(value, filePath, field, RESOURCE_NAME);
+}
+
+function parseBoolean(value: unknown, filePath: string, field: string): boolean | undefined {
+  if (value === undefined || typeof value === "boolean") {
+    return value;
+  }
+  throw new EpiConfigError(`${filePath}: ${field} must be a boolean`);
+}
+
+function parsePositiveInteger(value: unknown, filePath: string, field: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(value) || Number(value) <= 0) {
+    throw new EpiConfigError(`${filePath}: ${field} must be a positive integer`);
+  }
+  return Number(value);
+}
+
+function parseContext(value: unknown, filePath: string): "fresh" | "fork" | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value !== "fresh" && value !== "fork") {
+    throw new EpiConfigError(`${filePath}: context must be "fresh" or "fork"`);
+  }
+  return value;
+}
+
+/** Reads one agent file's frontmatter, wrapping a YAML syntax error and rejecting any key outside
+ * the documented set (hard rule 4: a typo or an unimplemented design field must not be silently
+ * dropped). */
+function parseAgentFrontmatter(filePath: string): { frontmatter: AgentFrontmatter; body: string } {
+  let parsed: { frontmatter: AgentFrontmatter; body: string };
+  try {
+    parsed = parseFrontmatter<AgentFrontmatter>(readFileSync(filePath, "utf8"));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new EpiConfigError(`${filePath}: invalid frontmatter: ${detail}`);
+  }
+  const { frontmatter } = parsed;
+  if (typeof frontmatter !== "object" || frontmatter === null || Array.isArray(frontmatter)) {
+    throw new EpiConfigError(`${filePath}: frontmatter must be a mapping of agent fields`);
+  }
+  for (const key of Object.keys(frontmatter)) {
+    if (AGENT_KEYS[key] !== true) {
+      throw new EpiConfigError(
+        `${filePath}: unknown field ${JSON.stringify(key)}; allowed: ${Object.keys(AGENT_KEYS).join(", ")}`,
+      );
+    }
+  }
+  return parsed;
 }
 
 function loadAgentDirectory(
@@ -74,10 +184,9 @@ function loadAgentDirectory(
 
   for (const entry of entries) {
     const filePath = join(canonicalDirectory, entry.name);
-    const parsed = parseFrontmatter<AgentFrontmatter>(
-      readFileSync(filePath, "utf8"),
-    );
-    const { name, description, model, timeoutSeconds } = parsed.frontmatter;
+    const parsed = parseAgentFrontmatter(filePath);
+    const { name, description, model } = parsed.frontmatter;
+    const timeoutSeconds = parsePositiveInteger(parsed.frontmatter.timeoutSeconds, filePath, "timeoutSeconds");
 
     if (typeof name !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(name)) {
       throw new EpiConfigError(
@@ -93,20 +202,21 @@ function loadAgentDirectory(
     if (model !== undefined && (typeof model !== "string" || model.trim().length === 0)) {
       throw new EpiConfigError(`${filePath}: model must be a non-empty string`);
     }
-    if (
-      timeoutSeconds !== undefined &&
-      (!Number.isInteger(timeoutSeconds) || Number(timeoutSeconds) <= 0)
-    ) {
-      throw new EpiConfigError(`${filePath}: timeoutSeconds must be a positive integer`);
-    }
-
     names.add(name);
     agents.push({
       name,
       description: description.trim(),
       model: typeof model === "string" ? model.trim() : undefined,
-      tools: parseTools(parsed.frontmatter.tools, filePath),
-      timeoutSeconds: timeoutSeconds === undefined ? 600 : Number(timeoutSeconds),
+      tools: parseNameList(parsed.frontmatter.tools, filePath, "tools", TOOL_NAME),
+      excludeTools: parseNameList(parsed.frontmatter.excludeTools, filePath, "excludeTools", TOOL_PATTERN),
+      timeoutSeconds: timeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS,
+      maxTurns: parsePositiveInteger(parsed.frontmatter.maxTurns, filePath, "maxTurns"),
+      context: parseContext(parsed.frontmatter.context, filePath),
+      rules: parseBoolean(parsed.frontmatter.rules, filePath, "rules"),
+      skills: parseSwitchList(parsed.frontmatter.skills, filePath, "skills"),
+      mcp: parseSwitchList(parsed.frontmatter.mcp, filePath, "mcp"),
+      hooks: parseBoolean(parsed.frontmatter.hooks, filePath, "hooks"),
+      extensions: parseSwitchList(parsed.frontmatter.extensions, filePath, "extensions"),
       systemPrompt: parsed.body,
       source,
       filePath,

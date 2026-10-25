@@ -20,6 +20,9 @@ import { getAgentDir, initTheme } from "@earendil-works/pi-coding-agent";
 import { getKeybindings } from "@earendil-works/pi-tui";
 
 import { createEpiMcpExtension, loadNativeMcpConfig } from "../dist/extensions/mcp.js";
+import { buildInlineExtensions } from "../dist/extensions/index.js";
+import { resolveAssembly, scopeAssemblyForTask } from "../dist/assembly.js";
+import { createEpiRuntimeIdentity } from "../dist/runtime-identity.js";
 import { startOAuthMcpServer } from "./fixtures/mcp-oauth-server.mjs";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -114,6 +117,38 @@ test("a bad server entry surfaces Pi's own validation error, not a silently empt
   const result = loadNativeMcpConfig({ epiHome, resolveAssembly: untrustedAssembly }, root);
   assert.equal(result.servers.length, 0);
   assert.match(result.errors[0], /needs either "command" \(stdio\) or "url" \(streamable HTTP\)/);
+});
+
+// stage-1 review P1-1: the child's `mcp: ["name"]` filter was validated only inside the
+// createMcpExtension `loadConfig` callback. Pi's session_start emit catches a handler's throw, so the
+// child ran with zero servers and reported success. The filter must fail in the eager preflight,
+// before the child session is bound.
+test("a subagent's unknown mcp server filter fails before the session starts", (t) => {
+  const root = createFixture(t);
+  const epiHome = join(root, "home");
+  mkdirSync(join(epiHome, "pi"), { recursive: true });
+  writeJson(join(epiHome, "mcp.json"), { mcpServers: { alpha: { command: "node" } } });
+  const assembly = resolveAssembly({
+    agentDir: join(epiHome, "pi"),
+    globalManifestPath: join(epiHome, "epi.json"),
+    epiHome,
+    cwd: root,
+    noProject: true,
+    projectTrustOverride: false,
+    environment: { HOME: root, EPI_HOME: epiHome },
+  });
+  const scoped = scopeAssemblyForTask(assembly, { mcp: ["nope"] });
+  const identity = createEpiRuntimeIdentity({
+    epiVersion: "0.1.24",
+    piVersion: "1.4.0",
+    epiHome,
+    assembly: scoped,
+  });
+  const build = (filter) =>
+    buildInlineExtensions(scoped, epiHome, identity, () => scoped, undefined, false, filter);
+
+  assert.throws(() => build(["nope"]), /unknown MCP server "nope"; configured: alpha/);
+  assert.doesNotThrow(() => build(["alpha"]));
 });
 
 // ── Isolation: Epi's OAuth credentials never land under Pi's own agent dir ─────────────────────

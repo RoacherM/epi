@@ -4,7 +4,7 @@
 // guidance, a path into Pi's docs. Offline: temp HOME/EPI_HOME, the gateway on loopback.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,7 +25,7 @@ async function setup(t, { withKey = true } = {}) {
   const home = mkdtempSync(join(tmpdir(), "epi-task-worker-"));
   t.after(async () => {
     await server.close();
-    rmSync(home, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true, maxRetries: 3 });
   });
   const agentDir = join(home, ".epi", "pi");
   mkdirSync(agentDir, { recursive: true });
@@ -41,10 +41,30 @@ async function setup(t, { withKey = true } = {}) {
   return { server, home, agentDir, env };
 }
 
-/** The worker run directly: its events and exit code. `onStarted` runs once it reports "started". */
-function runWorker(fixture, onStarted = () => {}) {
+/** The worker run directly: its events and exit code. `onStarted` runs once it reports "started".
+ * `overrides` patches the capsule (e.g. `maxTurns`), so a budget can be exercised on a real run. */
+function runWorker(fixture, onStarted = () => {}, overrides = {}) {
   const capsule = join(fixture.home, "capsule.json");
-  writeFileSync(capsule, JSON.stringify({ version: 1, task: "hi", cwd: fixture.home, agentDir: fixture.agentDir, systemPrompt: "", model: "other/echo", tools: [] }));
+  const sessionDir = join(fixture.home, "runtime", "task", "sessions");
+  mkdirSync(sessionDir, { recursive: true });
+  writeFileSync(capsule, JSON.stringify({
+    version: 1,
+    task: "hi",
+    cwd: fixture.home,
+    agentDir: fixture.agentDir,
+    epiHome: join(fixture.home, ".epi"),
+    systemPrompt: "",
+    model: "other/echo",
+    tools: [],
+    sessionPath: join(sessionDir, `direct-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`),
+    rules: false,
+    skills: false,
+    mcp: false,
+    hooks: false,
+    extensions: false,
+    projectTrusted: false,
+    ...overrides,
+  }));
   const child = spawn(process.execPath, [worker, capsule], { cwd: fixture.home, env: fixture.env, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
@@ -67,9 +87,12 @@ async function runTask(t, fixture) {
   const runtime = new TaskRuntime({
     workerPath: worker,
     agentDir: fixture.agentDir,
+    epiHome: join(fixture.home, ".epi"),
     capsuleRoot: join(fixture.home, "runtime", "task"),
     artifactRoot: join(fixture.home, "artifacts", "task"),
-    agents: [{ name: "worker", description: "Test worker", model: "other/echo", tools: [], timeoutSeconds: 20, systemPrompt: "", source: "global", filePath: "/fixture/worker.md" }],
+    sessionRoot: join(fixture.home, "runtime", "task", "sessions"),
+    agents: [{ name: "worker", description: "Test worker", model: "other/echo", tools: [], excludeTools: undefined, timeoutSeconds: 20, maxTurns: undefined, context: undefined, rules: undefined, skills: undefined, mcp: undefined, hooks: undefined, extensions: undefined, systemPrompt: "", source: "global", filePath: "/fixture/worker.md" }],
+    projectTrusted: false,
     killGraceMs: 100,
   });
   t.after(() => runtime.shutdown());
@@ -80,7 +103,11 @@ test("a failed model request is a failed task: ok:false with the request's error
   const fixture = await setup(t);
   const ok = await runWorker(fixture);
   assert.equal(ok.code, 0, ok.context);
-  assert.deepEqual(ok.result, { type: "result", ok: true, output: "MAGPIE_OK 你好" }, ok.context);
+  // A child's tokens are spent in its own process, so the worker reports them up: without this
+  // the parent (and any benchmark) counts delegation as free.
+  assert.equal(ok.result.usage.outputTokens > 0, true, ok.context);
+  const { usage, ...reported } = ok.result;
+  assert.deepEqual(reported, { type: "result", ok: true, turns: 1, output: "MAGPIE_OK 你好" }, ok.context);
 
   fixture.server.state.inferenceStatus = 401;
   fixture.server.state.inferenceError = "invalid x-api-key";
@@ -119,7 +146,58 @@ test("an interrupted task still reports the interruption with exit 143, not the 
   };
   const interrupted = await runWorker(fixture, waitForRequest);
   assert.equal(interrupted.code, 143, interrupted.context);
-  assert.deepEqual(interrupted.result, { type: "result", ok: false, error: "task worker was interrupted" }, interrupted.context);
+  // A cancelled child still spent tokens (or at least has a session to account for); reporting no
+  // usage made a killed job look free.
+  const { usage, ...reported } = interrupted.result;
+  assert.deepEqual(reported, { type: "result", ok: false, error: "task worker was interrupted" }, interrupted.context);
+  assert.equal(typeof usage, "object", interrupted.context);
+});
+
+// stage-1 review P2: a subagent inherits hooks.json, but a `type: "agent"` handler there used to
+// spawn a grandchild worker (docs/subagents-design.md §9.4). The child's epi:hooks must drop agent
+// handlers; session_start fires deterministically, so a surviving handler is observable as a
+// grandchild session. The tool_call event is covered by hooksForChild's unit test in
+// test/hooks.test.mjs.
+test("a subagent's inherited agent hook does not spawn a grandchild worker", async (t) => {
+  const fixture = await setup(t);
+  const epiHome = join(fixture.home, ".epi");
+  mkdirSync(join(epiHome, "agents"), { recursive: true });
+  writeFileSync(
+    join(epiHome, "agents", "hook-guard.md"),
+    "---\nname: hook-guard\ndescription: Hook agent\nmodel: other/echo\ntools: []\n---\nReturn continue.\n",
+  );
+  writeFileSync(
+    join(epiHome, "hooks.json"),
+    JSON.stringify({
+      version: 1,
+      hooks: [{
+        event: "session_start",
+        handlers: [{ type: "agent", agent: "hook-guard", prompt: "Reply with {\"action\":\"continue\"}", timeoutMs: 2000 }],
+      }],
+    }),
+  );
+
+  const result = await runWorker(fixture, () => {}, { hooks: true });
+  assert.equal(result.code, 0, result.context);
+  const grandchildDir = join(epiHome, "runtime", "hooks-task", "sessions");
+  const grandchildSessions = existsSync(grandchildDir) ? readdirSync(grandchildDir) : [];
+  assert.equal(
+    grandchildSessions.length,
+    0,
+    `a subagent must not spawn agent-hook workers: ${grandchildSessions.join(", ")}`,
+  );
+});
+
+// A `maxTurns` budget stops between turns, but a turn that issued no tool call is the model's final
+// answer: the run is already over. Marking that partial reported a finished job as unfinished and
+// threw away its answer.
+test("maxTurns does not mark a finished run partial when the last turn called no tool", async (t) => {
+  const fixture = await setup(t);
+  const result = await runWorker(fixture, () => {}, { maxTurns: 1 });
+  assert.equal(result.code, 0, result.context);
+  const { usage, ...reported } = result.result;
+  assert.deepEqual(reported, { type: "result", ok: true, turns: 1, output: "MAGPIE_OK 你好" }, result.context);
+  assert.equal(typeof usage, "object", result.context);
 });
 
 test("Pi's \"No API key found\", thrown before any request, reaches the model with Epi's guidance", async (t) => {

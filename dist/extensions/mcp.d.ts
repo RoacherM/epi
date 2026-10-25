@@ -22,6 +22,14 @@ export interface McpConfigSource {
  * the project entry wins, matching Pi's own project-overrides-global rule.
  */
 export declare function loadNativeMcpConfig(source: McpConfigSource, cwd: string): LoadedMcpConfig;
+/**
+ * A subagent's `mcp: ["name"]` filter, checked against the configured servers. Shared by
+ * `createEpiMcpExtension`'s own `loadConfig` and by the eager preflight in `buildInlineExtensions`
+ * (src/extensions/index.ts): Pi's `session_start` emit catches a throw from a handler, so a filter
+ * validated only inside `loadConfig` would let a child start with a silently empty server set.
+ * An unknown name is an error, not a missing tool (hard rule 4).
+ */
+export declare function filterMcpServers(config: LoadedMcpConfig, serverFilter: readonly string[] | undefined): LoadedMcpConfig;
 /** Shared by `/mcp` and `epi mcp list` (src/commands/mcp-cli.ts): what to run, in one sentence. `-l`
  * writes `<cwd>/.epi/mcp.json`, so it's offered only where `cwd` has a project Manifest (dogfood D47). */
 export declare function emptyStateMessage(epiHome: string, cwd: string): string;
@@ -48,5 +56,9 @@ export declare function emptyStateMessage(epiHome: string, cwd: string): string;
  * default-already-correct shortcut concern (it is a plain string), so it is passed explicitly for
  * auditability, matching the design.
  */
-export declare function createEpiMcpExtension(source: McpConfigSource): InlineExtension;
+export declare function createEpiMcpExtension(source: McpConfigSource, 
+/** A subagent's `mcp: ["name"]`: only these servers connect in the child, so a task that needs
+ * one server does not pay for every configured one (docs/subagents-design.md §3). An unknown
+ * name is an error at load, not a silently missing tool. */
+serverFilter?: readonly string[]): InlineExtension;
 //# sourceMappingURL=mcp.d.ts.map
