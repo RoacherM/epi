@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import { isConnectionRefused } from "../provider-startup.js";
-import type { Api, Model, ModelsStoreEntry, Provider, ProviderStreams, ThinkingLevelMap } from "@earendil-works/pi-ai";
+import type { Api, Model, ModelCost, ModelsStoreEntry, Provider, ProviderStreams, ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
@@ -19,6 +19,9 @@ export function magpieBaseUrl(): string {
   return process.env.EPI_TEST_MAGPIE_URL ?? "http://127.0.0.1:3425";
 }
 
+/** USD per token as the gateway sends it: a non-negative decimal string. */
+const priceSchema = z.string().refine((value) => value.trim() !== "" && Number.isFinite(Number(value)) && Number(value) >= 0);
+
 const catalogModelSchema = z.object({
   id: z.string().min(1),
   display_name: z.string().optional(),
@@ -32,6 +35,13 @@ const catalogModelSchema = z.object({
   reasoning: z.boolean().optional(),
   supported_reasoning_levels: z.array(z.object({ effort: z.string() })).optional(),
   native_endpoints: z.array(z.string()).optional(),
+  // Optional; the live gateway sends it for most models and omits it for the rest.
+  pricing: z.object({
+    prompt: priceSchema.optional(),
+    completion: priceSchema.optional(),
+    input_cache_read: priceSchema.optional(),
+    input_cache_write: priceSchema.optional(),
+  }).optional(),
 });
 const catalogSchema = z.object({
   data: z.array(catalogModelSchema),
@@ -82,12 +92,30 @@ function thinkingMap(model: CatalogModel, protocol: MagpieProtocol): ThinkingLev
   return map;
 }
 
+/** The gateway prices per token, Pi per million; a missing field is unknown (0), not free. */
+function toCost(pricing: CatalogModel["pricing"]): ModelCost {
+  const perMillion = (value: string | undefined): number =>
+    value === undefined ? 0 : Number((Number(value) * 1e6).toPrecision(12));
+  return {
+    input: perMillion(pricing?.prompt),
+    output: perMillion(pricing?.completion),
+    cacheRead: perMillion(pricing?.input_cache_read),
+    cacheWrite: perMillion(pricing?.input_cache_write),
+  };
+}
+
 function toModel(model: CatalogModel, baseUrl: string): Model<Api> {
   const protocol = protocolFor(model);
   const input: ("text" | "image")[] = ["text"];
   if (model.modalities?.input?.includes("image")) input.push("image");
   const reasoning = model.reasoning === true;
   const map = thinkingMap(model, protocol);
+  // Pi warms a prompt cache only for models that declare a lifetime (docs/models.md "Prompt cache
+  // lifetimes"), and the gateway publishes none. Anthropic Messages caches for five minutes, the
+  // conservative end of the published range; a catalog that prices cache writes means the same
+  // kind of cache, so it gets the same lifetime. `long` stays unset: Magpie advertises no 1-hour
+  // tier, and guessing one would have Pi warm an entry it cannot keep.
+  const cachesPrompts = protocol === "anthropic" || model.pricing?.input_cache_write !== undefined;
   return {
     id: model.id,
     provider: "magpie",
@@ -99,9 +127,10 @@ function toModel(model: CatalogModel, baseUrl: string): Model<Api> {
     ...(map ? { thinkingLevelMap: map } : {}),
     // Advertised effort levels distinguish adaptive thinking from older token-budget models.
     ...(protocol === "anthropic" && reasoning && map ? { compat: { forceAdaptiveThinking: true } } : {}),
+    ...(cachesPrompts ? { promptCache: { short: 300 } } : {}),
     contextWindow: model.context_window ?? model.context_length ?? model.max_input_tokens ?? 200000,
     maxTokens: model.max_output_tokens ?? 8192,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: toCost(model.pricing),
   };
 }
 

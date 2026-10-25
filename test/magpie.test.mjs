@@ -108,7 +108,7 @@ test("catalog maps metadata, native endpoints and four gateway protocols", () =>
   assert.equal(claude.thinkingLevelMap.medium, null);
   assert.equal(claude.thinkingLevelMap.max, "max");
   assert.equal(claude.compat.forceAdaptiveThinking, true);
-  assert.deepEqual(claude.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  assert.deepEqual(claude.cost, { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 });
   const native = parseMagpieModels({ data: [{ id: "claude/native", native_endpoints: ["/v1/responses"] }] }, baseUrl);
   assert.equal(native[0].api, "openai-responses");
   const inheritedNames = parseMagpieModels({ data: [{ id: "toString", native_endpoints: ["__proto__"] }] }, baseUrl);
@@ -117,6 +117,77 @@ test("catalog maps metadata, native endpoints and four gateway protocols", () =>
   assert.throws(() => parseMagpieModels({ data: [{ id: "x", context_window: -1 }] }, baseUrl), /invalid/);
   assert.throws(() => parseMagpieModels({ models: [] }, baseUrl), /invalid/);
   assert.deepEqual(parseMagpieModels({ data: [{ id: "image", type: "image" }] }, baseUrl), []);
+});
+
+// D90: the catalog's per-token price strings become Pi's per-million cost, and a model gets a
+// prompt-cache lifetime only when the provider is known to cache with a five-minute tier.
+test("catalog pricing becomes per-million cost, and only cache-capable models get a lifetime", () => {
+  const baseUrl = "http://localhost:1234";
+  const byId = new Map(parseMagpieModels({ data: magpieCatalog }, baseUrl).map((model) => [model.id, model]));
+  // Anthropic Messages (claude id): full pricing, five-minute cache.
+  assert.deepEqual(byId.get("claude/claude-opus-test").cost, { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 });
+  assert.deepEqual(byId.get("claude/claude-opus-test").promptCache, { short: 300 });
+  // Not Anthropic, but the catalog prices cache writes: same five-minute cache.
+  assert.deepEqual(byId.get("other/chat").cost, { input: 0.5, output: 0, cacheRead: 0, cacheWrite: 2 });
+  assert.deepEqual(byId.get("other/chat").promptCache, { short: 300 });
+  // Cache-read pricing alone says nothing about the cache we could keep warm.
+  assert.deepEqual(byId.get("codex/gpt-test").cost, { input: 2, output: 10, cacheRead: 0.4, cacheWrite: 0 });
+  assert.equal(byId.get("codex/gpt-test").promptCache, undefined);
+  // No pricing at all: unknown price, not free, and no lifetime (17 live models look like this).
+  assert.deepEqual(byId.get("antigravity/gemini-3-flash").cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  assert.equal(byId.get("antigravity/gemini-3-flash").promptCache, undefined);
+  // A claude id is Anthropic Messages even when the catalog has no pricing.
+  const bare = parseMagpieModels({ data: [{ id: "claude/legacy" }] }, baseUrl)[0];
+  assert.deepEqual(bare.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  assert.deepEqual(bare.promptCache, { short: 300 });
+  // Float noise is rounded away (0.0000002 * 1e6 is 0.19999999999999998 in binary floating point).
+  const noisy = parseMagpieModels({ data: [{ id: "x", pricing: { prompt: "0.0000002" } }] }, baseUrl)[0];
+  assert.equal(noisy.cost.input, 0.2);
+  // `long` is never set: Magpie does not advertise a one-hour cache tier.
+  for (const model of byId.values()) assert.equal(model.promptCache?.long, undefined);
+});
+
+test("invalid catalog pricing rejects the whole catalog", () => {
+  const baseUrl = "http://localhost:1234";
+  for (const pricing of [
+    { prompt: "free" },
+    { completion: "-0.1" },
+    { input_cache_write: "" },
+    { input_cache_read: "1e" },
+    { prompt: 0.004 },
+  ]) {
+    assert.throws(() => parseMagpieModels({ data: [{ id: "x", pricing }] }, baseUrl), /invalid/, JSON.stringify(pricing));
+  }
+});
+
+// D90: a saved catalog written before this change has zero cost and no lifetime. The store keeps a
+// list until the gateway's fresh list differs from it, so the new fields must make it differ.
+test("a saved catalog from before pricing is refreshed, not kept forever", async (t) => {
+  const server = await serverFor(t);
+  const store = new InMemoryModelsStore();
+  const legacy = parseMagpieModels({ data: magpieCatalog.map(({ pricing, ...model }) => model) }, server.baseUrl)
+    .map(({ promptCache, ...model }) => model);
+  assert.deepEqual(legacy[0].cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  assert.equal(legacy[0].promptCache, undefined);
+  await store.write("magpie", { models: legacy, checkedAt: 1, etag: JSON.stringify([server.baseUrl]) });
+  const models = modelsWith(createMagpieProvider(server.baseUrl), store);
+  await models.refresh({ allowNetwork: true });
+  const saved = (await store.read("magpie")).models.find((model) => model.id === "claude/claude-opus-test");
+  assert.deepEqual(saved.cost, { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 });
+  assert.deepEqual(saved.promptCache, { short: 300 });
+  assert.deepEqual(models.getModels("magpie").find((model) => model.id === "claude/claude-opus-test").cost, { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 });
+});
+
+// The lifetime exists for Pi's CacheWarmer: getPromptCacheTtlMs is what decides whether a model is
+// eligible at all, so assert against Pi's own function, not just the field's shape.
+test("Pi's cache warmer reads the parsed five-minute lifetime (300000 ms)", async () => {
+  const cacheWarmer = await import(new URL("./core/cache-warmer.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href);
+  const baseUrl = "http://localhost:1234";
+  const byId = new Map(parseMagpieModels({ data: magpieCatalog }, baseUrl).map((model) => [model.id, model]));
+  assert.equal(cacheWarmer.getPromptCacheTtlMs(byId.get("claude/claude-opus-test"), {}), 300000);
+  assert.equal(cacheWarmer.getPromptCacheTtlMs(byId.get("other/chat"), {}), 300000);
+  assert.equal(cacheWarmer.getPromptCacheTtlMs(byId.get("antigravity/gemini-3-flash"), {}), undefined);
+  assert.equal(cacheWarmer.getPromptCacheTtlMs(byId.get("claude/claude-opus-test"), { cacheRetention: "none" }), undefined);
 });
 
 test("discovery authenticates, honors pagination, HTTP errors, timeout and cancellation", async (t) => {

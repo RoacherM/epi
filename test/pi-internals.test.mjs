@@ -720,6 +720,14 @@ const registry = [
     },
   },
   {
+    id: "cache-warmer-ttl",
+    async check() {
+      const warmer = await import(pathToFileURL(join(piDist, "core", "cache-warmer.js")).href);
+      assert.equal(typeof warmer.getPromptCacheTtlMs, "function", "Pi's cache-warmer.js no longer exports getPromptCacheTtlMs");
+      assert.equal(warmer.getPromptCacheTtlMs({ promptCache: { short: 300 } }, {}), 300000, "getPromptCacheTtlMs no longer reads promptCache.short in seconds");
+    },
+  },
+  {
     id: "resolve-app-mode",
     async check() {
       // Throws by design when main.js no longer defines resolveAppMode(parsed, stdinIsTTY, stdoutIsTTY).
