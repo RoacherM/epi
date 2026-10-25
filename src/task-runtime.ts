@@ -26,6 +26,80 @@ import type { TaskAgentDefinition } from "./task-agents.js";
 export const DEFAULT_TASK_TIMEOUT_SECONDS = 600;
 
 /**
+ * The longest `timeoutSeconds` a job may ask for. Node's `setTimeout` clamps a delay above
+ * 2^31-1 ms to 1 ms, which would turn "run for a month" into "kill at once" (review pack A P3).
+ */
+export const MAX_TASK_TIMEOUT_SECONDS = Math.floor((2 ** 31 - 1) / 1_000);
+
+/**
+ * The stdout protocol line cap, deliberately separate from the preview size. One `result` line
+ * carries the child's whole final answer, so the line cap has to be far above `maxOutputBytes`;
+ * `boundedResult` truncates the answer for the model afterwards, with a pointer to the artifact.
+ * Only a worker that emits one runaway line (or corrupt JSONL) hits this.
+ */
+const MAX_PROTOCOL_LINE_BYTES = 16 * 1024 * 1024;
+
+/** How long stdout/stderr are drained after the worker exits, so a `result` line already written is
+ * still parsed before the pipes are destroyed (review pack A P2: settle on `exit`, not `close`). */
+const OUTPUT_DRAIN_MS = 500;
+
+/**
+ * Pi's valid thinking suffixes (`cli/args.js`'s `VALID_THINKING_LEVELS`). Kept as a local copy so
+ * the runtime does not take a deep import into Pi's CLI internals; test/task.test.mjs cross-checks
+ * the list against Pi's own `isValidThinkingLevel`.
+ */
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+/**
+ * The parent's model as a `provider/id` reference a worker can resolve, with the parent's thinking
+ * level when it has one. Undefined when the session has no usable model, which leaves the child to
+ * Pi's own selection and its own error if there is none. "unknown" is Pi's placeholder for "no
+ * model could be selected".
+ */
+export function inheritedModelReference(
+  model: { provider: string; id: string } | undefined,
+  thinkingLevel: string | undefined,
+): string | undefined {
+  if (model === undefined || model.provider === "unknown") {
+    return undefined;
+  }
+  return thinkingLevel === undefined || thinkingLevel === "off"
+    ? `${model.provider}/${model.id}`
+    : `${model.provider}/${model.id}:${thinkingLevel}`;
+}
+
+/** A model reference without its trailing `:thinking`, leaving model ids that merely contain `:`
+ * alone. */
+export function baseModelReference(reference: string): string {
+  const colon = reference.lastIndexOf(":");
+  if (colon <= 0) {
+    return reference;
+  }
+  return THINKING_LEVELS.has(reference.slice(colon + 1))
+    ? reference.slice(0, colon)
+    : reference;
+}
+
+/**
+ * The model reference the child resolves. A picked value that is only a thinking suffix (`":low"`)
+ * keeps the base model it modifies: a `:x` from the call keeps the preset model (falling back to
+ * the parent's), a `:x` from the preset keeps the parent's. The base's own `:thinking` is dropped
+ * first, so `a/b:high` + `:low` is `a/b:low`, never `a/b:high:low` (review pack A P1).
+ */
+export function childModelReference(
+  picked: string | undefined,
+  presetModel: string | undefined,
+  inheritedModel: string | undefined,
+  callPicked: boolean,
+): string | undefined {
+  if (picked === undefined || !picked.startsWith(":")) {
+    return picked ?? inheritedModel;
+  }
+  const base = callPicked ? presetModel ?? inheritedModel : inheritedModel;
+  return base === undefined ? picked : `${baseModelReference(base)}${picked}`;
+}
+
+/**
  * The parent entries a `context: "fork"` child may start from: the current branch, minus the
  * unfinished tail of this very turn.
  *
@@ -157,6 +231,9 @@ export interface TaskCapsule {
   /** Whether the parent's project Manifest counted as trusted for this run; a child never
    * re-decides trust on its own (hard rule 2). */
   projectTrusted: boolean;
+  /** The project root that decision was made for, so the worker can check the child's `cwd` is
+   * still inside it before applying the decision. Undefined when the parent trusted no project. */
+  projectRoot: string | undefined;
   maxTurns: number | undefined;
 }
 
@@ -205,6 +282,10 @@ export interface TaskRuntimeOptions {
   sessionRoot: string;
   agents: readonly TaskAgentDefinition[];
   projectTrusted: boolean;
+  /** The parent's trusted project root: the directory of the `.epi/epi.json` this run loaded, or
+   * undefined. The capsule carries it so the worker can refuse to load any other project (hard
+   * rule 2); `projectTrusted` says a root was trusted, this says which one. */
+  projectRoot?: string | undefined;
   maxConcurrency?: number;
   maxOutputBytes?: number;
   killGraceMs?: number;
@@ -353,6 +434,51 @@ class BoundedOutput {
 }
 
 /**
+ * The largest UTF-8 boundary at or below `limit`, so truncating a byte buffer never splits a
+ * multi-byte code point into a replacement character (review pack A P3).
+ */
+function utf8CutLength(bytes: Buffer, limit: number): number {
+  let end = Math.min(limit, bytes.length);
+  // Walk back over the continuation bytes of a sequence that the cut would land inside.
+  let start = end;
+  while (start > 0 && ((bytes[start - 1] ?? 0) & 0xc0) === 0x80) {
+    start -= 1;
+  }
+  if (start === 0) {
+    return end;
+  }
+  const lead = bytes[start - 1] ?? 0;
+  const expected = lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
+  // The sequence starting at `start - 1` needs `expected` bytes; drop it when the cut is inside.
+  return end - (start - 1) < expected ? start - 1 : end;
+}
+
+/**
+ * Wait for a pipe to end, or `OUTPUT_DRAIN_MS` at the latest, so output the worker already wrote is
+ * still delivered before the pipe is destroyed. A pipe a grandchild still holds never ends, which
+ * is exactly the case this timer exists for.
+ */
+function drainOutput(stream: Readable): Promise<void> {
+  return new Promise((resolve) => {
+    if (stream.readableEnded || stream.destroyed) {
+      resolve();
+      return;
+    }
+    const finish = (): void => {
+      clearTimeout(timer);
+      stream.removeListener("end", finish);
+      stream.removeListener("close", finish);
+      stream.removeListener("error", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, OUTPUT_DRAIN_MS);
+    stream.once("end", finish);
+    stream.once("close", finish);
+    stream.once("error", finish);
+  });
+}
+
+/**
  * How many subagents run at once when the caller does not say. A child is mostly waiting on its
  * model, not the CPU, so the cap is about process count, not cores; but each one is a Node process
  * (~0.6 s startup, ~100 MB), so it stays bounded by the machine. The old fixed 4 made a 15-way
@@ -438,12 +564,25 @@ export class TaskRuntime {
       promise: completion,
       resolve: resolveCompletion,
     } = Promise.withResolvers<void>();
+    const timeoutSeconds =
+      request.timeoutSeconds ?? agent?.timeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS;
+    // Above 2^31-1 ms Node clamps the timer to 1 ms, so an absurd timeout would kill the job at
+    // once. Fail loudly instead (review pack A P3).
+    if (
+      !Number.isInteger(timeoutSeconds) ||
+      timeoutSeconds < 1 ||
+      timeoutSeconds > MAX_TASK_TIMEOUT_SECONDS
+    ) {
+      throw new EpiConfigError(
+        `task timeoutSeconds must be an integer between 1 and ${MAX_TASK_TIMEOUT_SECONDS}`,
+      );
+    }
     const id = randomUUID();
     const job: InternalTaskJob = {
       id,
       agent,
       request,
-      timeoutSeconds: request.timeoutSeconds ?? agent?.timeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS,
+      timeoutSeconds,
       sessionPath: join(this.options.sessionRoot, `${id}.jsonl`),
       task: request.task,
       cwd,
@@ -620,7 +759,7 @@ export class TaskRuntime {
           return;
         }
         lineBuffer += decoder.write(chunk);
-        if (Buffer.byteLength(lineBuffer) > this.maxOutputBytes * 4) {
+        if (Buffer.byteLength(lineBuffer) > MAX_PROTOCOL_LINE_BYTES) {
           job.protocolError = "worker event exceeded protocol limit";
           return;
         }
@@ -643,15 +782,27 @@ export class TaskRuntime {
       }>();
       let spawnError: Error | undefined;
       worker.once("error", (error) => {
+        // A spawn failure (ENOENT, EACCES) emits `error` and never `exit`; settle here too so the
+        // job cannot hang until its timeout.
         spawnError = error;
+        exitWaiter.resolve({ code: null, error });
       });
-      worker.once("close", (code) => {
+      // Settle on `exit`, not `close` (review pack A P2): `close` waits for every holder of the
+      // stdout/stderr pipes, so a grandchild that inherited one (a hook command, an MCP stdio
+      // server) could turn a finished run into "timed out" or hang the job forever. The pipes are
+      // drained briefly below, then destroyed.
+      worker.once("exit", (code) => {
         exitWaiter.resolve({
           code,
           ...(spawnError === undefined ? {} : { error: spawnError }),
         });
       });
       const exit = await exitWaiter.promise;
+      // The job is over the moment the worker exits; a leftover holder must not arm the timeout.
+      clearTimeout(job.timeoutTimer);
+      await Promise.all([drainOutput(worker.stdout), drainOutput(worker.stderr)]);
+      worker.stdout.destroy();
+      worker.stderr.destroy();
       lineBuffer += decoder.end();
       if (lineBuffer.trim().length > 0 && job.protocolError === undefined) {
         this.parseWorkerLine(job, lineBuffer);
@@ -717,12 +868,13 @@ export class TaskRuntime {
     }
   }
 
-  /** The worker's answer, cut to the output budget with a pointer to the full artifact. */
+  /** The worker's answer, cut to the output budget with a pointer to the full artifact. The cut is
+   * made on a UTF-8 boundary, so a multi-byte code point is never split into U+FFFD. */
   private boundedResult(job: InternalTaskJob, output: string): string {
     const bytes = Buffer.from(output);
     return bytes.length <= this.maxOutputBytes
       ? output
-      : `${bytes.subarray(0, this.maxOutputBytes).toString("utf8")}\n[truncated; full worker event: ${job.stdoutArtifact ?? "unavailable"}]`;
+      : `${bytes.subarray(0, utf8CutLength(bytes, this.maxOutputBytes)).toString("utf8")}\n[truncated; full worker event: ${job.stdoutArtifact ?? "unavailable"}]`;
   }
 
   /** One setting's value: what the call said, else what the `agents/*.md` preset said, else the
@@ -742,8 +894,14 @@ export class TaskRuntime {
       agentDir: this.options.agentDir,
       epiHome: this.options.epiHome,
       systemPrompt,
-      // Precedence: explicit call argument, then the preset, then the parent's model.
-      model: pick("model") ?? request.inheritedModel,
+      // Precedence: explicit call argument, then the preset, then the parent's model. A picked
+      // `:thinking` is joined to the base model it modifies (review pack A P1).
+      model: childModelReference(
+        pick("model"),
+        agent?.model,
+        request.inheritedModel,
+        request.model !== undefined,
+      ),
       tools: pick("tools"),
       excludeTools: pick("excludeTools"),
       sessionPath: job.sessionPath,
@@ -755,6 +913,7 @@ export class TaskRuntime {
       hooks: (pick("hooks") ?? true) && this.allowHooks,
       extensions: pick("extensions") ?? true,
       projectTrusted: this.options.projectTrusted,
+      projectRoot: this.options.projectRoot,
       maxTurns: pick("maxTurns"),
     };
   }

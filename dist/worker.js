@@ -9,6 +9,7 @@ import { createAgentSession, createAgentSessionServices, resolveCliModel, Sessio
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readPreloadedSkills, resolveAssembly, scopeAssemblyForTask, } from "./assembly.js";
 import { buildInlineExtensions } from "./extensions/index.js";
+import { childProjectTrust } from "./project.js";
 import { collectUsage, finalAssistantText } from "./task-result.js";
 import { trackRequestOutcome } from "./request-outcome.js";
 import { notRunningWarnings, settleRegisteredProviders } from "./provider-startup.js";
@@ -55,6 +56,9 @@ function readCapsule(capsulePath) {
     if (capsule.model !== undefined && typeof capsule.model !== "string") {
         throw new Error("task capsule model must be a string");
     }
+    if (capsule.projectRoot !== undefined && typeof capsule.projectRoot !== "string") {
+        throw new Error("task capsule projectRoot must be a string");
+    }
     for (const field of ["tools", "excludeTools"]) {
         const value = capsule[field];
         if (value !== undefined && (!Array.isArray(value) || value.some((entry) => typeof entry !== "string"))) {
@@ -99,15 +103,18 @@ function appendSystemPrompt(capsule, preloaded) {
     return parts;
 }
 /** The capsule's own scoped view of this machine's Epi assembly. Trust is the parent's decision,
- * passed down: a child never re-decides whether a project is trusted (hard rule 2). */
+ * passed down: a child never re-decides whether a project is trusted (hard rule 2). The decision
+ * only applies to the project the parent actually trusted -- a `cwd` that lands in some other
+ * project resolves untrusted, so `task({ cwd: "../B" })` cannot pull in B's Manifest. */
 function childAssembly(capsule) {
+    const globalManifestPath = join(capsule.epiHome, "epi.json");
     return scopeAssemblyForTask(resolveAssembly({
         agentDir: capsule.agentDir,
-        globalManifestPath: join(capsule.epiHome, "epi.json"),
+        globalManifestPath,
         epiHome: capsule.epiHome,
         cwd: capsule.cwd,
         noProject: false,
-        projectTrustOverride: capsule.projectTrusted,
+        projectTrustOverride: childProjectTrust(capsule.projectRoot, capsule.projectTrusted, capsule.cwd, globalManifestPath),
         environment: process.env,
     }), capsule);
 }
@@ -213,6 +220,13 @@ async function main() {
     const capsule = readCapsule(capsulePath);
     process.env.PI_CODING_AGENT_DIR = capsule.agentDir;
     const session = await startChildSession(capsule);
+    // A SIGTERM that arrived while the session was still starting set `interrupted` before there was
+    // a session to abort; do not spend a full turn the parent already asked to stop.
+    if (interrupted) {
+        session.dispose();
+        activeSession = undefined;
+        throw new Error("task worker was interrupted");
+    }
     emit({ type: "started", pid: process.pid });
     let turns = 0;
     let stoppedAtMaxTurns = false;

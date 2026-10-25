@@ -81,6 +81,36 @@ export function readProjectTrustDecision(
   }
 }
 
+/**
+ * Whether a child may load the project Manifest its own `cwd` sits in. The parent's trust decision
+ * counts only for the project it was made for: the child's nearest Manifest must be that same root.
+ * Any other cwd resolves untrusted, and the child never reads `trust.json` itself (hard rule 2).
+ *
+ * This is what keeps `task({ cwd: "../B" })` from loading an untrusted project B when the parent
+ * was started in a trusted project A (review pack A P1).
+ */
+export function childProjectTrust(
+  parentProjectRoot: string | undefined,
+  parentTrusted: boolean,
+  cwd: string,
+  globalManifestPath: string,
+): boolean {
+  if (!parentTrusted || parentProjectRoot === undefined) {
+    return false;
+  }
+  const candidate = findNearestProjectManifest(cwd, globalManifestPath);
+  if (candidate === undefined) {
+    return false;
+  }
+  // `candidate.root` is realpath'd; canonicalize the parent's too, so a symlinked tmpdir compares
+  // equal to the path a caller happened to build.
+  try {
+    return realpathSync(parentProjectRoot) === candidate.root;
+  } catch {
+    return parentProjectRoot === candidate.root;
+  }
+}
+
 export function resolveProjectManifest(
   options: ResolveProjectOptions,
 ): ProjectResolution {
