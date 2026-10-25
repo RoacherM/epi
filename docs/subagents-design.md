@@ -126,7 +126,7 @@
                      ├─── task(jobId) ─────┘│
                      └─── task(jobId) ──────┘
 ```
-- **运行中转向（`Running` 自环）**：调用 `task({ jobId, task: "新指令" })` 时，父进程经 `worker.stdin` 发送 `steer` 命令，Worker 调 `session.steer()` 在当前工具结束后立即转向。
+- **运行中转向（`Running` 自环）**：调用 `task({ jobId, task: "新指令" })` 时，父进程经 `worker.stdin` 发送 `steer` 命令，Worker 在当前工具结束后立即转向（实现上是逐字投递的 `session.agent.steer`，不是会展开/抛错的 `session.steer`，见 development.md §12.1）。
 - **终态续跑（`Completed` / `Partial` / `Failed` → `Running`）**：对已停止的 `jobId` 调用 `task({ jobId, task: "追问或继续" })` 时，直接通过 `SessionManager.open(job.sessionPath)` 打开原会话文件继续执行下一轮。
 
 ---
@@ -270,7 +270,7 @@ export interface TaskJobSnapshot {
 ### 5.2 父子进程 stdio 协议
 
 - **`worker.stdin`（父 → 子，JSONL）**：
-  - `{"type": "steer", "message": "..."}`：调用 `activeSession.steer(message)`；
+  - `{"type": "steer", "message": "..."}`：调用 `activeSession.agent.steer(message)`（不展开、不抛错；session 就绪前的 steer 先缓存）；
   - `{"type": "abort"}`：调用 `activeSession.abort()`。
 - **`worker.stdout`（子 → 父，受 `takeOverStdout()` 保护的纯 JSONL，见 §9.3）**：
   - `{"type": "started", "pid": 12345}`

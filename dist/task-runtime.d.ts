@@ -187,6 +187,15 @@ export interface StartTaskRequest {
  * `EPI_TASK_MAX_CONCURRENCY` overrides it.
  */
 export declare function defaultTaskConcurrency(env?: NodeJS.ProcessEnv, cpus?: number): number;
+/** The shortest id prefix `findJobId` accepts: the 8-character form `task_status` lists and the
+ * model copies back into another tool call (review round 1 P1-2). */
+export declare const MIN_JOB_ID_PREFIX = 8;
+/**
+ * Resolve what the model typed to a job id: the full uuid, or a unique prefix of at least
+ * `MIN_JOB_ID_PREFIX` characters -- the 8-character form `task_status({})` lists. An ambiguous
+ * prefix is an error naming the jobs it matched, never a silent pick.
+ */
+export declare function findJobId(ids: readonly string[], id: string): string;
 export declare class TaskRuntime {
     private readonly options;
     private readonly agentsByName;
@@ -207,10 +216,10 @@ export declare class TaskRuntime {
     list(): TaskJobSnapshot[];
     /**
      * Steer a job (docs/subagents-design.md §5.2). A running job gets `{"type":"steer"}` on its
-     * worker's stdin, which hands it to Pi's `session.steer` for the child to pick up after the tool
-     * call it is executing. This returns at once, so steering cannot deadlock a parent. A queued job
-     * has no process to talk to yet, so its task text is replaced before it starts
-     * (development.md §12.4); a finished job cannot be steered at all.
+     * worker's stdin, which delivers it verbatim to Pi's agent for the child to pick up after the tool
+     * call it is executing (development.md §12.1). This returns at once, so steering cannot deadlock a
+     * parent. A queued job has no process to talk to yet, so its task text is replaced before it
+     * starts (development.md §12.4); a finished job cannot be steered at all.
      */
     steer(jobId: string, message: string): TaskJobSnapshot;
     /**
@@ -221,6 +230,8 @@ export declare class TaskRuntime {
     wait(jobId: string, timeoutMs?: number, signal?: AbortSignal): Promise<TaskJobSnapshot>;
     cancel(jobId: string): Promise<TaskJobSnapshot>;
     shutdown(): Promise<void>;
+    /** The job a `jobId` names: the 8-character id `task_status` prints works everywhere a jobId does. */
+    private findJob;
     private pump;
     private run;
     /**

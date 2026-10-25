@@ -466,9 +466,33 @@ export function createTaskInlineExtension(
         async execute(_toolCallId, params, signal, _onUpdate, ctx) {
           current.ctx = ctx;
           try {
-            // `task({ jobId, task })` is a steer, not a start: no hook fires, no job is created, and
-            // every other field is ignored (the schema says so). It returns at once.
+            // `task({ jobId, task })` is a steer, not a start: no job is created and every other
+            // field is ignored (the schema says so). It returns at once.
             if (params.jobId !== undefined) {
+              // A queued job has not started yet, so replacing its text is what will run: the
+              // `task_start` hook has to see it, or a hook that blocks by text is bypassed
+              // (review round 1 P2-2).
+              const known = runtime.status(params.jobId);
+              if (known.status === "queued") {
+                const replaceDecision = await emitTaskHook(
+                  pi.events,
+                  {
+                    type: "task_start",
+                    ...(known.agent === undefined ? {} : { agent: known.agent }),
+                    task: params.task,
+                    cwd: known.cwd,
+                  },
+                  ctx,
+                );
+                if (
+                  replaceDecision.action === "block" ||
+                  replaceDecision.action === "cancel"
+                ) {
+                  throw new Error(
+                    replaceDecision.reason ?? "task start blocked by Epi hook",
+                  );
+                }
+              }
               const steered = runtime.steer(params.jobId, params.task);
               return {
                 content: [{
@@ -627,7 +651,9 @@ export function createTaskInlineExtension(
             // hook. Pi always passes an abort signal, so branching on `signal === undefined` (as
             // this once did) skipped both on every real call.
             const waited = await runtime.wait(params.jobId, timeoutMs, signal);
-            const completion = completionHooks.get(params.jobId);
+            // Looked up by the id the wait resolved, not the text the caller typed: the model may
+            // have copied the 8-character form out of `task_status` (review round 1 P1-2).
+            const completion = completionHooks.get(waited.id);
             if (
               completion !== undefined &&
               waited.status !== "queued" &&
@@ -653,7 +679,7 @@ export function createTaskInlineExtension(
           current.ctx = ctx;
           try {
             const cancelled = await runtime.cancel(params.jobId);
-            const completion = completionHooks.get(params.jobId);
+            const completion = completionHooks.get(cancelled.id);
             if (completion !== undefined) {
               await completion;
             }

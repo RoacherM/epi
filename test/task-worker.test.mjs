@@ -73,10 +73,12 @@ function writeCapsule(fixture, overrides = {}) {
 /** The worker run directly: its events and exit code. `onStarted` runs once it reports "started".
  * `overrides` patches the capsule (e.g. `maxTurns`), so a budget can be exercised on a real run.
  * `onEvent` sees every protocol line as it arrives, with the child in hand, which is how a test
- * steers a run mid-turn. */
-function runWorker(fixture, onStarted = () => {}, overrides = {}, onEvent = () => {}) {
+ * steers a run mid-turn. `onSpawn` runs before the child has said anything, which is the only way
+ * to reach the window between spawn and a ready session. */
+function runWorker(fixture, onStarted = () => {}, overrides = {}, onEvent = () => {}, onSpawn = () => {}) {
   const capsule = writeCapsule(fixture, overrides);
   const child = spawn(process.execPath, [worker, capsule], { cwd: fixture.home, env: fixture.env, stdio: ["pipe", "pipe", "pipe"] });
+  onSpawn(child);
   let stdout = "";
   let stderr = "";
   let pending = "";
@@ -320,6 +322,69 @@ test("the real worker reports progress and applies a steer sent while its tool r
   assert.match(JSON.stringify(followUp.body.messages), /PLEASE_STEER/);
   // The malformed line was ignored with a note rather than killing the run.
   assert.match(result.context, /ignoring malformed stdin line/, result.context);
+});
+
+// Round-1 review P1-1: Pi's `session.steer` throws for text that starts with an extension command
+// the child registered (`/epi …`, `/web …`), and the rejection was unhandled -- the worker died with
+// no result line and left the bash process of the tool it was running behind. A steer is delivered
+// verbatim now, so the text reaches the next request instead of taking the run down.
+test("a steer that looks like a child extension command is delivered, not fatal", async (t) => {
+  const fixture = await setup(t);
+  fixture.server.state.inferenceHandler = (request, response, body) => {
+    const sawToolResult = body.messages.some((message) => message.role === "tool");
+    if (!sawToolResult) {
+      streamChunks(response, [
+        openaiChunk({
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            index: 0,
+            id: "call_1",
+            type: "function",
+            function: { name: "bash", arguments: JSON.stringify({ command: "sleep 2" }) },
+          }],
+        }, null),
+        openaiChunk({}, "tool_calls"),
+      ]);
+    } else {
+      streamChunks(response, [
+        openaiChunk({ role: "assistant", content: "STEERED" }, null),
+        openaiChunk({}, "stop"),
+      ]);
+    }
+  };
+
+  const result = await runWorker(fixture, () => {}, { tools: ["bash"] }, (event, child) => {
+    if (event.type === "progress" && event.phase === "tool_start") {
+      child.stdin.write(`${JSON.stringify({ type: "steer", message: "/epi status" })}\n`);
+    }
+  });
+
+  assert.equal(result.code, 0, result.context);
+  assert.equal(result.result.ok, true, result.context);
+  assert.equal(result.result.output, "STEERED", result.context);
+  assert.doesNotMatch(result.context, /cannot be queued/, result.context);
+  const followUp = fixture.server.state.requests
+    .filter((request) => request.url.includes("/chat/completions"))
+    .at(-1);
+  assert.match(JSON.stringify(followUp.body.messages), /\/epi status/);
+});
+
+// Round-1 review P2-1: the parent marks a job `running` the moment it spawns the worker, so a steer
+// can arrive while the child is still assembling its session. It used to be dropped there while the
+// parent answered "Steered".
+test("a steer sent before the child's session exists is delivered in its first request", async (t) => {
+  const fixture = await setup(t);
+  const result = await runWorker(fixture, () => {}, {}, () => {}, (child) => {
+    child.stdin.write(`${JSON.stringify({ type: "steer", message: "EARLY_STEER" })}\n`);
+  });
+
+  assert.equal(result.code, 0, result.context);
+  assert.equal(result.result.output, "MAGPIE_OK 你好", result.context);
+  const first = fixture.server.state.requests
+    .filter((request) => request.url.includes("/chat/completions"))[0];
+  assert.notEqual(first, undefined, result.context);
+  assert.match(JSON.stringify(first.body.messages), /EARLY_STEER/);
 });
 
 // The orphan net (docs/development.md §12.4): the parent's stdin pipe closing is the only signal a

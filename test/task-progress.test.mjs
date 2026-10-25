@@ -12,7 +12,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
 import { createTaskInlineExtension } from "../dist/extensions/task.js";
-import { TaskRuntime } from "../dist/task-runtime.js";
+// Namespace import: `findJobId` is new, and a named import of it would fail this whole file on the
+// commit before it existed instead of failing the one test that exercises it.
+import * as taskRuntime from "../dist/task-runtime.js";
+
+const { TaskRuntime } = taskRuntime;
 
 const fakeWorker = fileURLToPath(
   new URL("./fixtures/fake-task-worker.mjs", import.meta.url),
@@ -41,8 +45,9 @@ function createRuntime(root, overrides = {}) {
 
 /** The real extension, with only the tools it registers and the context its execute() reads. The
  * session_shutdown handler is wired to `t.after` so a job left waiting for a steer cannot keep the
- * test process alive for its whole 600 s timeout. */
-async function createHarness(t, root, options = {}) {
+ * test process alive for its whole 600 s timeout. `events` replaces the inert hook bus with one a
+ * test can answer on, the way epi:hooks answers the `epi/hooks/task/v1` bridge request. */
+async function createHarness(t, root, options = {}, events) {
   const extension = createTaskInlineExtension({
     epiHome: root,
     agentDir: join(root, "pi"),
@@ -55,7 +60,7 @@ async function createHarness(t, root, options = {}) {
   const tools = new Map();
   const handlers = new Map();
   await extension.factory({
-    events: { emit() {}, on: () => () => {} },
+    events: events ?? { emit() {}, on: () => () => {} },
     on(event, handler) {
       handlers.set(event, handler);
     },
@@ -211,4 +216,104 @@ test("task with a jobId steers a running job, replaces a queued one, and refuses
     "c9", { jobId: running.details.id }, undefined, undefined, context);
   assert.equal(settled.content[0].text, "steered:GO LEFT");
   assert.doesNotMatch(settled.content[0].text, /recent:/);
+});
+
+// Round-1 review P1-2: the list prints 8 characters, so every tool that takes a jobId has to accept
+// them -- otherwise the model can find a job and then do nothing with it.
+test("the 8-character id from task_status({}) works in task_status, steer, task_wait and task_cancel", async (t) => {
+  const root = createFixture(t);
+  const { tools, context } = await createHarness(t, root, { maxConcurrency: 1 });
+  await tools.get("task").execute(
+    "c1", { task: "steer-wait", background: true }, undefined, undefined, context);
+
+  /** The first field of the line `task_status({})` prints for the one running job. */
+  const listedId = async () => {
+    const listed = await tools.get("task_status").execute("c2", {}, undefined, undefined, context);
+    const line = listed.content[0].text.split("\n").find((entry) => entry.includes(" running "));
+    assert.notEqual(line, undefined, listed.content[0].text);
+    return line.split(" ")[0];
+  };
+  const id8 = await listedId();
+  assert.match(id8, /^[0-9a-f]{8}$/);
+
+  const running = await waitFor(async () => {
+    const status = await tools.get("task_status").execute(
+      "c3", { jobId: id8 }, undefined, undefined, context);
+    return status.details.currentActivity === undefined ? undefined : status;
+  }, "the running job's progress");
+  assert.equal(running.details.id.slice(0, 8), id8);
+
+  const steered = await tools.get("task").execute(
+    "c4", { jobId: id8, task: "GO LEFT" }, undefined, undefined, context);
+  assert.equal(steered.content[0].text.startsWith(`Steered job ${id8};`), true, steered.content[0].text);
+  const done = await tools.get("task_wait").execute("c5", { jobId: id8 }, undefined, undefined, context);
+  assert.equal(done.details.result, "steered:GO LEFT");
+
+  // A queued job cannot be cancelled by id8 before it starts, and a running one can.
+  await tools.get("task").execute(
+    "c6", { task: "sleep", background: true }, undefined, undefined, context);
+  const sleepingId = await waitFor(async () => {
+    const listed = await tools.get("task_status").execute("c7", {}, undefined, undefined, context);
+    const line = listed.content[0].text.split("\n").find((entry) => entry.includes(" running "));
+    return line === undefined ? undefined : line.split(" ")[0];
+  }, "the sleeping job to start");
+  const cancelled = await tools.get("task_cancel").execute(
+    "c8", { jobId: sleepingId }, undefined, undefined, context);
+  assert.equal(cancelled.details.status, "cancelled", JSON.stringify(cancelled.details));
+  assert.equal(cancelled.details.id.slice(0, 8), sleepingId);
+});
+
+// The prefix rule itself, including the case two jobs cannot be told apart (round-1 review P1-2).
+test("findJobId takes the full id or a unique 8-character prefix and refuses anything else", () => {
+  const first = "aaaaaaaa-1111-4000-8000-000000000001";
+  const second = "bbbbbbbb-2222-4000-8000-000000000002";
+  const twin = "cccccccc-3333-4000-8000-000000000003";
+  const twin2 = "cccccccc-4444-4000-8000-000000000004";
+  const ids = [first, second, twin, twin2];
+
+  assert.equal(taskRuntime.findJobId(ids, first), first, "the full id is itself");
+  assert.equal(taskRuntime.findJobId(ids, "bbbbbbbb"), second, "a unique 8-character prefix resolves");
+  assert.equal(taskRuntime.findJobId(ids, "bbbbbbbb-2222"), second, "a longer prefix resolves too");
+  assert.throws(() => taskRuntime.findJobId(ids, "cccccccc"), (error) => {
+    assert.match(error.message, /^ambiguous task job cccccccc; matches /);
+    assert.ok(error.message.includes(twin) && error.message.includes(twin2), error.message);
+    return true;
+  }, "an ambiguous prefix names the jobs it matched");
+  assert.throws(() => taskRuntime.findJobId(ids, "dddd"), /unknown task job dddd/, "too short to be a listed id");
+  assert.throws(() => taskRuntime.findJobId(ids, "dddddddd"), /unknown task job dddddddd/, "no such job");
+});
+
+// Round-1 review P2-2: replacing a queued job's task is a start of that text, so the `task_start`
+// hook has to see it -- otherwise a hook that blocks by text can be walked around.
+test("replacing a queued job's task runs task_start, so a hook can block the replacement", async (t) => {
+  const root = createFixture(t);
+  const seen = [];
+  const events = {
+    emit(channel, request) {
+      if (request?.event?.type !== "task_start") return;
+      seen.push(request.event.task);
+      if (request.event.task === "HOOK_BLOCKED") {
+        request.run = async () => ({ action: "block", reason: "blocked:HOOK_BLOCKED" });
+      }
+    },
+    on: () => () => {},
+  };
+  const { tools, context } = await createHarness(t, root, { maxConcurrency: 1 }, events);
+  const running = await tools.get("task").execute(
+    "c1", { task: "steer-wait", background: true }, undefined, undefined, context);
+  const queued = await tools.get("task").execute(
+    "c2", { task: "queued work", background: true }, undefined, undefined, context);
+
+  const blocked = await tools.get("task").execute(
+    "c3", { jobId: queued.details.id, task: "HOOK_BLOCKED" }, undefined, undefined, context);
+  assert.equal(blocked.details.error, "blocked:HOOK_BLOCKED");
+  assert.deepEqual(seen, ["steer-wait", "queued work", "HOOK_BLOCKED"]);
+
+  // The replacement never happened: once the queue drains, the job runs the text it started with.
+  await tools.get("task").execute(
+    "c4", { jobId: running.details.id, task: "GO LEFT" }, undefined, undefined, context);
+  const replacement = await tools.get("task_wait").execute(
+    "c5", { jobId: queued.details.id }, undefined, undefined, context);
+  assert.equal(replacement.details.task, "queued work");
+  assert.equal(replacement.details.result, "fake:queued work:");
 });

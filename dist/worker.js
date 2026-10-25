@@ -29,6 +29,10 @@ const PROGRESS_TOOL_LIMIT = 40;
 const PROGRESS_SUMMARY_LIMIT = 200;
 let activeSession;
 let interrupted = false;
+// Steers that arrived before there was a session to steer (review round 1 P2-1): the parent marks a
+// job `running` at spawn, so one can land while this child is still assembling. Held in arrival
+// order, delivered as soon as the session exists.
+const pendingSteers = [];
 // Set just before the session is disposed, so the failure path can still report what was spent.
 let spentUsage;
 // D84/D85: a request that failed leaves its error on the final message rather than throwing, so
@@ -88,12 +92,38 @@ async function interrupt() {
     await activeSession?.abort();
 }
 /**
+ * One steer into the running session, verbatim.
+ *
+ * Deliberately `session.agent.steer` -- the body of Pi's own `_queueSteer` -- and not
+ * `session.steer`, which expands skill commands and prompt templates and *throws* for text starting
+ * with an extension command the child registered (`/epi …`, `/web …`). That rejection was
+ * unhandled, so a steer killed the worker: no result line, and the bash grandchild of the tool it
+ * was running was orphaned (review round 1 P1-1). A steer is a parent's instruction, not user input
+ * at a prompt: it is not expanded, and it must never be able to take the run down.
+ */
+function deliverSteer(text) {
+    const session = activeSession;
+    if (session === undefined) {
+        pendingSteers.push(text);
+        return;
+    }
+    try {
+        session.agent.steer({
+            role: "user", content: [{ type: "text", text }], timestamp: Date.now(),
+        });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`task worker: steer failed: ${message}\n`);
+    }
+}
+/**
  * The parent's control channel (docs/subagents-design.md §5.2): a steer reaches the running session
- * through Pi's `session.steer` (after the current tool call, before the next model request) and an
- * abort takes the SIGTERM path. EOF or an error on stdin means the parent is gone -- it closed the
- * pipe, or it was SIGKILLed and the kernel closed it -- so the child stops itself. That is the whole
- * orphan net (docs/development.md §12.4): it covers the SIGKILL case a `process.once("exit")`
- * handler in the parent never could, because a killed process runs no handlers.
+ * through Pi's agent (after the current tool call, before the next model request) and an abort takes
+ * the SIGTERM path. EOF or an error on stdin means the parent is gone -- it closed the pipe, or it
+ * was SIGKILLed and the kernel closed it -- so the child stops itself. That is the whole orphan net
+ * (docs/development.md §12.4): it covers the SIGKILL case a `process.once("exit")` handler in the
+ * parent never could, because a killed process runs no handlers.
  */
 function listenToParent() {
     process.stdin.setEncoding("utf8");
@@ -139,13 +169,7 @@ function handleParentCommand(line) {
         process.stderr.write("task worker: ignoring a steer without a message\n");
         return;
     }
-    // A line can arrive while the session is still being assembled: there is nothing to steer yet,
-    // and dropping it beats crashing.
-    if (activeSession === undefined) {
-        process.stderr.write("task worker: ignoring a steer before the session was ready\n");
-        return;
-    }
-    void activeSession.steer(message);
+    deliverSteer(message);
 }
 /**
  * The child's session file. `context: "fork"` writes the parent's already-closed entries into it
@@ -276,6 +300,11 @@ async function startChildSession(capsule) {
         ...(capsule.excludeTools === undefined ? {} : { excludeTools: capsule.excludeTools }),
     });
     activeSession = session;
+    // Anything steered while this session was still being assembled goes in now, in arrival order.
+    // Queued before the first prompt, it lands in that prompt's own first request.
+    for (const text of pendingSteers.splice(0)) {
+        deliverSteer(text);
+    }
     // Extensions only get their ctx (and their session_start) once bound. Without this a child's
     // hooks, MCP and Manifest extensions would load but never run. "print" is the honest mode: this
     // process has no UI, so ui.notify is a no-op and extensions fall back to stderr, as in `epi -p`.

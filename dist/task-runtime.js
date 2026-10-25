@@ -260,6 +260,28 @@ export function defaultTaskConcurrency(env = process.env, cpus = availableParall
     }
     return Math.max(2, Math.min(16, cpus));
 }
+/** The shortest id prefix `findJobId` accepts: the 8-character form `task_status` lists and the
+ * model copies back into another tool call (review round 1 P1-2). */
+export const MIN_JOB_ID_PREFIX = 8;
+/**
+ * Resolve what the model typed to a job id: the full uuid, or a unique prefix of at least
+ * `MIN_JOB_ID_PREFIX` characters -- the 8-character form `task_status({})` lists. An ambiguous
+ * prefix is an error naming the jobs it matched, never a silent pick.
+ */
+export function findJobId(ids, id) {
+    if (ids.includes(id))
+        return id;
+    const matches = id.length >= MIN_JOB_ID_PREFIX
+        ? ids.filter((candidate) => candidate.startsWith(id))
+        : [];
+    if (matches.length === 1)
+        return matches[0];
+    if (matches.length > 1) {
+        // The 8-character forms are equal here by definition; full ids are the only useful answer.
+        throw new Error(`ambiguous task job ${id}; matches ${matches.join(", ")}`);
+    }
+    throw new Error(`unknown task job ${id}`);
+}
 export class TaskRuntime {
     options;
     agentsByName;
@@ -366,11 +388,7 @@ export class TaskRuntime {
         return this.snapshot(job);
     }
     status(jobId) {
-        const job = this.jobs.get(jobId);
-        if (job === undefined) {
-            throw new Error(`unknown task job ${jobId}`);
-        }
-        return this.snapshot(job);
+        return this.snapshot(this.findJob(jobId));
     }
     /** Every job this runtime knows, oldest first (insertion order), including jobs started before a
      * session switch: the registry lives for the process, not the session (docs/development.md §12.3). */
@@ -379,16 +397,13 @@ export class TaskRuntime {
     }
     /**
      * Steer a job (docs/subagents-design.md §5.2). A running job gets `{"type":"steer"}` on its
-     * worker's stdin, which hands it to Pi's `session.steer` for the child to pick up after the tool
-     * call it is executing. This returns at once, so steering cannot deadlock a parent. A queued job
-     * has no process to talk to yet, so its task text is replaced before it starts
-     * (development.md §12.4); a finished job cannot be steered at all.
+     * worker's stdin, which delivers it verbatim to Pi's agent for the child to pick up after the tool
+     * call it is executing (development.md §12.1). This returns at once, so steering cannot deadlock a
+     * parent. A queued job has no process to talk to yet, so its task text is replaced before it
+     * starts (development.md §12.4); a finished job cannot be steered at all.
      */
     steer(jobId, message) {
-        const job = this.jobs.get(jobId);
-        if (job === undefined) {
-            throw new Error(`unknown task job ${jobId}`);
-        }
+        const job = this.findJob(jobId);
         const shortId = job.id.slice(0, 8);
         if (job.status === "queued") {
             job.task = message;
@@ -410,10 +425,7 @@ export class TaskRuntime {
      * it started. Only `cancel` and process exit stop a job.
      */
     async wait(jobId, timeoutMs, signal) {
-        const job = this.jobs.get(jobId);
-        if (job === undefined) {
-            throw new Error(`unknown task job ${jobId}`);
-        }
+        const job = this.findJob(jobId);
         if (job.settled) {
             return this.snapshot(job);
         }
@@ -445,10 +457,7 @@ export class TaskRuntime {
         return this.snapshot(job);
     }
     async cancel(jobId) {
-        const job = this.jobs.get(jobId);
-        if (job === undefined) {
-            throw new Error(`unknown task job ${jobId}`);
-        }
+        const job = this.findJob(jobId);
         if (job.settled) {
             return this.snapshot(job);
         }
@@ -472,6 +481,10 @@ export class TaskRuntime {
             .filter((job) => !job.settled)
             .map((job) => this.cancel(job.id));
         await Promise.all(active);
+    }
+    /** The job a `jobId` names: the 8-character id `task_status` prints works everywhere a jobId does. */
+    findJob(jobId) {
+        return this.jobs.get(findJobId([...this.jobs.keys()], jobId));
     }
     pump() {
         while (!this.shuttingDown && this.running < this.maxConcurrency) {

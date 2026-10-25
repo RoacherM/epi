@@ -611,7 +611,8 @@ todo
 ```
 
 - `task_status` 省略 `jobId` 时列出本 runtime 的全部 Job（每行 `<id8> <status> <agent|task> · <turns>t <steps>s · <task 前 60 字>`）；给 `jobId` 时，未落定的 Job 返回紧凑进度块，已落定的 Job 仍返回其结果。
-- `task({ jobId, task })` 是中途转向（steer），不是新建 Job：running 的 Job 收到 `{"type":"steer","message":…}` 后交给 Pi 的 `session.steer`，在「当前工具执行完、下一次请求模型前」生效，调用立刻返回（绝不等待子进程）；queued 的 Job 尚无进程可谈，因此**替换其 task 文本**，在它启动时按新文本运行；已落定的 Job 返回 `job <id8> is <status>; resume is not supported yet`。给了 `jobId` 时其余设置字段一律忽略。
+- **`jobId` 既接受完整 uuid，也接受唯一前缀（至少 8 字符）**——列表只印 8 字符，因此这 8 字符必须能被 `task_status`/`task_wait`/`task_cancel`/`task` 原样用回（`findJobId()`，`src/task-runtime.ts`）；前缀不唯一时报错并列出候选的完整 id，绝不静默挑一个。
+- `task({ jobId, task })` 是中途转向（steer），不是新建 Job：running 的 Job 收到 `{"type":"steer","message":…}` 后由 worker 交给 Pi 的 **`session.agent.steer`**（即 Pi 自己 `_queueSteer` 的实体），在「当前工具执行完、下一次请求模型前」生效，调用立刻返回（绝不等待子进程）。**故意不走 `session.steer`**：后者会做命令/模板展开，并对子代理已注册的扩展命令（`/epi …`、`/web …`）**抛错**，而那个 rejection 曾无人接管——steer 一到 worker 就死，没有 `result` 行，正在跑的工具进程成了孤儿（round-1 P1-1）；steer 是父进程的指令而非用户输入，因此逐字投递、不做展开，也绝不允许把整轮跑挂掉。queued 的 Job 尚无进程可谈，因此**替换其 task 文本**，在它启动时按新文本运行——替换文本先过一遍 `task_start` hook（block/cancel 与新建任务同等处理），否则一个按文本拦截的 hook 能被“替换排队任务”绕过（round-1 P2-2）；已落定的 Job 返回 `job <id8> is <status>; resume is not supported yet`。给了 `jobId` 时其余设置字段一律忽略。
 - 子代理的进度是 **Pull** 视图：父进程从 worker 的 `progress` 行维护 `turns`/`steps`/`currentActivity`/`lastSummary`/`recentEvents`（10 条环形缓冲，与运行时长无关），随 `TaskJobSnapshot` 暴露；TUI 折叠行对 running 的 Job 追加 `· turn N · now: <activity>`。
 
 ### 12.2 可调能力（正交，默认全关）
@@ -665,7 +666,7 @@ Job Registry 属于扩展对象（真实运行中即一进程一份），跨 `/n
 - Worker 首行调 `takeOverStdout()`：插件/MCP 的 `console.log` 一律改道 stderr，只有协议 JSONL 走真 stdout；
 - Hook 的 `type: "agent"` handler 所用的 TaskRuntime 固定 `allowHooks: false`，避免 `tool_call` hook 派生的子代理再次触发 hook 形成死循环；
 - 只有 `session_shutdown` 的 `reason === "quit"` 取消并回收 Child；`new`/`resume`/`fork`/`reload` 只是换会话，进程仍在，Child 继续跑，且共享的 Job Registry（§12.3）让新会话仍能 `task_status`/`task_wait`/`task_cancel` 它们（父会话 abort 自己的轮次，如 Esc 或 `/compact`，同样不杀 Child）；`quit` 由任一存活 `factory` 收到即关停共享 Registry，回收全部 Child；
-- 子代理的 stdin 是**双向管道**：`{"type":"steer","message":…}` 调 `session.steer`，`{"type":"abort"}` 与 SIGTERM 同路径；解析不了的行只写 stderr 提示，绝不让 worker 崩溃。stdin **EOF 或 error**（父进程关闭管道，或被 SIGKILL 后内核关闭）即调 `interrupt()`：这是唯一的孤儿兜底，且它覆盖了旧的 `process.once("exit")` 兜底覆盖不了的 SIGKILL 情形（被 SIGKILL 的进程不执行任何 handler），因此模块级的 `liveWorkerPids` + exit 兜底已删除；worker 报完结果后 `unref` stdin，不让管道把它留在原地；
+- 子代理的 stdin 是**双向管道**：`{"type":"steer","message":…}` 经 `session.agent.steer` 逐字投递（不展开、不抛错，见 §12.1）；**session 就绪前到达的 steer 缓存在 worker 内、按到达顺序在 session 建好后投递**（父进程在 spawn 时就把 Job 标为 running，这个窗口真实存在；早先版本在那里丢掉 steer 却回答 “Steered”，round-1 P2-1）。`{"type":"abort"}` 与 SIGTERM 同路径；解析不了的行只写 stderr 提示，绝不让 worker 崩溃。stdin **EOF 或 error**（父进程关闭管道，或被 SIGKILL 后内核关闭）即调 `interrupt()`：这是唯一的孤儿兜底，且它覆盖了旧的 `process.once("exit")` 兜底覆盖不了的 SIGKILL 情形（被 SIGKILL 的进程不执行任何 handler），因此模块级的 `liveWorkerPids` + exit 兜底已删除；worker 报完结果后 `unref` stdin，不让管道把它留在原地；
 - stdout/stderr 和最终结果有明确上限，超出后写 artifact；一个 Job 失败不破坏其他 Job；
 - capsule 文件权限仅当前用户可读写，Child 读取后立即删除。
 
