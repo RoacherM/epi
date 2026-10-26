@@ -59,7 +59,7 @@
 │      按亮度与 Bayer 4x4 矩阵将任意网格实时重绘为点阵/抖动/ASCII   │
 │  • pulseRule(theme, width, t)                                  │
 │      生成 `─`/`━` 双向高斯流光分割线                             │
-│  • railGlyph(theme, row, t)  运行中竖轨的流光采样               │
+│  • (railGlyph 已删：2026-10-29 改成字车，见下表)                 │
 │      状态行彗星指示器与左侧竖轨流光采样函数                       │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -113,7 +113,7 @@
 
 | 项 | 实现 | 与上文的差异及理由 |
 |---|---|---|
-| `src/tui/motion.ts` | `blend`/`blendFg`（用 `Theme.colors` + pi-tui `mixColors`/`foregroundAnsi`，跟随 Theme 的 truecolor/256 色模式）、`paintRuns`、`pulseRule`、`railGlyph`、`FrameTicker`（`breathe` 在 0.1.24 去掉：`◈`、`∴` 改成旋转的 x，见 [tui-glyphs-design.md](tui-glyphs-design.md)） | 没做 `Grid`/Z-buffer/`restyleLook`：只服务 3D Hero 与 5 种 Look，而它们还没有选择入口（设置项或命令），先不加无人调用的代码 |
+| `src/tui/motion.ts` | `blend`/`blendFg`（用 `Theme.colors` + pi-tui `mixColors`/`foregroundAnsi`，跟随 Theme 的 truecolor/256 色模式）、`paintRuns`、`pulseRule`、`FrameTicker`（`railGlyph`/`railBlend` 在 2026-10-29 删掉：脊柱的脉冲换成字车，见下面「脉冲换成字车」一行）（`breathe` 在 0.1.24 去掉：`◈`、`∴` 改成旋转的 x，见 [tui-glyphs-design.md](tui-glyphs-design.md)） | 没做 `Grid`/Z-buffer/`restyleLook`：只服务 3D Hero 与 5 种 Look，而它们还没有选择入口（设置项或命令），先不加无人调用的代码 |
 | M1/M2 欢迎页 | 双波流光 Logo + 两条错相位脉冲分割线，24 FPS（`FrameTicker`，下一拍未被 render 即自停） | **只播一段 4s 开场**（3s 全强度 + 1s ease-out），之后静止在静态帧、定时器停止；`/new`、`/resume`、`/reload` 新建 header 时重播。实测常驻流光在空闲欢迎页约 90–130 KB/s 终端输出，违反 §1「不增加空闲开销」，也让依赖「画面静止」的测试失效。要改回常驻，改 `welcomeMotionStrength` 即可 |
 | M3 状态行 | 保留原有单字符盲文 spinner（`⠋⠙⠹…`，accent，133ms 一帧），所有宽度相同；`ui.setWorkingIndicator` 已打通（自定义帧原样绘制、`[]` 隐藏、`undefined` 恢复），会话失效时复位 | **不做 comet 等新指示器**：用户实测 6 列 comet 后认为从左到右扫动"不够优雅克制"，试过原地呼吸的 `●` 后，确认更喜欢原来的盲文 spinner（2026-10-21）。状态行右侧（耗时、tokens、速度、`[stop]`）和输入框右下的模型标签保持静态文字。刷新节拍由 133ms 改为 80ms（驱动运行中竖轨），spinner 帧仍按 133ms 取；扩展自定义 `intervalMs` 按 80ms 节拍取整 |
 | M4/M5 运行中竖轨 | 工具块、`!cmd` 块、流式 Thinking、只读分组：`┃` 颜色随脉冲沿行下移（accent ↔ thinkingHigh），分组 `◈` 呼吸；共用 TurnStatus 80ms 节拍，不另开定时器 | **字形固定为 `┃`，不在 `│`/`┃` 间切换**：e2e 测试与用户都以「`┃` 消失」判断块已结束；没有活动回合时（单独的 `!cmd`）竖轨不动画 |

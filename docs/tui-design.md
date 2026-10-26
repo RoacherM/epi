@@ -258,7 +258,7 @@ Epi 新写的文件也都在 `~/.epi/pi` 下：`themes/epi-grok-*.json`，键位
 - read 截断成前 5 行 + `…` + 后 3 行；
 - bash 默认折叠，只显示命令。
 
-扩展注册的工具（比如 MCP 工具）用它们自己的 `renderCall` / `renderResult`，放进同一个卡片外框里。既没有内置样式也没有自带渲染器的工具，用通用样式：显示参数 JSON 和结果文本。兜底结果中的 `content` 不是数组，或包含无效内容块时，保留可显示的文本并加一行 muted 的 `(unrenderable tool result)`；合法空数组、空文本和纯图片结果不报这个提示，不改模型收到的结果（D79）。
+扩展注册的工具（比如 MCP 工具）用它们自己的 `renderCall` / `renderResult`，放进同一个卡片外框里。扩展用同名覆盖 7 个内置工具之一时：自带 `renderCall` 或 `renderResult` 的，用它自己的；两个都没带的（例如 `pi.registerTool({ ...createBashTool(cwd), execute })`，Pi 的 `createBashTool` 返回值不带渲染器，minilfs 扩展就是这样），用 Epi 的内置渲染器，否则调用行只剩工具名（2026-10-29，`src/tui/transcript.ts` 的 `tool()`）。只读分组仍只认真正的内置工具。既没有内置样式也没有自带渲染器的工具，用通用样式：显示参数 JSON 和结果文本。兜底结果中的 `content` 不是数组，或包含无效内容块时，保留可显示的文本并加一行 muted 的 `(unrenderable tool result)`；合法空数组、空文本和纯图片结果不报这个提示，不改模型收到的结果（D79）。
 
 **折叠。** `Ctrl+O` 切换所有工具块和折叠的用户消息（上面那行），`Ctrl+T` 切换所有 thinking。单个块用鼠标点标题行切换。快捷键栏对应显示 `Ctrl+o:expand`（不再是 `tools`，因为现在也展开用户消息）。v1 不做键盘逐块选中（grok 的 scrollback 焦点模式），放到 v1.1。
 

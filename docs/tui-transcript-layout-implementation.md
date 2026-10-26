@@ -87,7 +87,7 @@
 - 测：回合边界的脊柱起止（连续两回合、`/new` reset、回放）、notice/错误行排除、宽度断言。
 
 ### W8 · 脊柱动效（依赖 W7）
-- 语义：回合进行中，脊柱就是 M4 的流光轨——`railGlyph(theme, row, t)` 画每行第 1 列（代替现状各块自画第 0 列 `┃`）；思考完成/工具完成时对应区段走 M6 衰减（`flash.ts` 公式，glyph 换成 `│`/`├`）；回合 settle 后整列沉淀为 `borderMuted`。
+- 语义：回合进行中，脊柱就是 M4 的流光轨——`railGlyph(theme, row, t)` 画每行第 1 列（代替现状各块自画第 0 列 `┃`。2026-10-29 起流光轨删掉，换成正在写的那一行上的一格字车 `┃`/`┝`，见 [tui-ctrl-o-per-block-design.md](tui-ctrl-o-per-block-design.md) §9.1）；思考完成/工具完成时对应区段走 M6 衰减（`flash.ts` 公式，glyph 换成 `│`/`├`）；回合 settle 后整列沉淀为 `borderMuted`。
 - 改：`GroupedMessages`/TurnSpine 增加运行态读取（`ToolEntry.status`、streaming 状态）与 tick 生命周期（复用 `motion.ts` 的 MOTION_TICK 契约：只在活跃时 tick、完成即停）；`tools/block.ts`、`assistant-block.ts` 里各自的第 0 列 rail 绘制随之移除，统一上移。
 - 参考：`reports/transcript-layout-prototype.html` 第四节的 85 帧分镜是验收基准（呼吸→绿闪→分支亮起→分支绿闪→沉淀收口）。
 - 测：`test/tui-motion.test.mjs` 扩展（脊柱帧断言、tick 停止契约）；Orca 真实终端走一遍动画。

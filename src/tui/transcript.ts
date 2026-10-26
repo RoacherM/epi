@@ -465,13 +465,18 @@ export class Transcript {
       if (args !== undefined) existing.updateArgs(args);
       return existing;
     }
-    // Pi's built-in tools come with Pi's own renderers; Epi swaps in its grok-style ones. Extension
-    // tools, including an extension overriding a built-in name, keep their own renderers. Extensions'
-    // pi.registerToolRenderer() resolvers come first, as in Pi's getRegisteredToolDefinition: Pi's MCP
-    // extension draws calls to tools whose server has not connected yet (a resumed session, #10285).
+    // Pi's built-in tools come with Pi's own renderers; Epi swaps in its grok-style ones. An extension
+    // tool that overrides a built-in name keeps its own renderers when it brings any (renderCall or
+    // renderResult); one that brings neither -- `{ ...createBashTool(cwd), execute }`, whose spread
+    // carries no renderers -- gets Epi's built-in ones too, else its call row would be the bare tool
+    // name. Extensions' pi.registerToolRenderer() resolvers come first, as in Pi's
+    // getRegisteredToolDefinition: Pi's MCP extension draws calls to tools whose server has not
+    // connected yet (a resumed session, #10285).
     const definition = this.session.getToolDefinition(toolName);
     const isBuiltIn = this.session.getAllTools().find((tool) => tool.name === toolName)?.sourceInfo.source === "builtin";
-    const base = (isBuiltIn ? builtInToolRenderers[toolName] : undefined) ?? definition;
+    const ownRenderers = definition?.renderCall !== undefined || definition?.renderResult !== undefined;
+    const epiRenderers = (isBuiltIn || !ownRenderers) && Object.hasOwn(builtInToolRenderers, toolName) ? builtInToolRenderers[toolName] : undefined;
+    const base = epiRenderers ?? definition;
     const renderers = toolBlock(toolName, this.session.extensionRunner.resolveToolRenderers(toolName, () => base), (target) => this.inspect(target));
     const component = new ToolEntry(
       toolName,
