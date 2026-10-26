@@ -280,19 +280,16 @@ test("bash: expanded result shows first 2, ellipsis, and last 3 when > 5 lines",
   assert.ok(!lines.some((l) => l.includes("line 3") || l.includes("line 7")));
 });
 
-test("bash: streaming partial results show the last 3 lines", () => {
-  const content = "first\nsecond\nthird\nfourth\nfifth\nsixth";
-  const res = bashRenderers.renderResult(
+test("bash: streaming partial results show the running slice, the newest 5 lines (all of them when opened)", () => {
+  const content = "first\nsecond\nthird\nfourth\nfifth\nsixth\nseventh";
+  const render = (expanded) => bashRenderers.renderResult(
     { content: [{ type: "text", text: content }] },
-    { expanded: false, isPartial: true },
+    { expanded, isPartial: true },
     theme,
     { isError: false },
-  );
-  const lines = res.render(80);
-  assert.equal(lines.length, 3);
-  assert.ok(lines[0].includes("fourth"));
-  assert.ok(lines[1].includes("fifth"));
-  assert.ok(lines[2].includes("sixth"));
+  ).render(80).map(strip);
+  assert.deepEqual(render(false), ["third", "fourth", "fifth", "sixth", "seventh"]);
+  assert.deepEqual(render(true), content.split("\n"), "Ctrl+O opened it: every line so far");
 });
 
 test("edit: call line shows verb and cwd-relative path", () => {

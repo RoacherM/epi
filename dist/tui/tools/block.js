@@ -1,6 +1,6 @@
 import { GLYPHS, paintMarker, takePhase } from "../glyphs.js";
 import { piTui } from "../pi-tui.js";
-import { CallLine, LinesComponent, textContent } from "./common.js";
+import { CallLine, LinesComponent, RUNNING_SLICE_ROWS, textContent } from "./common.js";
 // Rail column, then padding so `◆` lines up with assistant text (transcript CONTENT_PAD = 3).
 const CALL_PREFIX = 3;
 // Result rows start under the call text, after `◆ `.
@@ -31,15 +31,20 @@ class Railed {
     theme;
     state;
     timing;
-    isCall;
+    kind;
     onInspect;
-    constructor(inner, theme, state, timing, isCall, onInspect) {
+    constructor(inner, theme, state, timing, 
+    /** `running`: a running call's result, of which only the newest RUNNING_SLICE_ROWS rows show. */
+    kind, onInspect) {
         this.inner = inner;
         this.theme = theme;
         this.state = state;
         this.timing = timing;
-        this.isCall = isCall;
+        this.kind = kind;
         this.onInspect = onInspect;
+    }
+    get isCall() {
+        return this.kind === "call";
     }
     /** A left click on a row the renderer marked inspectable (`… N more lines`) opens the inspector;
      * anywhere else falls through to Pi's own click-to-expand. */
@@ -55,13 +60,14 @@ class Railed {
         return { handled: true };
     }
     /** The first columns stay blank for the turn spine (src/tui/spine.ts), which also carries the
-     * running pulse (docs/tui-motion-design.md M4). */
+     * carriage. */
     render(width) {
         const prefix = this.isCall ? CALL_PREFIX : RESULT_PREFIX;
         const bullet = this.marker();
         const contentWidth = Math.max(1, width - prefix - (this.isCall ? 2 : 0));
         const lead = " ".repeat(prefix);
-        return this.inner.render(contentWidth).map((line, index) => {
+        const rows = this.inner.render(contentWidth);
+        return (this.kind === "running" ? rows.slice(-RUNNING_SLICE_ROWS) : rows).map((line, index) => {
             if (!this.isCall)
                 return lead + line;
             return lead + (index === 0 ? bullet : "  ") + line;
@@ -105,9 +111,11 @@ function hasMalformedContent(result) {
         return true;
     });
 }
-function fallbackResult(result, expanded, theme) {
+function fallbackResult(result, expanded, theme, running) {
     const text = textContent(result).trimEnd();
     const lines = text === "" ? [] : text.split("\n");
+    if (running)
+        return new piTui.Text(lines.slice(-RUNNING_SLICE_ROWS).map((line) => theme.fg("toolOutput", line)).join("\n"), 0, 0);
     const shown = expanded ? lines : lines.slice(0, FALLBACK_LINES);
     const rows = shown.map((line) => theme.fg("toolOutput", line));
     if (shown.length < lines.length)
@@ -129,11 +137,13 @@ export function toolBlock(toolName, renderers, onInspect) {
         renderShell: "self",
         renderCall(args, theme, context) {
             const inner = renderCall?.(args, theme, unwrap(context)) ?? fallbackCall(toolName, theme);
-            return new Railed(inner, theme, markerStateOf(context), noteMarkerTiming(context), true, onInspect);
+            return new Railed(inner, theme, markerStateOf(context), noteMarkerTiming(context), "call", onInspect);
         },
         renderResult(result, options, theme, context) {
-            const inner = renderResult?.(result, options, theme, unwrap(context)) ?? fallbackResult(result, options.expanded, theme);
-            return new Railed(inner, theme, markerStateOf(context), undefined, false, onInspect);
+            // An opened block (Ctrl+O) shows everything, running or not (the v3 prototype's `open`).
+            const running = options.isPartial && context.executionStarted && !options.expanded;
+            const inner = renderResult?.(result, options, theme, unwrap(context)) ?? fallbackResult(result, options.expanded, theme, running);
+            return new Railed(inner, theme, markerStateOf(context), undefined, running ? "running" : "result", onInspect);
         },
     };
     return framed;

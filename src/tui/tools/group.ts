@@ -13,7 +13,7 @@ import { displayNow, drawAt } from "../clock.js";
 import { GLYPHS, paintMarker } from "../glyphs.js";
 import { piTui } from "../pi-tui.js";
 import { type ChildRows, dispatchToRows } from "../rows.js";
-import { type ClockGated, isClockGated, paintSpine, type SpineBlock, type SpineMember, spineMember, TIP_ROWS } from "../spine.js";
+import { type ClockGated, isClockGated, lastTextRow, paintSpine, type SpineBlock, type SpineMember, spineMember, TIP_ROWS } from "../spine.js";
 import { durationBar, fitCallRow } from "./common.js";
 import { createFlashState, disposeFlash, type FlashState, isFlashing, startFlash } from "./flash.js";
 import type { ToolRenderers } from "./types.js";
@@ -137,8 +137,9 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember, Cl
     return isFlashing(this.flash) ? this.flash : undefined;
   }
 
-  get spineRunning(): boolean {
-    return this.status === "running";
+  /** Running: the carriage sits on its last row, the running slice's newest line or the call row. */
+  spineWriteRow(lines: readonly string[]): number | undefined {
+    return this.status === "running" ? lastTextRow(lines) : undefined;
   }
 
   /** Cleared on `Transcript.reset()` so a stale flash timer never fires after this entry is gone. */
@@ -192,7 +193,7 @@ function summarize(members: MemberLike[]): { running: number; completed: number;
 /** Pure text+layout for the collapsed group line, split out from `GroupedMessages` so widths
  * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the marker is
  * the rotating x, read at `now`; once all settled it shakes twice and becomes `◈`
- * (docs/tui-glyphs-design.md §3). The turn spine beside it pulses. */
+ * (docs/tui-glyphs-design.md §3). The turn spine's carriage sits on it while it runs. */
 export function verbGroupLine(members: MemberLike[], theme: Theme, width: number, now = displayNow()): string {
   const { running, failed, completed, breakdown } = summarize(members);
   const anyRunning = running > 0;
@@ -492,7 +493,7 @@ export class GroupedMessages implements Component {
       ...(live ? { held: () => ["", drawAt(this.runShownAt.get(runKey), () => verbGroupLine(shown, this.theme, width))] } : {}),
       lines: ["", line],
       skipped: 0,
-      member: { spineRole: "tool", spineRunning: running, spineFlash: flash },
+      member: { spineRole: "tool", spineWriteRow: (lines) => (running ? lastTextRow(lines) : undefined), spineFlash: flash },
       toolish: true,
     };
   }

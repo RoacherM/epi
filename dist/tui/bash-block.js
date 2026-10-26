@@ -9,7 +9,8 @@ import { errorText } from "./errors.js";
 import { GLYPHS, paintMarker, renderThroughLanding, takePhase } from "./glyphs.js";
 import { TURN_COLUMNS } from "./measure.js";
 import { piTui } from "./pi-tui.js";
-import { durationBar, failureRow, fitCallRow, formatToolDuration, shortenCommand, truncateOutputLines } from "./tools/common.js";
+import { lastTextRow } from "./spine.js";
+import { durationBar, failureRow, fitCallRow, formatToolDuration, RUNNING_SLICE_ROWS, shortenCommand, truncateOutputLines } from "./tools/common.js";
 // Matches tools/block.ts: a rail column, then 2 columns of padding before the marker (the rotating x
 // while it runs, then `$` or `!!`); output lines sit two columns further in, under the marker's text.
 const CALL_PREFIX = 3;
@@ -70,8 +71,13 @@ export class UserBashBlock {
         this.outputLines[this.outputLines.length - 1] += parts[0] ?? "";
         this.outputLines.push(...parts.slice(1));
     }
-    get spineRunning() {
-        return this.status === "running";
+    /** Running: the carriage sits on the newest output row, or on the call row before any output --
+     * not on the `Running…` row under them. */
+    spineWriteRow(lines) {
+        if (this.status !== "running")
+            return undefined;
+        const call = lines.findIndex((line) => line.trim() !== "");
+        return call === -1 ? lastTextRow(lines) : call + Math.min(RUNNING_SLICE_ROWS, this.lines().length);
     }
     setComplete(exitCode, cancelled) {
         this.exitCode = exitCode;
@@ -128,9 +134,10 @@ export class UserBashBlock {
         const body = fitCallRow({ body: this.theme.fg("toolOutput", text), tail: extra, bar, fallbackTime: fallback }, Math.max(1, width - piTui.visibleWidth(callPrefix)), this.theme.fg("dim", "…"));
         const callLine = callPrefix + body;
         const lines = this.lines();
-        // While running, show the live tail (matches tools/mutating.ts bashRenderers' `isPartial` case);
-        // once finished, apply the fixed head/ellipsis/tail rule instead.
-        const shown = running ? lines.slice(-3) : truncateBashOutput(lines);
+        // While running, the running slice: the newest lines (matches tools/mutating.ts bashRenderers'
+        // `isPartial` case); once finished, the fixed head/ellipsis/tail rule instead -- a `!cmd` has no
+        // Ctrl+O of its own, so its output stays.
+        const shown = running ? lines.slice(-RUNNING_SLICE_ROWS) : truncateBashOutput(lines);
         const bodyPrefix = " ".repeat(RESULT_PREFIX);
         const rows = shown.map((entry) => bodyPrefix + this.theme.fg("toolOutput", entry));
         const status = this.statusText();

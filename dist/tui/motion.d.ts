@@ -21,12 +21,7 @@ export declare function gaussian(distance: number, spread: number): number;
  * `─` elsewhere, so the rule keeps its line geometry. `phase` offsets one rule from another;
  * `strength` scales the highlights (0 draws the plain `borderMuted` rule). */
 export declare function pulseRule(theme: MotionTheme, width: number, t: number, phase?: number, strength?: number): string;
-/** The color of a running rail's `row` at `t`: a pulse slides down it, accent to thinkingHigh,
- * repeating every RAIL_PERIOD rows. The turn spine (src/tui/spine.ts) paints its live glyphs in it. */
-export declare function railBlend(theme: MotionTheme, row: number, t: number): Blend;
-/** A running rail's `row`: `┃` in `railBlend`'s color. */
-export declare function railGlyph(theme: MotionTheme, row: number, t: number): string;
-/** Seconds on the shared motion clock. One clock keeps every rail and spinner in step. */
+/** Seconds on the shared motion clock. One clock keeps every rule and spinner in step. */
 export declare function motionTime(now?: number): number;
 /**
  * A redraw timer that stops itself once nothing draws the component any more (docs/tui-motion-

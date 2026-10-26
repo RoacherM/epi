@@ -1,14 +1,16 @@
 // grok tool block frame (docs/tui-design.md 4.2): a marker before the call line and result rows
 // indented under it. The marker is the rotating x while the call runs, then `$` for shell commands and
-// `◆` for the rest (docs/tui-glyphs-design.md, src/tui/glyphs.ts). The running pulse is the turn
-// spine's (src/tui/spine.ts). Replaces Pi's background box (`renderShell: "self"`).
+// `◆` for the rest (docs/tui-glyphs-design.md, src/tui/glyphs.ts). While a call runs, its result shows
+// as the running slice: the newest RUNNING_SLICE_ROWS rows, whatever renderer drew them (codemode's
+// nested calls, an MCP tool's progress, an extension's own rows). Replaces Pi's background box
+// (`renderShell: "self"`).
 import type { AgentToolResult, ToolRenderers as PiToolRenderers, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
 import type { InspectTarget } from "../buffer/inspector.js";
 import { GLYPHS, type MarkerState, paintMarker, takePhase } from "../glyphs.js";
 import { piTui } from "../pi-tui.js";
-import { CallLine, LinesComponent, textContent } from "./common.js";
+import { CallLine, LinesComponent, RUNNING_SLICE_ROWS, textContent } from "./common.js";
 import type { ToolRenderContext, ToolRenderers } from "./types.js";
 
 // Rail column, then padding so `◆` lines up with assistant text (transcript CONTENT_PAD = 3).
@@ -53,9 +55,14 @@ class Railed implements Component {
     private readonly theme: Theme,
     private readonly state: MarkerState,
     private readonly timing: MarkerTiming | undefined,
-    private readonly isCall: boolean,
+    /** `running`: a running call's result, of which only the newest RUNNING_SLICE_ROWS rows show. */
+    private readonly kind: "call" | "result" | "running",
     private readonly onInspect: OnInspect | undefined,
   ) {}
+
+  private get isCall(): boolean {
+    return this.kind === "call";
+  }
 
   /** A left click on a row the renderer marked inspectable (`… N more lines`) opens the inspector;
    * anywhere else falls through to Pi's own click-to-expand. */
@@ -69,13 +76,14 @@ class Railed implements Component {
   }
 
   /** The first columns stay blank for the turn spine (src/tui/spine.ts), which also carries the
-   * running pulse (docs/tui-motion-design.md M4). */
+   * carriage. */
   render(width: number): string[] {
     const prefix = this.isCall ? CALL_PREFIX : RESULT_PREFIX;
     const bullet = this.marker();
     const contentWidth = Math.max(1, width - prefix - (this.isCall ? 2 : 0));
     const lead = " ".repeat(prefix);
-    return this.inner.render(contentWidth).map((line, index) => {
+    const rows = this.inner.render(contentWidth);
+    return (this.kind === "running" ? rows.slice(-RUNNING_SLICE_ROWS) : rows).map((line, index) => {
       if (!this.isCall) return lead + line;
       return lead + (index === 0 ? bullet : "  ") + line;
     });
@@ -120,9 +128,10 @@ function hasMalformedContent(result: AgentToolResult<unknown>): boolean {
   });
 }
 
-function fallbackResult(result: AgentToolResult<unknown>, expanded: boolean, theme: Theme): Component {
+function fallbackResult(result: AgentToolResult<unknown>, expanded: boolean, theme: Theme, running: boolean): Component {
   const text = textContent(result).trimEnd();
   const lines = text === "" ? [] : text.split("\n");
+  if (running) return new piTui.Text(lines.slice(-RUNNING_SLICE_ROWS).map((line) => theme.fg("toolOutput", line)).join("\n"), 0, 0);
   const shown = expanded ? lines : lines.slice(0, FALLBACK_LINES);
   const rows = shown.map((line) => theme.fg("toolOutput", line));
   if (shown.length < lines.length) rows.push(theme.fg("muted", `… +${lines.length - shown.length} lines (Ctrl+O to expand)`));
@@ -146,11 +155,13 @@ export function toolBlock(
     renderShell: "self",
     renderCall(args, theme, context) {
       const inner = renderCall?.(args, theme, unwrap(context)) ?? fallbackCall(toolName, theme);
-      return new Railed(inner, theme, markerStateOf(context), noteMarkerTiming(context), true, onInspect);
+      return new Railed(inner, theme, markerStateOf(context), noteMarkerTiming(context), "call", onInspect);
     },
     renderResult(result, options, theme, context) {
-      const inner = renderResult?.(result, options, theme, unwrap(context)) ?? fallbackResult(result, options.expanded, theme);
-      return new Railed(inner, theme, markerStateOf(context), undefined, false, onInspect);
+      // An opened block (Ctrl+O) shows everything, running or not (the v3 prototype's `open`).
+      const running = options.isPartial && context.executionStarted && !options.expanded;
+      const inner = renderResult?.(result, options, theme, unwrap(context)) ?? fallbackResult(result, options.expanded, theme, running);
+      return new Railed(inner, theme, markerStateOf(context), undefined, running ? "running" : "result", onInspect);
     },
   };
   return framed;

@@ -17,7 +17,7 @@ import { rewritePiText } from "../pi-output.js";
 import { CONTENT_COLUMN, MeasuredMarkdown } from "./markdown-layout.js";
 import { piTui } from "./pi-tui.js";
 import { type ChildRows, dispatchToRows } from "./rows.js";
-import type { ClockGated, SpineMember } from "./spine.js";
+import { type ClockGated, lastTextRow, type SpineMember } from "./spine.js";
 import { createFlashState, disposeFlash, type FlashState, isFlashing, startFlash } from "./tools/flash.js";
 
 type ContentPart = AssistantMessage["content"][number];
@@ -370,6 +370,11 @@ export class AssistantBlock implements Component, SpineMember, ClockGated {
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     if (this.rowsWidth !== event.width) this.render(event.width);
     return dispatchToRows(this.rows, event);
+  }
+
+  /** Streaming: the carriage sits on the last row written, of the reply or of its thinking. */
+  spineWriteRow(lines: readonly string[]): number | undefined {
+    return this.lastStreaming ? lastTextRow(lines) : undefined;
   }
 
   /** A thinking run that just ended flashes its rows' stretch of the turn spine (docs/tui-motion-

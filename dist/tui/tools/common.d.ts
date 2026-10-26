@@ -36,6 +36,9 @@ export declare function isErrorResult(result: AgentToolResult<unknown>, context:
  * model's bash block `muted` and the `!cmd` block `toolOutput`).
  */
 export declare function truncateOutputLines(lines: string[], ellipsis: (text: string) => string): string[];
+/** A running tool's output under its call row, newest rows last (docs/tui-ctrl-o-per-block-design.md
+ * §9.1): the call row and these fit in the spine's tip (TIP_ROWS = 8), where the carriage moves. */
+export declare const RUNNING_SLICE_ROWS = 5;
 /** A tool's run time on its call line: `2.1s`, `2m20s`; under a second in milliseconds, since
  * `0.0s`/`0.1s` say nothing about a 30ms grep. */
 export declare function formatToolDuration(ms: number): string;

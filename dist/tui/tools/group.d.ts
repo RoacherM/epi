@@ -53,7 +53,8 @@ export declare class ToolEntry extends ToolExecutionComponent implements SpineMe
     setExpanded(expanded: boolean): void;
     /** The completion flash lights the whole block's stretch of the turn spine (src/tui/spine.ts). */
     spineFlash(): FlashState | undefined;
-    get spineRunning(): boolean;
+    /** Running: the carriage sits on its last row, the running slice's newest line or the call row. */
+    spineWriteRow(lines: readonly string[]): number | undefined;
     /** Cleared on `Transcript.reset()` so a stale flash timer never fires after this entry is gone. */
     dispose(): void;
 }
@@ -68,7 +69,7 @@ interface MemberLike {
 /** Pure text+layout for the collapsed group line, split out from `GroupedMessages` so widths
  * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the marker is
  * the rotating x, read at `now`; once all settled it shakes twice and becomes `◈`
- * (docs/tui-glyphs-design.md §3). The turn spine beside it pulses. */
+ * (docs/tui-glyphs-design.md §3). The turn spine's carriage sits on it while it runs. */
 export declare function verbGroupLine(members: MemberLike[], theme: Theme, width: number, now?: number): string;
 /**
  * Wraps `Transcript`'s `messages` container: folds consecutive collapsed built-in read-only tool

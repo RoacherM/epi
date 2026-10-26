@@ -119,5 +119,6 @@
 | M4/M5 运行中竖轨 | 工具块、`!cmd` 块、流式 Thinking、只读分组：`┃` 颜色随脉冲沿行下移（accent ↔ thinkingHigh），分组 `◈` 呼吸；共用 TurnStatus 80ms 节拍，不另开定时器 | **字形固定为 `┃`，不在 `│`/`┃` 间切换**：e2e 测试与用户都以「`┃` 消失」判断块已结束；没有活动回合时（单独的 `!cmd`）竖轨不动画 |
 | M6 完成闪烁 | 前 120ms 满色，之后指数 ease-out 向 `borderMuted`，400ms 消失；80ms 步进重绘，定时器 `unref` | 无 |
 | M4/M6 并入回合脊柱（2026-10-21，[对话区排版](tui-transcript-layout-implementation.md) W8） | 各块不再自画第 0 列竖轨：脉冲改由 `src/tui/spine.ts` 画在第 1 列的回合脊柱上（`railBlend` 取色），运行中工具的 `├─` 常亮，完成闪烁照亮该块那一段脊柱（`flashBlend`，字形 `│`/`├─`） | **只有运行中回合的末端 8 行（tip）在动**，其上的行已是沉淀后的样子：pi-tui 主屏渲染只能改写屏内行，屏外行一变就整屏重绘（清空 scrollback 重写全部历史），整条脊柱一起动在超过一屏的回合上每帧都会这样（terminal-progress 测试因此超时）。单独的 `!cmd` 没有脊柱，也就没有脉冲（只有 `Running…` 文案） |
+| 脉冲换成字车（2026-10-29，[Ctrl+O 逐块](tui-ctrl-o-per-block-design.md) §9.1） | 删掉 `railBlend`/`railGlyph` 和运行中 `├─` 常亮；脊柱只用 `borderMuted`。运行中的回合只在**正在写的那一行**画一格 accent：主干行 `┃`，调用行 `┝`（`─` 仍是结构色）。块用 `spineWriteRow` 声明自己正在写哪一行（流式回复、运行中的工具、`!cmd`、只读分组行） | 字车只在 tip 内画，tip 不变量照旧。字车位置由当帧的块推出，不存状态，不随时钟动（静止画面也停在原位） |
 | 测试 | `test/tui-motion.test.mjs`（新）、`test/startup-page.test.mjs`（12/40/44/80/88/108/120 列、帧文本与静态页一致、256 色、开场收敛、自停机） | 12 列时标题原本就溢出（静态页既有问题），已一并修正 |
 
