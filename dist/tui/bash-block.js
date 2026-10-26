@@ -125,8 +125,9 @@ export class UserBashBlock {
         const marker = this.marker(running);
         const { text, extraLines } = shortenCommand(this.command, undefined);
         const extra = extraLines > 0 ? this.theme.fg("dim", ` · +${extraLines} lines`) : "";
-        // The same column and bar as a model's call row (docs/tui-one-column-design.md §2.2): the time so
-        // far while it runs, the final time once done; a failure or a cancel draws none.
+        // The same column and bar as a collapsed model's call row (docs/tui-one-column-design.md §2.2): the
+        // time so far while it runs, the final time once done; a failure or a cancel draws none. A `!cmd`
+        // has no expanded state (Ctrl+O opens tool blocks), so it never shows the number there.
         const ms = this.status === "done" ? this.durationMs : running && this.startedAt !== undefined ? Math.max(0, displayNow() - this.startedAt) : undefined;
         const bar = ms === undefined ? "" : durationBar(this.theme, ms);
         const fallback = this.status === "done" && ms !== undefined ? `  ${this.theme.fg("dim", formatToolDuration(ms))}` : "";

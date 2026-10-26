@@ -183,7 +183,8 @@ test("bash: the call line drops `cd <cwd> &&`, writes home as ~, and adds the ru
   assert.equal(call(`cd ~/proj && ls ${home}/other`), "ls ~/other");
   assert.equal(call(`cd ${cwd}/sub && make`), `cd ~/proj/sub && make`, "only the session's own cwd is left out");
   assert.equal(call("npm test", { durationMs: 30 }), `${"npm test".padEnd(196)}▌···`);
-  assert.equal(call("npm test", { durationMs: 140_500 }), `${"npm test".padEnd(190)}████ 2m20s`, "a full bar is followed by the time");
+  assert.equal(call("npm test", { durationMs: 140_500 }), `${"npm test".padEnd(196)}████`, "a full bar has no number after it");
+  assert.equal(call("npm test", { durationMs: 140_500, expanded: true }), `${"npm test".padEnd(195)}2m20s`, "expanded: only the number, at the same edge");
   assert.equal(call("npm test", { durationMs: 30, isError: true }), "npm test", "a failure's row says what happened instead");
   assert.equal(call("npm test", { durationMs: 30, isPartial: true }), "npm test", "not started yet: no time so far");
 });

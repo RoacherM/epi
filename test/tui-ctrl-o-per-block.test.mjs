@@ -122,8 +122,11 @@ test("#5 the last block in a read-only run: Ctrl+O opens the whole run, again fo
   for (const n of [1, 2, 3]) assert.ok(opened.some((row) => row.includes(`content ${n}`)), `member ${n} shows its output`);
   assert.ok(!opened.some((row) => row.includes("built")), "the bash block before the run stays closed");
   assert.ok(!opened.some((row) => row.includes("fold")), "no click-fold row: Ctrl+O folds it");
+  // An opened run has no group row: each member's own row ends in its number (§9.2), the run's
+  // folded row in its total's bar.
+  for (const n of [1, 2, 3]) assert.match(opened.find((row) => row.includes(`read f${n}.ts`)), /\d+ms$/);
   t.toggleLastToolBlock();
-  assert.ok(rows(t).some((row) => row.includes("◈ Read 3 files")));
+  assert.match(rows(t).find((row) => row.includes("◈ Read 3 files")), /[▏▎▍▌▋▊▉█·]{4}$/);
 });
 
 test("#4 no tool block: toggleLastToolBlock is false and the transcript is unchanged", () => {
@@ -161,4 +164,51 @@ test("#9 every row fits 40, 80, 120 and 230 columns with a block open", () => {
   for (const width of [40, 80, 120, 230]) {
     for (const row of t.root.render(width)) assert.ok(piTui.visibleWidth(row) <= width, `width ${width}: ${JSON.stringify(strip(row))}`);
   }
+});
+
+// ── §9.2: the right edge is a bar when collapsed, a number when expanded ──────
+
+const BAR_END = /[▏▎▍▌▋▊▉█·]{4}$/;
+for (const columns of [40, 80, 120]) {
+  test(`#12/#13 real app at ${columns} columns: a collapsed call row ends in only the bar, an opened one in only the number, both on the right edge`, (t) => {
+    const screens = runApp(t, [
+      ...FIRST_TURN, ["screen", "collapsed"],
+      ["key", "ctrl+o"], ["waitFor", "cmd5-out-a", { screen: true }], ["screen", "opened"],
+      ["detach"],
+    ], { columns });
+    // The app insets the transcript like its header: the right edge is the header's (its token count).
+    const edge = screens.collapsed[1].length;
+    assert.ok(edge > columns - 4 && screens.collapsed[1].endsWith("128K"), JSON.stringify(screens.collapsed[1]));
+    const callRow = (screen, n) => screen.filter((row) => /[├│]─\$ printf/.test(row))[n - 1];
+    for (const n of [1, 5]) {
+      const row = callRow(screens.collapsed, n);
+      assert.match(row, BAR_END, `#12: ${row}`);
+      assert.doesNotMatch(row, /\d(ms|s)\s*$/, "#12: no number");
+      assert.equal(row.length, edge, "#12: the bar's last cell is on the right edge");
+    }
+    const opened = callRow(screens.opened, 5);
+    assert.match(opened, / \d+(\.\d)?(ms|s)$/, `#13: ${opened}`);
+    assert.doesNotMatch(opened, /[▏▎▍▌▋▊▉█·]/, "#13: no bar beside the number");
+    assert.equal(opened.length, edge, "#13: the number's last digit is on the right edge");
+    assert.equal(callRow(screens.opened, 4), callRow(screens.collapsed, 4), "the block Ctrl+O did not open keeps its bar");
+  });
+}
+
+test("#14 the bar follows the right edge from 80 to 120 columns; a long run's full bar has no number", () => {
+  const t = new Transcript({ requestRender() {} }, theme, stubSession());
+  t.handle({ type: "message_start", message: user("go") });
+  runTool(t, "bash", "b1", { command: "make" }, "built");
+  const message = assistant([call("bash", "b2", { command: "npm test" })]);
+  t.handle({ type: "message_start", message: { ...message, content: [] } });
+  t.handle({ type: "message_end", message });
+  t.handle({ type: "tool_execution_start", toolName: "bash", toolCallId: "b2", args: { command: "npm test" } });
+  t.handle({ type: "tool_execution_end", toolName: "bash", toolCallId: "b2", result: { content: [{ type: "text", text: "ok" }] }, isError: false, durationMs: 154_000 });
+  for (const width of [80, 120]) {
+    const row = rows(t, width).find((line) => line.includes("$ make"));
+    assert.equal(row.search(/[▏▎▍▌▋▊▉█]/), width - 4, `width ${width}: ${row}`);
+    assert.equal(row.length, width);
+    assert.match(rows(t, width).find((line) => line.includes("npm test")), /npm test +████$/, `width ${width}: 2m34s is a full bar, no number`);
+  }
+  t.toggleLastToolBlock();
+  assert.match(rows(t, 120).find((line) => line.includes("npm test")), /npm test +2m34s$/);
 });

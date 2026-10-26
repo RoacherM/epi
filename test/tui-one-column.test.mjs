@@ -22,7 +22,7 @@ const bar = (ms) => strip(durationBar(theme, ms));
 const WIDTHS = [40, 80, 120, 230, 300];
 const context = (overrides = {}) => ({ state: {}, isError: false, isPartial: false, executionStarted: true, expanded: false, ...overrides });
 
-test("the bar: one decade per cell from 10ms, eighths inside a cell, the time after a full bar", () => {
+test("the bar: one decade per cell from 10ms, eighths inside a cell, no number even when full", () => {
   // Under 10ms nothing is filled: a ▏ there joined the next fast call's into a vertical line.
   assert.equal(bar(0), "····", "under 10ms: all but instant");
   assert.equal(bar(1), "····");
@@ -34,10 +34,11 @@ test("the bar: one decade per cell from 10ms, eighths inside a cell, the time af
   assert.equal(bar(1500), "██▏·");
   assert.equal(bar(10_000), "███·");
   assert.equal(bar(99_900), "████");
-  assert.equal(bar(100_000), "████ 1m40s", "full from 100s: the time follows");
-  assert.equal(bar(140_500), "████ 2m20s");
-  assert.equal(bar(3_912_000), "████ 1h5m12s");
-  for (const ms of [0, 1, 50, 999, 5000, 99_999]) assert.equal([...bar(ms)].length, 4, `${ms}ms is 4 cells`);
+  // docs/tui-ctrl-o-per-block-design.md §9.2: collapsed is only the bar; the number is for expanded rows.
+  assert.equal(bar(100_000), "████", "full from 100s, no number after it");
+  assert.equal(bar(140_500), "████");
+  assert.equal(bar(3_912_000), "████");
+  for (const ms of [0, 1, 50, 999, 5000, 99_999, 140_500]) assert.equal([...bar(ms)].length, 4, `${ms}ms is 4 cells`);
   assert.ok(durationBar(theme, 1500).includes(theme.fg("dim", "██▏")), "filled cells are dim");
   assert.ok(durationBar(theme, 1500).includes(theme.fg("borderMuted", "·")), "empty cells borderMuted");
 });
@@ -78,12 +79,14 @@ test("a long command stops at the terminal's edge, its tail (· +N lines) never 
   }
 });
 
-test("a full bar's time runs past the edge when there is room, and moves the bar left when not", () => {
-  const wide = fitCallRow({ body: "make", tail: "", bar: durationBar(theme, 140_500) }, 120, "…");
-  assert.equal(strip(wide), `${"make".padEnd(110)}████ 2m20s`, "with a full width there is never room past the edge");
-  const tight = fitCallRow({ body: "make", tail: "", bar: durationBar(theme, 140_500) }, 76, "…");
-  assert.equal(piTui.visibleWidth(tight), 76);
-  assert.match(strip(tight), /make +████ 2m20s$/);
+test("whatever sits at the right edge -- bar or number -- ends on the row's last column", () => {
+  for (const right of [durationBar(theme, 140_500), "1.5s", "2m20s", "12ms", "9ms"]) {
+    for (const width of [76, 120]) {
+      const row = fitCallRow({ body: "make", tail: "", bar: right }, width, "…");
+      assert.equal(piTui.visibleWidth(row), width, `${strip(right)} at ${width}`);
+      assert.ok(strip(row).endsWith(strip(right)));
+    }
+  }
 });
 
 test("too narrow for a column: the time stays a number after the body", () => {
@@ -91,7 +94,7 @@ test("too narrow for a column: the time stays a number after the body", () => {
   assert.equal(strip(line.render(14)[0]), "npm test  1.5s");
 });
 
-test("running: the bar is the time so far; expanded adds the exact time; a failure draws none", (t) => {
+test("running: the bar is the time so far; expanded shows only the number; a failure draws none", (t) => {
   let now = 1_000_000;
   t.mock.method(Date, "now", () => now);
   const state = {};
@@ -103,7 +106,11 @@ test("running: the bar is the time so far; expanded adds the exact time; a failu
   const notStarted = new CallLine("$", theme, "sleep 9", context({ isPartial: true, executionStarted: false }));
   assert.equal(strip(notStarted.render(80)[0]), "sleep 9");
   const expanded = new CallLine("$", theme, "make", context({ durationMs: 1500, expanded: true }));
-  assert.match(strip(expanded.render(120)[0]), /make +██▏· 1\.5s$/);
+  assert.match(strip(expanded.render(120)[0]), /make +1\.5s$/);
+  assert.doesNotMatch(strip(expanded.render(120)[0]), /[▏▎▍▌▋▊▉█·]/, "no bar beside the number");
+  assert.equal(piTui.visibleWidth(expanded.render(120)[0]), 120, "the number ends at the right edge");
+  const runningOpen = new CallLine("$", theme, "sleep 9", context({ isPartial: true, expanded: true, state }));
+  assert.match(strip(runningOpen.render(80)[0]), /sleep 9 +2\.0s$/, "the number grows while it runs");
   const failed = new CallLine("$", theme, "false", context({ durationMs: 30, isError: true }));
   assert.equal(strip(failed.render(80)[0]), "false");
 });
@@ -153,7 +160,7 @@ test("review 1 #1: a call folded into a group row is timed from its start, not f
   now += 10_000;
   // Ctrl+O: drawn for the first time ten seconds later.
   const shown = readRenderers.renderCall(args, theme, context({ args, isPartial: true, expanded: true, state })).render(120)[0];
-  assert.match(strip(shown), /███· 10\.0s$/, strip(shown));
+  assert.match(strip(shown), / 10\.0s$/, strip(shown));
 });
 
 test("review 1 #3: output that starts with ✗ is data and keeps the full width; the failure row is cut", () => {

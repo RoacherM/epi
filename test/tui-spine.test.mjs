@@ -154,8 +154,8 @@ test("a click on a tool row whose blank row was left out still reaches it (W2 mo
   const click = { type: "click", button: "left", x: 6, y, screenX: 6, screenY: y, width: 80, height: rows.length, shift: false, alt: false, ctrl: false };
   assert.ok(t.root.handleMouse(click)?.handled, "the click on the call row is handled");
   const after = lines(t);
-  // Expanded, the bar is followed by the exact time (docs/tui-one-column-design.md §2.2).
-  assert.deepEqual(after.slice(y, y + 3).map((row) => row.replace(/ +[▏▎▍▌▋▊▉█][▏▎▍▌▋▊▉█·]{3} \d+ms$/, "")), [" ├─$ printf 'one\\ntwo'", " │   one", " │   two"], "the click expanded this tool, not its neighbour");
+  // Expanded, the time is a number in the bar's place (docs/tui-ctrl-o-per-block-design.md §9.2).
+  assert.deepEqual(after.slice(y, y + 3).map((row) => row.replace(/ +\d+ms$/, "")), [" ├─$ printf 'one\\ntwo'", " │   one", " │   two"], "the click expanded this tool, not its neighbour");
   // And a click on the first one still lands on it.
   const first = { ...click, y: y - 1, screenY: y - 1, height: after.length };
   assert.ok(t.root.handleMouse(first)?.handled);
