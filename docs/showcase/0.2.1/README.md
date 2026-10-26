@@ -1,8 +1,8 @@
-# 0.2.0 特性展示
+# 0.2.1 特性展示
 
 [← 特性展示](../README.md)
 
-0.2.0 的主题是**子代理的可靠交付**:`epi:task` 从"发出去就忘"变成"发出去有回执"。设计与实现见 [subagents-design.md](../../subagents-design.md) §11。
+0.2.1 的主题是**子代理的可靠交付**:`epi:task` 从"发出去就忘"变成"发出去有回执"。设计与实现见 [subagents-design.md](../../subagents-design.md) §11。
 
 本版本主要界面变化:
 
@@ -17,4 +17,4 @@
 | (待补) `turn.mp4` / `turn.gif` | 一轮对话:后台子代理落定 → 底栏 `✓ 1 done` → 通知送达 |
 | (待补) `notify.png` | `epi:task-notify` 渲染效果 |
 
-> 录屏由 `node scripts/docs/capture-showcase.mjs 0.2.0` 生成;场景脚本 `scripts/docs/showcase/0.2.0.mjs` 待补。
+> 录屏由 `node scripts/docs/capture-showcase.mjs 0.2.1` 生成;场景脚本 `scripts/docs/showcase/0.2.1.mjs` 待补。
