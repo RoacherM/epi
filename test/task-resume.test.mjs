@@ -190,9 +190,11 @@ test("a steer that arrives after the worker's last turn is reported on the answe
   assert.match(steered.content[0].text, /Steered job/);
 
   const settled = await waitFor(async () => {
-    const status = await tools.get("task_status").execute(
-      "c4", { jobId: started.details.id }, undefined, undefined, context);
-    return status.details.status === "completed" ? status : undefined;
+    // Poll the list form: a single task_status({ jobId }) on a settled job collects its notice
+    // (§11.2 #5), which would suppress the push wake this test exists to observe.
+    const list = await tools.get("task_status").execute("c4", {}, undefined, undefined, context);
+    const job = list.details.jobs.find((entry) => entry.id === started.details.id);
+    return job?.status === "completed" ? { details: job } : undefined;
   }, "the first run to settle");
   // One line, verbatim text quoted, and the way out spelled out.
   assert.equal(
@@ -356,9 +358,10 @@ test("a background job collected by task_wait is not pushed again", async (t) =>
   assert.equal(messages.length, 0, "the result was already handed to the model");
 });
 
-// N6 review P2-1: Esc or /compact turns a foreground task into a background one. Nobody waits for it
-// any more, so it must wake the parent when it settles, like a job started with background: true.
-test("a foreground task interrupted by the parent wakes the parent when it settles", async (t) => {
+// N6 review P2-1 + §11.2 #1: Esc or /compact turns a foreground task into a background one. Nobody
+// waits for it any more, so it must still reach the parent -- but a user's own Esc means it must
+// NOT start a turn of its own: the notice rides the next user prompt via before_agent_start.
+test("a foreground task interrupted by Esc rides the next user prompt, not a wake", async (t) => {
   const root = createFixture(t);
   const { tools, context, messages } = await createHarness(t, root);
   const controller = new AbortController();
@@ -368,7 +371,113 @@ test("a foreground task interrupted by the parent wakes the parent when it settl
   controller.abort();
   const receipt = await pending;
   assert.match(receipt.content[0].text, /keeps running in the background/);
+
+  // The job settles; no sendMessage may fire (autoWake: false). Poll the list form: a single
+  // task_status({ jobId }) on a settled job collects its notice (§11.2 #5), which this must not do.
+  await waitFor(async () => {
+    const list = await tools.get("task_status").execute("c2", {}, undefined, undefined, context);
+    return list.details.jobs[0]?.status === "completed";
+  }, "the interrupted job to settle");
+  await delay(400);
+  assert.equal(messages.length, 0, "an Esc'd job never starts a turn of its own");
+});
+
+// The companion case: an abort that is NOT the user's Esc (a /compact aborts the running tool) keeps
+// autoWake -- the interrupted job still pushes its own wake when it settles.
+test("a foreground task interrupted during compaction still pushes its wake", async (t) => {
+  const root = createFixture(t);
+  const handlers = new Map();
+  const messages = [];
+  const tools = new Map();
+  await createTaskInlineExtension({
+    epiHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: undefined,
+    projectTrusted: false,
+    workerPath: fakeWorker,
+    killGraceMs: 100,
+  }).factory({
+    events: { emit() {}, on: () => () => {} },
+    on(event, handler) {
+      handlers.set(event, handler);
+    },
+    appendEntry() {},
+    registerTool(definition) {
+      tools.set(definition.name, definition);
+    },
+    sendMessage(message, options) {
+      messages.push({ message, options });
+    },
+  });
+  t.after(async () => {
+    await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, {});
+  });
+  const context = { cwd: root, model: undefined, sessionManager: { getBranch: () => [] } };
+
+  // /compact begins: canWake() refuses until session_compact, and the abort it causes keeps
+  // autoWake -- the notice still pushes once the compaction ends.
+  await handlers.get("session_before_compact")?.({ type: "session_before_compact", reason: "manual" }, context);
+  const controller = new AbortController();
+  const pending = tools.get("task").execute(
+    "c1", { task: "slow-usage" }, controller.signal, undefined, context);
+  await delay(100);
+  controller.abort();
+  const receipt = await pending;
+  assert.match(receipt.content[0].text, /keeps running in the background/);
+  await handlers.get("session_compact")?.({ type: "session_compact" }, context);
+
   await waitFor(() => messages.length === 1, "the push wake after the interrupted job settles");
   assert.equal(messages[0].message.customType, "epi:task-notify");
   assert.match(messages[0].message.content, new RegExp(`Job ${receipt.details.id.slice(0, 8)} completed`));
+});
+
+// §11.2 #4: whatever state the mailbox is in, the next user prompt on the origin session carries
+// the notice itself -- the one path Esc/Alt+Up cannot clear.
+test("an unsent notice attaches to the next user prompt via before_agent_start", async (t) => {
+  const root = createFixture(t);
+  const handlers = new Map();
+  const messages = [];
+  const tools = new Map();
+  await createTaskInlineExtension({
+    epiHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: undefined,
+    projectTrusted: false,
+    workerPath: fakeWorker,
+    killGraceMs: 100,
+  }).factory({
+    events: { emit() {}, on: () => () => {} },
+    on(event, handler) {
+      handlers.set(event, handler);
+    },
+    appendEntry() {},
+    registerTool(definition) {
+      tools.set(definition.name, definition);
+    },
+    sendMessage(message, options) {
+      messages.push({ message, options });
+    },
+  });
+  t.after(async () => {
+    await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, {});
+  });
+  const context = { cwd: root, model: undefined, sessionManager: { getBranch: () => [] } };
+
+  const controller = new AbortController();
+  const pending = tools.get("task").execute(
+    "c1", { task: "slow-usage" }, controller.signal, undefined, context);
+  await delay(100);
+  controller.abort();
+  const receipt = await pending;
+  await waitFor(async () => {
+    const list = await tools.get("task_status").execute("c2", {}, undefined, undefined, context);
+    return list.details.jobs[0]?.status === "completed";
+  }, "the interrupted job to settle");
+  await delay(400);
+  assert.equal(messages.length, 0, "autoWake is off; the notice waits for a prompt");
+
+  const attached = await handlers.get("before_agent_start")?.(
+    { type: "before_agent_start", messageType: "user", prompt: "next" }, context);
+  assert.equal(attached?.message?.customType, "epi:task-notify");
+  assert.match(attached?.message?.content, new RegExp(receipt.details.id.slice(0, 8)));
 });

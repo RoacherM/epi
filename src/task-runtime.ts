@@ -317,6 +317,8 @@ export interface TaskJobSnapshot {
   /** Why a partial job stopped: the `maxTurns` budget, or a context window compaction could not
    * free enough of. Absent for a finished job. */
   stoppedBy?: "maxTurns" | "context";
+  /** Which run this snapshot describes; a resumed job's delivery belongs to its latest run. */
+  run?: number;
   stdoutArtifact?: string;
   stderrArtifact?: string;
   artifactError?: string;
@@ -343,6 +345,10 @@ export interface TaskRuntimeOptions {
   /** `false` in the hooks runtime's own task runtime: a hook's agent handler may not trigger hooks
    * or spawn further subagents (design §9, defect 4). */
   allowHooks?: boolean;
+  /** Called after a job's visible state changes (queued, running, progress, settled). Only the id
+   * is passed: the caller snapshots what it needs, so a progress tick costs no deep copy here.
+   * Used by the task extension's status bar and by a foreground wait's `onUpdate` refresh. */
+  onChange?: (jobId: string) => void;
 }
 
 /** One `task` call's settings. Everything but `task` and `cwd` is optional; an `agent` preset
@@ -709,6 +715,7 @@ export class TaskRuntime {
     };
     this.jobs.set(job.id, job);
     this.queue.push(job.id);
+    this.notifyChange(job.id);
     queueMicrotask(() => this.pump());
     return this.snapshot(job);
   }
@@ -735,6 +742,7 @@ export class TaskRuntime {
     const shortId = job.id.slice(0, 8);
     if (job.status === "queued") {
       job.task = message;
+      this.notifyChange(job.id);
       return this.snapshot(job);
     }
     if (job.status !== "running") {
@@ -782,6 +790,7 @@ export class TaskRuntime {
     job.completion = completion;
     job.resolveCompletion = resolveCompletion;
     this.queue.push(job.id);
+    this.notifyChange(job.id);
     queueMicrotask(() => this.pump());
     return this.snapshot(job);
   }
@@ -844,6 +853,7 @@ export class TaskRuntime {
       job.status = "cancelled";
       job.finishedAt = Date.now();
       this.finish(job);
+      this.notifyChange(job.id);
       return this.snapshot(job);
     }
 
@@ -858,6 +868,15 @@ export class TaskRuntime {
       .filter((job) => !job.settled)
       .map((job) => this.cancel(job.id));
     await Promise.all(active);
+  }
+
+  /** A state change the UI cares about; a throwing listener must not kill a worker. */
+  private notifyChange(jobId: string): void {
+    try {
+      this.options.onChange?.(jobId);
+    } catch {
+      // A UI listener's bug is not the job's failure.
+    }
   }
 
   /** The job a `jobId` names: the 8-character id `task_status` prints works everywhere a jobId does. */
@@ -886,6 +905,7 @@ export class TaskRuntime {
   private async run(job: InternalTaskJob): Promise<void> {
     job.status = "running";
     job.startedAt = Date.now();
+    this.notifyChange(job.id);
     // Per-run artifact names: a resumed job reuses its id, so `wx` would throw EEXIST (review P0-1).
     job.run += 1;
     const stdout = new BoundedOutput(
@@ -1216,6 +1236,7 @@ export class TaskRuntime {
       const compacted = event.ok === true && before.length > 0 && after.length > 0;
       this.pushRecentEvent(job, compacted ? `⟲ compacted ${before}→${after}` : "⟲ compaction failed");
     }
+    this.notifyChange(job.id);
   }
 
   private pushRecentEvent(job: InternalTaskJob, entry: string): void {
@@ -1255,6 +1276,7 @@ export class TaskRuntime {
     if (!job.settled) {
       job.settled = true;
       job.resolveCompletion();
+      this.notifyChange(job.id);
     }
   }
 
@@ -1283,6 +1305,7 @@ export class TaskRuntime {
       recentEvents: [...job.recentEvents],
       ...(job.compactions > 0 ? { compactions: job.compactions } : {}),
       ...(job.stoppedBy === undefined ? {} : { stoppedBy: job.stoppedBy }),
+      run: job.run,
       ...(job.stdoutArtifact === undefined ? {} : { stdoutArtifact: job.stdoutArtifact }),
       ...(job.stderrArtifact === undefined ? {} : { stderrArtifact: job.stderrArtifact }),
     };

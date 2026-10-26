@@ -36,6 +36,14 @@ Epi 是基于 Pi SDK 的可定制终端编程助手。自有 grok 风格 TUI，�
 
 ## 最近更新
 
+**0.2.0：子代理的可靠交付**
+
+[→ 特性展示](docs/showcase/0.2.0/README.md)
+
+- **进程内可靠信箱**：后台子代理落定的结果先进 `unsent` 账，`canWake()`（同一会话、非压缩中）满足才发 `epi:task-notify` 标为 `sent`，收到 `message_end` 回执才销账；被 Esc/`Alt+Up` 清掉、`/compact` 期间到达或切走会话的通知不会丢，下一次用户提问由 `before_agent_start` 捎带送达。
+- **底栏 `epi-task` 微提示**：右下角常驻 `◐ 2 tasks` / `◐ 2+1 tasks` / `✓ 1 done` / `✗ 1 failed`，纯事件驱动、零定时器，`/new`、`/reload` 之后自动重刷。
+- **实时任务行**：`task`/`task_status`/`task_wait`/`task_cancel` 四个工具都有单行 `renderCall`；前台 `task`/`task_wait` 等待期间每 250ms 同行刷新 `turn N · <tool>: <arg>`，成功折叠占 0 行，失败一行 `✗`；`epi:task-notify` 渲染为每任务一行。
+
 **0.1.25：内置子代理**
 
 ![一轮对话：两个 reader 子代理并发](docs/showcase/0.1.25/turn.gif)

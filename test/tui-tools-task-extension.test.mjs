@@ -1,7 +1,8 @@
 // epi:task's tools used to fall back to Epi's generic tool-block renderer, which just prints the
 // raw JSON from jobResult()/todo's result text (src/tui/tools/block.ts fallbackResult). This
 // exercises the grok-style renderResult each tool now registers, the same way
-// tui-tools-mutating.test.mjs exercises Pi's own bash/edit/write tools.
+// tui-tools-mutating.test.mjs exercises Pi's own bash/edit/write tools. §11.4: a collapsed success
+// takes no row of its own -- the summary lives on the call line's tail (context.state.callSummary).
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,6 +38,11 @@ function loadTools(t) {
   };
   extension.factory(fakePi);
   return tools;
+}
+
+/** The render context a collapsed result sees: `state` is where setCallSummary writes. */
+function renderCtx(isPartial = false) {
+  return { state: {}, isPartial, expanded: false };
 }
 
 test("todo: real execute() results render as one line per item with a status glyph, not raw JSON", async (t) => {
@@ -75,7 +81,7 @@ test("todo: an empty checklist renders as a short message, not an empty JSON arr
   assert.match(rendered[0], /No items/);
 });
 
-test("task/task_status/task_wait/task_cancel: a completed job renders a status summary line, not the raw JSON snapshot", (t) => {
+test("task/task_status/task_wait/task_cancel: a completed job puts its summary on the call line, not a row", (t) => {
   const tools = loadTools(t);
   const job = {
     id: "job-1",
@@ -86,6 +92,7 @@ test("task/task_status/task_wait/task_cancel: a completed job renders a status s
     createdAt: 0,
     startedAt: 0,
     finishedAt: 1,
+    turns: 3,
     result: "All good.\nNo issues found.",
   };
   const result = { content: [{ type: "text", text: job.result }], details: job };
@@ -93,32 +100,36 @@ test("task/task_status/task_wait/task_cancel: a completed job renders a status s
   for (const name of ["task", "task_status", "task_wait", "task_cancel"]) {
     const tool = tools.get(name);
     assert.equal(typeof tool.renderResult, "function", `${name} must register a renderResult`);
+    assert.equal(typeof tool.renderCall, "function", `${name} must register a renderCall`);
 
-    const collapsed = tool.renderResult(result, { expanded: false, isPartial: false }, theme, {}).render(80);
-    assert.equal(collapsed.length, 1);
-    assert.match(collapsed[0], /reviewer/);
-    assert.match(collapsed[0], /completed/);
-    assert.match(collapsed[0], /job-1/);
+    // Collapsed: 0 rows; the summary rides the call line's tail.
+    const context = renderCtx();
+    const collapsed = tool.renderResult(result, { expanded: false, isPartial: false }, theme, context).render(80);
+    assert.equal(collapsed.length, 0, `${name}: a success takes no row of its own`);
+    assert.match(context.state.callSummary, /3 turns · 2 lines · job-1/);
 
-    const expanded = tool.renderResult(result, { expanded: true, isPartial: false }, theme, {}).render(80);
-    assert.match(expanded.join("\n"), /All good\./);
-    assert.match(expanded.join("\n"), /No issues found\./);
-    assert.doesNotMatch(expanded.join("\n"), /"status":/, "must not fall back to the raw JSON snapshot");
+    // Expanded: the summary line plus the answer, never the raw snapshot.
+    const expanded = tool.renderResult(result, { expanded: true, isPartial: false }, theme, renderCtx()).render(80);
+    const text = expanded.join("\n");
+    assert.match(text, /reviewer/);
+    assert.match(text, /completed/);
+    assert.match(text, /All good\./);
+    assert.match(text, /No issues found\./);
+    assert.doesNotMatch(text, /"status":/, "must not fall back to the raw JSON snapshot");
   }
 });
 
 test("task tools: a bad jobId (errorResult's {error} shape) renders the error message", (t) => {
   const tools = loadTools(t);
   const result = { content: [{ type: "text", text: "unknown job x" }], details: { error: "unknown job x" } };
-  const collapsed = tools.get("task_status").renderResult(result, { expanded: false, isPartial: false }, theme, {}).render(80);
+  const collapsed = tools.get("task_status").renderResult(result, { expanded: false, isPartial: false }, theme, renderCtx()).render(80);
   assert.equal(collapsed.length, 1);
   assert.match(collapsed[0], /unknown job x/);
 });
 
 test("task tools: a failed job also carries `error` on the snapshot itself, and must still render as a job (not the bare-error shape)", (t) => {
-  // snapshot() (task-runtime.ts) puts `error` on a completed TaskJobSnapshot too, so a naive
-  // `"error" in details` check mistakes a failed job for errorResult()'s bare `{ error }` shape
-  // and drops the agent/status/id summary line entirely.
+  // snapshot() (task-runtime.ts) puts `error` on a failed TaskJobSnapshot too, so a naive
+  // `"error" in details` check mistakes it for errorResult()'s bare `{ error }` shape.
   const tools = loadTools(t);
   const job = {
     id: "job-1",
@@ -133,14 +144,16 @@ test("task tools: a failed job also carries `error` on the snapshot itself, and 
 
   for (const name of ["task", "task_status", "task_wait", "task_cancel"]) {
     const tool = tools.get(name);
-    const collapsed = tool.renderResult(result, { expanded: false, isPartial: false }, theme, {}).render(80);
-    assert.equal(collapsed.length, 1);
-    assert.match(collapsed[0], /reviewer/, `${name}: collapsed line lost the agent name`);
-    assert.match(collapsed[0], /failed/, `${name}: collapsed line lost the status`);
-    assert.match(collapsed[0], /job-1/, `${name}: collapsed line lost the job id`);
+    const context = renderCtx();
+    const collapsed = tool.renderResult(result, { expanded: false, isPartial: false }, theme, context).render(80);
+    assert.equal(collapsed.length, 1, `${name}: a failure takes one row`);
+    assert.match(collapsed[0], /worker exited with code 1/, `${name}: collapsed lost the error`);
+    assert.match(context.state.callSummary, /failed · job-1/);
 
-    const expanded = tool.renderResult(result, { expanded: true, isPartial: false }, theme, {}).render(80);
-    assert.match(expanded.join("\n"), /worker exited with code 1/, `${name}: expanded view lost the error text`);
+    const expanded = tool.renderResult(result, { expanded: true, isPartial: false }, theme, renderCtx()).render(80);
+    const text = expanded.join("\n");
+    assert.match(text, /reviewer/, `${name}: expanded lost the agent name`);
+    assert.match(text, /worker exited with code 1/, `${name}: expanded lost the error text`);
   }
 });
 
@@ -155,7 +168,7 @@ test("a long todo item text is truncated to the viewport width, not left to over
   }
 });
 
-test("task tools: a running job's collapsed line shows its turn and current activity", (t) => {
+test("task tools: a running job's partial update lands on the call line, not a row", (t) => {
   const tools = loadTools(t);
   const job = {
     id: "job-1",
@@ -170,16 +183,41 @@ test("task tools: a running job's collapsed line shows its turn and current acti
   const result = { content: [{ type: "text", text: "running · turn 3 · 7 steps · now: bash: npm test" }], details: job };
 
   for (const name of ["task", "task_status", "task_wait", "task_cancel"]) {
-    const collapsed = tools.get(name).renderResult(result, { expanded: false, isPartial: false }, theme, {}).render(80);
-    assert.equal(collapsed.length, 1);
-    assert.match(collapsed[0], /reviewer/);
-    assert.match(collapsed[0], /running/);
-    assert.match(collapsed[0], /turn 3/, `${name}: the collapsed line lost the turn counter`);
-    assert.match(collapsed[0], /now: bash: npm test/, `${name}: the collapsed line lost the current activity`);
+    const context = renderCtx(true);
+    const rendered = tools.get(name).renderResult(result, { expanded: false, isPartial: true }, theme, context).render(80);
+    assert.equal(rendered.length, 0, `${name}: a partial update takes no row`);
+    assert.match(context.state.callSummary, /turn 3/, `${name}: the tail lost the turn counter`);
+    assert.match(context.state.callSummary, /bash: npm test/, `${name}: the tail lost the current activity`);
   }
 });
 
-test("task_status with no jobId renders a count collapsed and one line per job expanded", (t) => {
+test("task tools: renderCall draws one CallLine with the verb and the task text", (t) => {
+  const tools = loadTools(t);
+  const context = { state: {}, isPartial: true, executionStarted: true, expanded: false };
+
+  const started = tools.get("task").renderCall(
+    { task: "refactor the parser", agent: "worker" }, theme, context).render(80);
+  assert.equal(started.length, 1);
+  assert.match(started[0], /task/);
+  assert.match(started[0], /worker/);
+  assert.match(started[0], /"refactor the parser"/);
+
+  const bg = tools.get("task").renderCall(
+    { task: "long build", background: true }, theme, context).render(80);
+  assert.match(bg[0], /bg/);
+
+  const steered = tools.get("task").renderCall(
+    { jobId: "abcdef123456", task: "hurry up" }, theme, context).render(80);
+  assert.match(steered[0], /steer/);
+  assert.match(steered[0], /abcdef12/, "the call line shows the 8-char id");
+
+  assert.match(tools.get("task_wait").renderCall({ jobId: "abcdef123456" }, theme, context).render(80)[0], /wait.*abcdef12/);
+  assert.match(tools.get("task_status").renderCall({}, theme, context).render(80)[0], /status.*all/);
+  assert.match(tools.get("task_status").renderCall({ jobId: "abcdef123456" }, theme, context).render(80)[0], /status.*abcdef12/);
+  assert.match(tools.get("task_cancel").renderCall({ jobId: "abcdef123456" }, theme, context).render(80)[0], /cancel.*abcdef12/);
+});
+
+test("task_status with no jobId puts a count on the call line and one row per job expanded", (t) => {
   const tools = loadTools(t);
   const jobs = [
     { id: "job-1", status: "running", cwd: "/work", createdAt: 0, turns: 1, steps: 2, task: "one" },
@@ -188,11 +226,12 @@ test("task_status with no jobId renders a count collapsed and one line per job e
   ];
   const result = { content: [{ type: "text", text: "listed" }], details: { jobs } };
 
-  const collapsed = tools.get("task_status").renderResult(result, { expanded: false, isPartial: false }, theme, {}).render(80);
-  assert.equal(collapsed.length, 1);
-  assert.match(collapsed[0], /2 running, 1 completed/);
+  const context = renderCtx();
+  const collapsed = tools.get("task_status").renderResult(result, { expanded: false, isPartial: false }, theme, context).render(80);
+  assert.equal(collapsed.length, 0);
+  assert.match(context.state.callSummary, /2 running, 1 completed/);
 
-  const expanded = tools.get("task_status").renderResult(result, { expanded: true, isPartial: false }, theme, {}).render(80);
+  const expanded = tools.get("task_status").renderResult(result, { expanded: true, isPartial: false }, theme, renderCtx()).render(80);
   assert.equal(expanded.length, 3);
   assert.match(expanded.join("\n"), /job-3/);
 });

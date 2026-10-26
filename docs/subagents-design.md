@@ -1,6 +1,6 @@
 # Epi 内置 Subagents 设计（`epi:task` 2.0）
 
-状态：**包 1、包 2 已实现**（2026-10-25 更新）。第 10 节是实现状态与范围修订，**以第 10 节为准**；第 1–9 节保留原始设计，其中标为"不做"或"未实现"的承诺不对用户和模型生效。
+状态：**包 1、包 2 已实现，包 3 待实现**（2026-10-26 更新）。第 10–11 节是实现状态、范围修订与包 3 详细设计，**以第 10–11 节为准**；第 1–9 节保留原始设计，其中标为"不做"或"未实现"的承诺不对用户和模型生效。
 
 本文定义如何将 Epi 现有的内置扩展 `epi:task`（当前约 840 行）升级为完整的、简约风格的内置 Subagents 系统，从而直接替代外部 98,113 行的 `npm:pi-subagents`。
 
@@ -438,3 +438,105 @@ timeoutSeconds: 600
 
 - 委派的收益是父上下文（峰值降 63–82%）和墙钟（并发后最快），**省钱只在父模型比子模型贵时成立**。
 - **便宜父模型不会主动委派**：flash 在测评自由组、5 个开发任务中 4 个（含规则里写明"必须委派"的 2 个）都是 0 次委派；只有 1 个任务派了 2 次。光靠工具描述和规则不够，需要机制（例如父上下文超阈值时提示），待设计。
+
+---
+
+## 11. 包 3 设计：可靠投递信箱、底栏微提示、实时任务行（2026-10-26）
+
+背景：对照 Claude Code MCP Tasks 客户端交互与 Peri Code `AsyncResultMailbox`（`docs/design/session-async-tasks.md` §3），并由主控与 `claude-opus-5-5:high` 联合走查 `src/extensions/task.ts`、`src/task-runtime.ts`、`src/tui/app.ts` 与 `@earendil-works/pi-coding-agent` 1.4.0 的 `dist/core/agent-session.js`，确认包 2 存在后台结果通知丢失漏洞与 TUI 可见性缺口，收敛为以下三项改进。
+
+### 11.1 走查发现的真问题（核对源码）
+
+| # | 问题 | 源码位置与触发条件 |
+|---|---|---|
+| 1 | **`flushNotify` 在确认落盘前就清空 `pendingNotify`** | `src/extensions/task.ts:463-475` 先 `pendingNotify.splice(0)` 再调 `pi.sendMessage`。而 `agent-session.js:2765-2772` 中 `sendMessage` 内部是 `this.sendCustomMessage(message, options).catch(→ emitError)`（fire-and-forget），后续队列被清空或 `_startRun` 抛错都不会回到 `task.ts` 的 `try/catch`。 |
+| 2 | **流式运行中按 `Esc` / `Alt+Up` / `Ctrl+C` 永久擦除后台任务通知** | 主会话流式运行中（`this.isStreaming === true`），`sendCustomMessage`（`agent-session.js:1857-1859`）把 `epi:task-notify` 放进底层 `this.agent.followUp(appMessage)`，而**不进** `this._followUpMessages`（后者只存用户文本，见 `1811-1818`）。当用户按 `Esc`（`src/tui/keys.ts:49-51`）、`Alt+Up` 取回排队消息（`keys.ts:156`）、`Ctrl+C`（`keys.ts:89-93`）或扩展调 `ctx.abort()`（`src/tui/app.ts:810-814`）时，`restoreQueuedMessagesToEditor()` → `clearAllQueues()`（`app.ts:926-965`）调用 `session.clearQueue()`（`agent-session.js:1944-1951`）执行 `this.agent.clearAllQueues()`，底层队列里的 `epi:task-notify` 被彻底抹掉，而编辑器只恢复用户文本数组。结果既不进会话历史，也不再重发。 |
+| 3 | **手动 `/compact` 或 `/tree` 分支摘要期间到达的通知并发启动 `_startRun`** | `compact()`（`agent-session.js:2230-2232`）先 `await this.abort()`，此时 `this.isStreaming` 为 `false`、`_compactionAbortController` 非空。`prompt()` 在 `1647` 行显式拦截了 `_compactionAbortController !== undefined`，但 `sendCustomMessage`（`1844-1872`）没有该检查，会直接与正在进行的手动压缩并发调用 `this._startRun()`。 |
+| 4 | **跨会话串台唤醒** | `TaskRuntime` 是进程级共享的（`src/extensions/task.ts:379`）。会话 A 启动的后台任务在用户切到 `/new`（会话 B）后完成，`flushNotify` 会读取 `current.pi` 直接向会话 B 发送 `Job <id> completed` 并触发新轮次，而会话 B 的模型根本不知道这个任务。 |
+| 5 | **底栏状态与前台实时进度缺失** | `src/extensions/task.ts` 未调用 `ctx.ui.setStatus("epi-task", ...)`，也未注册 `renderCall` 或在等待期间调用 `onUpdate`；前台 `task` 落入 `src/tui/tools/block.ts:111` 的 `fallbackCall`（只显示粗体 `◆ task`，无任务描述、无耗时条、无步骤进度），折叠完成结果还打出了 36 位完整 UUID（`task.ts:293`）。 |
+
+### 11.2 改进一：进程内轻量结果信箱（`Mailbox`，替代 `pendingNotify` + `delivered`）
+
+不引入 Peri Code 的 SQLite 持久化表（Epi 退出进程时 `runtime.shutdown()` 会终止所有子代理，无需跨进程冷恢复），在 `src/extensions/task.ts` 闭包内用一个 `Map<string, MailboxEntry>` 闭环：
+
+```text
+          settle && (background || wakeOnSettle) && !collected
+                                 │
+                                 ▼
+     ┌──────────── unsent ◄──────────────────────────────┐
+     │                │ flush() when canWake()           │ agent_settled (no receipt),
+     │                ▼                                  │ session_start,
+     │              sent ────────────────────────────────┘ originSessionId !== current
+     │                │ message_end(epi:task-notify, details.jobIds ∋ id)
+     │ before_agent_start (any run on originSession): attach as { message }
+     │                ▼
+     └──────────► delivered (mailbox.delete)
+  task_wait / task_cancel / task_status(jobId) on settled job ──► mailbox.delete
+  resume(jobId)                                               ──► mailbox.delete
+```
+
+```ts
+interface MailboxEntry {
+  job: TaskJobSnapshot;
+  run: number;
+  originSessionId: string | undefined;
+  state: "unsent" | "sent";
+  /** 用户主动按 Esc 中断后置为 false：不再自动开新轮次，留给底栏提示与下次用户提问捎带。 */
+  autoWake: boolean;
+}
+```
+
+1. **创建条目**：后台任务（或前台等待被中断转入 `wakeOnSettle` 的任务）落定时，若尚未被同步收回，写入 `mailbox.set(job.id, { job, run, originSessionId, state: "unsent", autoWake })`。其中前台等待若因非压缩期间的用户 `Esc` 中断，初始 `autoWake` 设为 `false`（用户刚按了停止，不应几分钟后自己开一轮）；若因压缩中断则 `autoWake: true`。
+2. **准入条件 `canWake()`**：同时满足 ① `current.pi` 与 `current.ctx` 存在；② `current.ctx.sessionManager.getSessionId() === entry.originSessionId`（只唤醒发起该任务的原会话）；③ `!compacting`（在 `session_before_compact` / `session_before_tree` 置 `true`，在 `session_compact` / `session_compact_failed` / `session_tree` 置 `false` 并重调 `flush()`）。
+3. **发送与回执确认（Cover after commit）**：
+   - `flush()`（保持 300ms 微批合并）挑出当前会话 `state === "unsent" && autoWake` 的条目，调用 `pi.sendMessage({ customType: "epi:task-notify", content, display: true, details: { jobIds } }, { deliverAs: "followUp", triggerTurn: true })`，将状态标为 `"sent"`（**不删除条目**）。
+   - 监听 `message_end`：当收到 `message.role === "custom" && message.customType === "epi:task-notify"` 时，按 `message.details.jobIds` 精确删除已落盘进 `sessionManager` 的 `MailboxEntry`（此时才算真正送达）。
+   - 监听 `agent_settled`：本轮结束时，所有仍处于 `"sent"`（未收到 `message_end` 回执，说明被 `Esc` / `Alt+Up` / `clearQueue` 擦除或 `_prepareRun` 失败）的条目退回 `"unsent"`；若 `event.aborted === true`，同时将这些条目的 `autoWake` 置为 `false`。
+   - 监听 `session_start`：所有 `"sent"` 条目退回 `"unsent"`；若切回了某条目的 `originSessionId`，触发 `flush()`。
+4. **下一轮启动捎带（`before_agent_start` 兜底）**：
+   - 监听 `before_agent_start`：当用户在原会话发起新一轮提问（且触发源不是 `epi:task-notify` 自身）时，若存在属于该会话的 `"unsent"` 条目（含此前因 `Esc` 将 `autoWake` 置为 `false` 的条目），直接通过 `before_agent_start` 返回 `{ message: { customType: "epi:task-notify", content, display: true, details: { jobIds } } }` 挂入本轮起始消息并标为 `"sent"`。该路径发生在 `_prepareRun` 内部（`agent-session.js:1514-1523`），不经过 `followUp` 队列，不受 `clearQueue()` 影响。
+5. **主动拉取即销账**：模型调用 `task_wait({ jobId })`、`task_cancel({ jobId })`、或对已落定任务调用单查 `task_status({ jobId })`（返回完整 `jobResult`）时，直接 `mailbox.delete(job.id)`，不再重复推送。`task_status({})` 列表摘要不销账。
+
+### 11.3 改进二：底栏实时状态微提示（`ctx.ui.setStatus("epi-task", ...)`）
+
+1. **`TaskRuntime` 状态变更回调**：
+   在 `TaskRuntimeOptions`（`src/task-runtime.ts:325`）新增可选 `onChange?: (jobId: string) => void`，由私有 `notifyChange(jobId)`（内包 `try/catch`）在 `start`、`resume`、`steer`（仅 queued 替换文本分支）、`run` 启动、`applyProgress`、`finish` 时触发。只传 `jobId`，避免每次工具进度都深拷贝 `recentEvents`。
+2. **纯事件驱动、零定时器、80 列预算**：
+   - `src/tui/chrome.ts:28-33` 的 `shortcutsBar` 在 80 列终端下左侧快捷键占约 68 列，右侧留给 `statuses`（含 `epi-update`）仅约 12–14 列。因此底栏**不放 jobId、不放工具参数、不起动画定时器**（严守 `docs/dev-workflow.md` §9 的静默帧 `fullRedraws` 增量为 0 不变量），只显示静态符号与计数：
+
+   | 状态 | 底栏文本（`epi-task`） | 颜色 |
+   |---|---|---|
+   | 仅有运行中任务 | `◐ 2 tasks`（单数为 `◐ 1 task`） | `accent` |
+   | 运行中 + 排队中 | `◐ 2+1 tasks` | `accent` |
+   | 仅有未收取的已完成/失败任务（在 `mailbox` 中） | `✓ 1 done`（若含失败则为 `✗ 1 failed`） | `success` / `error` |
+   | 同时有运行中与未收取任务 | `◐ 2 · ✓ 1` | 组合 |
+   | 无活跃任务且 `mailbox` 为空 | `undefined`（清除槽位） | — |
+
+3. **跨会话保留与去重**：
+   - 记录上一次设置的文本 `lastStatusText`，仅在文本变化时调用 `ctx.ui.setStatus("epi-task", text)`，将高频 `applyProgress` 降为 O(1) 空操作。
+   - 在 `pi.on("session_start")` 中重置 `lastStatusText` 并立即调一次 `refreshStatus()`，补回被 `clearExtensionUiState()`（`src/tui/app.ts:834`）清空的底栏状态。
+
+### 11.4 改进三：Grok 单列 `renderCall`、节流 `onUpdate` 与通知渲染器
+
+1. **四个工具全部补齐 `renderCall`（基于 `CallLine`，`src/tui/tools/common.ts:166`）**：
+   - `task`：`task [<agent>] "<task 前 50 字>"`（后台任务带 `bg` 尾注；传 `jobId` 时按状态显示 `steer <id8> "…"` 或 `resume <id8> "…"`）。
+   - `task_wait`：`wait <id8>`。
+   - `task_status`：`status <id8>` 或 `status all`。
+   - `task_cancel`：`cancel <id8>`。
+2. **前台等待期间的节流 `onUpdate`（实时进度上屏）**：
+   - 在前台 `runJob` 与 `task_wait` 等待期间，订阅该 `jobId` 的 `onChange` 事件。
+   - 当 `turn N · now: <tool>: <target>` 发生变化时，按 **250ms 尾随节流**（`unref()` 定时器）调用 `onUpdate({ content: [...], details: snapshot })`；等待结束或 `signal` 中止时立即退订并清理定时器。
+3. **`renderResult` 对齐「成功不占行」**：
+   - 运行中（`context.isPartial`）：调用 `setCallSummary(context, "turn 2 · bash: npm test")` 并返回空 `LinesComponent`（0 行），让实时步骤与 `CallLine` 右侧的对数耗时条同行刷新，不引起工具块高度跳动。
+   - 终态折叠（`!options.expanded`）：成功时 `setCallSummary(context, "3 turns · 28 lines")` 且结果占 0 行；后台回执时 `setCallSummary(context, "bg · 1a2b3c4d")` 占 0 行；失败时返回单行 `failureRow(theme, error)`。
+   - 终态展开（`options.expanded`）：显示最多 10 行正文，超出部分提供可点击的 `… +N lines`（打开 Buffer Inspector）。所有展示统一使用 8 位短 ID（`shortJobId`），不再打印 36 位 UUID。
+4. **`epi:task-notify` 消息渲染器**：
+   调用 `pi.registerMessageRenderer("epi:task-notify", ...)`，将后台唤醒消息渲染为紧凑单行（每任务一行 `✓ <agent|task> <id8> · <summary>`），替代默认的裸 custom 文本块。
+
+### 11.5 实施拆分与文件预算（单包 `src/` 远低于 800 行红线）
+
+| 子步骤 | 改动文件 | 预估行数变化 | 核心验证点 |
+|---|---|---|---|
+| **Step 1：可靠信箱 + 底栏状态** | `src/task-runtime.ts`、`src/extensions/task.ts` | +110 / -25 行 | ① 流式运行中落定后按 `Esc` / `Alt+Up`，底栏显示 `✓ 1 done`，下一轮用户提问通过 `before_agent_start` 捎带送达；② 手动 `/compact` 期间落定不并发调 `_startRun`；③ `/new` 切到新会话不乱唤醒，切回原会话或 `session_start` 后底栏仍在；④ 单查 `task_status({ jobId })` 后信箱销账。 |
+| **Step 2：单列 `renderCall` + 实时 `onUpdate`** | `src/extensions/task.ts` | +95 / -40 行 | ① 前台 `task` / `task_wait` 运行中 `CallLine` 尾部每 250ms 更新 `turn N · <tool>`；② 完成后折叠占 0 行、展开可进 Inspector；③ 静默时 `fullRedraws` 增量为 0。 |
+

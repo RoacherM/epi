@@ -135,6 +135,8 @@ export interface TaskJobSnapshot {
     /** Why a partial job stopped: the `maxTurns` budget, or a context window compaction could not
      * free enough of. Absent for a finished job. */
     stoppedBy?: "maxTurns" | "context";
+    /** Which run this snapshot describes; a resumed job's delivery belongs to its latest run. */
+    run?: number;
     stdoutArtifact?: string;
     stderrArtifact?: string;
     artifactError?: string;
@@ -160,6 +162,10 @@ export interface TaskRuntimeOptions {
     /** `false` in the hooks runtime's own task runtime: a hook's agent handler may not trigger hooks
      * or spawn further subagents (design §9, defect 4). */
     allowHooks?: boolean;
+    /** Called after a job's visible state changes (queued, running, progress, settled). Only the id
+     * is passed: the caller snapshots what it needs, so a progress tick costs no deep copy here.
+     * Used by the task extension's status bar and by a foreground wait's `onUpdate` refresh. */
+    onChange?: (jobId: string) => void;
 }
 /** One `task` call's settings. Everything but `task` and `cwd` is optional; an `agent` preset
  * supplies defaults that an explicit field overrides (docs/subagents-design.md §3). */
@@ -243,6 +249,8 @@ export declare class TaskRuntime {
     wait(jobId: string, timeoutMs?: number, signal?: AbortSignal): Promise<TaskJobSnapshot>;
     cancel(jobId: string): Promise<TaskJobSnapshot>;
     shutdown(): Promise<void>;
+    /** A state change the UI cares about; a throwing listener must not kill a worker. */
+    private notifyChange;
     /** The job a `jobId` names: the 8-character id `task_status` prints works everywhere a jobId does. */
     private findJob;
     private pump;

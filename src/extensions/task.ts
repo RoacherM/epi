@@ -9,9 +9,14 @@ import type {
   Theme,
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-// Just the pure text-width helper, not pi-tui's Component classes: this extension has none of the
-// "must be Pi's exact installed copy" concerns src/tui/pi-tui.ts exists for (no instanceof checks).
-import { truncateToWidth } from "@earendil-works/pi-tui";
+// CallLine/LinesComponent are Epi's own transcript components (src/tui/tools/common.ts), not Pi's:
+// the tool block wrapper (src/tui/tools/block.ts) already frames them, so importing them here is
+// safe -- only pi-tui's own Component classes would hit the "must be Pi's exact installed copy"
+// instanceof concern src/tui/pi-tui.ts exists for.
+import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
+
+import { CallLine, LinesComponent, setCallSummary } from "../tui/tools/common.js";
+import type { ToolRenderContext } from "../tui/tools/types.js";
 import { Type, type Static } from "typebox";
 
 import { emitTaskHook } from "../hook-events.js";
@@ -209,6 +214,9 @@ const NOTIFY_COALESCE_MS = 300;
 /** The part of a settled job's answer a push wake carries, one line and bounded. */
 const NOTIFY_SUMMARY_LIMIT = 400;
 
+/** How often a foreground wait's `onUpdate` refresh fires at most (design §11.4). */
+const UPDATE_THROTTLE_MS = 250;
+
 /** The id the model sees and can copy back: the full uuid is 36 characters of noise per mention. */
 function shortJobId(id: string): string {
   return id.slice(0, 8);
@@ -290,44 +298,133 @@ function jobSummaryLine(theme: Theme, job: TaskJobSnapshot): string {
     if (job.turns !== undefined) suffix += ` · turn ${job.turns}`;
     if (job.currentActivity !== undefined) suffix += ` · now: ${job.currentActivity}`;
   }
-  return `${theme.fg("accent", job.agent ?? "task")} ${theme.fg(tone, job.status)} ${theme.fg("muted", job.id)}${suffix}`;
+  return `${theme.fg("accent", job.agent ?? "task")} ${theme.fg(tone, job.status)} ${theme.fg("muted", shortJobId(job.id))}${suffix}`;
 }
+
+/** The red row a failed call gets, matching the built-ins' `✗` convention (tools/common.ts). */
+function failureLine(theme: Theme, text: string): string {
+  return theme.fg("error", `✗ ${singleLine(text, 200)}`);
+}
+
+/** The call-line tail while a job runs: `turn 2 · bash: npm test` (§11.4). */
+function liveSummary(job: TaskJobSnapshot): string {
+  const parts = [`turn ${job.turns ?? 0}`];
+  if (job.currentActivity !== undefined) parts.push(job.currentActivity);
+  else if (job.lastSummary !== undefined && job.lastSummary.length > 0) parts.push(job.lastSummary);
+  return parts.join(" · ");
+}
+
+/** The call-line tail once a job settles: `3 turns · 28 lines`, `failed · 1a2b3c4d`. */
+function settledSummary(theme: Theme, job: TaskJobSnapshot): string {
+  const id = shortJobId(job.id);
+  if (job.status === "completed" || job.status === "partial") {
+    const lines = (job.result ?? "").split("\n").filter((line) => line.trim().length > 0).length;
+    return theme.fg("dim", `${job.turns ?? 0} turns · ${lines} lines · ${id}`);
+  }
+  return theme.fg("dim", `${job.status} · ${id}`);
+}
+
+/** `task [<agent>] "<task first 50 chars>"`, `bg` for background, `steer|resume <id8> "…"` for a
+ * jobId call (§11.4). One CallLine: the block wrapper adds the rail and the marker. */
+function renderTaskCall(
+  args: TaskToolParams,
+  theme: Theme,
+  context: ToolRenderContext,
+): Component {
+  let body: string;
+  let extra = "";
+  if (args.jobId !== undefined) {
+    const verb = args.background === true ? "resume" : "steer";
+    body = `${theme.fg("toolOutput", verb)} ${theme.fg("muted", shortJobId(args.jobId))} ${theme.fg("toolOutput", quoteTask(args.task))}`;
+  } else {
+    const agent = args.agent !== undefined ? `${theme.fg("accent", args.agent)} ` : "";
+    body = `${theme.fg("toolOutput", "task")} ${agent}${theme.fg("toolOutput", quoteTask(args.task))}`;
+    if (args.background === true) extra = theme.fg("dim", "bg");
+  }
+  return new CallLine("◆", theme, body, context, extra);
+}
+
+function quoteTask(text: string): string {
+  const one = singleLine(text, 51);
+  const cut = one.length > 50 ? `${one.slice(0, 50)}…` : one;
+  return `"${cut}"`;
+}
+
+const renderWaitCall = (args: { jobId?: string }, theme: Theme, context: ToolRenderContext): Component =>
+  new CallLine("◆", theme, `${theme.fg("toolOutput", "wait")} ${theme.fg("muted", shortJobId(args.jobId ?? ""))}`, context);
+
+const renderStatusCall = (args: { jobId?: string }, theme: Theme, context: ToolRenderContext): Component =>
+  new CallLine("◆", theme, `${theme.fg("toolOutput", "status")} ${theme.fg("muted", args.jobId === undefined ? "all" : shortJobId(args.jobId))}`, context);
+
+const renderCancelCall = (args: { jobId?: string }, theme: Theme, context: ToolRenderContext): Component =>
+  new CallLine("◆", theme, `${theme.fg("toolOutput", "cancel")} ${theme.fg("muted", shortJobId(args.jobId ?? ""))}`, context);
 
 /**
  * Shared by task/task_status/task_wait/task_cancel: all resolve to a TaskJobSnapshot via
  * jobResult(), or to `{ error }` via errorResult() when the call itself was invalid (bad jobId).
+ * §11.4: while the call runs (`isPartial`) or once it succeeds, the row count is zero and the
+ * call line's tail carries the summary (`setCallSummary`); only a failure or an expanded result
+ * takes rows of its own. Ids print as the 8-character short form.
  */
 function renderTaskResult(
   result: AgentToolResult<unknown>,
   options: ToolRenderResultOptions,
   theme: Theme,
-): ReturnType<typeof toolLines> {
+  context: ToolRenderContext,
+): Component {
   const details = result.details as { error: string } | { jobs: TaskJobSnapshot[] } | TaskJobSnapshot | undefined;
-  if (details === undefined) return toolLines([]);
+  if (details === undefined) {
+    setCallSummary(context, undefined);
+    return new LinesComponent([]);
+  }
   // `task_status` with no jobId: a one-line summary collapsed, one job per line expanded.
   if ("jobs" in details) {
-    if (details.jobs.length === 0) return toolLines([theme.fg("muted", "No task jobs.")]);
-    if (!options.expanded) {
-      const counts = new Map<string, number>();
-      for (const job of details.jobs) counts.set(job.status, (counts.get(job.status) ?? 0) + 1);
-      return toolLines([
-        theme.fg("muted", [...counts].map(([status, count]) => `${count} ${status}`).join(", ")),
-      ]);
+    if (details.jobs.length === 0) {
+      setCallSummary(context, theme.fg("dim", "none"));
+      return new LinesComponent([]);
     }
-    return toolLines(capLines(theme, details.jobs.map((job) => jobSummaryLine(theme, job))));
+    const counts = new Map<string, number>();
+    for (const job of details.jobs) counts.set(job.status, (counts.get(job.status) ?? 0) + 1);
+    setCallSummary(context, theme.fg("dim", [...counts].map(([status, count]) => `${count} ${status}`).join(", ")));
+    if (!options.expanded) return new LinesComponent([]);
+    return new LinesComponent(capLines(theme, details.jobs.map((job) => jobSummaryLine(theme, job))));
   }
   // A failed TaskJobSnapshot also has an `error` field, so discriminate on `status` (only the
   // snapshot has one), not on `error`'s presence -- errorResult()'s `{ error }` never has it.
   if (!("status" in details)) {
-    return toolLines([theme.fg("error", details.error)]);
+    setCallSummary(context, undefined);
+    return new LinesComponent([failureLine(theme, details.error)]);
   }
   const job = details;
-  if (!options.expanded) return toolLines([jobSummaryLine(theme, job)]);
+  if (context.isPartial === true) {
+    setCallSummary(context, liveSummary(job));
+    return new LinesComponent([]);
+  }
+  if (!options.expanded) {
+    setCallSummary(context, settledSummary(theme, job));
+    return job.status === "failed"
+      ? new LinesComponent([failureLine(theme, job.error ?? "Task failed.")])
+      : new LinesComponent([]);
+  }
+  setCallSummary(context, settledSummary(theme, job));
+  const rows = [jobSummaryLine(theme, job)];
   const detail = job.status === "completed" || job.status === "partial"
       ? (job.result ?? "(no output)").split("\n")
     : job.status === "failed" ? [job.error ?? "Task failed."]
     : [];
-  return toolLines([jobSummaryLine(theme, job), ...capLines(theme, detail)]);
+  const lines = capLines(theme, [...rows, ...detail]);
+  const inspectable = detail.length > MAX_DETAIL_LINES
+    ? {
+        rows: [lines.length - 1],
+        target: {
+          title: `task ${shortJobId(job.id)}`,
+          subtitle: job.status,
+          lines: detail,
+          text: detail.join("\n"),
+        },
+      }
+    : undefined;
+  return new LinesComponent(lines, inspectable);
 }
 
 function todoStatusGlyph(status: TodoStatus): string {
@@ -376,6 +473,11 @@ export function createTaskInlineExtension(
   // were lost), and a later quit shut down only the newest runtime. Deliberately not a
   // module-global: one per extension object keeps tests isolated and gives the hooks runtime's own
   // task runtime a separate registry.
+  /** Per-session onChange wiring: TaskRuntime calls the listener Set every factory installs. The
+   * Set lives outside `factory` so the runtime's single `onChange` survives session switches; each
+   * session's factory adds its own listener (its own `refreshStatus`, its own foreground waits). */
+  const changeListeners = new Set<(jobId: string) => void>();
+  // `refreshStatus` is declared later; the onChange fan-out goes through a stable function.
   const runtime = new TaskRuntime({
     workerPath,
     agentDir: options.agentDir,
@@ -397,6 +499,9 @@ export function createTaskInlineExtension(
     ...(options.killGraceMs === undefined
       ? {}
       : { killGraceMs: options.killGraceMs }),
+    onChange: (jobId) => {
+      for (const fn of [...changeListeners]) fn(jobId);
+    },
   });
   const availableAgents = runtime.availableAgents();
   const completionHooks = new Map<string, Promise<TaskJobSnapshot>>();
@@ -444,10 +549,45 @@ export function createTaskInlineExtension(
     }
   };
 
-  /** Jobs `task_wait`/`task_cancel` already handed back: a background settle must not re-push. */
-  const delivered = new Set<string>();
-  const pendingNotify: TaskJobSnapshot[] = [];
+  // ---------------------------------------------------------------------------
+  // The result mailbox (design §11.2): an in-process `unsent -> sent -> delete` ledger replacing
+  // the old `pendingNotify` + `delivered` pair, which dropped a settled job's notice the moment
+  // `sendMessage` returned -- before Pi had queued it, let alone persisted it.
+  // ---------------------------------------------------------------------------
+
+  interface MailboxEntry {
+    /** The settled job this notice reports. */
+    job: TaskJobSnapshot;
+    /** The run the notice is for; a resume's result is new and replaces the old entry. */
+    run: number;
+    /** Only the session that started the job may be woken for it (design §11.1 #4). */
+    originSessionId: string | undefined;
+    state: "unsent" | "sent";
+    /** False after the user Esc'd the notice's turn (or the foreground wait that produced it):
+     * the notice stops starting turns on its own and rides the next user prompt instead. */
+    autoWake: boolean;
+  }
+
+  const mailbox = new Map<string, MailboxEntry>();
   let notifyTimer: NodeJS.Timeout | undefined;
+  /** True while Pi runs a manual `/compact` or `/tree` branch summary: `sendCustomMessage` has no
+   * compaction guard (agent-session.js:1844), so a wake sent then races `_startRun` (§11.1 #3). */
+  let compacting = false;
+
+  const sessionId = (): string | undefined => {
+    try {
+      return current.ctx?.sessionManager.getSessionId();
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** §11.2 #2: a wake may go out only to the session that started the job, outside a compaction. */
+  const canWake = (entry: MailboxEntry): boolean =>
+    current.pi !== undefined &&
+    current.ctx !== undefined &&
+    !compacting &&
+    sessionId() === entry.originSessionId;
 
   /** One line of a push wake: `Job <id8> <status>: <first 400 chars>`, plus the pull hint. */
   const notifyText = (job: TaskJobSnapshot): string => {
@@ -456,29 +596,34 @@ export function createTaskInlineExtension(
     return `Job ${id} ${job.status}: ${summary}\ntask_status({ jobId: "${id}" }) for details`;
   };
 
-  /** The micro-batch wake (design §2.2): everything settled in the window goes out as one
-   * `epi:task-notify` follow-up. Read through the *current* `pi`: after a switch the old is stale. */
+  const notifyPayload = (entries: MailboxEntry[]) => ({
+    customType: "epi:task-notify",
+    content: entries.map((entry) => notifyText(entry.job)).join("\n\n"),
+    display: true,
+    // `message_end`'s receipt matches the persisted message back to its entries by these ids.
+    details: { jobIds: entries.map((entry) => entry.job.id) },
+  });
+
+  /** The micro-batch wake (design §2.2/§11.2 #3): everything deliverable in the window goes out as
+   * one `epi:task-notify` follow-up. Entries are marked `sent`, not deleted -- only a `message_end`
+   * receipt proves the message reached the session tree; `agent_settled` without one puts them back. */
   const flushNotify = (): void => {
     notifyTimer = undefined;
-    const fresh = pendingNotify.splice(0).filter((job) => !delivered.has(job.id));
     const pi = current.pi;
-    if (fresh.length === 0 || pi === undefined) return;
+    const ready = [...mailbox.values()].filter(
+      (entry) => entry.state === "unsent" && entry.autoWake && canWake(entry),
+    );
+    if (ready.length === 0 || pi === undefined) return;
     try {
-      pi.sendMessage(
-        {
-          customType: "epi:task-notify",
-          content: fresh.map(notifyText).join("\n\n"),
-          display: true,
-        },
-        { deliverAs: "followUp", triggerTurn: true },
-      );
+      pi.sendMessage(notifyPayload(ready), { deliverAs: "followUp", triggerTurn: true });
+      for (const entry of ready) entry.state = "sent";
     } catch (error) {
       reportCompletionError("notifying a settled task", error);
     }
+    refreshStatus();
   };
 
-  const scheduleNotify = (job: TaskJobSnapshot): void => {
-    pendingNotify.push(job);
+  const scheduleFlush = (): void => {
     if (notifyTimer !== undefined) return;
     // Unref'd: in `epi -p` a background job that has not settled by exit must not hold the process
     // open (a documented limit -- there is no session left to notify).
@@ -486,13 +631,66 @@ export function createTaskInlineExtension(
     notifyTimer.unref();
   };
 
-  /**
-   * "Delivered" belongs to a run, not a job: a resume's result is new and must be pushed even when
-   * an earlier run's was already handed to the model (round-2 review P2).
-   */
-  /** Jobs whose foreground caller was interrupted (Esc, /compact): nobody is waiting any more, so
-   * they get the same wake as a background job (N6 review P2-1). */
-  const wakeOnSettle = new Set<string>();
+  /** §11.2 #1: a settled job nobody collected enters the ledger and, when allowed, pushes a wake. */
+  const enqueueNotify = (job: TaskJobSnapshot, autoWake: boolean): void => {
+    // The pull that already handed this run's result to the model suppresses the wake.
+    if (collectedRuns.get(job.id) === (job.run ?? 0)) return;
+    mailbox.set(job.id, {
+      job,
+      run: job.run ?? 0,
+      originSessionId: sessionId(),
+      state: "unsent",
+      autoWake,
+    });
+    refreshStatus();
+    scheduleFlush();
+  };
+
+  /** §11.2 #5: the model pulled the result itself, or the job restarted -- the notice is settled.
+   * The run is recorded too: `collect` can land while `trackCompletion`'s hook is still awaiting,
+   * so a plain delete would lose to the `enqueueNotify` that follows it. */
+  const collectedRuns = new Map<string, number>();
+  const collect = (job: TaskJobSnapshot): void => {
+    collectedRuns.set(job.id, job.run ?? 0);
+    if (mailbox.delete(job.id)) refreshStatus();
+  };
+
+  /** What the bottom bar shows (§11.3): compact counts only -- the shortcuts row leaves ~12-14
+   * columns, so no ids, no tool names, no timers. */
+  const STATUS_KEY = "epi-task";
+  let lastStatusText: string | undefined;
+  function refreshStatus(): void {
+    const ui = current.ctx?.ui;
+    if (ui === undefined) return;
+    const jobs = runtime.list();
+    const running = jobs.filter((job) => job.status === "running").length;
+    const queued = jobs.filter((job) => job.status === "queued").length;
+    const settled = [...mailbox.values()].filter(
+      (entry) => entry.originSessionId === sessionId(),
+    );
+    const failed = settled.filter((entry) => entry.job.status !== "completed").length;
+    const done = settled.length - failed;
+    const parts: string[] = [];
+    if (running > 0 || queued > 0) {
+      const count = queued > 0 ? `${running}+${queued}` : `${running}`;
+      parts.push(`◐ ${count} task${running + queued === 1 ? "" : "s"}`);
+    }
+    if (done > 0) parts.push(`✓ ${done} done`);
+    if (failed > 0) parts.push(`✗ ${failed} failed`);
+    const text = parts.length === 0 ? undefined : parts.join(" · ");
+    if (text === lastStatusText) return;
+    lastStatusText = text;
+    try {
+      ui.setStatus(STATUS_KEY, text);
+    } catch {
+      // A stale ctx (mid session switch) must not turn a progress tick into an error.
+    }
+  }
+
+  /** Foreground waits that were interrupted (Esc, /compact): nobody is waiting any more, so the
+   * job gets the same wake as a background one -- but a user's Esc means the notice must not start
+   * a turn of its own (§11.2 #1). The map's boolean is that `autoWake` choice. */
+  const wakeOnSettle = new Map<string, boolean>();
   const trackCompletion = (jobId: string, notify: boolean): Promise<TaskJobSnapshot> => {
     const completion = runtime.wait(jobId).then(async (job) => {
       recordChildUsage(job);
@@ -505,7 +703,11 @@ export function createTaskInlineExtension(
           throw new Error(stopDecision.reason ?? "task stop hook returned an invalid decision");
         }
       }
-      if (notify || wakeOnSettle.delete(job.id)) scheduleNotify(job);
+      const interrupted = wakeOnSettle.get(job.id);
+      wakeOnSettle.delete(job.id);
+      // A foreground job the caller is still awaiting needs no notice; a background job (notify)
+      // and an interrupted wait both do -- `collect` may already have cleared the entry.
+      if (notify || interrupted !== undefined) enqueueNotify(job, interrupted ?? true);
       return job;
     });
     completionHooks.set(jobId, completion);
@@ -531,20 +733,22 @@ export function createTaskInlineExtension(
     job: TaskJobSnapshot,
     background: boolean,
     signal: AbortSignal | undefined,
+    onUpdate: ((partial: AgentToolResult<unknown>) => void) | undefined,
   ): Promise<AgentToolResult<unknown>> => {
     // This run's result is new, whatever an earlier run's delivery state was.
-    delivered.delete(job.id);
-    for (let index = pendingNotify.length - 1; index >= 0; index -= 1) {
-      if (pendingNotify[index]?.id === job.id) pendingNotify.splice(index, 1);
-    }
+    collect(job);
     const completion = trackCompletion(job.id, background);
     if (background) return startedResult(job);
+    const progress = watchJob(job.id, onUpdate);
     const waited = await runtime.wait(job.id, undefined, signal);
     if (
       signal?.aborted === true &&
       (waited.status === "queued" || waited.status === "running")
     ) {
-      wakeOnSettle.add(job.id);
+      progress.stop();
+      // A user's own Esc keeps the notice from starting a turn on its own; a /compact abort is not
+      // the user saying "stop" and keeps autoWake (§11.2 #1).
+      wakeOnSettle.set(job.id, compacting);
       return {
         content: [{
           type: "text",
@@ -553,7 +757,58 @@ export function createTaskInlineExtension(
         details: runtime.status(job.id),
       };
     }
-    return jobResult(await completion);
+    const settled = await completion;
+    progress.stop();
+    collect(settled);
+    return jobResult(settled);
+  };
+
+  /**
+   * Subscribe to a job's progress and refresh the tool block through `onUpdate`, throttled to one
+   * trailing call per UPDATE_THROTTLE_MS (§11.4): the block re-renders the CallLine's tail
+   * (`turn 2 · bash: npm test`) in place, so progress costs no transcript rows.
+   */
+  const watchJob = (
+    jobId: string,
+    onUpdate: ((partial: AgentToolResult<unknown>) => void) | undefined,
+  ): { stop: () => void } => {
+    if (onUpdate === undefined) return { stop: () => {} };
+    let stopped = false;
+    let timer: NodeJS.Timeout | undefined;
+    let lastKey = "";
+    const push = (): void => {
+      timer = undefined;
+      if (stopped) return;
+      try {
+        const snap = runtime.status(jobId);
+        onUpdate({ content: [{ type: "text", text: runningStatusText(snap) }], details: snap });
+      } catch {
+        // A job that vanished mid-wait ends the updates, not the wait.
+      }
+    };
+    const listener = (changed: string): void => {
+      if (stopped || changed !== jobId) return;
+      let key: string;
+      try {
+        const snap = runtime.status(jobId);
+        key = `${snap.turns ?? 0}|${snap.steps ?? 0}|${snap.currentActivity ?? ""}|${snap.lastSummary ?? ""}|${snap.status}`;
+      } catch {
+        return;
+      }
+      if (key === lastKey) return;
+      lastKey = key;
+      if (timer !== undefined) return;
+      timer = setTimeout(push, UPDATE_THROTTLE_MS);
+      timer.unref();
+    };
+    changeListeners.add(listener);
+    return {
+      stop: () => {
+        stopped = true;
+        changeListeners.delete(listener);
+        if (timer !== undefined) clearTimeout(timer);
+      },
+    };
   };
 
   return {
@@ -565,8 +820,83 @@ export function createTaskInlineExtension(
       // unset ctx makes a job that finishes in that window skip its task_stop hook instead of
       // calling a dead ctx.
       delete current.ctx;
+      const listener = (): void => refreshStatus();
+      changeListeners.add(listener);
       pi.on("session_start", (_event, ctx) => {
         current.ctx = ctx;
+        // Entries "sent" to a session that was switched away never persisted (the old pi is dead):
+        // back to unsent, and this session's own mail flushes at once (§11.2 #3).
+        for (const entry of mailbox.values()) {
+          if (entry.state === "sent") entry.state = "unsent";
+        }
+        lastStatusText = undefined;
+        refreshStatus();
+        scheduleFlush();
+      });
+
+      // A manual /compact aborts the run, then summarises with its own _startRun-equivalent path;
+      // sendCustomMessage has no compaction guard, so a wake sent while it runs races _startRun
+      // (§11.1 #3). Only `reason === "manual"` gates: an auto-compaction inside a running turn
+      // queues follow-ups safely and must not stall the wake.
+      pi.on("session_before_compact", (event) => {
+        if (event.reason === "manual") compacting = true;
+      });
+      pi.on("session_compact", () => {
+        compacting = false;
+        scheduleFlush();
+      });
+      pi.on("session_compact_failed", () => {
+        compacting = false;
+        scheduleFlush();
+      });
+      pi.on("session_before_tree", () => {
+        compacting = true;
+      });
+      pi.on("session_tree", () => {
+        compacting = false;
+        scheduleFlush();
+      });
+
+      // The receipt (§11.2 #3): a persisted epi:task-notify message is real delivery; delete its
+      // entries. The notify message itself re-enters mailbox on settle only if never persisted.
+      pi.on("message_end", (event) => {
+        const message = event.message as { role?: unknown; customType?: unknown; details?: unknown };
+        if (message.role !== "custom" || message.customType !== "epi:task-notify") return;
+        const ids = (message.details as { jobIds?: unknown } | undefined)?.jobIds;
+        if (!Array.isArray(ids)) return;
+        for (const id of ids) {
+          if (typeof id === "string") mailbox.delete(id);
+        }
+        refreshStatus();
+      });
+
+      // A run ended. Entries still "sent" got no receipt: the follow-up was cleared (Esc, Alt+Up)
+      // or the run died first -- back to unsent (§11.2 #3). An aborted run also drops autoWake: the
+      // user just said stop, so the notice rides the next prompt instead of starting a turn.
+      pi.on("agent_settled", (event) => {
+        for (const entry of mailbox.values()) {
+          if (entry.state !== "sent") continue;
+          entry.state = "unsent";
+          if (event.aborted === true) entry.autoWake = false;
+        }
+        scheduleFlush();
+        refreshStatus();
+      });
+
+      // The next user prompt carries the mail itself (§11.2 #4): attached inside _prepareRun, it
+      // never touches the followUp queue that Esc/Alt+Up clear. Works even for autoWake: false.
+      pi.on("before_agent_start", (event) => {
+        if (event.messageType === "custom" && event.message.customType === "epi:task-notify") {
+          return undefined;
+        }
+        const id = sessionId();
+        const ready = [...mailbox.values()].filter(
+          (entry) => entry.state === "unsent" && entry.originSessionId === id,
+        );
+        if (ready.length === 0) return undefined;
+        for (const entry of ready) entry.state = "sent";
+        refreshStatus();
+        return { message: notifyPayload(ready) };
       });
 
       pi.on("session_shutdown", async (event) => {
@@ -578,6 +908,30 @@ export function createTaskInlineExtension(
         if (event.reason !== "quit") return;
         await runtime.shutdown();
         await Promise.allSettled(completionHooks.values());
+      });
+
+      // §11.4 #4: the wake message renders as one compact line per job, not a raw custom block.
+      // `?.`: test doubles bind a partial `pi`, and a missing renderer is display-only.
+      pi.registerMessageRenderer?.("epi:task-notify", (message, options, theme) => {
+        const text = typeof message.content === "string"
+          ? message.content
+          : message.content
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("\n");
+        const rows = text.split("\n").filter((line) => line.trim().length > 0);
+        const shown = options.expanded ? rows : rows.slice(0, 4);
+        const lines = shown.map((line) => {
+          const match = /^Job (\S+) (\w+):\s*(.*)$/.exec(line);
+          if (match === null) return theme.fg("muted", line);
+          const [, id, status, summary] = match;
+          const tone: Tone = status === "completed" ? "success" : status === "failed" ? "error" : "warning";
+          return `${theme.fg(tone, status === "completed" ? "✓" : status === "failed" ? "✗" : "◐")} ${theme.fg("accent", "task")} ${theme.fg("muted", id ?? "")} ${theme.fg("toolOutput", summary ?? "")}`;
+        });
+        if (rows.length > shown.length) {
+          lines.push(theme.fg("muted", `… ${rows.length - shown.length} more`));
+        }
+        return new LinesComponent(lines);
       });
 
       pi.registerTool({
@@ -598,9 +952,10 @@ export function createTaskInlineExtension(
         ].filter((part) => part !== "").join(" "),
         promptSnippet: "Delegate bounded work to a subagent with its own context window.",
         executionMode: "parallel",
+        renderCall: renderTaskCall,
         renderResult: renderTaskResult,
         parameters: TaskToolParameters,
-        async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+        async execute(_toolCallId, params, signal, onUpdate, ctx) {
           current.ctx = ctx;
           try {
             // `task({ jobId, task })` acts on an existing job, not a new one: a running job is
@@ -636,6 +991,7 @@ export function createTaskInlineExtension(
                   runtime.resume(params.jobId, params.task),
                   params.background === true,
                   signal,
+                  onUpdate,
                 );
               }
               const steered = runtime.steer(params.jobId, params.task);
@@ -685,7 +1041,7 @@ export function createTaskInlineExtension(
                 ? { forkEntries: forkableBranch(ctx.sessionManager.getBranch()) }
                 : {}),
             });
-            return runJob(started, params.background === true, signal);
+            return runJob(started, params.background === true, signal, onUpdate);
           } catch (error) {
             return errorResult(error);
           }
@@ -697,6 +1053,7 @@ export function createTaskInlineExtension(
         label: "Task status",
         description: "Return the current state of one Epi task job, or list every job when jobId is omitted.",
         executionMode: "parallel",
+        renderCall: renderStatusCall,
         renderResult: renderTaskResult,
         parameters: Type.Object({
           jobId: Type.Optional(Type.String({ description: "The job to inspect; omit to list every job of this runtime" })),
@@ -715,6 +1072,10 @@ export function createTaskInlineExtension(
               };
             }
             const job = runtime.status(params.jobId);
+            if (job.status !== "queued" && job.status !== "running") {
+              // Pulling a settled job's result collects its notice (§11.2 #5).
+              collect(job);
+            }
             // A live job gets the compact progress block; a settled one still gets its answer.
             return job.status === "queued" || job.status === "running"
               ? { content: [{ type: "text", text: runningStatusText(job) }], details: job }
@@ -730,13 +1091,15 @@ export function createTaskInlineExtension(
         label: "Task wait",
         description: "Wait for an Epi task job to finish or until timeoutSeconds elapses.",
         executionMode: "parallel",
+        renderCall: renderWaitCall,
         renderResult: renderTaskResult,
         parameters: Type.Object({
           jobId: Type.String(),
           timeoutSeconds: Type.Optional(Type.Number({ minimum: 0.001 })),
         }),
-        async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+        async execute(_toolCallId, params, signal, onUpdate, ctx) {
           current.ctx = ctx;
+          const progress = watchJob(params.jobId, onUpdate);
           try {
             const timeoutMs = params.timeoutSeconds === undefined
               ? undefined
@@ -750,7 +1113,7 @@ export function createTaskInlineExtension(
             const completion = completionHooks.get(waited.id);
             if (waited.status !== "queued" && waited.status !== "running") {
               // The result is in the model's context now; a push wake would repeat it.
-              delivered.add(waited.id);
+              collect(waited);
             }
             if (completion !== undefined && waited.status !== "queued" && waited.status !== "running") {
               return jobResult(await completion);
@@ -758,6 +1121,8 @@ export function createTaskInlineExtension(
             return jobResult(waited);
           } catch (error) {
             return errorResult(error);
+          } finally {
+            progress.stop();
           }
         },
       });
@@ -767,6 +1132,7 @@ export function createTaskInlineExtension(
         label: "Task cancel",
         description: "Cancel a queued or running Epi task job and its process tree.",
         executionMode: "parallel",
+        renderCall: renderCancelCall,
         renderResult: renderTaskResult,
         parameters: Type.Object({ jobId: Type.String() }),
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -774,7 +1140,7 @@ export function createTaskInlineExtension(
           try {
             const cancelled = await runtime.cancel(params.jobId);
             // Cancelling is the model collecting the job; do not also push it.
-            delivered.add(cancelled.id);
+            collect(cancelled);
             const completion = completionHooks.get(cancelled.id);
             if (completion !== undefined) {
               await completion;

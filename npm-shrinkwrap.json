@@ -1,12 +1,12 @@
 {
   "name": "epi",
-  "version": "0.1.25",
+  "version": "0.2.0",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "epi",
-      "version": "0.1.25",
+      "version": "0.2.0",
       "dependencies": {
         "@earendil-works/pi-agent-core": "1.4.0",
         "@earendil-works/pi-ai": "1.4.0",
