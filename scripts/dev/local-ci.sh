@@ -28,7 +28,11 @@ trap cleanup EXIT
 
 step() { printf '\n== %s\n' "$*"; }
 t0=$(date +%s)
+# `set -e` would stop the script the moment the pipe below fails, before the FAILED line prints:
+# turn it off around the pipe and read the step's own status from PIPESTATUS.
+set +e
 {
+  set -e
   step "checkout $short"
   git worktree add --detach "$dir" "$sha" >/dev/null
   cd "$dir"
@@ -43,6 +47,7 @@ t0=$(date +%s)
   npm test
 } 2>&1 | tee "$log"
 status=${PIPESTATUS[0]}
+set -e
 elapsed=$(( $(date +%s) - t0 ))
 if (( status != 0 )); then
   echo "LOCAL CI FAILED for $short after ${elapsed}s (log: $log)" >&2
