@@ -1,6 +1,6 @@
 # Epi TUI 配色映射
 
-日期：2026-09-29。[tui-design.md](tui-design.md) 第 4.9 节的细节。
+日期：2026-09-29。[tui-design.md](tui-design.md) 第 4.9 节的细节。对照：Amp CLI 的 TUI 配色分层（终端默认色 / ANSI 索引 / 固定真彩）见 [amp-tui-research.md](amp-tui-research.md)。
 
 把 grok-build 的 groknight（暗）/ grokday（亮）配色映射到 Pi 主题的全部 token。Epi 启动时按这张表生成 `epi-grok-night.json`、`epi-grok-day.json`，写进 `~/.epi/pi/themes/`。
 
@@ -73,4 +73,6 @@ token 清单来自 0.87 的 `theme-schema.json`：前景（fg）必填 45 个、
 两个 **我定** 的地方要说明：
 - grok 用左侧竖条的颜色表示工具状态，工具框本身没有底色。Epi 自己画的工具卡片也照 grok 用竖条；这三个工具底色只在复用 Pi 组件的地方起作用，所以压得很淡。
 - Pi 按思考档位给输入框边框换色，grok 没有这个概念。Epi 的输入框保留这个提示，档位越高颜色越亮，从灰色开始。
+
+这张表把调色板**对不对得上 grok** 说清楚了，但没说清**读起来是不是一片灰**：所有工具输出共用一个 `toolOutput` 灰，色相只给运行/失败/`$`/diff 四处，所以只有成功工具调用的回合在屏幕上一个有色相的像素都没有。诊断、三个改动提案（按工具类型选色）和对应探针见 [notes/research-tui-visual-style.md](notes/research-tui-visual-style.md)。
 
