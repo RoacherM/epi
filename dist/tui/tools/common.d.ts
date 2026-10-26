@@ -36,6 +36,9 @@ export declare function isErrorResult(result: AgentToolResult<unknown>, context:
  * model's bash block `muted` and the `!cmd` block `toolOutput`).
  */
 export declare function truncateOutputLines(lines: string[], ellipsis: (text: string) => string): string[];
+/** A running tool's output under its call row, newest rows last (docs/tui-ctrl-o-per-block-design.md
+ * §9.1): the call row and these fit in the spine's tip (TIP_ROWS = 8), where the carriage moves. */
+export declare const RUNNING_SLICE_ROWS = 5;
 /** A tool's run time on its call line: `2.1s`, `2m20s`; under a second in milliseconds, since
  * `0.0s`/`0.1s` say nothing about a 30ms grep. */
 export declare function formatToolDuration(ms: number): string;
@@ -43,12 +46,15 @@ export declare function formatToolDuration(ms: number): string;
  * design.md §4-C: a long command must not eat its `· +8 lines`). A tail wider than the line is
  * dropped rather than cut. */
 export declare function fitWithTail(body: string, tail: string, width: number, ellipsis: string): string;
-/** `ms` as a bar: dim filled cells, then `·` for the empty ones; with the time after a full bar. Under
+/** `ms` as a bar: dim filled cells, then `·` for the empty ones; full from 100s on. Under
  * 10ms nothing is filled (`····`, all but instant): a `▏` there, drawn full-height by terminals, lined
  * up with the next fast call's into what read as a divider (docs/tui-one-column-design.md §2.2). */
 export declare function durationBar(theme: Theme, ms: number): string;
+/** The right edge of a call row: the bar when collapsed, the time as a number when expanded. */
+export declare function rightEdgeTime(theme: Theme, ms: number, expanded: boolean): string;
 /** What a call row holds: the body (cut to fit), its tail (`· +36 lines`, `· +3 −1`; never cut), the
- * duration bar ("" for none), and the time as a number for a line too narrow for a column. */
+ * right edge (the duration bar or the number, "" for none), and the time as a number for a line too
+ * narrow for a column. */
 interface CallRowParts {
     body: string;
     tail: string;
@@ -57,10 +63,9 @@ interface CallRowParts {
 }
 /**
  * A call row in the turn's one column (docs/tui-one-column-design.md §2.1): the body and its tail
- * fill the column up to the bar, and the bar starts at the same column on every row -- the
- * measure's right edge less its cells -- so a group of calls lines its bars up. A number after a
- * full bar runs past the edge when the line has room, and otherwise moves the bar left. `width` is
- * the row's width after the marker.
+ * fill the column up to the bar, and the bar ends at the terminal's right edge on every row, so a
+ * group of calls lines its bars up. A number in its place (an expanded row) ends at the same edge.
+ * `width` is the row's width after the marker.
  */
 export declare function fitCallRow({ body, tail, bar, fallbackTime }: CallRowParts, width: number, ellipsis: string): string;
 /** The marker a call line puts in the marker column once it settles: `$` for shell commands, `◆` for
@@ -87,7 +92,7 @@ export declare class CallLine implements Component {
     /** How long the tool has run: the final time, or while it runs the time since it started (kept in
      * the renderer's state, which Pi keeps per call). A failure draws none, as in 0.1.22. */
     private elapsed;
-    /** The bar for the time so far, with the exact time after it when expanded (Ctrl+O). */
+    /** The time so far: a bar, or the number when expanded (Ctrl+O). */
     private bar;
     invalidate(): void;
     render(width: number): string[];

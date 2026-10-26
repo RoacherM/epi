@@ -13,7 +13,7 @@ import { displayNow, drawAt } from "../clock.js";
 import { GLYPHS, paintMarker } from "../glyphs.js";
 import { piTui } from "../pi-tui.js";
 import { type ChildRows, dispatchToRows } from "../rows.js";
-import { type ClockGated, isClockGated, paintSpine, type SpineBlock, type SpineMember, spineMember, TIP_ROWS } from "../spine.js";
+import { type ClockGated, isClockGated, lastTextRow, paintSpine, type SpineBlock, type SpineMember, spineMember, TIP_ROWS } from "../spine.js";
 import { durationBar, fitCallRow } from "./common.js";
 import { createFlashState, disposeFlash, type FlashState, isFlashing, startFlash } from "./flash.js";
 import type { ToolRenderers } from "./types.js";
@@ -69,6 +69,8 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember, Cl
   /** When it finished, if it was seen running: the group row's marker shakes then (glyphs.ts). */
   endedAt: number | undefined;
   clockLive = true;
+  /** Pi keeps the call id private; Ctrl+O's per-block state (Transcript.expandedBlocks) is keyed by it. */
+  readonly callId: string;
   // The time this block last showed with a live clock; it is drawn at that time while it may not move.
   private shownAt: number | undefined;
   private started = false;
@@ -84,6 +86,7 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember, Cl
     options?: ToolExecutionOptions,
   ) {
     super(toolName, toolCallId, args, options, renderers as never, hostUi, cwd);
+    this.callId = toolCallId;
   }
 
   override markExecutionStarted(): void {
@@ -134,8 +137,9 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember, Cl
     return isFlashing(this.flash) ? this.flash : undefined;
   }
 
-  get spineRunning(): boolean {
-    return this.status === "running";
+  /** Running: the carriage sits on its last row, the running slice's newest line or the call row. */
+  spineWriteRow(lines: readonly string[]): number | undefined {
+    return this.status === "running" ? lastTextRow(lines) : undefined;
   }
 
   /** Cleared on `Transcript.reset()` so a stale flash timer never fires after this entry is gone. */
@@ -189,7 +193,7 @@ function summarize(members: MemberLike[]): { running: number; completed: number;
 /** Pure text+layout for the collapsed group line, split out from `GroupedMessages` so widths
  * 40/80/120 can be checked without a real `Transcript`/`ToolEntry`. While a member runs, the marker is
  * the rotating x, read at `now`; once all settled it shakes twice and becomes `◈`
- * (docs/tui-glyphs-design.md §3). The turn spine beside it pulses. */
+ * (docs/tui-glyphs-design.md §3). The turn spine's carriage sits on it while it runs. */
 export function verbGroupLine(members: MemberLike[], theme: Theme, width: number, now = displayNow()): string {
   const { running, failed, completed, breakdown } = summarize(members);
   const anyRunning = running > 0;
@@ -284,6 +288,9 @@ export class GroupedMessages implements Component {
     private readonly theme: Theme,
     /** A turn is in progress: its spine is live (src/tui/spine.ts). */
     private readonly turnRunning: () => boolean = () => false,
+    /** Ctrl+O opened the run starting at this member (Transcript.expandedBlocks): it draws like a
+     * run under the all-blocks toggle, every member and no fold row. */
+    private readonly isOpen: (anchor: ToolEntry) => boolean = () => false,
   ) {}
 
   invalidate(): void {
@@ -295,6 +302,30 @@ export class GroupedMessages implements Component {
     this.toolsExpanded = expanded;
     this.unfolded.clear();
     this.revealed.clear();
+  }
+
+  /** Ctrl+O on one run: a click's unfold/reveal of it is dropped, so closing it again folds it. */
+  forget(anchor: ToolEntry): void {
+    this.unfolded.delete(anchor);
+    this.revealed.delete(anchor);
+  }
+
+  /** The most recent tool block, newest last: one tool, or every member of the read-only run it
+   * ends (a run is one row, so Ctrl+O opens it whole). Read again on every call: runs grow at the
+   * tail while a turn streams. */
+  lastToolBlock(): ToolEntry[] | undefined {
+    const children = this.messages.children;
+    const lastIndex = children.findLastIndex((child) => child instanceof ToolEntry);
+    const last = children[lastIndex] as ToolEntry | undefined;
+    if (last === undefined || !isGroupable(last)) return last === undefined ? undefined : [last];
+    const width = this.mouseLayout?.width ?? 80;
+    const members = [last];
+    for (let index = lastIndex - 1; index >= 0; index -= 1) {
+      const child = children[index]!;
+      if (isGroupable(child)) members.unshift(child);
+      else if (child.render(width).length > 0) break;
+    }
+    return members;
   }
 
   /** Cleared on `Transcript.reset()`: old runs' first members no longer resolve to anything on screen. */
@@ -337,7 +368,7 @@ export class GroupedMessages implements Component {
         }
         if (members.length > 1) {
           const anchor = members[0]!;
-          if (!this.toolsExpanded && !this.unfolded.has(anchor)) {
+          if (!this.toolsExpanded && !this.isOpen(anchor) && !this.unfolded.has(anchor)) {
             placed.push(this.summaryLine(anchor, members, width));
           } else {
             this.renderUnfolded(anchor, members, width, placed);
@@ -407,7 +438,8 @@ export class GroupedMessages implements Component {
    * to fold *and* unfold everything at once).
    */
   private renderUnfolded(anchor: ToolEntry, members: ToolEntry[], width: number, placed: Placed[]): void {
-    const capped = !this.toolsExpanded && !this.revealed.has(anchor) && members.length > MAX_UNFOLDED_MEMBERS;
+    const all = this.toolsExpanded || this.isOpen(anchor);
+    const capped = !all && !this.revealed.has(anchor) && members.length > MAX_UNFOLDED_MEMBERS;
     const visible = capped ? members.slice(-MAX_UNFOLDED_MEMBERS) : members;
     if (capped) {
       const hidden = members.length - visible.length;
@@ -415,7 +447,7 @@ export class GroupedMessages implements Component {
       placed.push({ component: reveal, lines: [leadLine(this.theme, `◈ ${hidden} more`)], skipped: 0, member: TRUNK, toolish: true });
     }
     for (const member of visible) placed.push(place(member, member.render(width), width));
-    if (!this.toolsExpanded) {
+    if (!all) {
       const fold = clickTarget(() => {
         this.unfolded.delete(anchor);
         this.revealed.delete(anchor);
@@ -461,7 +493,7 @@ export class GroupedMessages implements Component {
       ...(live ? { held: () => ["", drawAt(this.runShownAt.get(runKey), () => verbGroupLine(shown, this.theme, width))] } : {}),
       lines: ["", line],
       skipped: 0,
-      member: { spineRole: "tool", spineRunning: running, spineFlash: flash },
+      member: { spineRole: "tool", spineWriteRow: (lines) => (running ? lastTextRow(lines) : undefined), spineFlash: flash },
       toolish: true,
     };
   }

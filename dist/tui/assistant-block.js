@@ -14,6 +14,7 @@ import { rewritePiText } from "../pi-output.js";
 import { CONTENT_COLUMN, MeasuredMarkdown } from "./markdown-layout.js";
 import { piTui } from "./pi-tui.js";
 import { dispatchToRows } from "./rows.js";
+import { lastTextRow } from "./spine.js";
 import { createFlashState, disposeFlash, isFlashing, startFlash } from "./tools/flash.js";
 // The content column (R3): expanded thinking and the error lines start where the reply text does.
 const CONTENT_PAD = CONTENT_COLUMN;
@@ -363,6 +364,10 @@ export class AssistantBlock {
         if (this.rowsWidth !== event.width)
             this.render(event.width);
         return dispatchToRows(this.rows, event);
+    }
+    /** Streaming: the carriage sits on the last row written, of the reply or of its thinking. */
+    spineWriteRow(lines) {
+        return this.lastStreaming ? lastTextRow(lines) : undefined;
     }
     /** A thinking run that just ended flashes its rows' stretch of the turn spine (docs/tui-motion-
      * design.md M6); `row` counts the rows of the last render. */

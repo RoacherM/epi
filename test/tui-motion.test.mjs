@@ -1,17 +1,18 @@
 // Motion primitives and the running/finishing visuals built on them (docs/tui-motion-design.md):
-// the status spinner and ui.setWorkingIndicator (M3), the pulsing rails of running blocks
-// (M4/M5), and the completion flash's ease-out (M6).
+// the status spinner and ui.setWorkingIndicator (M3), the running group line (M5), and the completion
+// flash's ease-out (M6). The spine's carriage, which replaced M4's pulsing rail, is in tui-spine.test.mjs.
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import { TurnStatus } from "../dist/tui/chrome.js";
 import { createExtensionUIContext } from "../dist/tui/ext-host.js";
-import { blendFg, FrameTicker, pulseRule, railGlyph } from "../dist/tui/motion.js";
+import * as motion from "../dist/tui/motion.js";
 import { piTui } from "../dist/tui/pi-tui.js";
 import { createEpiTheme } from "../dist/tui/theme.js";
 import { createFlashState, disposeFlash, flashBlend, isFlashing, startFlash } from "../dist/tui/tools/flash.js";
 import { verbGroupLine } from "../dist/tui/tools/group.js";
 
+const { blendFg, FrameTicker, pulseRule } = motion;
 const theme = createEpiTheme("dark");
 const day = createEpiTheme("light");
 const plain = (line) => line.replace(/\x1b\[[0-9;]*m/g, "");
@@ -39,13 +40,9 @@ test("pulseRule keeps the rule's width and line glyphs at every width and time",
   }
 });
 
-test("railGlyph: always one ┃, colored by a pulse that moves down the rows over time", () => {
-  for (const row of [0, 1, 5, 40]) {
-    for (const t of [0, 0.3, 7.7]) assert.equal(plain(railGlyph(theme, row, t)), "┃");
-  }
-  const column = (t) => [0, 1, 2, 3, 4, 5, 6, 7].map((row) => railGlyph(theme, row, t)).join("");
-  assert.notEqual(column(0), column(0.25), "the pulse should move");
-  assert.notEqual(railGlyph(theme, 0, 0), railGlyph(theme, 4, 0), "rows of one frame differ");
+test("the pulsing rail is gone: the spine's carriage replaced it (docs/tui-ctrl-o-per-block-design.md §9.1)", () => {
+  assert.equal(motion.railGlyph, undefined);
+  assert.equal(motion.railBlend, undefined);
 });
 
 test("FrameTicker is unref'd and stops itself when nothing renders", async () => {

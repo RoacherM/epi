@@ -1,7 +1,7 @@
 import { type MarkdownTransformer, type Theme } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import type { ClockGated, SpineMember } from "./spine.js";
+import { type ClockGated, type SpineMember } from "./spine.js";
 import { type FlashState } from "./tools/flash.js";
 export declare class AssistantBlock implements Component, SpineMember, ClockGated {
     private readonly theme;
@@ -52,6 +52,8 @@ export declare class AssistantBlock implements Component, SpineMember, ClockGate
     render(width: number): string[];
     private draw;
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
+    /** Streaming: the carriage sits on the last row written, of the reply or of its thinking. */
+    spineWriteRow(lines: readonly string[]): number | undefined;
     /** A thinking run that just ended flashes its rows' stretch of the turn spine (docs/tui-motion-
      * design.md M6); `row` counts the rows of the last render. */
     spineFlash(row: number): FlashState | undefined;

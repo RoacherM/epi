@@ -166,8 +166,8 @@ export async function runTuiApp(options) {
             // still adds a newline without expanding (docs/tui-design.md 4.3, item 7's footer style).
             : editor.chipAtCursor()?.kind === "text"
                 ? [{ key: "Enter", label: "expand" }, { key: "Shift+Enter", label: "newline" }]
-                // "expand", not "tools": Ctrl+o now also expands a collapsed user message (item 5), not
-                // just tool output.
+                // "expand": Ctrl+o opens or closes the most recent tool block (docs/tui-ctrl-o-per-block-design.md
+                // §4.5, option B kept the label).
                 // Item 3 (docs/tui-design.md 4.2/4.6): idle already had 4 hints, the limit, so `Ctrl+t:thinking`
                 // (toggle thinking blocks) replaces `Ctrl+d:quit` -- quitting is still reachable via Ctrl+C
                 // twice (app.clear's double-press, 4.7) and is the least useful of the four to lose.
@@ -391,7 +391,10 @@ export async function runTuiApp(options) {
             inAgentLoop = false;
             tui.requestRender();
         },
-        toggleToolsExpanded: () => surface.setToolsExpanded(!toolsExpanded),
+        toggleLastToolBlock: () => {
+            if (!transcript.toggleLastToolBlock())
+                tui.flash("No tool output to expand");
+        },
         toggleThinkingExpanded: () => {
             thinkingExpanded = !thinkingExpanded;
             transcript.setThinkingExpanded(thinkingExpanded);

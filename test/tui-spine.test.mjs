@@ -1,6 +1,6 @@
 // The turn spine (src/tui/spine.ts, docs/tui-transcript-layout-implementation.md W2/W7/W8): one turn is
 // one line down column 1 -- `│` beside text, `├─` into tool calls (red into a failure row), `╰─` into
-// `Worked for`; consecutive tool rows sit together; a live turn's tip pulses. Driven through the real
+// `Worked for`; consecutive tool rows sit together; a live turn's carriage marks the row being written. Driven through the real
 // Transcript with a stub session, like tui-tools-group.test.mjs.
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -154,35 +154,132 @@ test("a click on a tool row whose blank row was left out still reaches it (W2 mo
   const click = { type: "click", button: "left", x: 6, y, screenX: 6, screenY: y, width: 80, height: rows.length, shift: false, alt: false, ctrl: false };
   assert.ok(t.root.handleMouse(click)?.handled, "the click on the call row is handled");
   const after = lines(t);
-  // Expanded, the bar is followed by the exact time (docs/tui-one-column-design.md §2.2).
-  assert.deepEqual(after.slice(y, y + 3).map((row) => row.replace(/ +[▏▎▍▌▋▊▉█][▏▎▍▌▋▊▉█·]{3} \d+ms$/, "")), [" ├─$ printf 'one\\ntwo'", " │   one", " │   two"], "the click expanded this tool, not its neighbour");
+  // Expanded, the time is a number in the bar's place (docs/tui-ctrl-o-per-block-design.md §9.2).
+  assert.deepEqual(after.slice(y, y + 3).map((row) => row.replace(/ +\d+ms$/, "")), [" ├─$ printf 'one\\ntwo'", " │   one", " │   two"], "the click expanded this tool, not its neighbour");
   // And a click on the first one still lands on it.
   const first = { ...click, y: y - 1, screenY: y - 1, height: after.length };
   assert.ok(t.root.handleMouse(first)?.handled);
 });
 
-test("while a turn runs only its tip pulses; rows above it already look settled", () => {
+// The carriage (docs/tui-ctrl-o-per-block-design.md §9.1): one accent cell in the spine column on the
+// row being written; the rest of the spine is borderMuted. `carriages` lists [row, glyph] for each.
+const ACCENT = theme.getFgAnsi("accent");
+const OSC = /^(?:\x1b\][^\x07\x1b]*(?:\x07|\x1b\\))*/;
+const carriages = (raw) => raw.flatMap((row, index) => (row.replace(OSC, "").startsWith(` ${ACCENT}`) ? [[index, strip(row)[1]]] : []));
+
+test("while a turn runs only the carriage is lit, on the tip; rows above it already look settled", () => {
   const t = transcript();
   t.handle({ type: "agent_start" });
   t.handle({ type: "message_start", message: user("go") });
   reply(t, [{ type: "text", text: Array.from({ length: 14 }, (_, i) => `para ${i}`).join("\n\n") }]);
   runTool(t, "bash", "b1", { args: { command: "sleep 9" }, finish: false });
   const live = t.root.render(80);
-  const spined = live.filter((row) => /^ \x1b\[[0-9;]*m[│┃├╰]/.test(row));
-  const heavy = spined.filter((row) => strip(row).startsWith(" ┃"));
-  assert.ok(heavy.length > 0 && heavy.length <= 8, `the tip is at most 8 rows (got ${heavy.length})`);
-  assert.ok(spined.slice(-heavy.length - 1).some((row) => strip(row).startsWith(" ├─")), "the running tool sits in the tip");
-  const branch = live.find((row) => /[+×] sleep 9/.test(strip(row)));
-  assert.ok(!branch.includes(theme.fg("borderMuted", "├─")), "a running tool's branch is lit");
+  const callRow = live.findIndex((row) => /[+×] sleep 9/.test(strip(row)));
+  assert.deepEqual(carriages(live), [[callRow, "┝"]], "one carriage, on the running call row (no output yet)");
+  assert.ok(live[callRow].startsWith(` ${theme.fg("accent", "┝")}${theme.fg("borderMuted", "─")}`), "┝ keeps its ─ in the spine's color");
+  assert.ok(!live.some((row) => strip(row).startsWith(" ┃")), "no heavy rail: the old pulse is gone");
+  for (const row of live) {
+    if (/^ \x1b\[[0-9;]*m[│├╰]/.test(row) && !row.startsWith(` ${ACCENT}`)) assert.ok(row.startsWith(` ${theme.getFgAnsi("borderMuted")}`), `spine is borderMuted: ${JSON.stringify(row.slice(0, 30))}`);
+  }
 
   t.handle({ type: "tool_execution_end", toolName: "bash", toolCallId: "b1", result: { content: [{ type: "text", text: "" }] }, isError: false, durationMs: 9000 });
   t.handle({ type: "agent_end", messages: [] });
   t.handle({ type: "agent_settled" });
   const settled = t.root.render(80);
-  const above = live.findIndex((row) => heavy.includes(row));
+  const above = live.length - 8;
   assert.ok(above > 10);
   assert.deepEqual(settled.slice(0, above), live.slice(0, above), "settling changes no row above the tip (pi-tui would redraw everything for an off-screen change)");
-  assert.ok(!settled.some((row) => strip(row).includes("┃")), "no heavy rail once settled");
+  assert.deepEqual(carriages(settled), [], "#15: a settled turn has no carriage");
+  assert.ok(!settled.some((row) => /[┃┝]/.test(strip(row))));
+});
+
+test("#10/#11 a running bash with 12 lines: the newest 5 under the call row, the carriage on the 5th; on success only the call row, the carriage gone", () => {
+  const t = transcript();
+  t.handle({ type: "agent_start" });
+  t.handle({ type: "message_start", message: user("go") });
+  runTool(t, "bash", "b1", { args: { command: "make" }, finish: false });
+  const output = Array.from({ length: 12 }, (_, i) => `out ${i + 1}`).join("\n");
+  t.handle({ type: "tool_execution_update", toolName: "bash", toolCallId: "b1", args: { command: "make" }, partialResult: { content: [{ type: "text", text: output }] } });
+  for (const width of [40, 80, 120]) {
+    const raw = t.root.render(width);
+    const rows = raw.map((row) => strip(row).trimEnd());
+    const call = rows.findIndex((row) => /[+×] make/.test(row));
+    assert.deepEqual(rows.slice(call + 1), [" ┃   out 8", " │   out 9", " │   out 10", " │   out 11", " ┃   out 12"].map((row, i) => (i === 4 ? row : row.replace("┃", "│"))), `width ${width}`);
+    assert.deepEqual(carriages(raw), [[call + 5, "┃"]], `width ${width}: the carriage is on the 5th row`);
+  }
+  t.handle({ type: "tool_execution_end", toolName: "bash", toolCallId: "b1", result: { content: [{ type: "text", text: output }] }, isError: false, durationMs: 900 });
+  const rows = lines(t);
+  // Its marker may still be shaking as it lands (× +), then `$`.
+  const call = rows.findIndex((row) => /[$+×] make/.test(row));
+  assert.equal(call, rows.length - 1, `#11: only the call row is left\n${rows.join("\n")}`);
+  assert.deepEqual(carriages(t.root.render(80)), [], "#11: the carriage left the block (the turn has nothing else being written)");
+});
+
+test("a failed running tool keeps its ✗ row once it folds; a streaming reply carries the carriage on its last row", () => {
+  const t = transcript();
+  t.handle({ type: "agent_start" });
+  t.handle({ type: "message_start", message: user("go") });
+  runTool(t, "bash", "b1", { args: { command: "make" }, finish: false });
+  t.handle({ type: "tool_execution_update", toolName: "bash", toolCallId: "b1", args: { command: "make" }, partialResult: { content: [{ type: "text", text: "a\nb" }] } });
+  t.handle({ type: "tool_execution_end", toolName: "bash", toolCallId: "b1", result: { content: [{ type: "text", text: "a\nb\n\nCommand exited with code 2" }] }, isError: true, durationMs: 90 });
+  assert.deepEqual(lines(t).slice(-2), [" ├─× make", " ├─  ✗ exit 2 · b"], "a failure draws no time; its ✗ row stays");
+
+  const streaming = assistant([{ type: "text", text: "First line.\n\nSecond" }]);
+  t.handle({ type: "message_start", message: { ...streaming, content: [] } });
+  t.handle({ type: "message_update", message: streaming, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "d" } });
+  const raw = t.root.render(80);
+  const last = raw.map(strip).findLastIndex((row) => row.includes("Second"));
+  assert.deepEqual(carriages(raw), [[last, "┃"]], "on the reply's last written row");
+  const more = { ...streaming, content: [{ type: "text", text: "First line.\n\nSecond\n\nThird" }] };
+  t.handle({ type: "message_update", message: more, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "T" } });
+  const moved = t.root.render(80);
+  assert.deepEqual(carriages(moved), [[moved.map(strip).findLastIndex((row) => row.includes("Third")), "┃"]], "a new line moves it down");
+});
+
+test("the carriage moving through a turn taller than the screen causes no full redraw (tip invariant)", (t) => {
+  let now = 3_000_000;
+  t.mock.method(Date, "now", () => now);
+  const tr = transcript();
+  const screen = new piTui.TuiMainScreen({ columns: 80, rows: 12, write() {}, hideCursor() {}, showCursor() {} }, false);
+  screen.addChild(tr.root);
+  tr.handle({ type: "agent_start" });
+  tr.handle({ type: "message_start", message: user("go") });
+  reply(tr, [{ type: "text", text: Array.from({ length: 20 }, (_, i) => `history ${i}`).join("\n\n") }]);
+  screen.renderNow();
+  const before = screen.fullRedraws;
+  for (const id of ["c1", "c2"]) {
+    runTool(tr, "bash", id, { args: { command: `make ${id}` }, finish: false });
+    for (let n = 1; n <= 9; n += 1) {
+      tr.handle({ type: "tool_execution_update", toolName: "bash", toolCallId: id, args: { command: `make ${id}` }, partialResult: { content: [{ type: "text", text: Array.from({ length: n }, (_, i) => `line ${i}`).join("\n") }] } });
+      now += 80;
+      screen.renderNow();
+    }
+    tr.handle({ type: "tool_execution_end", toolName: "bash", toolCallId: id, result: { content: [{ type: "text", text: "done" }] }, isError: false, durationMs: 700 });
+    now += 80;
+    screen.renderNow();
+  }
+  for (let i = 0; i < 6; i += 1) {
+    const message = assistant([{ type: "text", text: Array.from({ length: i + 1 }, (_, k) => `streamed ${k}`).join("\n\n") }]);
+    if (i === 0) tr.handle({ type: "message_start", message: { ...message, content: [] } });
+    tr.handle({ type: "message_update", message, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x" } });
+    now += 80;
+    screen.renderNow();
+  }
+  assert.equal(screen.fullRedraws - before, 0);
+});
+
+test("#15 no motion: the carriage sits still at the write row, the row width unchanged", (t) => {
+  t.mock.method(Date, "now", () => 5_000_000);
+  const tr = transcript();
+  tr.handle({ type: "agent_start" });
+  tr.handle({ type: "message_start", message: user("go") });
+  runTool(tr, "bash", "b1", { args: { command: "make" }, finish: false });
+  tr.handle({ type: "tool_execution_update", toolName: "bash", toolCallId: "b1", args: { command: "make" }, partialResult: { content: [{ type: "text", text: "x\ny" }] } });
+  const first = tr.root.render(80);
+  const later = tr.root.render(80);
+  assert.deepEqual(carriages(first), carriages(later), "the carriage does not move with the clock");
+  const [[row]] = carriages(first);
+  assert.equal(piTui.visibleWidth(first[row]), piTui.visibleWidth(first[row].replace("┃", "│")));
 });
 
 test("a !cmd on its own gets no spine; inside a turn it branches like a tool", async () => {
@@ -602,3 +699,21 @@ for (const action of ["no interaction", "fold", "expand", "new args", "the last 
     assert.equal(screen.fullRedraws - before, 0, `${action} made the clock redraw rows outside the tip`);
   });
 }
+
+// Every tool with partial output gets the same running slice (docs/tui-ctrl-o-per-block-design.md §9.1):
+// tools/block.ts cuts any framed renderer's running result -- Pi's codemode (nested calls) and MCP
+// (progress) renderers, an extension's own -- and the fallback for a tool with no renderer.
+test("the running slice applies to any framed tool: an extension renderer and the fallback show their newest 5 rows", async () => {
+  const { toolBlock } = await import("../dist/tui/tools/block.js");
+  const rows = Array.from({ length: 9 }, (_, i) => `progress ${i + 1}`);
+  const custom = toolBlock("ext", { renderResult: () => ({ render: () => rows, invalidate() {} }) });
+  const fallback = toolBlock("ext", undefined);
+  const result = { content: [{ type: "text", text: rows.join("\n") }] };
+  const ctx = (overrides) => ({ args: {}, state: {}, isError: false, executionStarted: true, expanded: false, ...overrides });
+  const shown = (framed, options, context) => framed.renderResult(result, options, theme, ctx(context)).render(80).map((row) => strip(row).trim());
+  for (const framed of [custom, fallback]) {
+    assert.deepEqual(shown(framed, { expanded: false, isPartial: true }, { isPartial: true }), rows.slice(-5), "running: the newest 5");
+    assert.deepEqual(shown(framed, { expanded: true, isPartial: true }, { isPartial: true, expanded: true }), rows, "opened with Ctrl+O: everything");
+  }
+  assert.deepEqual(shown(custom, { expanded: false, isPartial: false }, { isPartial: false }), rows, "finished: the renderer's own rows again");
+});

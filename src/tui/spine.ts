@@ -1,15 +1,16 @@
 // The turn spine (docs/tui-transcript-layout-design.md §7.3 "V-S", docs/tui-transcript-layout-
 // implementation.md W7/W8): one agent turn reads as one line down column 1 -- a `│` trunk beside the
 // reply text and thinking, a `├─` branch into each tool call (red into a failure row), `╰─` into the
-// `Worked for` footer, all a quiet `borderMuted`. While the turn runs, the spine's growing tip is the
-// running rail of docs/tui-motion-design.md M4: a heavy `┃` with a pulse sliding down it; a running
-// tool's branch is lit; a finished tool or thinking run flashes its stretch (M6).
+// `Worked for` footer, all a quiet `borderMuted`. While the turn runs, one accent cell marks the row
+// being written, the carriage (docs/tui-ctrl-o-per-block-design.md §9.1): `┃` on a trunk row, `┝` on
+// a call row. It moves down a row per new line and jumps back up when a running tool's output folds
+// away. A finished tool or thinking run flashes its stretch (docs/tui-motion-design.md M6).
 //
 // Only the tip moves, never the whole turn: pi-tui's main-screen renderer can only patch rows still
 // on screen, and a changed row that has scrolled off forces a full redraw (scrollback cleared and
-// everything written again) -- every frame, for an animated spine on a turn taller than the screen.
-// So the pulse, a running tool's lit branch and the completion flash all stay inside the tip; rows
-// above it look exactly as they will once the turn settles, so settling doesn't touch them either.
+// everything written again). So the carriage and the completion flash stay inside the tip (a
+// carriage that would fall above it is not drawn); rows above it look exactly as they will once the
+// turn settles, so settling doesn't touch them either.
 //
 // Painted at render time over the rows the transcript's blocks drew, like tools/group.ts's grouping,
 // so a /resume replay gets the same spine as a live run. Only glyphs in columns 1-2 change, never a
@@ -17,7 +18,7 @@
 // user messages, notices, extension messages and anything unknown break the spine.
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
-import { type Blend, blend, motionTime, railBlend } from "./motion.js";
+import { type Blend, blend } from "./motion.js";
 import { type FlashState, flashBlend, isFlashing } from "./tools/flash.js";
 
 /** `trunk`: every row on the trunk (reply text, thinking). `tool`: a branch into its first row.
@@ -29,8 +30,15 @@ export interface SpineMember {
   readonly spineRole: SpineRole;
   /** The flash running on `row` of the block's last render, if any. */
   spineFlash?(row: number): FlashState | undefined;
-  /** A tool still running: its branch lights up while the turn's spine pulses. */
-  readonly spineRunning?: boolean;
+  /** The row of `lines` (the block's rows as placed) being written right now -- a streaming reply's
+   * last row, a running tool's last output row or its call row -- or undefined when nothing is. */
+  spineWriteRow?(lines: readonly string[]): number | undefined;
+}
+
+/** The last row of `lines` with text, or undefined: where a block being written writes. */
+export function lastTextRow(lines: readonly string[]): number | undefined {
+  const row = lines.findLastIndex((line) => !isBlank(line));
+  return row === -1 ? undefined : row;
 }
 
 export function spineMember(component: object): SpineMember | undefined {
@@ -45,9 +53,9 @@ export interface SpineBlock {
 
 type Glyph = "trunk" | "branch" | "fail" | "close";
 
-// The animated tip: the live turn's last rows, one pulse period (motion.ts RAIL_PERIOD). Small enough to
-// stay on screen in any terminal the transcript has room in. Running duration bars obey it too
-// (tools/group.ts, ClockGated).
+// The animated tip: the live turn's last rows. Small enough to stay on screen in any terminal the
+// transcript has room in, and to hold a call row and its running output (RUNNING_SLICE_ROWS). Running
+// duration bars obey it too (tools/group.ts, ClockGated).
 export const TIP_ROWS = 8;
 
 /**
@@ -146,22 +154,30 @@ function overlay(line: string, glyphs: string, columns: number): string {
 
 interface PaintContext {
   theme: Theme;
-  t: number;
   now: number;
 }
 
-/** One spine cell. `pulse`: the row is in a live turn's tip; `flash`: the block's completion flash
- * color, if one runs (only ever inside the last turn's tip). */
-function paintRow(context: PaintContext, line: string, glyph: Glyph, member: SpineMember, cell: { flash: Blend | undefined; pulse: boolean; row: number }): string {
-  const { theme, t } = context;
+/** One spine cell. `flash`: the block's completion flash color, if one runs (only ever inside the
+ * last turn's tip); `carriage`: the row being written (only ever in a live turn's tip). */
+function paintRow(theme: Theme, line: string, glyph: Glyph, cell: { flash: Blend | undefined; carriage: boolean }): string {
   if (glyph === "fail") return overlay(line, theme.fg("error", "├─"), 2);
-  const pulsing = cell.flash === undefined && cell.pulse;
-  const tone = cell.flash ?? (pulsing ? railBlend(theme, cell.row, t) : blend(theme, "borderMuted", "borderMuted", 0));
-  if (glyph === "trunk") return overlay(line, tone.paint(pulsing ? "┃" : "│"), 1);
+  const tone = cell.flash ?? blend(theme, "borderMuted", "borderMuted", 0);
+  if (glyph === "trunk") return overlay(line, cell.carriage ? theme.fg("accent", "┃") : tone.paint("│"), 1);
   if (glyph === "close") return overlay(line, tone.paint("╰─"), 2);
-  // A running tool's branch holds steady between accent and thinkingHigh while the tip pulses past.
-  const branch = pulsing && member.spineRunning ? blend(theme, "accent", "thinkingHigh", 0.5) : tone;
-  return overlay(line, branch.paint("├─"), 2);
+  return overlay(line, cell.carriage ? theme.fg("accent", "┝") + tone.paint("─") : tone.paint("├─"), 2);
+}
+
+/** Where the carriage sits in `rows` (an index), if anywhere: the last row a block of the turn is
+ * writing. */
+function carriageIndex(blocks: readonly SpineBlock[], rows: readonly Row[]): number | undefined {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const { block, row } = rows[index]!;
+    const placed = blocks[block]!;
+    if (row !== placed.lines.length - 1 || placed.member === undefined || placed.member === "spacer") continue;
+    const written = placed.member.spineWriteRow?.(placed.lines);
+    if (written !== undefined) return index - row + written;
+  }
+  return undefined;
 }
 
 /** Rows a block's image keeps for itself, as pi-tui's Image lays it out (components/image.js): Kitty
@@ -191,7 +207,7 @@ function imageRows(lines: readonly string[]): Set<number> {
   return rows;
 }
 
-/** `tipped`: the newest turn, whose last rows may move (flashes; the pulse too while `live`). */
+/** `tipped`: the newest turn, whose last rows may move (flashes; the carriage too while `live`). */
 function paintTurn(context: PaintContext, blocks: SpineBlock[], turn: Turn, tipped: boolean, live: boolean): void {
   const rows: Row[] = turn.blocks.flatMap((block) => blocks[block]!.lines.map((_, row) => ({ block, row })));
   const first = rows.findIndex(({ block, row }) => !isBlank(blocks[block]!.lines[row]!));
@@ -203,17 +219,19 @@ function paintTurn(context: PaintContext, blocks: SpineBlock[], turn: Turn, tipp
     if (!firstContentRow.has(block) && !isBlank(blocks[block]!.lines[row]!)) firstContentRow.set(block, row);
   }
   const tipStart = tipped ? Math.max(0, last - first + 1 - TIP_ROWS) : Infinity;
+  const written = live ? carriageIndex(blocks, rows) : undefined;
+  const carriage = written !== undefined && written - first >= tipStart ? written : undefined;
   const images = new Map(turn.blocks.map((block) => [block, imageRows(blocks[block]!.lines)]));
   rows.slice(first, last + 1).forEach((position, index) => {
     const { block, row } = position;
     const placed = blocks[block]!;
     if (images.get(block)!.has(row)) return;
-    const member = placed.member === "spacer" ? { spineRole: "trunk" as const } : (placed.member as SpineMember);
+    const member = placed.member === "spacer" ? undefined : (placed.member as SpineMember);
     const glyph = placed.member === "spacer" ? "trunk" : glyphFor(blocks, position, firstContentRow.get(block) ?? -1);
     const tip = index >= tipStart;
-    const flashState = tip ? member.spineFlash?.(row) : undefined;
+    const flashState = tip ? member?.spineFlash?.(row) : undefined;
     const flash = flashState !== undefined && isFlashing(flashState, context.now) ? flashBlend(flashState, context.theme, context.now) : undefined;
-    placed.lines[row] = paintRow(context, placed.lines[row]!, glyph, member, { flash, pulse: tip && live, row: index });
+    placed.lines[row] = paintRow(context.theme, placed.lines[row]!, glyph, { flash, carriage: index + first === carriage });
   });
 }
 
@@ -225,7 +243,7 @@ function paintTurn(context: PaintContext, blocks: SpineBlock[], turn: Turn, tipp
 export function paintSpine(theme: Theme, blocks: SpineBlock[], width: number, running: boolean, now = Date.now()): void {
   if (width < 4) return;
   const turns = findTurns(blocks);
-  const context: PaintContext = { theme, t: motionTime(now), now };
+  const context: PaintContext = { theme, now };
   turns.forEach((turn, index) => {
     const tipped = !turn.cut && index === turns.length - 1;
     paintTurn(context, blocks, turn, tipped, tipped && running && !turn.closed);

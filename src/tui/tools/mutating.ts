@@ -6,7 +6,7 @@ import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 
 import type { InspectTarget } from "../buffer/inspector.js";
-import { CallLine, failureRow, isErrorResult, LinesComponent, setCallSummary, shortenCommand, textContent, truncateOutputLines } from "./common.js";
+import { CallLine, failureRow, isErrorResult, LinesComponent, RUNNING_SLICE_ROWS, setCallSummary, shortenCommand, textContent, truncateOutputLines } from "./common.js";
 import type { ToolRenderContext, ToolRenderers } from "./types.js";
 
 /** Bash output without Pi's trailing status paragraph, and that status as a short label (`exit 2`,
@@ -338,10 +338,9 @@ export const bashRenderers: ToolRenderers = {
   renderResult(result, options, theme, context) {
     const { failure, exitLabel, lines } = parseBashOutput(textContent(result), isErrorResult(result, context));
 
-    if (options.isPartial) {
-      const partialLines = lines.length <= 3 ? lines : lines.slice(-3);
-      return new LinesComponent(partialLines.map((l) => theme.fg("toolOutput", l)));
-    }
+    // The running slice: the newest lines while it runs (all of them when opened); it folds away as
+    // soon as the result lands.
+    if (options.isPartial) return new LinesComponent((options.expanded ? lines : lines.slice(-RUNNING_SLICE_ROWS)).map((l) => theme.fg("toolOutput", l)));
 
     // Success is the normal case and takes no row (docs/tui-transcript-layout-design.md R4): the
     // call line's run time says it finished. Only a failure gets a row, collapsed or not.

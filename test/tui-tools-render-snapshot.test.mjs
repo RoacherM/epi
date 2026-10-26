@@ -332,7 +332,8 @@ test("snapshot: bash tool call and results", () => {
   const outs = (lines) => lines.map((line) => fg("toolOutput", line));
   const render = (result, options, context = ctx()) => bashRenderers.renderResult(result, options, theme, context).render(80);
 
-  assert.deepEqual(render(text("1\n2\n3\n4"), { expanded: false, isPartial: true }), outs(["2", "3", "4"]));
+  // The running slice: the newest 5 lines (docs/tui-ctrl-o-per-block-design.md §9.1).
+  assert.deepEqual(render(text("1\n2\n3\n4\n5\n6\n7"), { expanded: false, isPartial: true }), outs(["3", "4", "5", "6", "7"]));
   assert.deepEqual(render(text("1\n2"), { expanded: false, isPartial: true }), outs(["1", "2"]));
   assert.deepEqual(render(text("ok\n"), collapsed), []);
   assert.deepEqual(render(text("oops\n\nCommand exited with code 2"), collapsed), [fg("error", "✗ exit 2 · oops")]);
@@ -421,7 +422,7 @@ test("D79: fallback makes malformed results visible without mislabelling valid e
 test("snapshot: user bash block", () => {
   const outRow = (line) => `     ${fg("toolOutput", line)}`;
   const running = new UserBashBlock(theme, "seq 1 9", false);
-  running.appendOutput(`${numbered(4).join("\n")}\n`);
+  running.appendOutput(`${numbered(7).join("\n")}\n`);
   // The bar is the time since the block started: normalized, it depends on how fast this runs.
   const [runningCall, ...runningRest] = running.render(80);
   assert.match(runningCall.replace(/\x1b\[[0-9;]*m/g, ""), /[▏▎▍▌·]···$/, "the time so far: under 10ms here, so `····`");
@@ -431,9 +432,12 @@ test("snapshot: user bash block", () => {
   assert.ok([fg("accent", "+"), fg("accent", "×")].includes(spin), JSON.stringify(spin));
   assert.deepEqual([runningCall.slice(0, runningCall.indexOf(" ".repeat(10))).replace(spin, "<x>"), ...runningRest], [
     `   <x> ${out("seq 1 9")}`,
-    outRow("line 2"),
+    // The running slice: the newest 5 lines.
     outRow("line 3"),
     outRow("line 4"),
+    outRow("line 5"),
+    outRow("line 6"),
+    outRow("line 7"),
     `     ${fg("muted", `Running… (${keyText("app.interrupt")} to cancel)`)}`,
   ]);
 

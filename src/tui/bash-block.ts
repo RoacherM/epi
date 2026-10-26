@@ -13,8 +13,8 @@ import { errorText } from "./errors.js";
 import { GLYPHS, paintMarker, renderThroughLanding, takePhase } from "./glyphs.js";
 import { TURN_COLUMNS } from "./measure.js";
 import { piTui } from "./pi-tui.js";
-import type { ClockGated, SpineMember } from "./spine.js";
-import { durationBar, failureRow, fitCallRow, formatToolDuration, shortenCommand, truncateOutputLines } from "./tools/common.js";
+import { type ClockGated, lastTextRow, type SpineMember } from "./spine.js";
+import { durationBar, failureRow, fitCallRow, formatToolDuration, RUNNING_SLICE_ROWS, shortenCommand, truncateOutputLines } from "./tools/common.js";
 
 // Matches tools/block.ts: a rail column, then 2 columns of padding before the marker (the rotating x
 // while it runs, then `$` or `!!`); output lines sit two columns further in, under the marker's text.
@@ -83,8 +83,12 @@ export class UserBashBlock implements Component, SpineMember, ClockGated {
     this.outputLines.push(...parts.slice(1));
   }
 
-  get spineRunning(): boolean {
-    return this.status === "running";
+  /** Running: the carriage sits on the newest output row, or on the call row before any output --
+   * not on the `Running…` row under them. */
+  spineWriteRow(lines: readonly string[]): number | undefined {
+    if (this.status !== "running") return undefined;
+    const call = lines.findIndex((line) => line.trim() !== "");
+    return call === -1 ? lastTextRow(lines) : call + Math.min(RUNNING_SLICE_ROWS, this.lines().length);
   }
 
   setComplete(exitCode: number | undefined, cancelled: boolean): void {
@@ -133,8 +137,9 @@ export class UserBashBlock implements Component, SpineMember, ClockGated {
     const marker = this.marker(running);
     const { text, extraLines } = shortenCommand(this.command, undefined);
     const extra = extraLines > 0 ? this.theme.fg("dim", ` · +${extraLines} lines`) : "";
-    // The same column and bar as a model's call row (docs/tui-one-column-design.md §2.2): the time so
-    // far while it runs, the final time once done; a failure or a cancel draws none.
+    // The same column and bar as a collapsed model's call row (docs/tui-one-column-design.md §2.2): the
+    // time so far while it runs, the final time once done; a failure or a cancel draws none. A `!cmd`
+    // has no expanded state (Ctrl+O opens tool blocks), so it never shows the number there.
     const ms = this.status === "done" ? this.durationMs : running && this.startedAt !== undefined ? Math.max(0, displayNow() - this.startedAt) : undefined;
     const bar = ms === undefined ? "" : durationBar(this.theme, ms);
     const fallback = this.status === "done" && ms !== undefined ? `  ${this.theme.fg("dim", formatToolDuration(ms))}` : "";
@@ -143,9 +148,10 @@ export class UserBashBlock implements Component, SpineMember, ClockGated {
     const callLine = callPrefix + body;
 
     const lines = this.lines();
-    // While running, show the live tail (matches tools/mutating.ts bashRenderers' `isPartial` case);
-    // once finished, apply the fixed head/ellipsis/tail rule instead.
-    const shown = running ? lines.slice(-3) : truncateBashOutput(lines);
+    // While running, the running slice: the newest lines (matches tools/mutating.ts bashRenderers'
+    // `isPartial` case); once finished, the fixed head/ellipsis/tail rule instead -- a `!cmd` has no
+    // Ctrl+O of its own, so its output stays.
+    const shown = running ? lines.slice(-RUNNING_SLICE_ROWS) : truncateBashOutput(lines);
     const bodyPrefix = " ".repeat(RESULT_PREFIX);
     const rows = shown.map((entry) => bodyPrefix + this.theme.fg("toolOutput", entry));
 

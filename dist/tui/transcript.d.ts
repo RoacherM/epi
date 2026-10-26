@@ -16,7 +16,12 @@ export declare class Transcript {
     private readonly userMessages;
     private readonly assistantBlocks;
     private streaming;
+    /** The extensions' all-blocks toggle (pi.ui.setToolsExpanded). */
     private toolsExpanded;
+    /** Tool calls Ctrl+O opened, by call id: it toggles only the most recent block (a read-only run is
+     * one block: all its members). Independent of `toolsExpanded`, which neither sets nor clears it
+     * (docs/tui-ctrl-o-per-block-design.md §4). Cleared by reset(); never closed on its own. */
+    private readonly expandedBlocks;
     private thinkingExpanded;
     /** The open block inspector, at most one (docs/tui-buffer-overlay-design.md §4): opening
      * another replaces it, and reset() (/new, /resume, /reload, /tree) closes it. */
@@ -60,9 +65,12 @@ export declare class Transcript {
     get highestImageNumber(): number;
     /** A user message's text was shown or handed to the session: its labels are used up. */
     noteImageLabels(text: string): void;
-    /** Ctrl+O (docs/tui-design.md 4.3, item 5): the same toggle that expands tool output also
-     * expands a user message collapsed past 3 lines, instead of a second toggle. */
+    /** The extensions' all-blocks toggle (pi.ui.setToolsExpanded): every tool block, and every user
+     * message collapsed past 3 lines. Off, the blocks Ctrl+O opened stay open. */
     setToolsExpanded(expanded: boolean): void;
+    /** Ctrl+O (docs/tui-ctrl-o-per-block-design.md §4.2): opens or closes the most recent tool block
+     * only. False when there is none. */
+    toggleLastToolBlock(): boolean;
     /** Ctrl+T (docs/tui-design.md 4.2/4.6, `app.thinking.toggle`): expands or collapses every
      * thinking run in every assistant message at once, independent of Ctrl+O's tool/user-message
      * toggle. */

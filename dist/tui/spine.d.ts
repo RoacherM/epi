@@ -8,9 +8,12 @@ export interface SpineMember {
     readonly spineRole: SpineRole;
     /** The flash running on `row` of the block's last render, if any. */
     spineFlash?(row: number): FlashState | undefined;
-    /** A tool still running: its branch lights up while the turn's spine pulses. */
-    readonly spineRunning?: boolean;
+    /** The row of `lines` (the block's rows as placed) being written right now -- a streaming reply's
+     * last row, a running tool's last output row or its call row -- or undefined when nothing is. */
+    spineWriteRow?(lines: readonly string[]): number | undefined;
 }
+/** The last row of `lines` with text, or undefined: where a block being written writes. */
+export declare function lastTextRow(lines: readonly string[]): number | undefined;
 export declare function spineMember(component: object): SpineMember | undefined;
 /** One block's rows as GroupedMessages placed them. `member` undefined: not part of a turn. */
 export interface SpineBlock {

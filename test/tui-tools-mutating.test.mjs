@@ -183,7 +183,8 @@ test("bash: the call line drops `cd <cwd> &&`, writes home as ~, and adds the ru
   assert.equal(call(`cd ~/proj && ls ${home}/other`), "ls ~/other");
   assert.equal(call(`cd ${cwd}/sub && make`), `cd ~/proj/sub && make`, "only the session's own cwd is left out");
   assert.equal(call("npm test", { durationMs: 30 }), `${"npm test".padEnd(196)}▌···`);
-  assert.equal(call("npm test", { durationMs: 140_500 }), `${"npm test".padEnd(190)}████ 2m20s`, "a full bar is followed by the time");
+  assert.equal(call("npm test", { durationMs: 140_500 }), `${"npm test".padEnd(196)}████`, "a full bar has no number after it");
+  assert.equal(call("npm test", { durationMs: 140_500, expanded: true }), `${"npm test".padEnd(195)}2m20s`, "expanded: only the number, at the same edge");
   assert.equal(call("npm test", { durationMs: 30, isError: true }), "npm test", "a failure's row says what happened instead");
   assert.equal(call("npm test", { durationMs: 30, isPartial: true }), "npm test", "not started yet: no time so far");
 });
@@ -280,19 +281,16 @@ test("bash: expanded result shows first 2, ellipsis, and last 3 when > 5 lines",
   assert.ok(!lines.some((l) => l.includes("line 3") || l.includes("line 7")));
 });
 
-test("bash: streaming partial results show the last 3 lines", () => {
-  const content = "first\nsecond\nthird\nfourth\nfifth\nsixth";
-  const res = bashRenderers.renderResult(
+test("bash: streaming partial results show the running slice, the newest 5 lines (all of them when opened)", () => {
+  const content = "first\nsecond\nthird\nfourth\nfifth\nsixth\nseventh";
+  const render = (expanded) => bashRenderers.renderResult(
     { content: [{ type: "text", text: content }] },
-    { expanded: false, isPartial: true },
+    { expanded, isPartial: true },
     theme,
     { isError: false },
-  );
-  const lines = res.render(80);
-  assert.equal(lines.length, 3);
-  assert.ok(lines[0].includes("fourth"));
-  assert.ok(lines[1].includes("fifth"));
-  assert.ok(lines[2].includes("sixth"));
+  ).render(80).map(strip);
+  assert.deepEqual(render(false), ["third", "fourth", "fifth", "sixth", "seventh"]);
+  assert.deepEqual(render(true), content.split("\n"), "Ctrl+O opened it: every line so far");
 });
 
 test("edit: call line shows verb and cwd-relative path", () => {

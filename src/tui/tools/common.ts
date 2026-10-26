@@ -87,6 +87,10 @@ export function truncateOutputLines(lines: string[], ellipsis: (text: string) =>
   return [...lines.slice(0, 2), ellipsis(`… +${lines.length - 5} lines`), ...lines.slice(-3)];
 }
 
+/** A running tool's output under its call row, newest rows last (docs/tui-ctrl-o-per-block-design.md
+ * §9.1): the call row and these fit in the spine's tip (TIP_ROWS = 8), where the carriage moves. */
+export const RUNNING_SLICE_ROWS = 5;
+
 /** A tool's run time on its call line: `2.1s`, `2m20s`; under a second in milliseconds, since
  * `0.0s`/`0.1s` say nothing about a 30ms grep. */
 export function formatToolDuration(ms: number): string {
@@ -105,16 +109,15 @@ export function fitWithTail(body: string, tail: string, width: number, ellipsis:
 
 // A duration bar (docs/tui-one-column-design.md §2.2): four cells, one decade each -- 10ms–100ms,
 // 100ms–1s, 1s–10s, 10s–100s -- filled in eighths at the log position. Tool run times span four or
-// five decades; on a linear scale everything but the slowest would be a sliver.
+// five decades; on a linear scale everything but the slowest would be a sliver. A collapsed row shows
+// only the bar, an expanded one only the number (docs/tui-ctrl-o-per-block-design.md §9.2).
 const BAR_CELLS = 4;
 const EIGHTHS = ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
-// From here the bar is full and can't tell lengths apart, so the time follows it as a number.
-const BAR_FULL_MS = 100_000;
 // Below this many columns for the whole call row there is no room for a column: the time stays a
 // number at the end of the body, as in 0.1.22.
 const MIN_COLUMN_FOR_BAR = 16;
 
-/** `ms` as a bar: dim filled cells, then `·` for the empty ones; with the time after a full bar. Under
+/** `ms` as a bar: dim filled cells, then `·` for the empty ones; full from 100s on. Under
  * 10ms nothing is filled (`····`, all but instant): a `▏` there, drawn full-height by terminals, lined
  * up with the next fast call's into what read as a divider (docs/tui-one-column-design.md §2.2). */
 export function durationBar(theme: Theme, ms: number): string {
@@ -123,12 +126,17 @@ export function durationBar(theme: Theme, ms: number): string {
   const eighths = Math.round((position - full) * 8);
   let filled = "█".repeat(full) + (full < BAR_CELLS && eighths > 0 ? EIGHTHS[eighths - 1] : "");
   if (filled === "" && ms >= 10) filled = "▏";
-  const bar = (filled === "" ? "" : theme.fg("dim", filled)) + theme.fg("borderMuted", "·".repeat(BAR_CELLS - [...filled].length));
-  return ms >= BAR_FULL_MS ? `${bar} ${theme.fg("dim", formatDuration(ms))}` : bar;
+  return (filled === "" ? "" : theme.fg("dim", filled)) + theme.fg("borderMuted", "·".repeat(BAR_CELLS - [...filled].length));
+}
+
+/** The right edge of a call row: the bar when collapsed, the time as a number when expanded. */
+export function rightEdgeTime(theme: Theme, ms: number, expanded: boolean): string {
+  return expanded ? theme.fg("muted", formatToolDuration(ms)) : durationBar(theme, ms);
 }
 
 /** What a call row holds: the body (cut to fit), its tail (`· +36 lines`, `· +3 −1`; never cut), the
- * duration bar ("" for none), and the time as a number for a line too narrow for a column. */
+ * right edge (the duration bar or the number, "" for none), and the time as a number for a line too
+ * narrow for a column. */
 interface CallRowParts {
   body: string;
   tail: string;
@@ -138,15 +146,14 @@ interface CallRowParts {
 
 /**
  * A call row in the turn's one column (docs/tui-one-column-design.md §2.1): the body and its tail
- * fill the column up to the bar, and the bar starts at the same column on every row -- the
- * measure's right edge less its cells -- so a group of calls lines its bars up. A number after a
- * full bar runs past the edge when the line has room, and otherwise moves the bar left. `width` is
- * the row's width after the marker.
+ * fill the column up to the bar, and the bar ends at the terminal's right edge on every row, so a
+ * group of calls lines its bars up. A number in its place (an expanded row) ends at the same edge.
+ * `width` is the row's width after the marker.
  */
 export function fitCallRow({ body, tail, bar, fallbackTime = "" }: CallRowParts, width: number, ellipsis: string): string {
   const column = Math.min(width, DEFAULT_MEASURE);
   if (bar === "" || column < MIN_COLUMN_FOR_BAR) return fitWithTail(body, tail + fallbackTime, column, ellipsis);
-  const start = Math.max(0, Math.min(column - BAR_CELLS, width - piTui.visibleWidth(bar)));
+  const start = Math.max(0, column - piTui.visibleWidth(bar));
   const left = fitWithTail(body, tail, Math.max(1, start - 1), ellipsis);
   return left + " ".repeat(Math.max(1, start - piTui.visibleWidth(left))) + bar;
 }
@@ -195,12 +202,10 @@ export class CallLine implements Component {
     return typeof startedAt === "number" ? Math.max(0, displayNow() - startedAt) : undefined;
   }
 
-  /** The bar for the time so far, with the exact time after it when expanded (Ctrl+O). */
+  /** The time so far: a bar, or the number when expanded (Ctrl+O). */
   private bar(): string {
     const ms = this.elapsed();
-    if (ms === undefined) return "";
-    const exact = this.context.expanded && ms < 100_000 ? ` ${this.theme.fg("dim", formatToolDuration(ms))}` : "";
-    return durationBar(this.theme, ms) + exact;
+    return ms === undefined ? "" : rightEdgeTime(this.theme, ms, this.context.expanded === true);
   }
 
   invalidate(): void {}
