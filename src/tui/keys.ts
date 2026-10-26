@@ -112,7 +112,7 @@ export function createKeyActions(): KeyAction[] {
     },
     {
       id: "app.tools.expand",
-      run: (host) => host.toggleToolsExpanded(),
+      run: (host) => host.toggleLastToolBlock(),
     },
     {
       id: "app.thinking.toggle",

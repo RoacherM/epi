@@ -42,7 +42,12 @@ export class Transcript {
     userMessages = [];
     assistantBlocks = [];
     streaming;
+    /** The extensions' all-blocks toggle (pi.ui.setToolsExpanded). */
     toolsExpanded = false;
+    /** Tool calls Ctrl+O opened, by call id: it toggles only the most recent block (a read-only run is
+     * one block: all its members). Independent of `toolsExpanded`, which neither sets nor clears it
+     * (docs/tui-ctrl-o-per-block-design.md §4). Cleared by reset(); never closed on its own. */
+    expandedBlocks = new Set();
     thinkingExpanded = false;
     /** The open block inspector, at most one (docs/tui-buffer-overlay-design.md §4): opening
      * another replaces it, and reset() (/new, /resume, /reload, /tree) closes it. */
@@ -77,7 +82,7 @@ export class Transcript {
         this.tui = tui;
         this.theme = theme;
         this.session = session;
-        this.groupedMessages = new GroupedMessages(this.messages, this.tui, this.theme, () => this.turnStartedAt !== undefined);
+        this.groupedMessages = new GroupedMessages(this.messages, this.tui, this.theme, () => this.turnStartedAt !== undefined, (anchor) => this.expandedBlocks.has(anchor.callId));
         this.root.addChild({
             render: (width) => (this.messageCount === 0 ? this.header.render(width) : []),
             invalidate: () => this.header.invalidate(),
@@ -101,6 +106,7 @@ export class Transcript {
         this.messageCount = 0;
         this.highestImage = 0;
         this.tools.clear();
+        this.expandedBlocks.clear();
         this.userMessages.length = 0;
         this.assistantBlocks.length = 0;
         this.streaming = undefined;
@@ -153,17 +159,35 @@ export class Transcript {
     noteImageLabels(text) {
         this.highestImage = Math.max(this.highestImage, ...imageLabelNumbers(text));
     }
-    /** Ctrl+O (docs/tui-design.md 4.3, item 5): the same toggle that expands tool output also
-     * expands a user message collapsed past 3 lines, instead of a second toggle. */
+    /** The extensions' all-blocks toggle (pi.ui.setToolsExpanded): every tool block, and every user
+     * message collapsed past 3 lines. Off, the blocks Ctrl+O opened stay open. */
     setToolsExpanded(expanded) {
         this.toolsExpanded = expanded;
         for (const tool of this.tools.values())
-            tool.setExpanded(expanded);
+            tool.setExpanded(expanded || this.expandedBlocks.has(tool.callId));
         for (const block of this.userMessages)
             block.setExpanded(expanded);
         // Ctrl+O is authoritative over grouping too: it always wins over a group left unfolded (or
         // partly revealed) by a click (tools/group.ts's GroupedMessages doc comment).
         this.groupedMessages.setToolsExpanded(expanded);
+    }
+    /** Ctrl+O (docs/tui-ctrl-o-per-block-design.md §4.2): opens or closes the most recent tool block
+     * only. False when there is none. */
+    toggleLastToolBlock() {
+        const block = this.groupedMessages.lastToolBlock();
+        if (block === undefined)
+            return false;
+        const open = !this.expandedBlocks.has(block[0].callId);
+        this.groupedMessages.forget(block[0]);
+        for (const tool of block) {
+            if (open)
+                this.expandedBlocks.add(tool.callId);
+            else
+                this.expandedBlocks.delete(tool.callId);
+            tool.setExpanded(open || this.toolsExpanded);
+        }
+        this.tui.requestRender();
+        return true;
     }
     /** Ctrl+T (docs/tui-design.md 4.2/4.6, `app.thinking.toggle`): expands or collapses every
      * thinking run in every assistant message at once, independent of Ctrl+O's tool/user-message

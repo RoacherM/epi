@@ -73,7 +73,8 @@ export interface CommandHost {
     /** Drop the turn status row. Only for Esc when the row shows but the session is idle (dogfood
      * D15): every normal path clears it from session events. */
     clearTurnStatus(): void;
-    toggleToolsExpanded(): void;
+    /** Ctrl+O: opens or closes the most recent tool block (Transcript.toggleLastToolBlock). */
+    toggleLastToolBlock(): void;
     /** Ctrl+T (docs/tui-design.md 4.2/4.6, `app.thinking.toggle`): expands/collapses every finished
      * thinking block, independent of Ctrl+O's tool/user-message toggle. */
     toggleThinkingExpanded(): void;

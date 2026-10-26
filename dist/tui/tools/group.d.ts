@@ -29,6 +29,8 @@ export declare class ToolEntry extends ToolExecutionComponent implements SpineMe
     /** When it finished, if it was seen running: the group row's marker shakes then (glyphs.ts). */
     endedAt: number | undefined;
     clockLive: boolean;
+    /** Pi keeps the call id private; Ctrl+O's per-block state (Transcript.expandedBlocks) is keyed by it. */
+    readonly callId: string;
     private shownAt;
     private started;
     constructor(toolName: string, toolCallId: string, args: unknown, renderers: ToolRenderers | undefined, hostUi: TUI, cwd: string, groupKind: GroupKind | undefined, options?: ToolExecutionOptions);
@@ -89,6 +91,9 @@ export declare class GroupedMessages implements Component {
     private readonly theme;
     /** A turn is in progress: its spine is live (src/tui/spine.ts). */
     private readonly turnRunning;
+    /** Ctrl+O opened the run starting at this member (Transcript.expandedBlocks): it draws like a
+     * run under the all-blocks toggle, every member and no fold row. */
+    private readonly isOpen;
     private mouseLayout;
     private toolsExpanded;
     private readonly unfolded;
@@ -105,10 +110,19 @@ export declare class GroupedMessages implements Component {
     private readonly runKeys;
     constructor(messages: Container, tui: TUI, theme: Theme, 
     /** A turn is in progress: its spine is live (src/tui/spine.ts). */
-    turnRunning?: () => boolean);
+    turnRunning?: () => boolean, 
+    /** Ctrl+O opened the run starting at this member (Transcript.expandedBlocks): it draws like a
+     * run under the all-blocks toggle, every member and no fold row. */
+    isOpen?: (anchor: ToolEntry) => boolean);
     invalidate(): void;
     /** `Ctrl+O`: always wins over any per-group unfold/reveal state left over from clicks. */
     setToolsExpanded(expanded: boolean): void;
+    /** Ctrl+O on one run: a click's unfold/reveal of it is dropped, so closing it again folds it. */
+    forget(anchor: ToolEntry): void;
+    /** The most recent tool block, newest last: one tool, or every member of the read-only run it
+     * ends (a run is one row, so Ctrl+O opens it whole). Read again on every call: runs grow at the
+     * tail while a turn streams. */
+    lastToolBlock(): ToolEntry[] | undefined;
     /** Cleared on `Transcript.reset()`: old runs' first members no longer resolve to anything on screen. */
     dispose(): void;
     render(width: number): string[];
