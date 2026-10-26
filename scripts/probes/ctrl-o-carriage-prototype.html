@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>运行中的一片 · 字车 · 右缘进度条 —— Epi TUI 原型 v3</title>
+<style>
+:root{color-scheme:dark;--bg:#1c1c1c;--text:#e1e1e1;--out:#c8c8c8;--muted:#6c6c6c;--dim:#585858;
+--rail:#323237;--amber:#e0af68;--accent:#bb9af7;--err:#f7768e}
+*{box-sizing:border-box}
+body{margin:0;padding:40px 24px 80px;background:#0e0f11;color:#d4d4d8;
+font:15px/1.7 -apple-system,"SF Pro Text","PingFang SC",sans-serif}
+main{max-width:1180px;margin:0 auto}
+h1{font-size:25px;font-weight:650;color:#ececee;margin:0 0 4px}
+h2{font-size:18px;font-weight:650;color:#ececee;margin:40px 0 6px}
+p,li{color:#a5a5ad;max-width:80ch}
+p{margin:6px 0}
+.sub{color:#71717a;font-size:14px}
+code{font:12.5px ui-monospace,"SF Mono",Menlo,monospace;color:#9db8c4}
+table{border-collapse:collapse;margin:10px 0;font-size:14px}
+td,th{border:1px solid #26282d;padding:6px 12px;text-align:left;vertical-align:top;color:#a5a5ad}
+th{color:#c9c9cf;font-weight:600;background:#16171a}
+.term{margin:12px 0 6px;border:1px solid #26282d;border-radius:10px;overflow:hidden;background:var(--bg);
+box-shadow:0 12px 32px rgba(0,0,0,.4)}
+.resizable{resize:horizontal;min-width:340px;max-width:100%;width:100%}
+.cap{padding:7px 13px;font-size:12.5px;color:#8e8e96;background:#1c1d20;border-bottom:1px solid #26282d;
+display:flex;justify-content:space-between;gap:12px;align-items:center}
+.cap b{color:#c9c9cf;font-weight:600}
+.cap button{font:12px ui-monospace,Menlo,monospace;background:#26282d;color:#c9c9cf;border:1px solid #34363c;
+border-radius:5px;padding:2px 9px;cursor:pointer}
+.cap button.on{background:#3a2f55;border-color:#bb9af7}
+pre{margin:0;padding:12px 14px 14px;overflow:hidden;color:var(--text);
+font:12.5px/1.55 ui-monospace,"SF Mono",Menlo,monospace;white-space:pre}
+.legend{font-size:13px;color:#8e8e96;margin:2px 2px 22px;max-width:86ch}
+.legend b{color:#c2c2c9}
+.grid{display:grid;grid-template-columns:1fr;gap:0}
+.t{color:var(--text)}.o{color:var(--out)}.m{color:var(--muted)}.d{color:var(--dim)}.a{color:var(--amber)}
+.r{color:var(--rail)}.c{color:var(--accent)}.e{color:var(--err)}
+</style></head><body><main>
+
+<h1>运行中的一片 · 字车 · 右缘进度条</h1>
+<p class="sub">原型 v3（2026-10-29）。取代 v2 的「左侧方块循环扫」和「按单位分色的方块条」。本文件是实现的唯一准绳；下方的动画和四张快照由同一个渲染函数画出。</p>
+
+<h2>规则（三条）</h2>
+<table>
+<tr><th>要素</th><th>规则</th></tr>
+<tr><td>运行中的一片</td><td>工具运行时，它的输出<b>实时摊开</b>在调用行下面，最多 5 行；超过 5 行时窗口内上滚，只留最新 5 行。工具结束，这一片<b>立刻折叠</b>，回到一行。失败的工具留一行 <code>✗</code>。</td></tr>
+<tr><td>字车 <code>┃</code></td><td>画在左侧 spine 列（第 2 列），用 <code>accent</code> 色的粗竖线 <code>┃</code>（调用行上用 <code>┝</code>），和上下的 <code>│</code> 连成一条细长的线，停在<b>正在写的那一行</b>。不换行就停在原行；输出一换行就下移一行；窗口满了就停在窗口底行，内容在它上方滚动（纸在走，字车不走）；工具结束、这一片折叠，字车<b>跳回上方</b>，停到下一个正在写的地方。全屏只有它一个在走。spine 其余部分只用结构色，删掉光带和呼吸。</td></tr>
+<tr><td>右侧时间</td><td><b>折叠</b>：只画 4 格对数进度条（沿用现有 <code>durationBar</code>：每格一个数量级，10ms→100s，可以细到 1/8 格），不画数字。运行中进度条实时增长。<b>展开</b>（Ctrl+O）：同一位置换成数字。两种都<b>贴终端右边缘</b>，随窗口宽度动态变化，和顶栏、底栏的右缘是同一条线。</td></tr>
+</table>
+
+<h2>一、动画（可拖右下角改宽度）</h2>
+<div class="term resizable" id="liveTerm"><div class="cap"><b>一轮运行</b>
+<span><span id="cols"></span>
+<button id="b40">40 列</button> <button id="b80">80 列</button> <button id="b120">120 列</button>
+<button id="ctrlo">Ctrl+O</button> <button id="pause">暂停</button></span></div>
+<pre id="live"></pre></div>
+<p class="legend">看三件事：① 第一段文字没换行时字车停在原行，换行后下移；② <code>node --test</code> 运行时输出摊开成一片，字车随行下移，满 5 行后不再动、内容上滚；结束后整片折叠，字车跳回上方；③ 右侧进度条贴右缘、运行中增长。按 <b>Ctrl+O</b>（或按钮）只展开/收起最近一个工具块，展开后进度条换成数字。演示里工具的耗时按比例压缩（2m34s 的测试用 4 秒放完），进度条的长度按真实耗时画。</p>
+
+<h2>二、四个关键帧（同一渲染函数，固定 84 列）</h2>
+<div class="grid">
+<div><div class="term"><div class="cap"><b>A · 文字流式</b><span>字车停在正在写的行</span></div><pre id="snapA"></pre></div></div>
+<div><div class="term"><div class="cap"><b>B · 工具运行中</b><span>一片输出 + 字车在底行</span></div><pre id="snapB"></pre></div></div>
+<div><div class="term"><div class="cap"><b>C · 工具结束</b><span>折叠回一行，字车跳回</span></div><pre id="snapC"></pre></div></div>
+<div><div class="term"><div class="cap"><b>D · 结束后按 Ctrl+O</b><span>只展开最后一块，进度条换成数字</span></div><pre id="snapD"></pre></div></div>
+</div>
+
+<h2>三、和现状的差量（给实现者）</h2>
+<table>
+<tr><th>项</th><th>现状（代码事实）</th><th>改成</th></tr>
+<tr><td>运行中的一片</td><td>已有：bash 运行时显示最后 3 行，成功后不占行（<code>tools/mutating.ts:341</code>，<code>bash-block.ts:146</code>）</td><td>3 行改为 5 行（调用行 + 5 行 ≤ <code>TIP_ROWS = 8</code>，不出动画区）</td></tr>
+<tr><td>字车</td><td>spine 尖端是 <code>railBlend</code> 光带，思考行有呼吸（<code>spine.ts:159</code>）</td><td>删光带和呼吸；在当前写入行的 spine 格画 accent 色 <code>┃</code>（调用行 <code>┝</code>）</td></tr>
+<tr><td>进度条位置</td><td>已贴右缘：<code>DEFAULT_MEASURE = ∞</code>，<code>fitCallRow</code> 把条放在 <code>width − 4</code>（<code>common.ts:147</code>）</td><td>不变</td></tr>
+<tr><td>折叠时的数字</td><td>≥100s 时条后接数字；展开时条后接数字（<code>common.ts:127,202</code>）</td><td>折叠永远只有条；展开时只有数字，右对齐到同一右缘</td></tr>
+</table>
+
+<script>
+// ── 数据：一轮运行 ──────────────────────────────────────────────
+const SCRIPT = [
+  { type: "text", text: "Model is set. Next, a baseline on the current code with flash in every role, so the later optimizations have a fair comparison point." },
+  { type: "tool", cmd: "sed -n 70,140p src/task-runtime.ts", dur: 450, ms: 310, out: [
+    "export function jobResult(job: Job): string {", "  if (job.state !== \"done\") return pending(job);", "  return job.result ?? \"\";", "}"] },
+  { type: "tool", cmd: "grep -rn 'createTaskInlineExtension' test/*.mjs", dur: 260, ms: 80, out: [] },
+  { type: "tool", cmd: "python3 - <<'EOF'", extra: "+35 lines", dur: 1300, ms: 2400, out: [
+    "parsed 42 fixtures", "rewrote 3 snapshots", "ok"] },
+  { type: "tool", cmd: "node --test test/*.test.mjs 2>&1 | tail -12", dur: 4200, ms: 154000, out: [
+    "> epi@0.2.0 test", "> node --test test/*.test.mjs", "# Subtest: task-runtime", "ok 1 - jobResult resolves",
+    "ok 2 - mailbox survives reload", "# Subtest: tui-keys", "ok 3 - ctrl+o toggles last block",
+    "ok 4 - footer keeps ctrl+o:expand", "# tests 1312", "# pass 1312", "# fail 0", "# duration_ms 412873"] },
+  { type: "text", text: "1312 tests pass. Checking whether the model-visible snapshot was silently regenerated." },
+  { type: "footer" },
+];
+const CHAR_MS = 16, GAP = 380, LEAD = 500, HOLD = 3200, WINDOW = 5;
+
+// ── 时间线 ──────────────────────────────────────────────────────
+const EVENTS = [];
+let clock = LEAD;
+SCRIPT.forEach((item, id) => {
+  const start = clock;
+  const end = item.type === "text" ? start + item.text.length * CHAR_MS : item.type === "tool" ? start + item.dur : start;
+  EVENTS.push({ ...item, id, start, end });
+  clock = end + GAP;
+});
+const TOTAL = EVENTS[EVENTS.length - 1].start;
+
+// ── 移植自 src/tui：formatDuration (chrome.ts:59) / durationBar (tools/common.ts:120) ──
+function formatDuration(ms) {
+  if (ms < 950) return `${Math.max(1, Math.round(ms))}ms`;
+  const s = ms / 1000, tenths = s.toFixed(1);
+  if (s < 60 && tenths !== "60.0") return `${tenths}s`;
+  const total = Math.max(60, Math.floor(s));
+  return [[Math.floor(total / 3600), "h"], [Math.floor((total % 3600) / 60), "m"], [total % 60, "s"]]
+    .filter(([v]) => v > 0).map(([v, u]) => `${v}${u}`).join("");
+}
+const EIGHTHS = ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
+function durationBar(ms) {
+  const pos = Math.min(4, Math.max(0, Math.log10(Math.max(ms, 1) / 10)));
+  const full = Math.floor(pos), eighths = Math.round((pos - full) * 8);
+  let filled = "█".repeat(full) + (full < 4 && eighths > 0 ? EIGHTHS[eighths - 1] : "");
+  if (filled === "" && ms >= 10) filled = "▏";
+  return [[filled, "d"], ["·".repeat(4 - [...filled].length), "r"]];
+}
+const spin = (t) => (Math.floor(t / 320) % 2 === 0 ? "+" : "×");
+
+// ── 渲染：纯函数 render(t, cols, expanded) → HTML ───────────────
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const len = (segs) => segs.reduce((n, [s]) => n + [...s].length, 0);
+function cut(s, w) { const a = [...s]; return a.length <= w ? s : w <= 1 ? a.slice(0, Math.max(0, w)).join("") : a.slice(0, w - 1).join("") + "…"; }
+function wrap(s, w) {
+  const out = []; let line = "";
+  for (const word of s.split(" ")) {
+    if (line === "") line = word;
+    else if ([...line].length + 1 + [...word].length <= w) line += " " + word;
+    else { out.push(line); line = word; }
+  }
+  out.push(line);
+  return out.flatMap((l) => (l.length > w ? l.match(new RegExp(`.{1,${w}}`, "g")) : [l]));
+}
+// 一行 = { spine: "│"|"├─"|"╰─"|"", segs: [[text, cls]], right: [[text, cls]], cursor: bool }
+function rows(t, cols, expanded) {
+  const out = [];
+  const live = EVENTS.filter((e) => e.start <= t);
+  const turnOpen = !live.some((e) => e.type === "footer");
+  const lastTool = [...live].reverse().find((e) => e.type === "tool");
+  live.forEach((e, i) => {
+    const prev = live[i - 1];
+    if (prev && prev.type !== e.type && e.type !== "footer") out.push({ spine: "│", segs: [] });
+    if (e.type === "text") {
+      const shown = e.text.slice(0, Math.floor((t - e.start) / CHAR_MS));
+      const lines = wrap(shown, Math.max(8, cols - 3));
+      const writing = t < e.end;
+      lines.forEach((l, k) => out.push({ spine: "│", segs: [[l, "t"]], cursor: writing && k === lines.length - 1 }));
+    } else if (e.type === "tool") {
+      const running = t < e.end;
+      const ms = e.ms * Math.min(1, (t - e.start) / e.dur);
+      const open = expanded && lastTool && lastTool.id === e.id;
+      const right = open ? [[formatDuration(ms), "m"]] : durationBar(ms);
+      const marker = running ? [spin(t - e.start), "c"] : ["$", "a"];
+      const tail = e.extra ? " · " + e.extra : "";
+      const room = cols - 4 - 1 - len(right) - 1 - tail.length;
+      const body = [[cut(e.cmd, Math.max(1, room)), "o"]];
+      if (tail) body.push([tail, "d"]);
+      const seen = e.out.filter((_, k) => e.start + (e.dur * (k + 1)) / (e.out.length + 1) <= t);
+      const window = open ? seen : running ? seen.slice(-WINDOW) : [];
+      out.push({ spine: "├─", marker, segs: body, right, cursor: running && window.length === 0 });
+      window.forEach((l, k) => out.push({ spine: "│", segs: [["  " + cut(l, cols - 5), "o"]], cursor: running && k === window.length - 1 }));
+    } else {
+      out.push({ spine: "╰─", segs: [[" Worked for 2m41s", "d"]] });
+    }
+  });
+  return { out, turnOpen };
+}
+function paint(segs) { return segs.map(([s, c]) => (s === "" ? "" : `<span class="${c}">${esc(s)}</span>`)).join(""); }
+function line(row, cols) {
+  const head = row.spine === "├─" || row.spine === "╰─"
+    ? (row.cursor ? `<span class="c">┝</span><span class="r">─</span>` : `<span class="r">${row.spine}</span>`)
+    : row.cursor ? `<span class="c">┃</span>` : `<span class="r">${row.spine}</span>`;
+  const lead = " " + head + (row.marker ? paint([row.marker]) : row.spine === "│" && row.segs.length ? " " : "");
+  const leadW = 1 + [...row.spine].length + (row.marker ? 1 : row.spine === "│" && row.segs.length ? 1 : 0);
+  let body = row.marker ? " " + paint(row.segs) : paint(row.segs);
+  let w = leadW + (row.marker ? 1 : 0) + len(row.segs);
+  if (row.right) { const pad = Math.max(1, cols - w - len(row.right)); body += " ".repeat(pad) + paint(row.right); }
+  return lead + body;
+}
+function chrome(left, right, cols, cls) { return `<span class="${cls}">${esc(left)}${" ".repeat(Math.max(1, cols - left.length - right.length))}${esc(right)}</span>`; }
+function render(t, cols, expanded, frame = true) {
+  const { out } = rows(t, cols, expanded);
+  const body = out.map((r) => line(r, cols)).join("\n");
+  if (!frame) return body;
+  return [chrome("main ~/P/sides/epi", "58.2K / 1M", cols, "m"), "", body, "",
+    chrome("Ctrl+o:expand  /:commands", "minilfs", cols, "d")].join("\n");
+}
+
+// ── 快照 ────────────────────────────────────────────────────────
+const tool = EVENTS[4], text0 = EVENTS[0];
+document.getElementById("snapA").innerHTML = render(text0.start + 92 * CHAR_MS, 84, false, false);
+document.getElementById("snapB").innerHTML = render(tool.start + tool.dur * 0.82, 84, false, false);
+document.getElementById("snapC").innerHTML = render(tool.end + 60, 84, false, false);
+document.getElementById("snapD").innerHTML = render(TOTAL + 10, 84, true, false);
+
+// ── 动画 ────────────────────────────────────────────────────────
+const pre = document.getElementById("live"), term = document.getElementById("liveTerm");
+const probe = Object.assign(document.createElement("span"), { textContent: "M".repeat(200) });
+probe.style.visibility = "hidden"; probe.style.position = "absolute"; pre.appendChild(probe);
+const CW = probe.getBoundingClientRect().width / 200; probe.remove();
+let expanded = false, paused = false, t0 = performance.now(), pausedAt = 0;
+const colsNow = () => Math.max(30, Math.floor((pre.clientWidth - 28) / CW));
+function setCols(n) { term.style.width = `${Math.ceil(n * CW + 28 + 2)}px`; }
+for (const n of [40, 80, 120]) document.getElementById(`b${n}`).onclick = () => setCols(n);
+const ctrlBtn = document.getElementById("ctrlo");
+function toggle() { expanded = !expanded; ctrlBtn.classList.toggle("on", expanded); }
+ctrlBtn.onclick = toggle;
+addEventListener("keydown", (ev) => { if (ev.ctrlKey && ev.key.toLowerCase() === "o") { ev.preventDefault(); toggle(); } });
+document.getElementById("pause").onclick = (ev) => {
+  paused = !paused; ev.target.textContent = paused ? "继续" : "暂停";
+  if (paused) pausedAt = performance.now() - t0; else t0 = performance.now() - pausedAt;
+};
+function tick() {
+  if (!paused) {
+    let t = performance.now() - t0;
+    if (t > TOTAL + HOLD) { t0 = performance.now(); t = 0; if (expanded) toggle(); }
+    const cols = colsNow();
+    document.getElementById("cols").textContent = `${cols} 列 · `;
+    pre.innerHTML = render(t, cols, expanded);
+  }
+  setTimeout(tick, 80);
+}
+tick();
+</script>
+</main></body></html>
