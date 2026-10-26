@@ -28,7 +28,13 @@ test("real app: a bash override spread from createBashTool draws the command and
   const home = join(root, "home");
   mkdirSync(join(home, ".epi"), { recursive: true });
   writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1, extensions: [fixture] }));
-  const steps = [["waitReady"], ["type", "go"], ["key", "enter"], ["waitFor", { regex: "OVERRIDE-DONE[\\s\\S]*Worked for" }, { screen: true }], ["wait", 300], ["screen", "done"], ["detach"]];
+  // Wait for the settled marker instead of sleeping: the marker turns (`+`/`×`) while the call runs
+  // and shakes for LANDING_MS (4 frames x TICK_MS = 320ms, src/tui/glyphs.ts) after it lands, so a
+  // fixed sleep shorter than that can capture the turning frame rather than the settled glyph --
+  // measured: a 0.3s command read `+` in 3 of 4 runs after `wait 300`, and this test failed on CI the
+  // first time it ran there. Waiting for the settled glyph was 4/4 in the same runs and cost nothing:
+  // it returns as soon as the marker settles.
+  const steps = [["waitReady"], ["type", "go"], ["key", "enter"], ["waitFor", { regex: "OVERRIDE-DONE[\\s\\S]*Worked for" }, { screen: true }], ["waitFor", { regex: "├─\\$ printf" }, { screen: true }], ["screen", "done"], ["detach"]];
   const result = spawnSync(process.execPath, [harness], {
     cwd: root,
     env: { PATH: process.env.PATH, HOME: home, EPI_HOME: join(home, ".epi"), EPI_OFFLINE: "1", EPI_TUI_HARNESS: JSON.stringify({ steps }) },
