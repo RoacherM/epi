@@ -27,11 +27,11 @@
 
 ## 2. 一个任务（N1–N7）
 
-设计先行（规格写进 `docs/` 并注明来源）；合并前强制审查；只提交本地分支，对外操作过 G2。
+设计先行（规格写进 `docs/` 并注明来源；每个设计配一个可交互 HTML 原型 `scripts/probes/<名字>-prototype.html`，用户试过并同意后才进入 N2，决策 WF6）；合并前强制审查；只提交本地分支，对外操作过 G2。
 
 | 节点 | 执行者 | 触发 | 动作 | 检查（通过才交下一节点） | 停止与移交 |
 |---|---|---|---|---|---|
-| N1 计划 | 主控 | 用户需求 / dogfood / 终审发现 | 读材料 → 拆不重叠小任务 → 写 `.dev/tasks/<id>/brief.md` | 含七项（第 5 节），写明基准 SHA，`src/` 预计 ≤ 800 行 | 需求有歧义 → 问用户 |
+| N1 计划 | 主控 | 用户需求 / dogfood / 终审发现 | 读材料 → 写设计和可交互 HTML 原型 → 交用户试用 → 拆不重叠小任务 → 写 `.dev/tasks/<id>/brief.md` | 用户试过原型并明确同意（WF6）；brief 含七项（第 5 节），写明基准 SHA 和原型路径，`src/` 预计 ≤ 800 行 | 需求有歧义或原型被否 → 改原型再交用户 |
 | N2 实现 | worker | 收到 `brief.md` 指令 | 实现、写测试、worktree 提交、写 `report.md` | `report.md` 末行 `STATUS: done` | 需拍板 → 写 `question.md` 停等；卡住 → `STATUS: blocked` 交主控 |
 | N3 审查验证 | 主控 | `STATUS: done` | 跑 `run-review.sh precheck <id> <base> <head>` → 过第 3 节清单 → 验修复前失败与 ≥2 个变异 | 闸门 G1 满足，`precheck.sha` 匹配被审 head | 有 P0–P2 → 写 `review.md` 退回 N2；同一问题第 2 次出现 → 问顾问；满 2 轮仍不过 → G3 |
 | N4 合并 | 主控 | G1 通过 | `git merge --no-ff` 确认无冲突 → `main` 上跑完整测试 | `main` 完整测试全过 | 合并时主控改了代码 → 过 G5 再合；测试挂 → 回 N3 |
