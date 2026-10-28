@@ -89,9 +89,6 @@ export class BufferViewport {
             this.lastRows = this.rows(this.renderedWidth);
         this.scrollTo(this.scrollTop);
     }
-    scrollToEnd() {
-        this.scrollTo(this.maxScroll);
-    }
     /** Mouse wheel: `delta` rows, positive down. */
     wheel(delta) {
         this.navigation.scrollTo(this.scrollTop + delta);
@@ -141,6 +138,7 @@ export class BufferViewport {
         this.rowsCache = { width, wrap: this.wrap, rows };
         return rows;
     }
+    /** Scrolls to `row`, clamped to the content as last laid out. */
     scrollTo(row) {
         this.scrollTop = Math.max(0, Math.min(this.maxScroll, Math.round(row)));
     }

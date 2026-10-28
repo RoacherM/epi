@@ -55,6 +55,12 @@ interface View {
   target: InspectTarget;
   viewport: BufferViewport;
   stopLive?: () => void;
+  /** The page's own `live.follow`, fixed when it opens: a refresh brings new content, not a new
+   * page, so it need not repeat `live`. */
+  follow: boolean;
+  /** A following page stays at the end: true until the reader scrolls up, true again at the end.
+   * Kept apart from the scroll position, which a page not drawn yet does not have. */
+  atEnd: boolean;
 }
 
 export class BlockInspectorOverlay implements Component {
@@ -91,12 +97,10 @@ export class BlockInspectorOverlay implements Component {
       match: (text) => this.theme.inverse(text),
     });
     viewport.wrap = target.wrap === true;
-    const view: View = { target, viewport };
+    const follow = target.live?.follow === true;
+    const view: View = { target, viewport, follow, atEnd: follow };
     this.views.push(view);
-    if (target.live !== undefined) {
-      if (target.live.follow === true) viewport.scrollTop = Number.MAX_SAFE_INTEGER;
-      view.stopLive = target.live.subscribe((next) => this.update(view, next));
-    }
+    if (target.live !== undefined) view.stopLive = target.live.subscribe((next) => this.update(view, next));
   }
 
   /** Leaves the page on top for the one under it; false when it is the only one. */
@@ -116,13 +120,14 @@ export class BlockInspectorOverlay implements Component {
     for (const view of this.views) view.stopLive?.();
   }
 
-  /** New content for a live page: the position is kept, and a following page scrolled to the end
-   * stays at the end. */
+  /** New content for a live page: the position is kept, and a following page at the end moves to
+   * the new end at once, so a key or click before the next frame sees where it will be drawn. The
+   * page keeps its own `live` (a refresh's content need not carry it). */
   private update(view: View, target: InspectTarget): void {
-    const following = view.target.live?.follow === true && view.viewport.scrollTop >= view.viewport.maxScroll;
-    view.target = target;
+    const live = view.target.live;
+    view.target = live === undefined ? target : { ...target, live };
     view.viewport.setLines(target.lines);
-    if (following) view.viewport.scrollToEnd();
+    if (view.atEnd) view.viewport.scrollTo(view.viewport.maxScroll);
     this.actions.requestRender();
   }
 
@@ -133,8 +138,19 @@ export class BlockInspectorOverlay implements Component {
     this.actions.requestRender();
   }
 
+  /** After the reader moved: a following page follows again once back at the end. */
+  private noteScroll(view: View): void {
+    if (view.follow) view.atEnd = view.viewport.scrollTop >= view.viewport.maxScroll;
+  }
+
   handleInput(data: string): void {
     if (piTui.isKeyRelease(data)) return;
+    const view = this.view;
+    this.handleKey(data);
+    if (this.views.includes(view)) this.noteScroll(view);
+  }
+
+  private handleKey(data: string): void {
     // Esc in a prompt only leaves the prompt; Esc in NORMAL (nothing pending) goes back or closes.
     const result = this.viewport.handleInput(data);
     if (result === "close") {
@@ -162,6 +178,7 @@ export class BlockInspectorOverlay implements Component {
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
     if (event.type === "wheel") {
       this.viewport.wheel((event.wheelDelta ?? 1) * WHEEL_ROWS);
+      this.noteScroll(this.view);
       return { handled: true, render: true };
     }
     if (event.type === "click" && event.button === "left" && event.y === 0 && event.x >= event.width - visibleWidth(CLOSE_LABEL) - 2) {
@@ -183,6 +200,8 @@ export class BlockInspectorOverlay implements Component {
     const inner = Math.max(1, width - 4);
     const maxBody = Math.max(1, Math.floor(this.actions.terminalRows() * MAX_HEIGHT_SHARE) - 2);
     const bodyHeight = Math.max(1, Math.min(maxBody, this.viewport.measure(inner)));
+    // The end is known only now (rows depend on the width): a following page is pinned to it here.
+    if (this.view.atEnd) this.viewport.scrollTop = Number.MAX_SAFE_INTEGER;
     const body = this.viewport.render(inner, bodyHeight);
     // The right frame edge doubles as the scrollbar; a plain edge when everything fits.
     const bar = scrollbar(th, this.viewport.rowCount, bodyHeight, this.viewport.scrollTop, bodyHeight, { thumb: "accent", track: "borderMuted", fits: "borderAccent" });

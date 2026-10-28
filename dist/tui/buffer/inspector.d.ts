@@ -51,12 +51,16 @@ export declare class BlockInspectorOverlay implements Component {
     private close;
     /** Ends live updates; the host calls it when it hides the overlay. */
     dispose(): void;
-    /** New content for a live page: the position is kept, and a following page scrolled to the end
-     * stays at the end. */
+    /** New content for a live page: the position is kept, and a following page at the end moves to
+     * the new end at once, so a key or click before the next frame sees where it will be drawn. The
+     * page keeps its own `live` (a refresh's content need not carry it). */
     private update;
     /** `openLine`'s page for logical line `line`, opened on top. */
     private open;
+    /** After the reader moved: a following page follows again once back at the end. */
+    private noteScroll;
     handleInput(data: string): void;
+    private handleKey;
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult;
     render(width: number): string[];
     invalidate(): void;
