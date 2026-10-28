@@ -64,11 +64,11 @@ class Railed implements Component {
     return this.kind === "call";
   }
 
-  /** A left click on a row the renderer marked inspectable (`… N more lines`) opens the inspector;
-   * anywhere else falls through to Pi's own click-to-expand. */
+  /** A left click on a row the renderer marked inspectable (`… N more lines`, a task's call row)
+   * opens the inspector; anywhere else falls through to Pi's own click-to-expand. */
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     if (event.type !== "click" || event.button !== "left" || this.onInspect === undefined) return undefined;
-    if (!(this.inner instanceof LinesComponent)) return undefined;
+    if (!(this.inner instanceof LinesComponent) && !(this.inner instanceof CallLine)) return undefined;
     const target = this.inner.inspectTargetAt(event.y);
     if (target === undefined) return undefined;
     this.onInspect(target);

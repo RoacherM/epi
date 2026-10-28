@@ -46,7 +46,7 @@ function textPopup(theme, chip, width) {
     const body = lines.length <= 6
         ? lines
         : [...lines.slice(0, 3), `⋮ (${lines.length - 6} more lines)`, ...lines.slice(-3)];
-    const hint = chip.justPasted ? "paste again or double-click to expand" : "enter or double-click to expand";
+    const hint = chip.justPasted ? "click to view · paste again or double-click to expand" : "click to view · enter or double-click to expand";
     const boxWidth = popupWidth(width, body, hint);
     const inner = Math.max(1, boxWidth - 4);
     return box(theme, boxWidth, body.map((line) => fit(line, inner)), undefined, hint);
@@ -76,8 +76,9 @@ function imagePopup(theme, chip, width, cache) {
         return box(theme, boxWidth, [], fittedTitle, undefined);
     return box(theme, boxWidth, pictureFor(theme, image, cache).render(inner), fittedTitle, undefined);
 }
-/** Empty when nothing is being previewed, so it costs zero rows in the layout otherwise. */
-export function pastePreview(theme, getChip) {
+/** Empty when nothing is being previewed, so it costs zero rows in the layout otherwise. A left
+ * click on a text chip's popup hands the chip to `onView` (the full text, editable). */
+export function pastePreview(theme, getChip, onView) {
     const pictures = new WeakMap();
     return {
         render(width) {
@@ -85,6 +86,15 @@ export function pastePreview(theme, getChip) {
             if (chip === undefined)
                 return [];
             return chip.kind === "text" ? textPopup(theme, chip, width) : imagePopup(theme, chip, width, pictures);
+        },
+        handleMouse(event) {
+            if (event.type !== "click" || event.button !== "left" || onView === undefined)
+                return undefined;
+            const chip = getChip();
+            if (chip?.kind !== "text")
+                return undefined;
+            onView(chip);
+            return { handled: true };
         },
         invalidate() { },
     };

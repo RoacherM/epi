@@ -74,6 +74,17 @@ export class BufferViewport {
             return "close";
         return "ignored";
     }
+    /** The logical line (0-based) drawn on body row `row` of the last render, if any. */
+    lineAtRow(row) {
+        if (row < 0 || row >= this.height)
+            return undefined;
+        return this.lastRows[this.scrollTop + row]?.line;
+    }
+    /** Replaces the lines (a live view); the scroll position is clamped at the next render. */
+    setLines(lines) {
+        this.content = { ...this.content, lines };
+        this.rowsCache = undefined;
+    }
     /** Mouse wheel: `delta` rows, positive down. */
     wheel(delta) {
         this.navigation.scrollTo(this.scrollTop + delta);

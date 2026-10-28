@@ -139,13 +139,14 @@ export class Transcript {
             requestRender: () => this.tui.requestRender(),
             terminalRows: () => this.tui.terminal.rows,
         });
-        this.inspector = this.tui.showOverlay(overlay, { width: "88%", minWidth: 24, anchor: "center" });
+        this.inspector = { handle: this.tui.showOverlay(overlay, { width: "88%", minWidth: 24, anchor: "center" }), overlay };
         this.tui.requestRender();
     }
     closeInspector() {
         if (this.inspector === undefined)
             return;
-        this.inspector.hide();
+        this.inspector.overlay.dispose();
+        this.inspector.handle.hide();
         this.inspector = undefined;
         this.tui.requestRender();
     }
@@ -411,7 +412,7 @@ export class Transcript {
         switch (message.role) {
             case "user": {
                 this.noteImageLabels(messageText(message.content));
-                const block = new UserMessageBlock(this.theme, message.content, new Date(message.timestamp ?? Date.now()));
+                const block = new UserMessageBlock(this.theme, message.content, new Date(message.timestamp ?? Date.now()), (target) => this.inspect(target));
                 block.setExpanded(this.toolsExpanded);
                 this.userMessages.push(block);
                 this.add(block);

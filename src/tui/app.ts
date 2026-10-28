@@ -29,6 +29,7 @@ import {
 import { findBuiltin, slashCompletions } from "./builtins.js";
 import type { CommandHost } from "./command-host.js";
 import { errorText } from "./errors.js";
+import { viewTextChip } from "./chip-view.js";
 import { createExtensionUIContext, type HostSurface } from "./ext-host.js";
 import { readGitBranch } from "../git-branch.js";
 import { installKeybindings } from "./keybindings.js";
@@ -62,6 +63,9 @@ export interface TuiAppOptions {
   resumeOnStart?: boolean;
   terminal?: Terminal;
 }
+
+/** Between two extension statuses on the footer's right. */
+const STATUS_JOINER = " · ";
 
 /** How long quitting waits for the runtime to dispose before exiting anyway (see disposeRuntime). */
 const SHUTDOWN_TIMEOUT_MS = 3000;
@@ -197,7 +201,13 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
   // chipForPopup(), not chipAtCursor(): the popup still shows right after a fresh paste (spec
   // table), even though chipAtCursor() alone no longer counts that position as "on the chip"
   // (docs/tui-design.md 4.3's Enter row -- Enter must send there, like grok, not expand).
-  const pastePreviewWidget = pastePreview(theme, () => (editorSlotHasDialog ? undefined : editor.chipForPopup()));
+  // A click on a text chip's popup opens its full text in the inspector, where `e` edits it.
+  const pastePreviewWidget = pastePreview(theme, () => (editorSlotHasDialog ? undefined : editor.chipForPopup()), (chip) => viewTextChip({
+    tui,
+    inspect: (target) => transcript.inspect(target),
+    takeEditorSlot: (component) => surface.takeEditorSlot(component),
+    notice: (text, tone) => transcript.notice(text, tone),
+  }, editor, chip));
 
   const header = headerBar(theme, () => {
     const usage = session.getContextUsage();
@@ -231,9 +241,29 @@ export async function runTuiApp(options: TuiAppOptions): Promise<number> {
         : turn === undefined
           ? [{ key: "Shift+Tab", label: "effort" }, { key: "Ctrl+t", label: "thinking" }, { key: "Ctrl+o", label: "expand" }, { key: "/", label: "commands" }]
           : [{ key: "Esc", label: "stop" }, { key: "Ctrl+c", label: "cancel" }, { key: "Ctrl+o", label: "expand" }, { key: "Alt+Enter", label: "steer" }];
-    return { shortcuts, right: theme.fg("muted", [...statuses.values()].join(" · ")) };
-  });
+    return { shortcuts, right: theme.fg("muted", [...statuses.values()].join(STATUS_JOINER)) };
+  }, (column) => void openStatusAt(column));
   footerSlot.addChild(defaultFooter);
+  /** A click on a footer status whose key names an extension command (epi:task's `tasks`) runs
+   * that command, as typing `/tasks` would; Pi runs extension commands at once, even mid-turn. */
+  async function openStatusAt(column: number): Promise<void> {
+    let start = 0;
+    for (const [key, text] of statuses) {
+      const end = start + piTui.visibleWidth(text);
+      if (column < start) return;
+      if (column < end) {
+        const known = session.extensionRunner.getRegisteredCommands().some((command) => command.invocationName === key);
+        if (!known) return;
+        try {
+          await session.prompt(`/${key}`);
+        } catch (error) {
+          transcript.notice(`/${key} failed: ${errorText(error)}`, "error");
+        }
+        return;
+      }
+      start = end + STATUS_JOINER.length;
+    }
+  }
   const queueDisplay = queuedMessagesBar(theme, () => ({
     steering: [...queued.steering, ...compactionQueue.filter((message) => message.mode === "steer").map((message) => message.text)],
     followUp: [...queued.followUp, ...compactionQueue.filter((message) => message.mode === "followUp").map((message) => message.text)],

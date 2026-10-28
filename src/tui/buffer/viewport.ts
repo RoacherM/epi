@@ -40,7 +40,7 @@ export class BufferViewport {
   private renderedWidth: number | undefined;
 
   constructor(
-    private readonly content: BufferContent,
+    private content: BufferContent,
     private readonly style: BufferStyle,
   ) {
     const target: NavigationTarget = {
@@ -103,6 +103,18 @@ export class BufferViewport {
     if (data === "y") return "yank";
     if (data === "q" || piTui.matchesKey(data, "escape")) return "close";
     return "ignored";
+  }
+
+  /** The logical line (0-based) drawn on body row `row` of the last render, if any. */
+  lineAtRow(row: number): number | undefined {
+    if (row < 0 || row >= this.height) return undefined;
+    return this.lastRows[this.scrollTop + row]?.line;
+  }
+
+  /** Replaces the lines (a live view); the scroll position is clamped at the next render. */
+  setLines(lines: readonly string[]): void {
+    this.content = { ...this.content, lines };
+    this.rowsCache = undefined;
   }
 
   /** Mouse wheel: `delta` rows, positive down. */

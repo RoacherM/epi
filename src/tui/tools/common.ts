@@ -171,6 +171,10 @@ export type CallMarker = "$" | "◆";
  * result then needs no row of its own ("成功不占行").
  */
 export class CallLine implements Component {
+  /** Set by a renderer whose call row opens a view (a task's live progress): a click on the row
+   * then opens the inspector instead of toggling the block. Read at click time. */
+  inspect: (() => InspectTarget | undefined) | undefined;
+
   constructor(
     readonly marker: CallMarker,
     private readonly theme: Theme,
@@ -209,6 +213,10 @@ export class CallLine implements Component {
   }
 
   invalidate(): void {}
+
+  inspectTargetAt(row: number): InspectTarget | undefined {
+    return row === 0 ? this.inspect?.() : undefined;
+  }
 
   render(width: number): string[] {
     const ms = this.elapsed();

@@ -540,3 +540,13 @@ interface MailboxEntry {
 | **Step 1：可靠信箱 + 底栏状态** | `src/task-runtime.ts`、`src/extensions/task.ts` | +110 / -25 行 | ① 流式运行中落定后按 `Esc` / `Alt+Up`，底栏显示 `✓ 1 done`，下一轮用户提问通过 `before_agent_start` 捎带送达；② 手动 `/compact` 期间落定不并发调 `_startRun`；③ `/new` 切到新会话不乱唤醒，切回原会话或 `session_start` 后底栏仍在；④ 单查 `task_status({ jobId })` 后信箱销账。 |
 | **Step 2：单列 `renderCall` + 实时 `onUpdate`** | `src/extensions/task.ts` | +95 / -40 行 | ① 前台 `task` / `task_wait` 运行中 `CallLine` 尾部每 250ms 更新 `turn N · <tool>`；② 完成后折叠占 0 行、展开可进 Inspector；③ 静默时 `fullRedraws` 增量为 0。 |
 
+
+## 12. 任务进度可点开（2026-10-28，D95）
+
+以前只能看到一行摘要：call 行、底栏 `◐ 1 task`、`task_status` 都点不开，看不到子代理在做什么。
+
+- **任务页**：inspector（`src/tui/buffer/inspector.ts`）里显示一个 Job：状态、轮数、步数、正在做的事、会话文件路径，然后是子代理的对话（读 `job.sessionPath`：用户消息、助手文字、思考的一行、每个工具调用一行、结果最多 600 字符）。Job 在跑时页面随 `TaskRuntime.onChange` 刷新，最多每 250ms 读一次文件；停在末尾时跟着新内容走。Pi 在第一条回复之后才写会话文件，这之前显示「no conversation yet」。代码在 `src/extensions/task-view.ts`。
+- **三个入口**：① 单击 `task` / `task_status` / `task_wait` / `task_cancel` 的 call 行（`CallLine.inspect`，结果渲染时把 jobId 记在 renderer state）；② 单击底栏的任务计数；③ `/tasks`（列表）或 `/tasks <id>`。
+- **列表页**：每个 Job 一行，最新的在上面。单击一行或按 Enter 打开该 Job 的页；Esc 回到列表，再按 Esc 关闭。inspector 为此加了一个页栈（`openLine`）。
+- **底栏点击**：底栏右侧的状态按 `setStatus` 的 key 分段。点到哪一段，就执行与 key 同名的扩展命令（如果有）。所以 epi:task 的状态 key 从 `epi-task` 改成 `tasks`。Pi 的扩展命令在流式输出中也立即执行，所以运行中也能点。
+- **不做**：在任务页里 steer 或取消（仍由模型调用工具完成）；完整的 `/trace` 子代理轨迹（trace-design §8 仍未实现）。

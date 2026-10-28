@@ -47,7 +47,16 @@ function tempDir(t) {
 
 test("decidePasteChip: below both thresholds is not a chip", () => {
   assert.equal(decidePasteChip("one\ntwo\nthree"), undefined); // 3 lines, tiny
-  assert.equal(decidePasteChip("x".repeat(1000)), undefined); // 1 line, under 10KB
+  assert.equal(decidePasteChip("x".repeat(1000)), undefined); // 1 line, at the 1000-character limit
+});
+
+// A few long paragraphs (no or few newlines, under 10 KB) used to go in raw and fill the prompt
+// with wrapped rows; they fold like Pi's own Editor does above 1000 characters.
+test("decidePasteChip: a paste over 1000 characters folds, even on one to three lines", () => {
+  const paragraph = "第四轮修复已完成，但还不能推送。".repeat(70); // 1120 characters, 3360 bytes
+  assert.equal(decidePasteChip(paragraph)?.label, "[Pasted: 3.3 KB]");
+  assert.equal(decidePasteChip([paragraph, paragraph, "end"].join("\n"))?.label, "[Pasted: 6.6 KB]");
+  assert.equal(decidePasteChip("x".repeat(1001))?.label, "[Pasted: 1.0 KB]");
 });
 
 test("decidePasteChip: >=4 lines labels by line count", () => {

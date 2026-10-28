@@ -1,7 +1,7 @@
 // Paste/image preview popup (docs/tui-design.md 4.3): shown right above the prompt frame whenever
 // the caret sits on a chip. A grok-style rounded box, styled like chrome.ts's PromptFrame border.
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
 import { type ChipInfo, type ImageChipMeta, dropTrailingNewline } from "./paste-chips.js";
 import { piTui } from "./pi-tui.js";
@@ -57,7 +57,7 @@ function textPopup(theme: Theme, chip: Extract<ChipInfo, { kind: "text" }>, widt
   const body = lines.length <= 6
     ? lines
     : [...lines.slice(0, 3), `⋮ (${lines.length - 6} more lines)`, ...lines.slice(-3)];
-  const hint = chip.justPasted ? "paste again or double-click to expand" : "enter or double-click to expand";
+  const hint = chip.justPasted ? "click to view · paste again or double-click to expand" : "click to view · enter or double-click to expand";
   const boxWidth = popupWidth(width, body, hint);
   const inner = Math.max(1, boxWidth - 4);
   return box(theme, boxWidth, body.map((line) => fit(line, inner)), undefined, hint);
@@ -94,14 +94,26 @@ function imagePopup(theme: Theme, chip: Extract<ChipInfo, { kind: "image" }>, wi
   return box(theme, boxWidth, pictureFor(theme, image, cache).render(inner), fittedTitle, undefined);
 }
 
-/** Empty when nothing is being previewed, so it costs zero rows in the layout otherwise. */
-export function pastePreview(theme: Theme, getChip: () => ChipInfo | undefined): Component {
+/** Empty when nothing is being previewed, so it costs zero rows in the layout otherwise. A left
+ * click on a text chip's popup hands the chip to `onView` (the full text, editable). */
+export function pastePreview(
+  theme: Theme,
+  getChip: () => ChipInfo | undefined,
+  onView?: (chip: Extract<ChipInfo, { kind: "text" }>) => void,
+): Component {
   const pictures: PictureCache = new WeakMap();
   return {
     render(width: number): string[] {
       const chip = getChip();
       if (chip === undefined) return [];
       return chip.kind === "text" ? textPopup(theme, chip, width) : imagePopup(theme, chip, width, pictures);
+    },
+    handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+      if (event.type !== "click" || event.button !== "left" || onView === undefined) return undefined;
+      const chip = getChip();
+      if (chip?.kind !== "text") return undefined;
+      onView(chip);
+      return { handled: true };
     },
     invalidate() {},
   };

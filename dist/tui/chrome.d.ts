@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorComponent, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
+import type { InspectTarget } from "./buffer/inspector.js";
 /** Shared with assistant-block.ts (the assistant-message timestamp reuses this row layout). */
 export declare function fit(text: string, width: number): string;
 /** Left and right segments on one row; the left side is truncated first. */
@@ -32,17 +33,21 @@ export declare function splitPromptZone(line: string): {
     rest: string;
 };
 /** Full-width `userMessageBg` block with one row of padding, `❯ text` and the time on the right.
- * Collapses past `COLLAPSED_LINES` *logical* lines (not wrapped rows) to `…` -- observed in grok
- * 1.0.44 (docs/tui-design.md 4.2/4.3): a sent 12-line paste renders as its first 3 lines then `…`.
- * Counting logical lines, not wrapped rows, means a single long line never collapses just because a
- * narrow terminal wraps it into more than 3 screen rows. Expanded back with Ctrl+O -- the same
- * toggle that expands tool output (item 5). */
+ * Collapses past `COLLAPSED_LINES` *logical* lines (not wrapped rows) to `… +N lines` -- observed in
+ * grok 1.0.44 (docs/tui-design.md 4.2/4.3): a sent 12-line paste renders as its first 3 lines then
+ * `…`. Counting logical lines, not wrapped rows, means a single long line never collapses just
+ * because a narrow terminal wraps it into more than 3 screen rows. A click on that row opens the
+ * whole message in the inspector; the extensions' all-blocks toggle expands it in place. */
 export declare class UserMessageBlock implements Component {
     private readonly theme;
     private readonly time;
+    private readonly onInspect?;
     private readonly text;
     private expanded;
-    constructor(theme: Theme, content: unknown, time: Date);
+    /** The row of the last render that reads `… +N lines`, if any. */
+    private moreRow;
+    constructor(theme: Theme, content: unknown, time: Date, onInspect?: ((target: InspectTarget) => void) | undefined);
+    handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
     setExpanded(expanded: boolean): void;
     render(fullWidth: number): string[];
     invalidate(): void;
@@ -172,11 +177,12 @@ export interface Shortcut {
     key: string;
     label: string;
 }
-/** `Key:label  │  Key:label` on the left; extension statuses and notices on the right. */
+/** `Key:label  │  Key:label` on the left; extension statuses and notices on the right. A left
+ * click on the right segment calls `onRightClick` with the column inside it. */
 export declare function shortcutsBar(theme: Theme, state: () => {
     shortcuts: Shortcut[];
     right: string;
-}): Component;
+}, onRightClick?: (column: number) => void): Component;
 export interface QueuedMessagesState {
     steering: readonly string[];
     followUp: readonly string[];
