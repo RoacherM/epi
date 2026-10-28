@@ -348,6 +348,11 @@ function renderTaskCall(
   return new CallLine("◆", theme, body, context, extra);
 }
 
+/** Kept in the renderer state for the call row (`opensJobPage`): a result names the job. */
+function rememberJobId(context: ToolRenderContext, jobId: string): void {
+  if (context.state !== undefined && context.state !== null) (context.state as { jobId?: string }).jobId = jobId;
+}
+
 /** A call row that opens its job's live page on a click, once a result (or the call's own
  * `jobId`) has named the job. Shared by task, task_status, task_wait and task_cancel. */
 function opensJobPage<Args extends { jobId?: string }>(
@@ -418,7 +423,7 @@ function renderTaskResult(
     return new LinesComponent([failureLine(theme, details.error)]);
   }
   const job = details;
-  if (context.state !== undefined && context.state !== null) (context.state as { jobId?: string }).jobId = job.id;
+  rememberJobId(context, job.id);
   if (context.isPartial === true) {
     setCallSummary(context, liveSummary(job));
     return new LinesComponent([]);
