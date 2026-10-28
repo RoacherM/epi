@@ -80,10 +80,17 @@ export class BufferViewport {
             return undefined;
         return this.lastRows[this.scrollTop + row]?.line;
     }
-    /** Replaces the lines (a live view); the scroll position is clamped at the next render. */
+    /** Replaces the lines (a live view). Rows and the scroll position are brought up to date at once,
+     * so a click before the next render still finds the line under it. */
     setLines(lines) {
         this.content = { ...this.content, lines };
         this.rowsCache = undefined;
+        if (this.renderedWidth !== undefined)
+            this.lastRows = this.rows(this.renderedWidth);
+        this.scrollTo(this.scrollTop);
+    }
+    scrollToEnd() {
+        this.scrollTo(this.maxScroll);
     }
     /** Mouse wheel: `delta` rows, positive down. */
     wheel(delta) {

@@ -17,10 +17,12 @@ export interface InspectTarget {
     wrap?: boolean;
     /** Set when the content can be edited: `e` closes the inspector and calls it. */
     edit?: () => void;
-    /** Content that changes while shown (a running task): the inspector starts at the end, calls
-     * `subscribe` once open, and stops the subscription when it closes. */
+    /** Content that changes while shown (a running task): the inspector calls `subscribe` once open
+     * and stops the subscription when it closes. With `follow`, the page starts at the end and stays
+     * there while new lines arrive (a log); without, it keeps its place (a list, newest first). */
     live?: {
         subscribe(update: (target: InspectTarget) => void): () => void;
+        follow?: boolean;
     };
     /** Lines that open something (a list of tasks): a click on logical line `line` (0-based), or
      * Enter on the first line shown, opens the page this returns on top; Esc comes back. */
@@ -49,8 +51,8 @@ export declare class BlockInspectorOverlay implements Component {
     private close;
     /** Ends live updates; the host calls it when it hides the overlay. */
     dispose(): void;
-    /** New content for a live page (a running task): the position is kept, and a page scrolled to
-     * the end follows new lines. */
+    /** New content for a live page: the position is kept, and a following page scrolled to the end
+     * stays at the end. */
     private update;
     /** `openLine`'s page for logical line `line`, opened on top. */
     private open;
@@ -59,6 +61,11 @@ export declare class BlockInspectorOverlay implements Component {
     render(width: number): string[];
     invalidate(): void;
     private topBorder;
+    /** The position readout on the bottom border's left, or the prompt/status in its place. */
+    private positionLabel;
+    /** The keys the bottom border lists: the page's own action first, `q back` on a page opened from
+     * a list. */
+    private keyHint;
     private bottomBorder;
     private yank;
 }

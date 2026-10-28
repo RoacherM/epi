@@ -46,30 +46,28 @@ function argsLine(args: unknown): string {
   return singleLine(JSON.stringify(args), ARGS_PREVIEW_CHARS);
 }
 
-function messageLines(theme: Theme, entry: Entry): string[] {
-  const message = entry.message!;
-  switch (message.role) {
-    case "user":
-      return [theme.fg("accent", "❯ user"), ...textOf(message.content).split("\n"), ""];
-    case "assistant": {
-      const out: string[] = [];
-      for (const part of parts(message.content)) {
-        if (part.type === "text" && part.text?.trim()) out.push(...part.text.trim().split("\n"));
-        else if (part.type === "thinking" && part.thinking?.trim()) out.push(theme.fg("dim", `∴ ${singleLine(part.thinking, ARGS_PREVIEW_CHARS)}`));
-        else if (part.type === "toolCall") out.push(`${theme.fg("muted", "◆")} ${theme.fg("toolOutput", part.name ?? "tool")} ${theme.fg("muted", argsLine(part.arguments))}`);
-      }
-      return out.length === 0 ? [] : [theme.fg("accent", "◇ assistant"), ...out, ""];
-    }
-    case "toolResult": {
-      const text = textOf(message.content).trimEnd();
-      const cut = text.length > RESULT_PREVIEW_CHARS ? `${text.slice(0, RESULT_PREVIEW_CHARS)}…` : text;
-      const tone = message.isError === true ? "error" : "dim";
-      const lines = cut === "" ? ["(no output)"] : cut.split("\n");
-      return [...lines.map((line) => theme.fg(tone, `  ${line}`)), ""];
-    }
-    default:
-      return [];
-  }
+/** An assistant message part as view lines: its text, a thinking line, or a tool-call line. */
+function assistantPartLines(theme: Theme, part: Part): string[] {
+  if (part.type === "text") return part.text?.trim() ? part.text.trim().split("\n") : [];
+  if (part.type === "thinking") return part.thinking?.trim() ? [theme.fg("dim", `∴ ${singleLine(part.thinking, ARGS_PREVIEW_CHARS)}`)] : [];
+  if (part.type === "toolCall") return [`${theme.fg("muted", "◆")} ${theme.fg("toolOutput", part.name ?? "tool")} ${theme.fg("muted", argsLine(part.arguments))}`];
+  return [];
+}
+
+function toolResultLines(theme: Theme, message: NonNullable<Entry["message"]>): string[] {
+  const text = textOf(message.content).trimEnd();
+  const cut = text.length > RESULT_PREVIEW_CHARS ? `${text.slice(0, RESULT_PREVIEW_CHARS)}…` : text;
+  const tone = message.isError === true ? "error" : "dim";
+  const lines = cut === "" ? ["(no output)"] : cut.split("\n");
+  return [...lines.map((line) => theme.fg(tone, `  ${line}`)), ""];
+}
+
+function messageLines(theme: Theme, message: NonNullable<Entry["message"]>): string[] {
+  if (message.role === "user") return [theme.fg("accent", "❯ user"), ...textOf(message.content).split("\n"), ""];
+  if (message.role === "toolResult") return toolResultLines(theme, message);
+  if (message.role !== "assistant") return [];
+  const out = parts(message.content).flatMap((part) => assistantPartLines(theme, part));
+  return out.length === 0 ? [] : [theme.fg("accent", "◇ assistant"), ...out, ""];
 }
 
 /** The conversation in a job's session file, or a note saying why there is none yet. Pi writes the
@@ -92,7 +90,7 @@ function conversationLines(theme: Theme, sessionPath: string): string[] {
       continue; // The last line can be half written while the child appends.
     }
     if (entry.type === "compaction") out.push(theme.fg("warning", `── compacted: ${singleLine(entry.summary ?? "", ARGS_PREVIEW_CHARS)}`), "");
-    else if (entry.type === "message" && entry.message !== undefined) out.push(...messageLines(theme, entry));
+    else if (entry.type === "message" && entry.message !== undefined) out.push(...messageLines(theme, entry.message));
   }
   return out;
 }

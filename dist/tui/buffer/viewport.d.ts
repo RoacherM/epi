@@ -39,8 +39,10 @@ export declare class BufferViewport {
     handleInput(data: string): BufferInputResult;
     /** The logical line (0-based) drawn on body row `row` of the last render, if any. */
     lineAtRow(row: number): number | undefined;
-    /** Replaces the lines (a live view); the scroll position is clamped at the next render. */
+    /** Replaces the lines (a live view). Rows and the scroll position are brought up to date at once,
+     * so a click before the next render still finds the line under it. */
     setLines(lines: readonly string[]): void;
+    scrollToEnd(): void;
     /** Mouse wheel: `delta` rows, positive down. */
     wheel(delta: number): void;
     /**

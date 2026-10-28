@@ -39,7 +39,8 @@ export class BlockInspectorOverlay {
         const view = { target, viewport };
         this.views.push(view);
         if (target.live !== undefined) {
-            viewport.scrollTop = Number.MAX_SAFE_INTEGER;
+            if (target.live.follow === true)
+                viewport.scrollTop = Number.MAX_SAFE_INTEGER;
             view.stopLive = target.live.subscribe((next) => this.update(view, next));
         }
     }
@@ -60,14 +61,14 @@ export class BlockInspectorOverlay {
         for (const view of this.views)
             view.stopLive?.();
     }
-    /** New content for a live page (a running task): the position is kept, and a page scrolled to
-     * the end follows new lines. */
+    /** New content for a live page: the position is kept, and a following page scrolled to the end
+     * stays at the end. */
     update(view, target) {
-        const following = view.viewport.scrollTop >= view.viewport.maxScroll;
+        const following = view.target.live?.follow === true && view.viewport.scrollTop >= view.viewport.maxScroll;
         view.target = target;
         view.viewport.setLines(target.lines);
         if (following)
-            view.viewport.scrollTop = Number.MAX_SAFE_INTEGER;
+            view.viewport.scrollToEnd();
         this.actions.requestRender();
     }
     /** `openLine`'s page for logical line `line`, opened on top. */
@@ -143,32 +144,36 @@ export class BlockInspectorOverlay {
         const fill = Math.max(0, width - 2 - visibleWidth(title) - visibleWidth(CLOSE_LABEL) - 2);
         return `${th.fg("borderAccent", "╭─")}${title}${th.fg("borderAccent", "─".repeat(fill))}${close}${th.fg("borderAccent", "─╮")}`;
     }
-    bottomBorder(width) {
+    /** The position readout on the bottom border's left, or the prompt/status in its place. */
+    positionLabel() {
         const th = this.theme;
         const viewport = this.viewport;
         const { prompt, status, pending: typed } = viewport.navigation;
-        let left;
-        if (prompt !== undefined) {
-            left = th.fg("text", ` ${prompt.kind}${printable(prompt.text)}█ `);
-        }
-        else if (status !== undefined) {
-            left = th.fg(status.tone === "error" ? "error" : "success", ` ${status.text} `);
-        }
-        else {
-            const { first, last } = viewport.visibleLines();
-            const percent = viewport.maxScroll === 0 ? 100 : Math.round((viewport.scrollTop / viewport.maxScroll) * 100);
-            const pending = typed === "" ? "" : ` · ${typed}`;
-            left = ` ${th.fg("accent", viewport.mode)}${th.fg("muted", ` · L${first}–${last}/${viewport.lineCount} (${percent}%)${pending}`)} `;
-        }
-        const edit = this.target.edit !== undefined ? "e edit · " : this.target.openLine !== undefined ? "click/Enter open · " : "";
+        if (prompt !== undefined)
+            return th.fg("text", ` ${prompt.kind}${printable(prompt.text)}█ `);
+        if (status !== undefined)
+            return th.fg(status.tone === "error" ? "error" : "success", ` ${status.text} `);
+        const { first, last } = viewport.visibleLines();
+        const percent = viewport.maxScroll === 0 ? 100 : Math.round((viewport.scrollTop / viewport.maxScroll) * 100);
+        const pending = typed === "" ? "" : ` · ${typed}`;
+        return ` ${th.fg("accent", viewport.mode)}${th.fg("muted", ` · L${first}–${last}/${viewport.lineCount} (${percent}%)${pending}`)} `;
+    }
+    /** The keys the bottom border lists: the page's own action first, `q back` on a page opened from
+     * a list. */
+    keyHint() {
+        const prompt = this.viewport.navigation.prompt;
+        if (prompt !== undefined)
+            return prompt.kind === "/" ? "Enter search · Esc back" : "Enter go to line · Esc back";
+        const action = this.target.edit !== undefined ? "e edit · " : this.target.openLine !== undefined ? "click/Enter open · " : "";
         const close = this.views.length > 1 ? "q back" : "q close";
-        const hint = prompt === undefined
-            ? `${edit}j/k · gg/G · / search · :line · w wrap:${viewport.wrap ? "on" : "off"} · y copy · ${close}`
-            : prompt.kind === "/" ? "Enter search · Esc back" : "Enter go to line · Esc back";
+        return `${action}j/k · gg/G · / search · :line · w wrap:${this.viewport.wrap ? "on" : "off"} · y copy · ${close}`;
+    }
+    bottomBorder(width) {
+        const th = this.theme;
         const room = Math.max(0, width - 4);
-        const leftFitted = truncateToWidth(left, room, "…");
+        const leftFitted = truncateToWidth(this.positionLabel(), room, "…");
         const hintRoom = room - visibleWidth(leftFitted) - 2;
-        const right = hintRoom >= 12 ? ` ${th.fg("muted", truncateToWidth(hint, hintRoom - 1, "…"))} ` : "";
+        const right = hintRoom >= 12 ? ` ${th.fg("muted", truncateToWidth(this.keyHint(), hintRoom - 1, "…"))} ` : "";
         const fill = Math.max(0, room - visibleWidth(leftFitted) - visibleWidth(right));
         return `${th.fg("borderAccent", "╰─")}${leftFitted}${th.fg("borderAccent", "─".repeat(fill))}${right}${th.fg("borderAccent", "─╯")}`;
     }

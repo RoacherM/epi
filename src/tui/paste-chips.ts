@@ -683,8 +683,16 @@ export class ChipEditor {
     const index = chipMatches(text, TEXT_CHIP_REGEX_G).findIndex((match) => match.start === chip.offset && match.text === chip.label);
     if (index === -1 || this.textContent(this.synced.slots[index], chip.label) !== chip.content) return false;
     const decision = decidePasteChip(content);
-    const replacement = decision?.label ?? content;
-    this.setText(text.slice(0, chip.offset) + replacement + text.slice(chip.offset + chip.label.length));
+    const before = text.slice(0, chip.offset);
+    const after = text.slice(chip.offset + chip.label.length);
+    // Two steps, so the old label always leaves (its slot with it) and the new one always arrives
+    // contentless, even when both read the same (`[Pasted: 6 lines]` edited to 6 other lines): a
+    // single setText of equal text would push no undo step and keep the old slot. Merged into one
+    // undo step, like expanding a chip.
+    const undoDepth = this.undoStack().length + 1;
+    this.setText(before + after);
+    this.setText(before + (decision?.label ?? content) + after);
+    this.dropUndoSnapshotsAbove(undoDepth);
     if (decision !== undefined) this.attachContent(decision.label, content, chip.offset);
     return true;
   }

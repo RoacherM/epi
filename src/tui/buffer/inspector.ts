@@ -27,9 +27,10 @@ export interface InspectTarget {
   wrap?: boolean;
   /** Set when the content can be edited: `e` closes the inspector and calls it. */
   edit?: () => void;
-  /** Content that changes while shown (a running task): the inspector starts at the end, calls
-   * `subscribe` once open, and stops the subscription when it closes. */
-  live?: { subscribe(update: (target: InspectTarget) => void): () => void };
+  /** Content that changes while shown (a running task): the inspector calls `subscribe` once open
+   * and stops the subscription when it closes. With `follow`, the page starts at the end and stays
+   * there while new lines arrive (a log); without, it keeps its place (a list, newest first). */
+  live?: { subscribe(update: (target: InspectTarget) => void): () => void; follow?: boolean };
   /** Lines that open something (a list of tasks): a click on logical line `line` (0-based), or
    * Enter on the first line shown, opens the page this returns on top; Esc comes back. */
   openLine?: (line: number) => InspectTarget | undefined;
@@ -93,7 +94,7 @@ export class BlockInspectorOverlay implements Component {
     const view: View = { target, viewport };
     this.views.push(view);
     if (target.live !== undefined) {
-      viewport.scrollTop = Number.MAX_SAFE_INTEGER;
+      if (target.live.follow === true) viewport.scrollTop = Number.MAX_SAFE_INTEGER;
       view.stopLive = target.live.subscribe((next) => this.update(view, next));
     }
   }
@@ -115,13 +116,13 @@ export class BlockInspectorOverlay implements Component {
     for (const view of this.views) view.stopLive?.();
   }
 
-  /** New content for a live page (a running task): the position is kept, and a page scrolled to
-   * the end follows new lines. */
+  /** New content for a live page: the position is kept, and a following page scrolled to the end
+   * stays at the end. */
   private update(view: View, target: InspectTarget): void {
-    const following = view.viewport.scrollTop >= view.viewport.maxScroll;
+    const following = view.target.live?.follow === true && view.viewport.scrollTop >= view.viewport.maxScroll;
     view.target = target;
     view.viewport.setLines(target.lines);
-    if (following) view.viewport.scrollTop = Number.MAX_SAFE_INTEGER;
+    if (following) view.viewport.scrollToEnd();
     this.actions.requestRender();
   }
 
@@ -201,30 +202,35 @@ export class BlockInspectorOverlay implements Component {
     return `${th.fg("borderAccent", "╭─")}${title}${th.fg("borderAccent", "─".repeat(fill))}${close}${th.fg("borderAccent", "─╮")}`;
   }
 
-  private bottomBorder(width: number): string {
+  /** The position readout on the bottom border's left, or the prompt/status in its place. */
+  private positionLabel(): string {
     const th = this.theme;
     const viewport = this.viewport;
     const { prompt, status, pending: typed } = viewport.navigation;
-    let left: string;
-    if (prompt !== undefined) {
-      left = th.fg("text", ` ${prompt.kind}${printable(prompt.text)}█ `);
-    } else if (status !== undefined) {
-      left = th.fg(status.tone === "error" ? "error" : "success", ` ${status.text} `);
-    } else {
-      const { first, last } = viewport.visibleLines();
-      const percent = viewport.maxScroll === 0 ? 100 : Math.round((viewport.scrollTop / viewport.maxScroll) * 100);
-      const pending = typed === "" ? "" : ` · ${typed}`;
-      left = ` ${th.fg("accent", viewport.mode)}${th.fg("muted", ` · L${first}–${last}/${viewport.lineCount} (${percent}%)${pending}`)} `;
-    }
-    const edit = this.target.edit !== undefined ? "e edit · " : this.target.openLine !== undefined ? "click/Enter open · " : "";
+    if (prompt !== undefined) return th.fg("text", ` ${prompt.kind}${printable(prompt.text)}█ `);
+    if (status !== undefined) return th.fg(status.tone === "error" ? "error" : "success", ` ${status.text} `);
+    const { first, last } = viewport.visibleLines();
+    const percent = viewport.maxScroll === 0 ? 100 : Math.round((viewport.scrollTop / viewport.maxScroll) * 100);
+    const pending = typed === "" ? "" : ` · ${typed}`;
+    return ` ${th.fg("accent", viewport.mode)}${th.fg("muted", ` · L${first}–${last}/${viewport.lineCount} (${percent}%)${pending}`)} `;
+  }
+
+  /** The keys the bottom border lists: the page's own action first, `q back` on a page opened from
+   * a list. */
+  private keyHint(): string {
+    const prompt = this.viewport.navigation.prompt;
+    if (prompt !== undefined) return prompt.kind === "/" ? "Enter search · Esc back" : "Enter go to line · Esc back";
+    const action = this.target.edit !== undefined ? "e edit · " : this.target.openLine !== undefined ? "click/Enter open · " : "";
     const close = this.views.length > 1 ? "q back" : "q close";
-    const hint = prompt === undefined
-      ? `${edit}j/k · gg/G · / search · :line · w wrap:${viewport.wrap ? "on" : "off"} · y copy · ${close}`
-      : prompt.kind === "/" ? "Enter search · Esc back" : "Enter go to line · Esc back";
+    return `${action}j/k · gg/G · / search · :line · w wrap:${this.viewport.wrap ? "on" : "off"} · y copy · ${close}`;
+  }
+
+  private bottomBorder(width: number): string {
+    const th = this.theme;
     const room = Math.max(0, width - 4);
-    const leftFitted = truncateToWidth(left, room, "…");
+    const leftFitted = truncateToWidth(this.positionLabel(), room, "…");
     const hintRoom = room - visibleWidth(leftFitted) - 2;
-    const right = hintRoom >= 12 ? ` ${th.fg("muted", truncateToWidth(hint, hintRoom - 1, "…"))} ` : "";
+    const right = hintRoom >= 12 ? ` ${th.fg("muted", truncateToWidth(this.keyHint(), hintRoom - 1, "…"))} ` : "";
     const fill = Math.max(0, room - visibleWidth(leftFitted) - visibleWidth(right));
     return `${th.fg("borderAccent", "╰─")}${leftFitted}${th.fg("borderAccent", "─".repeat(fill))}${right}${th.fg("borderAccent", "─╯")}`;
   }

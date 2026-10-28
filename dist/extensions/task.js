@@ -242,8 +242,10 @@ function jobSummaryLine(theme, job) {
 function failureLine(theme, text) {
     return theme.fg("error", `✗ ${singleLine(text, 200)}`);
 }
-/** The call-line tail while a job runs: `turn 2 · bash: npm test` (§11.4). */
+/** The call-line tail while a job runs: `turn 2 · bash: npm test` (§11.4); `queued` before it starts. */
 function liveSummary(job) {
+    if (job.status === "queued")
+        return "queued";
     const parts = [`turn ${job.turns ?? 0}`];
     if (job.currentActivity !== undefined)
         parts.push(job.currentActivity);
@@ -643,6 +645,9 @@ export function createTaskInlineExtension(options) {
         const completion = trackCompletion(job.id, background);
         if (background)
             return startedResult(job);
+        // The first update names the job at once, so its call row can open the job's page while it is
+        // still queued or before its first progress line.
+        onUpdate?.({ content: [{ type: "text", text: runningStatusText(job) }], details: job });
         const progress = watchJob(job.id, onUpdate);
         const waited = await runtime.wait(job.id, undefined, signal);
         if (signal?.aborted === true &&
@@ -729,6 +734,7 @@ export function createTaskInlineExtension(options) {
         return {
             ...taskViewTarget(theme, job),
             live: {
+                follow: true,
                 subscribe: (update) => {
                     // Each refresh rereads the session file: at most one per UPDATE_THROTTLE_MS.
                     let timer;
@@ -781,19 +787,33 @@ export function createTaskInlineExtension(options) {
             },
         };
     };
+    /** The `/tasks` overlay, at most one: opening it again (a second click on the footer) replaces
+     * it, and a session switch or quit closes it, live subscriptions included. */
+    let openPage;
+    const closePage = () => {
+        const page = openPage;
+        openPage = undefined;
+        page?.overlay.dispose();
+        page?.close();
+    };
     /** Shows `target` as an overlay through the extension UI (used by `/tasks`). */
     const showPage = async (ctx, target) => {
-        let overlay;
+        closePage();
+        let page;
         await ctx.ui.custom((tui, theme, _keybindings, done) => {
-            overlay = new BlockInspectorOverlay(theme, target, {
+            const overlay = new BlockInspectorOverlay(theme, target, {
                 close: () => done(undefined),
                 copy: (text) => writeClipboardText(text),
                 requestRender: () => tui.requestRender(),
                 terminalRows: () => tui.terminal.rows,
             });
+            page = { overlay, close: () => done(undefined) };
+            openPage = page;
             return overlay;
         }, { overlay: true, overlayOptions: { width: "88%", minWidth: 24, anchor: "center" } });
-        overlay?.dispose();
+        page?.overlay.dispose();
+        if (openPage === page)
+            openPage = undefined;
     };
     return {
         name: "epi:task",
@@ -886,6 +906,10 @@ export function createTaskInlineExtension(options) {
                 return { message: notifyPayload(ready) };
             });
             pi.on("session_shutdown", async (event) => {
+                // Each session's factory adds its own status listener; the old one goes with its session,
+                // and so does an open `/tasks` overlay (its live pages included).
+                changeListeners.delete(listener);
+                closePage();
                 // Only a real quit ends the subagents. A session switch (`/new`, `/resume`, fork, reload)
                 // tears down this extension runtime but not the process, and the jobs are detached Epi
                 // runs: killing them would silently discard work the user never asked to stop. This
