@@ -36,7 +36,8 @@ export class BlockInspectorOverlay {
             match: (text) => this.theme.inverse(text),
         });
         viewport.wrap = target.wrap === true;
-        const view = { target, viewport, atEnd: target.live?.follow === true };
+        const follow = target.live?.follow === true;
+        const view = { target, viewport, follow, atEnd: follow };
         this.views.push(view);
         if (target.live !== undefined)
             view.stopLive = target.live.subscribe((next) => this.update(view, next));
@@ -58,11 +59,15 @@ export class BlockInspectorOverlay {
         for (const view of this.views)
             view.stopLive?.();
     }
-    /** New content for a live page: the position is kept, and a following page scrolled to the end
-     * stays at the end. */
+    /** New content for a live page: the position is kept, and a following page at the end moves to
+     * the new end at once, so a key or click before the next frame sees where it will be drawn. The
+     * page keeps its own `live` (a refresh's content need not carry it). */
     update(view, target) {
-        view.target = target;
+        const live = view.target.live;
+        view.target = live === undefined ? target : { ...target, live };
         view.viewport.setLines(target.lines);
+        if (view.atEnd)
+            view.viewport.scrollTo(view.viewport.maxScroll);
         this.actions.requestRender();
     }
     /** `openLine`'s page for logical line `line`, opened on top. */
@@ -74,7 +79,7 @@ export class BlockInspectorOverlay {
     }
     /** After the reader moved: a following page follows again once back at the end. */
     noteScroll(view) {
-        if (view.target.live?.follow === true)
+        if (view.follow)
             view.atEnd = view.viewport.scrollTop >= view.viewport.maxScroll;
     }
     handleInput(data) {

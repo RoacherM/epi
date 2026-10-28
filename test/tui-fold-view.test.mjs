@@ -310,9 +310,10 @@ test("a foreground task names its job in its first update, so its row opens the 
 // its first frame had no scroll position yet, so it never reached the end and stopped following.
 test("a following page opened from a list and refreshed before its first frame still follows the end", () => {
   let push;
-  const job = (n) => ({ title: "job", lines: Array.from({ length: n }, (_, i) => `row ${i}`), text: "", wrap: true,
-    live: { follow: true, subscribe: (update) => { push = update; return () => {}; } } });
-  const { overlay } = inspector({ title: "tasks", lines: ["a"], text: "", openLine: () => job(30) }, 20);
+  // Refreshes carry content only, no `live`, as epi:task's jobPage sends them (G5 review live-follow P1).
+  const job = (n) => ({ title: "job", lines: Array.from({ length: n }, (_, i) => `row ${i}`), text: "", wrap: true });
+  const opened = { ...job(30), live: { follow: true, subscribe: (update) => { push = update; return () => {}; } } };
+  const { overlay } = inspector({ title: "tasks", lines: ["a"], text: "", openLine: () => opened }, 20);
   overlay.render(80);
   overlay.handleInput("\r");
   push(job(40));
@@ -325,4 +326,19 @@ test("a following page opened from a list and refreshed before its first frame s
   overlay.handleInput("G"); // back at the end: follows again
   push(job(80));
   assert.match(plain(overlay.render(80).at(-1)), /L\d+–80\/80 \(100%\)/);
+});
+
+// G5 review live-follow P2: between a refresh and the next frame, the drawn page must already sit at
+// the new end, so a key there neither reads a stale position nor stops following by mistake.
+test("a following page is at the new end right after a refresh, before the next frame", () => {
+  let push;
+  const job = (n) => ({ title: "job", lines: Array.from({ length: n }, (_, i) => `row ${i}`), text: "" });
+  const { overlay } = inspector({ ...job(30), live: { follow: true, subscribe: (update) => { push = update; return () => {}; } } }, 20);
+  overlay.render(80);
+  push(job(60));
+  assert.equal(overlay.viewport.scrollTop, overlay.viewport.maxScroll);
+  overlay.handleInput("j"); // a key here must not read the page as scrolled up
+  push(job(70));
+  assert.equal(overlay.viewport.scrollTop, overlay.viewport.maxScroll);
+  assert.match(plain(overlay.render(80).at(-1)), /\/70 \(100%\)/);
 });

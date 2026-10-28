@@ -51,7 +51,8 @@ export declare class BufferViewport {
     render(width: number, height: number): string[];
     private gutterWidth;
     private rows;
-    private scrollTo;
+    /** Scrolls to `row`, clamped to the content as last laid out. */
+    scrollTo(row: number): void;
     /** The first row of logical line `line` (0-based), clamped to the content. */
     private rowOfLine;
     private toggleWrap;

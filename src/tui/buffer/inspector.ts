@@ -55,6 +55,9 @@ interface View {
   target: InspectTarget;
   viewport: BufferViewport;
   stopLive?: () => void;
+  /** The page's own `live.follow`, fixed when it opens: a refresh brings new content, not a new
+   * page, so it need not repeat `live`. */
+  follow: boolean;
   /** A following page stays at the end: true until the reader scrolls up, true again at the end.
    * Kept apart from the scroll position, which a page not drawn yet does not have. */
   atEnd: boolean;
@@ -94,7 +97,8 @@ export class BlockInspectorOverlay implements Component {
       match: (text) => this.theme.inverse(text),
     });
     viewport.wrap = target.wrap === true;
-    const view: View = { target, viewport, atEnd: target.live?.follow === true };
+    const follow = target.live?.follow === true;
+    const view: View = { target, viewport, follow, atEnd: follow };
     this.views.push(view);
     if (target.live !== undefined) view.stopLive = target.live.subscribe((next) => this.update(view, next));
   }
@@ -116,11 +120,14 @@ export class BlockInspectorOverlay implements Component {
     for (const view of this.views) view.stopLive?.();
   }
 
-  /** New content for a live page: the position is kept, and a following page scrolled to the end
-   * stays at the end. */
+  /** New content for a live page: the position is kept, and a following page at the end moves to
+   * the new end at once, so a key or click before the next frame sees where it will be drawn. The
+   * page keeps its own `live` (a refresh's content need not carry it). */
   private update(view: View, target: InspectTarget): void {
-    view.target = target;
+    const live = view.target.live;
+    view.target = live === undefined ? target : { ...target, live };
     view.viewport.setLines(target.lines);
+    if (view.atEnd) view.viewport.scrollTo(view.viewport.maxScroll);
     this.actions.requestRender();
   }
 
@@ -133,7 +140,7 @@ export class BlockInspectorOverlay implements Component {
 
   /** After the reader moved: a following page follows again once back at the end. */
   private noteScroll(view: View): void {
-    if (view.target.live?.follow === true) view.atEnd = view.viewport.scrollTop >= view.viewport.maxScroll;
+    if (view.follow) view.atEnd = view.viewport.scrollTop >= view.viewport.maxScroll;
   }
 
   handleInput(data: string): void {

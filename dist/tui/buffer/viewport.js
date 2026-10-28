@@ -138,6 +138,7 @@ export class BufferViewport {
         this.rowsCache = { width, wrap: this.wrap, rows };
         return rows;
     }
+    /** Scrolls to `row`, clamped to the content as last laid out. */
     scrollTo(row) {
         this.scrollTop = Math.max(0, Math.min(this.maxScroll, Math.round(row)));
     }
