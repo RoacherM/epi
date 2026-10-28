@@ -18,6 +18,17 @@ fonts = {
     (True, True): "DejaVuSansMono-BoldOblique.ttf",
 }
 fonts = {key: ImageFont.truetype(str(font_dir / name), 28) for key, name in fonts.items()}
+# Wide glyphs DejaVu lacks (CJK): drawn from EPI_SCREENSHOT_WIDE_FONT when set, e.g. macOS's
+# "/System/Library/Fonts/Hiragino Sans GB.ttc". Without it they render as missing-glyph boxes.
+wide_path = os.environ.get("EPI_SCREENSHOT_WIDE_FONT")
+wide_font = ImageFont.truetype(wide_path, 30) if wide_path else None
+
+
+def font_for(text, cell_width, bold, italic):
+    # A double-width cell is CJK or fullwidth punctuation: DejaVu has none of these.
+    if wide_font is not None and cell_width == 2:
+        return wide_font
+    return fonts[bold, italic]
 cw, ch, pad = 17, 42, 28
 background, foreground = (24, 24, 24), (225, 225, 225)
 palette = [
@@ -79,6 +90,14 @@ def draw_braille(draw, text, x, y, fg):
 def render(cells):
     image = Image.new("RGB", (data["columns"] * cw + pad * 2, data["rows"] * ch + pad * 2), background)
     draw = ImageDraw.Draw(image)
+    # Backgrounds first: a wide glyph spans two cells, and painting the second cell's background
+    # after it would cut the glyph in half.
+    for row, line in enumerate(cells):
+        for col, cell in enumerate(line):
+            fg = color(cell["fgMode"], cell["fg"], foreground)
+            bg = color(cell["bgMode"], cell["bg"], background)
+            x, y = pad + col * cw, pad + row * ch
+            draw.rectangle((x, y, x + cw - 1, y + ch - 1), fill=fg if cell["inverse"] else bg)
     for row, line in enumerate(cells):
         for col, cell in enumerate(line):
             fg = color(cell["fgMode"], cell["fg"], foreground)
@@ -86,7 +105,6 @@ def render(cells):
             if cell["inverse"]:
                 fg, bg = bg, fg
             x, y = pad + col * cw, pad + row * ch
-            draw.rectangle((x, y, x + cw - 1, y + ch - 1), fill=bg)
             text = cell["text"]
             if not text or cell["width"] == 0 or cell["invisible"]:
                 continue
@@ -107,7 +125,8 @@ def render(cells):
             if len(text) == 1 and 0x2800 <= ord(text) <= 0x28FF:
                 draw_braille(draw, text, x, y, fg)
                 continue
-            draw.text((x, y + 5), text, font=fonts[cell["bold"], cell["italic"]], fill=fg)
+            font = font_for(text, cell["width"], cell["bold"], cell["italic"])
+            draw.text((x, y + (5 if font is not wide_font else 3)), text, font=font, fill=fg)
             if cell["underline"]:
                 draw.line((x, y + 35, x + cw * cell["width"], y + 35), fill=fg)
             if cell["strike"]:

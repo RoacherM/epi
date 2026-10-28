@@ -4,6 +4,7 @@
 
 | 版本 | 内容 |
 |---|---|
+| [0.2.2](0.2.2/README.md) | 长文折叠：单击看全文、按 e 编辑；子代理任务页：单击 task 行、底栏计数或 `/tasks` 实时查看 |
 | [0.2.1](0.2.1/README.md) | 子代理的可靠交付:信箱回执、底栏微提示、实时任务行 |
 | [0.1.25](0.1.25/README.md) | 内置子代理:并发、查看与纠偏、续跑、自己压缩;Magpie 价格与缓存预热 |
 | [0.1.24](0.1.24/README.md) | 混合网页检索（DeepSeek + Exa，日期优先）；旋转的 x；终端全宽 |
@@ -32,7 +33,7 @@ node scripts/docs/capture-showcase.mjs 0.1.22
 额外需要：
 
 - `ffmpeg`（切片、编码 MP4 和 GIF）。
-- Python 3 与 Pillow、DejaVu Sans Mono 字体，同 [截图说明](../assets/README.md)：`EPI_SCREENSHOT_FONT_DIR` 指定字体目录，`PYTHON` 指定带 Pillow 的 Python。
+- Python 3 与 Pillow、DejaVu Sans Mono 字体，同 [截图说明](../assets/README.md)：`EPI_SCREENSHOT_FONT_DIR` 指定字体目录，`PYTHON` 指定带 Pillow 的 Python。画面里有中文时，用 `EPI_SCREENSHOT_WIDE_FONT` 指定一个中文字体文件（macOS：`/System/Library/Fonts/Hiragino Sans GB.ttc`），双宽格子用它画；不设则显示成方框。
 
 脚本在临时 `HOME`、`EPI_HOME` 和演示项目里运行，环境变量采用白名单：不联网、不加载真实凭证、不读你的 `~/.epi`，结束后删除临时目录。录制用的是 `@xterm/headless`，不支持图形协议，所以 `/preview` 的图片和视频画面录不到，需要在 Ghostty、kitty 或 iTerm2 里手动录。
 

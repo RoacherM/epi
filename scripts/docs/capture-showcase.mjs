@@ -185,6 +185,19 @@ async function record({ version, cwd, out }) {
         await sleep(15);
       }
     },
+    /** A left click (SGR press + release) on the first on-screen occurrence of `value`, as
+     * tui-harness.mjs's clickText does; `offset` moves it right by that many columns. */
+    async clickText(value, { offset = 0 } = {}) {
+      await settle();
+      const lines = text().split("\n");
+      const y = lines.findIndex((line) => line.includes(value));
+      assert.ok(y >= 0, `no ${JSON.stringify(value)} on screen to click. Screen:\n${text()}`);
+      const x = lines[y].indexOf(value) + offset;
+      onInput(`\x1b[<0;${x + 1};${y + 1}M`);
+      await sleep(20);
+      onInput(`\x1b[<0;${x + 1};${y + 1}m`);
+      await sleep(50);
+    },
     async expect(pattern) {
       await settle();
       assert.ok(matches(pattern), `expected ${pattern} on screen. Screen:\n${text()}`);
