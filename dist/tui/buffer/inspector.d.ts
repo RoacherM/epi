@@ -13,6 +13,20 @@ export interface InspectTarget {
     firstLineNumber?: number;
     /** Plain text `y` copies. */
     text: string;
+    /** Start with long lines wrapped (prose); off by default (code, logs). */
+    wrap?: boolean;
+    /** Set when the content can be edited: `e` closes the inspector and calls it. */
+    edit?: () => void;
+    /** Content that changes while shown (a running task): the inspector calls `subscribe` once open
+     * and stops the subscription when it closes. With `follow`, the page starts at the end and stays
+     * there while new lines arrive (a log); without, it keeps its place (a list, newest first). */
+    live?: {
+        subscribe(update: (target: InspectTarget) => void): () => void;
+        follow?: boolean;
+    };
+    /** Lines that open something (a list of tasks): a click on logical line `line` (0-based), or
+     * Enter on the first line shown, opens the page this returns on top; Esc comes back. */
+    openLine?: (line: number) => InspectTarget | undefined;
 }
 export interface InspectorActions {
     close(): void;
@@ -24,15 +38,34 @@ export interface InspectorActions {
 }
 export declare class BlockInspectorOverlay implements Component {
     private readonly theme;
-    private readonly target;
     private readonly actions;
-    readonly viewport: BufferViewport;
+    private readonly views;
     constructor(theme: Theme, target: InspectTarget, actions: InspectorActions);
+    /** The page on top. */
+    get viewport(): BufferViewport;
+    private get view();
+    private get target();
+    private push;
+    /** Leaves the page on top for the one under it; false when it is the only one. */
+    private back;
+    private close;
+    /** Ends live updates; the host calls it when it hides the overlay. */
+    dispose(): void;
+    /** New content for a live page: the position is kept, and a following page scrolled to the end
+     * stays at the end. */
+    private update;
+    /** `openLine`'s page for logical line `line`, opened on top. */
+    private open;
     handleInput(data: string): void;
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult;
     render(width: number): string[];
     invalidate(): void;
     private topBorder;
+    /** The position readout on the bottom border's left, or the prompt/status in its place. */
+    private positionLabel;
+    /** The keys the bottom border lists: the page's own action first, `q back` on a page opened from
+     * a list. */
+    private keyHint;
     private bottomBorder;
     private yank;
 }

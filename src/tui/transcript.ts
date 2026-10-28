@@ -62,7 +62,7 @@ export class Transcript {
   private thinkingExpanded = false;
   /** The open block inspector, at most one (docs/tui-buffer-overlay-design.md §4): opening
    * another replaces it, and reset() (/new, /resume, /reload, /tree) closes it. */
-  private inspector: OverlayHandle | undefined;
+  private inspector: { handle: OverlayHandle; overlay: BlockInspectorOverlay } | undefined;
   /** Set on the *first* `agent_start` of a prompt run (item 2's `Worked for Ns` footer), read and
    * cleared on `agent_settled` -- this process's own clock, not anything from the event stream,
    * since none of these events carry a timestamp. Not reset on a later `agent_start`: `agent.
@@ -151,13 +151,14 @@ export class Transcript {
       requestRender: () => this.tui.requestRender(),
       terminalRows: () => this.tui.terminal.rows,
     });
-    this.inspector = this.tui.showOverlay(overlay, { width: "88%", minWidth: 24, anchor: "center" });
+    this.inspector = { handle: this.tui.showOverlay(overlay, { width: "88%", minWidth: 24, anchor: "center" }), overlay };
     this.tui.requestRender();
   }
 
   closeInspector(): void {
     if (this.inspector === undefined) return;
-    this.inspector.hide();
+    this.inspector.overlay.dispose();
+    this.inspector.handle.hide();
     this.inspector = undefined;
     this.tui.requestRender();
   }
@@ -421,7 +422,7 @@ export class Transcript {
     switch (message.role) {
       case "user": {
         this.noteImageLabels(messageText(message.content));
-        const block = new UserMessageBlock(this.theme, message.content, new Date(message.timestamp ?? Date.now()));
+        const block = new UserMessageBlock(this.theme, message.content, new Date(message.timestamp ?? Date.now()), (target) => this.inspect(target));
         block.setExpanded(this.toolsExpanded);
         this.userMessages.push(block);
         this.add(block);

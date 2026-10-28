@@ -6,6 +6,7 @@ import { basename, sep } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, EditorComponent, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
+import type { InspectTarget } from "./buffer/inspector.js";
 import { GLYPHS, spinFrame } from "./glyphs.js";
 import { TURN_COLUMNS } from "./measure.js";
 import { imageLabelNumbers } from "./paste-chips.js";
@@ -143,18 +144,18 @@ const COLLAPSED_LINES = 3;
  * what displayText() emits for unlabelled images and `@file` blocks). */
 const CHIP_ONLY_LINE = /^\s*(?:\[(?:Image(?: #\d+)?|File: [^\]\n]*)\]\s*)+$/;
 
-/** Cuts the text after its `COLLAPSED_LINES`-th logical line and appends `…`. Chip-only lines don't
- * count toward the limit: three `@file` arguments plus a one-line question must still show the
- * question. */
-function collapseUserText(text: string): string {
+/** The text up to its `COLLAPSED_LINES`-th logical line, and how many lines were cut after it.
+ * Chip-only lines don't count toward the limit: three `@file` arguments plus a one-line question
+ * must still show the question. */
+function collapseUserText(text: string): { shown: string; hidden: number } {
   const lines = text.split("\n");
   let counted = 0;
   for (let index = 0; index < lines.length; index += 1) {
     if (CHIP_ONLY_LINE.test(lines[index] ?? "")) continue;
     counted += 1;
-    if (counted > COLLAPSED_LINES) return [...lines.slice(0, index), "…"].join("\n");
+    if (counted > COLLAPSED_LINES) return { shown: lines.slice(0, index).join("\n"), hidden: lines.length - index };
   }
-  return text;
+  return { shown: text, hidden: 0 };
 }
 
 // OSC 133 semantic-prompt zones, marked the way Pi's user-message.js (L39-46) and
@@ -180,21 +181,32 @@ export function splitPromptZone(line: string): { marker: string; rest: string } 
 }
 
 /** Full-width `userMessageBg` block with one row of padding, `❯ text` and the time on the right.
- * Collapses past `COLLAPSED_LINES` *logical* lines (not wrapped rows) to `…` -- observed in grok
- * 1.0.44 (docs/tui-design.md 4.2/4.3): a sent 12-line paste renders as its first 3 lines then `…`.
- * Counting logical lines, not wrapped rows, means a single long line never collapses just because a
- * narrow terminal wraps it into more than 3 screen rows. Expanded back with Ctrl+O -- the same
- * toggle that expands tool output (item 5). */
+ * Collapses past `COLLAPSED_LINES` *logical* lines (not wrapped rows) to `… +N lines` -- observed in
+ * grok 1.0.44 (docs/tui-design.md 4.2/4.3): a sent 12-line paste renders as its first 3 lines then
+ * `…`. Counting logical lines, not wrapped rows, means a single long line never collapses just
+ * because a narrow terminal wraps it into more than 3 screen rows. A click on that row opens the
+ * whole message in the inspector; the extensions' all-blocks toggle expands it in place. */
 export class UserMessageBlock implements Component {
   private readonly text: string;
   private expanded = false;
+  /** The row of the last render that reads `… +N lines`, if any. */
+  private moreRow: number | undefined;
 
   constructor(
     private readonly theme: Theme,
     content: unknown,
     private readonly time: Date,
+    private readonly onInspect?: (target: InspectTarget) => void,
   ) {
     this.text = displayText(content);
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type !== "click" || event.button !== "left" || this.onInspect === undefined) return undefined;
+    if (this.moreRow === undefined || event.y !== this.moreRow) return undefined;
+    const lines = this.text.split("\n");
+    this.onInspect({ title: "Message", subtitle: `${lines.length} lines`, lines, firstLineNumber: 1, text: this.text, wrap: true });
+    return { handled: true };
   }
 
   setExpanded(expanded: boolean): void {
@@ -207,13 +219,19 @@ export class UserMessageBlock implements Component {
     const paint = (content: string) => this.theme.bg("userMessageBg", content + " ".repeat(Math.max(0, width - visibleWidth(content))));
     const clock = this.theme.fg("muted", this.time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
     const bodyWidth = Math.max(1, width - 4 - clockColumns(clock) - 3);
-    const source = this.expanded ? this.text : collapseUserText(this.text);
-    const lines = piTui.wrapTextWithAnsi(source, bodyWidth);
+    const { shown, hidden } = this.expanded ? { shown: this.text, hidden: 0 } : collapseUserText(this.text);
+    const lines = piTui.wrapTextWithAnsi(shown, bodyWidth);
     const rows = lines.map((text, index) => {
       const prefix = index === 0 ? `${this.theme.fg("muted", GLYPHS.user)} ` : "  ";
       const left = `  ${prefix}${this.theme.fg("userMessageText", text)}`;
       return index === 0 ? spread(left, `${clock}  `, width) : fit(left, width);
     });
+    // After the top padding row and the text rows.
+    this.moreRow = hidden > 0 ? rows.length + 1 : undefined;
+    if (hidden > 0) {
+      const hint = this.onInspect === undefined ? "" : " (click to view)";
+      rows.push(fit(`    ${this.theme.fg("muted", `… +${hidden} ${hidden === 1 ? "line" : "lines"}${hint}`)}`, width));
+    }
     return markPromptZone([paint(""), ...rows.map(paint), paint("")]);
   }
 
@@ -539,15 +557,33 @@ export interface Shortcut {
   label: string;
 }
 
-/** `Key:label  │  Key:label` on the left; extension statuses and notices on the right. */
-export function shortcutsBar(theme: Theme, state: () => { shortcuts: Shortcut[]; right: string }): Component {
-  return line((width) => {
+/** `Key:label  │  Key:label` on the left; extension statuses and notices on the right. A left
+ * click on the right segment calls `onRightClick` with the column inside it. */
+export function shortcutsBar(
+  theme: Theme,
+  state: () => { shortcuts: Shortcut[]; right: string },
+  onRightClick?: (column: number) => void,
+): Component {
+  const render = (width: number): string => {
     const { shortcuts, right } = state();
     const left = shortcuts
       .map(({ key, label }) => `${theme.bold(theme.fg("text", key))}${theme.fg("muted", `:${label}`)}`)
       .join(theme.fg("dim", "  │  "));
     return right === "" ? fit(left, width) : spread(left, right, width);
-  });
+  };
+  return {
+    render: (width) => [render(width)],
+    invalidate() {},
+    handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+      if (event.type !== "click" || event.button !== "left" || onRightClick === undefined) return undefined;
+      const rightWidth = visibleWidth(state().right);
+      // spread() puts the right segment flush with the edge, unless it alone overflows the row.
+      const start = rightWidth >= event.width ? 0 : event.width - rightWidth;
+      if (rightWidth === 0 || event.x < start) return undefined;
+      onRightClick(event.x - start);
+      return { handled: true };
+    },
+  };
 }
 
 // ── queued messages ─────────────────────────────────────────────────────────────

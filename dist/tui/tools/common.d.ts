@@ -85,6 +85,9 @@ export declare class CallLine implements Component {
     private readonly body;
     private readonly context;
     private readonly extra;
+    /** Set by a renderer whose call row opens a view (a task's live progress): a click on the row
+     * then opens the inspector instead of toggling the block. Read at click time. */
+    inspect: (() => InspectTarget | undefined) | undefined;
     constructor(marker: CallMarker, theme: Theme, body: string, context: Pick<ToolRenderContext, "state" | "durationMs" | "isError" | "isPartial" | "executionStarted" | "expanded">, extra?: string);
     /** The tail as it reads right now: `extra`, then the result's summary. A failed result's own row
      * says what happened, so a summary left by an earlier (partial) result is dropped. */
@@ -95,6 +98,7 @@ export declare class CallLine implements Component {
     /** The time so far: a bar, or the number when expanded (Ctrl+O). */
     private bar;
     invalidate(): void;
+    inspectTargetAt(row: number): InspectTarget | undefined;
     render(width: number): string[];
 }
 /** A result renderer's summary for the call line's tail (see `CallLine`). */

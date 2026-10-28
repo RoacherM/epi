@@ -139,6 +139,9 @@ export class CallLine {
     body;
     context;
     extra;
+    /** Set by a renderer whose call row opens a view (a task's live progress): a click on the row
+     * then opens the inspector instead of toggling the block. Read at click time. */
+    inspect;
     constructor(marker, theme, body, context, extra = "") {
         this.marker = marker;
         this.theme = theme;
@@ -175,6 +178,9 @@ export class CallLine {
         return ms === undefined ? "" : rightEdgeTime(this.theme, ms, this.context.expanded === true);
     }
     invalidate() { }
+    inspectTargetAt(row) {
+        return row === 0 ? this.inspect?.() : undefined;
+    }
     render(width) {
         const ms = this.elapsed();
         const fallback = ms !== undefined && !this.context.isPartial ? `  ${this.theme.fg("dim", formatToolDuration(ms))}` : "";

@@ -28,6 +28,7 @@ export type ChipInfo = {
     end: number;
     justPasted: boolean;
     content: string;
+    offset: number;
 } | {
     kind: "image";
     label: string;
@@ -42,8 +43,8 @@ export type ChipInfo = {
  * the two never disagree. Only ONE trailing newline is dropped; a genuine blank line before it
  * (two or more trailing newlines) still counts. */
 export declare function dropTrailingNewline(text: string): string;
-/** A paste triggers a chip at >=4 lines OR >10KB (docs/tui-design.md 4.3); lines wins the label
- * when both are true, matching grok's own priority (docs/notes/research-grok-build-tui.md:323). */
+/** A paste triggers a chip at >=4 lines OR >1000 characters (docs/tui-design.md 4.3); lines wins
+ * the label when both are true, matching grok's own priority (docs/notes/research-grok-build-tui.md:323). */
 export declare function decidePasteChip(text: string): {
     label: string;
     lines: number;
@@ -171,6 +172,14 @@ export declare class ChipEditor {
      * we can decide chip-or-not *before* the inner editor ever applies its own (different) fold. */
     private bufferPaste;
     private handlePaste;
+    /** The last edit's sync() saw a new, contentless `label` at `start`; give it its content. */
+    private attachContent;
+    /** Replaces a text chip's content with `content` (edited in the viewer), as one undo step. The
+     * new content folds again when it is still long enough, else it goes in as plain text. False when
+     * the draft no longer holds `chip` (it changed while the editor was open): nothing is changed. */
+    replaceTextChip(chip: Extract<ChipInfo, {
+        kind: "text";
+    }>, content: string): boolean;
     private interceptChipKey;
     /** Deletes what's left of a chip label that the edit from `before` to now only partly removed
      * (Backspace at its end, Delete at its start, Ctrl+W/Alt+D/Ctrl+U/Ctrl+K reaching into it), so a

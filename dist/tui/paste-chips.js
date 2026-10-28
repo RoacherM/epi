@@ -59,7 +59,9 @@ import { piTui } from "./pi-tui.js";
 const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
 const { detectSupportedImageMimeType } = (await import(pathToFileURL(join(piDist, "utils", "mime.js")).href));
 const MIN_PASTE_LINES = 4;
-const MAX_PASTE_BYTES = 10 * 1024;
+/** Characters above which even a one-line paste folds: a few long paragraphs otherwise fill the
+ * prompt with wrapped rows (Pi's own Editor folds above 1000 characters too). */
+const MAX_PASTE_CHARS = 1000;
 const TEXT_CHIP_SOURCE = String.raw `\[Pasted: (?:\d+ lines|\d+(?:\.\d+)? KB)\]`;
 const IMAGE_CHIP_SOURCE = String.raw `\[Image #(\d+)\]`;
 const CHIP_REGEX_G = new RegExp(`${TEXT_CHIP_SOURCE}|${IMAGE_CHIP_SOURCE}`, "g");
@@ -152,14 +154,15 @@ const HISTORY_ACTIONS = ["tui.editor.cursorUp", "tui.editor.cursorDown", "tui.ed
 export function dropTrailingNewline(text) {
     return text.endsWith("\n") ? text.slice(0, -1) : text;
 }
-/** A paste triggers a chip at >=4 lines OR >10KB (docs/tui-design.md 4.3); lines wins the label
- * when both are true, matching grok's own priority (docs/notes/research-grok-build-tui.md:323). */
+/** A paste triggers a chip at >=4 lines OR >1000 characters (docs/tui-design.md 4.3); lines wins
+ * the label when both are true, matching grok's own priority (docs/notes/research-grok-build-tui.md:323). */
 export function decidePasteChip(text) {
     const lines = dropTrailingNewline(text).split("\n").length;
     const bytes = Buffer.byteLength(text, "utf8");
-    if (lines < MIN_PASTE_LINES && bytes <= MAX_PASTE_BYTES)
+    if (lines < MIN_PASTE_LINES && text.length <= MAX_PASTE_CHARS)
         return undefined;
-    const label = lines >= MIN_PASTE_LINES ? `[Pasted: ${lines} lines]` : `[Pasted: ${Math.round(bytes / 1024)} KB]`;
+    const kb = bytes / 1024;
+    const label = lines >= MIN_PASTE_LINES ? `[Pasted: ${lines} lines]` : `[Pasted: ${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB]`;
     return { label, lines, bytes };
 }
 /** Resolves a single-line pasted string to an existing image file's absolute path, or undefined
@@ -580,18 +583,44 @@ export class ChipEditor {
             this.insertTextAtCursor(filtered);
             return;
         }
-        this.textContentCounter += 1;
-        const id = this.textContentCounter;
-        this.textContents.set(id, { label: decision.label, content: filtered });
         const start = cursorOffset(this.inner.getText(), cursor);
         this.insertTextAtCursor(decision.label);
-        // insertTextAtCursor's sync() saw a new, contentless label at `start`; give it its content.
-        const index = chipMatches(this.inner.getText(), TEXT_CHIP_REGEX_G).findIndex((match) => match.start === start);
-        if (index === -1)
-            throw new Error(`ChipEditor: pasted label ${decision.label} not found at offset ${start}`);
-        this.synced.slots[index] = id;
+        this.attachContent(decision.label, filtered, start);
         const after = this.inner.getCursor();
         this.lastPastedChip = { line: after.line, col: after.col };
+    }
+    /** The last edit's sync() saw a new, contentless `label` at `start`; give it its content. */
+    attachContent(label, content, start) {
+        this.textContentCounter += 1;
+        const id = this.textContentCounter;
+        this.textContents.set(id, { label, content });
+        const index = chipMatches(this.inner.getText(), TEXT_CHIP_REGEX_G).findIndex((match) => match.start === start);
+        if (index === -1)
+            throw new Error(`ChipEditor: label ${label} not found at offset ${start}`);
+        this.synced.slots[index] = id;
+    }
+    /** Replaces a text chip's content with `content` (edited in the viewer), as one undo step. The
+     * new content folds again when it is still long enough, else it goes in as plain text. False when
+     * the draft no longer holds `chip` (it changed while the editor was open): nothing is changed. */
+    replaceTextChip(chip, content) {
+        const text = this.inner.getText();
+        const index = chipMatches(text, TEXT_CHIP_REGEX_G).findIndex((match) => match.start === chip.offset && match.text === chip.label);
+        if (index === -1 || this.textContent(this.synced.slots[index], chip.label) !== chip.content)
+            return false;
+        const decision = decidePasteChip(content);
+        const before = text.slice(0, chip.offset);
+        const after = text.slice(chip.offset + chip.label.length);
+        // Two steps, so the old label always leaves (its slot with it) and the new one always arrives
+        // contentless, even when both read the same (`[Pasted: 6 lines]` edited to 6 other lines): a
+        // single setText of equal text would push no undo step and keep the old slot. Merged into one
+        // undo step, like expanding a chip.
+        const undoDepth = this.undoStack().length + 1;
+        this.setText(before + after);
+        this.setText(before + (decision?.label ?? content) + after);
+        this.dropUndoSnapshotsAbove(undoDepth);
+        if (decision !== undefined)
+            this.attachContent(decision.label, content, chip.offset);
+        return true;
     }
     // ── chip-aware keys ─────────────────────────────────────────────────────
     interceptChipKey(data) {
@@ -786,7 +815,7 @@ export class ChipEditor {
         const index = chipMatches(this.inner.getText().slice(0, offset), TEXT_CHIP_REGEX_G).length;
         const content = this.textContent(this.synced.slots[index], match.text) ?? match.text;
         const justPasted = this.lastPastedChip?.line === line && this.lastPastedChip.col === match.end;
-        return { kind: "text", label: match.text, start: match.start, end: match.end, justPasted, content };
+        return { kind: "text", label: match.text, start: match.start, end: match.end, justPasted, content, offset };
     }
     /** The content pasted under `label`, or undefined for a contentless slot. Checking the label
      * again here is a last safety net: a slot never resolves to content pasted under another label. */

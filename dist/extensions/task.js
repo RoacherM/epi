@@ -5,7 +5,10 @@ import { fileURLToPath } from "node:url";
 // safe -- only pi-tui's own Component classes would hit the "must be Pi's exact installed copy"
 // instanceof concern src/tui/pi-tui.ts exists for.
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { BlockInspectorOverlay } from "../tui/buffer/inspector.js";
+import { writeClipboardText } from "../tui/clipboard.js";
 import { CallLine, LinesComponent, setCallSummary } from "../tui/tools/common.js";
+import { jobRow, taskViewTarget } from "./task-view.js";
 import { Type } from "typebox";
 import { emitTaskHook } from "../hook-events.js";
 import { loadTaskAgents } from "../task-agents.js";
@@ -239,8 +242,10 @@ function jobSummaryLine(theme, job) {
 function failureLine(theme, text) {
     return theme.fg("error", `✗ ${singleLine(text, 200)}`);
 }
-/** The call-line tail while a job runs: `turn 2 · bash: npm test` (§11.4). */
+/** The call-line tail while a job runs: `turn 2 · bash: npm test` (§11.4); `queued` before it starts. */
 function liveSummary(job) {
+    if (job.status === "queued")
+        return "queued";
     const parts = [`turn ${job.turns ?? 0}`];
     if (job.currentActivity !== undefined)
         parts.push(job.currentActivity);
@@ -273,6 +278,25 @@ function renderTaskCall(args, theme, context) {
             extra = theme.fg("dim", "bg");
     }
     return new CallLine("◆", theme, body, context, extra);
+}
+/** Kept in the renderer state for the call row (`opensJobPage`): a result names the job. */
+function rememberJobId(context, jobId) {
+    if (context.state !== undefined && context.state !== null)
+        context.state.jobId = jobId;
+}
+/** A call row that opens its job's live page on a click, once a result (or the call's own
+ * `jobId`) has named the job. Shared by task, task_status, task_wait and task_cancel. */
+function opensJobPage(render, pageFor) {
+    return (args, theme, context) => {
+        const line = render(args, theme, context);
+        if (line instanceof CallLine) {
+            line.inspect = () => {
+                const jobId = context.state?.jobId ?? args.jobId;
+                return typeof jobId === "string" ? pageFor(theme, jobId) : undefined;
+            };
+        }
+        return line;
+    };
 }
 function quoteTask(text) {
     const one = singleLine(text, 51);
@@ -316,6 +340,7 @@ function renderTaskResult(result, options, theme, context) {
         return new LinesComponent([failureLine(theme, details.error)]);
     }
     const job = details;
+    rememberJobId(context, job.id);
     if (context.isPartial === true) {
         setCallSummary(context, liveSummary(job));
         return new LinesComponent([]);
@@ -541,8 +566,9 @@ export function createTaskInlineExtension(options) {
             refreshStatus();
     };
     /** What the bottom bar shows (§11.3): compact counts only -- the shortcuts row leaves ~12-14
-     * columns, so no ids, no tool names, no timers. */
-    const STATUS_KEY = "epi-task";
+     * columns, so no ids, no tool names, no timers. The key is the `/tasks` command's name: a click
+     * on a footer status runs the command of the same name (src/tui/app.ts). */
+    const STATUS_KEY = "tasks";
     let lastStatusText;
     function refreshStatus() {
         const ui = current.ctx?.ui;
@@ -623,6 +649,9 @@ export function createTaskInlineExtension(options) {
         const completion = trackCompletion(job.id, background);
         if (background)
             return startedResult(job);
+        // The first update names the job at once, so its call row can open the job's page while it is
+        // still queued or before its first progress line.
+        onUpdate?.({ content: [{ type: "text", text: runningStatusText(job) }], details: job });
         const progress = watchJob(job.id, onUpdate);
         const waited = await runtime.wait(job.id, undefined, signal);
         if (signal?.aborted === true &&
@@ -695,6 +724,100 @@ export function createTaskInlineExtension(options) {
                     clearTimeout(timer);
             },
         };
+    };
+    /** A job's page in the inspector, refreshed on every change while open (the session file grows
+     * with each message, so a change in turns, steps or status means new lines to show). */
+    const jobPage = (theme, jobId) => {
+        let job;
+        try {
+            job = runtime.status(jobId);
+        }
+        catch {
+            return undefined;
+        }
+        return {
+            ...taskViewTarget(theme, job),
+            live: {
+                follow: true,
+                subscribe: (update) => {
+                    // Each refresh rereads the session file: at most one per UPDATE_THROTTLE_MS.
+                    let timer;
+                    const refresh = () => {
+                        timer = undefined;
+                        try {
+                            update(taskViewTarget(theme, runtime.status(jobId)));
+                        }
+                        catch {
+                            // A job that vanished leaves the last page up.
+                        }
+                    };
+                    const listener = (changed) => {
+                        if (changed !== jobId || timer !== undefined)
+                            return;
+                        timer = setTimeout(refresh, UPDATE_THROTTLE_MS);
+                        timer.unref();
+                    };
+                    changeListeners.add(listener);
+                    return () => {
+                        changeListeners.delete(listener);
+                        if (timer !== undefined)
+                            clearTimeout(timer);
+                    };
+                },
+            },
+        };
+    };
+    /** Every job of this process, newest first; a row opens that job's page. */
+    const jobsPage = (theme) => {
+        const build = () => {
+            const jobs = runtime.list().reverse();
+            const lines = jobs.length === 0 ? [theme.fg("muted", "No task jobs.")] : jobs.map((job) => jobRow(theme, job));
+            return {
+                title: "tasks",
+                subtitle: `${jobs.length} ${jobs.length === 1 ? "job" : "jobs"}`,
+                lines,
+                text: lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "")).join("\n"),
+                openLine: (line) => (jobs[line] === undefined ? undefined : jobPage(theme, jobs[line].id)),
+            };
+        };
+        return {
+            ...build(),
+            live: {
+                subscribe: (update) => {
+                    const listener = () => update({ ...build() });
+                    changeListeners.add(listener);
+                    return () => changeListeners.delete(listener);
+                },
+            },
+        };
+    };
+    /** The `/tasks` overlay, at most one: opening it again (a second click on the footer) replaces
+     * it, and a session switch or quit closes it, live subscriptions included. */
+    let openPage;
+    const closePage = () => {
+        const page = openPage;
+        openPage = undefined;
+        page?.overlay.dispose();
+        page?.close();
+    };
+    /** Shows `target` as an overlay through the extension UI (used by `/tasks`). */
+    const showPage = async (ctx, target) => {
+        closePage();
+        let page;
+        await ctx.ui.custom((tui, theme, _keybindings, done) => {
+            const overlay = new BlockInspectorOverlay(theme, target, {
+                close: () => done(undefined),
+                copy: (text) => writeClipboardText(text),
+                requestRender: () => tui.requestRender(),
+                terminalRows: () => tui.terminal.rows,
+            });
+            page = { overlay, close: () => done(undefined) };
+            openPage = page;
+            return overlay;
+        }, { overlay: true, overlayOptions: { width: "88%", minWidth: 24, anchor: "center" } });
+        page?.overlay.dispose();
+        if (openPage === page)
+            openPage = undefined;
     };
     return {
         name: "epi:task",
@@ -787,6 +910,10 @@ export function createTaskInlineExtension(options) {
                 return { message: notifyPayload(ready) };
             });
             pi.on("session_shutdown", async (event) => {
+                // Each session's factory adds its own status listener; the old one goes with its session,
+                // and so does an open `/tasks` overlay (its live pages included).
+                changeListeners.delete(listener);
+                closePage();
                 // Only a real quit ends the subagents. A session switch (`/new`, `/resume`, fork, reload)
                 // tears down this extension runtime but not the process, and the jobs are detached Epi
                 // runs: killing them would silently discard work the user never asked to stop. This
@@ -821,6 +948,23 @@ export function createTaskInlineExtension(options) {
                 }
                 return new LinesComponent(lines);
             });
+            // `?.`: test doubles bind a partial `pi`, as for registerMessageRenderer below.
+            pi.registerCommand?.("tasks", {
+                description: "See subagent jobs and their live progress (also: click the footer's task count)",
+                handler: async (args, ctx) => {
+                    if (ctx.mode !== "tui") {
+                        ctx.ui.notify("/tasks needs the interactive TUI", "error");
+                        return;
+                    }
+                    const id = args.trim();
+                    const page = id === "" ? jobsPage(ctx.ui.theme) : jobPage(ctx.ui.theme, id);
+                    if (page === undefined) {
+                        ctx.ui.notify(`No task job ${id}.`, "error");
+                        return;
+                    }
+                    await showPage(ctx, page);
+                },
+            });
             pi.registerTool({
                 name: "task",
                 label: "Task",
@@ -839,7 +983,7 @@ export function createTaskInlineExtension(options) {
                 ].filter((part) => part !== "").join(" "),
                 promptSnippet: "Delegate bounded work to a subagent with its own context window.",
                 executionMode: "parallel",
-                renderCall: renderTaskCall,
+                renderCall: opensJobPage(renderTaskCall, jobPage),
                 renderResult: renderTaskResult,
                 parameters: TaskToolParameters,
                 async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -919,7 +1063,7 @@ export function createTaskInlineExtension(options) {
                 label: "Task status",
                 description: "Return the current state of one Epi task job, or list every job when jobId is omitted.",
                 executionMode: "parallel",
-                renderCall: renderStatusCall,
+                renderCall: opensJobPage(renderStatusCall, jobPage),
                 renderResult: renderTaskResult,
                 parameters: Type.Object({
                     jobId: Type.Optional(Type.String({ description: "The job to inspect; omit to list every job of this runtime" })),
@@ -957,7 +1101,7 @@ export function createTaskInlineExtension(options) {
                 label: "Task wait",
                 description: "Wait for an Epi task job to finish or until timeoutSeconds elapses.",
                 executionMode: "parallel",
-                renderCall: renderWaitCall,
+                renderCall: opensJobPage(renderWaitCall, jobPage),
                 renderResult: renderTaskResult,
                 parameters: Type.Object({
                     jobId: Type.String(),
@@ -999,7 +1143,7 @@ export function createTaskInlineExtension(options) {
                 label: "Task cancel",
                 description: "Cancel a queued or running Epi task job and its process tree.",
                 executionMode: "parallel",
-                renderCall: renderCancelCall,
+                renderCall: opensJobPage(renderCancelCall, jobPage),
                 renderResult: renderTaskResult,
                 parameters: Type.Object({ jobId: Type.String() }),
                 async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
