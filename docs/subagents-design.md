@@ -543,6 +543,8 @@ interface MailboxEntry {
 
 ## 12. 任务进度可点开（2026-10-28，D95）
 
+交互以原型 [`scripts/probes/fold-view-tasks-prototype.html`](../scripts/probes/fold-view-tasks-prototype.html) 为准（WF6；用户 2026-10-28 试过 10 项并选定 D1–D5 全部为推荐项）。
+
 以前只能看到一行摘要：call 行、底栏 `◐ 1 task`、`task_status` 都点不开，看不到子代理在做什么。
 
 - **任务页**：inspector（`src/tui/buffer/inspector.ts`）里显示一个 Job：状态、轮数、步数、正在做的事、会话文件路径，然后是子代理的对话（读 `job.sessionPath`：用户消息、助手文字、思考的一行、每个工具调用一行、结果最多 600 字符）。Job 在跑时页面随 `TaskRuntime.onChange` 刷新，最多每 250ms 读一次文件；停在末尾时跟着新内容走。Pi 在第一条回复之后才写会话文件，这之前显示「no conversation yet」。代码在 `src/extensions/task-view.ts`。
