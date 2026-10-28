@@ -120,9 +120,6 @@ export class BufferViewport {
     this.scrollTo(this.scrollTop);
   }
 
-  scrollToEnd(): void {
-    this.scrollTo(this.maxScroll);
-  }
 
   /** Mouse wheel: `delta` rows, positive down. */
   wheel(delta: number): void {

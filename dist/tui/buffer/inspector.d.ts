@@ -56,7 +56,10 @@ export declare class BlockInspectorOverlay implements Component {
     private update;
     /** `openLine`'s page for logical line `line`, opened on top. */
     private open;
+    /** After the reader moved: a following page follows again once back at the end. */
+    private noteScroll;
     handleInput(data: string): void;
+    private handleKey;
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult;
     render(width: number): string[];
     invalidate(): void;

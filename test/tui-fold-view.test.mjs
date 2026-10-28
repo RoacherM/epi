@@ -305,3 +305,24 @@ test("a foreground task names its job in its first update, so its row opens the 
   abort.abort();
   await running;
 });
+
+// Found while recording the 0.2.2 showcase: a job page opened from the list and refreshed before
+// its first frame had no scroll position yet, so it never reached the end and stopped following.
+test("a following page opened from a list and refreshed before its first frame still follows the end", () => {
+  let push;
+  const job = (n) => ({ title: "job", lines: Array.from({ length: n }, (_, i) => `row ${i}`), text: "", wrap: true,
+    live: { follow: true, subscribe: (update) => { push = update; return () => {}; } } });
+  const { overlay } = inspector({ title: "tasks", lines: ["a"], text: "", openLine: () => job(30) }, 20);
+  overlay.render(80);
+  overlay.handleInput("\r");
+  push(job(40));
+  assert.match(plain(overlay.render(80).at(-1)), /L\d+–40\/40 \(100%\)/);
+  push(job(60));
+  assert.match(plain(overlay.render(80).at(-1)), /L\d+–60\/60 \(100%\)/);
+  overlay.handleInput("k"); // scrolled up: stops following
+  push(job(70));
+  assert.doesNotMatch(plain(overlay.render(80).at(-1)), /\/70 \(100%\)/);
+  overlay.handleInput("G"); // back at the end: follows again
+  push(job(80));
+  assert.match(plain(overlay.render(80).at(-1)), /L\d+–80\/80 \(100%\)/);
+});
