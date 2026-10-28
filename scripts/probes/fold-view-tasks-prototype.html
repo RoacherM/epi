@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>长文折叠 · 查看与编辑 · 子任务进度 —— Epi TUI 原型</title>
+<style>
+:root{color-scheme:dark;--cw:8px;--lh:19px}
+*{box-sizing:border-box}
+body{margin:0;padding:32px 24px 80px;background:#0e0f11;color:#d4d4d8;font:15px/1.7 -apple-system,"SF Pro Text","PingFang SC",sans-serif}
+main{max-width:1500px;margin:0 auto}
+h1{font-size:25px;font-weight:650;color:#ececee;margin:0 0 4px}
+h2{font-size:18px;font-weight:650;color:#ececee;margin:34px 0 6px}
+h3{font-size:15px;font-weight:650;color:#d8d8de;margin:18px 0 4px}
+p,li{color:#a5a5ad;max-width:88ch}p{margin:6px 0}
+.sub{color:#71717a;font-size:14px}
+code,kbd{font:12.5px ui-monospace,"SF Mono",Menlo,monospace;color:#9db8c4}
+kbd{background:#1f2125;border:1px solid #34363c;border-radius:4px;padding:0 5px;color:#d0d0d6}
+table{border-collapse:collapse;margin:8px 0;font-size:14px}
+td,th{border:1px solid #26282d;padding:5px 10px;text-align:left;vertical-align:top;color:#a5a5ad}
+th{color:#c9c9cf;font-weight:600;background:#16171a}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:22px;align-items:start}
+@media (max-width:1100px){.layout{grid-template-columns:1fr}}
+.panel{background:#141518;border:1px solid #26282d;border-radius:10px;padding:12px 14px;margin-bottom:14px}
+.panel h3{margin-top:0}
+.ctl{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px}
+button{font:12.5px ui-monospace,Menlo,monospace;background:#22242a;color:#d0d0d6;border:1px solid #34363c;border-radius:6px;padding:4px 10px;cursor:pointer}
+button:hover{border-color:#5a5d66}button.on{background:#3a2f55;border-color:#bb9af7}
+.opt{margin:8px 0 12px}.opt b{color:#d8d8de;font-weight:600;font-size:13.5px;display:block}
+.opt label{display:block;font-size:13px;color:#a5a5ad;cursor:pointer;padding:1px 0}
+.opt .rec{color:#9ece6a;font-size:11.5px;margin-left:4px}
+.check label{display:block;font-size:13px;color:#a5a5ad;padding:3px 0;cursor:pointer}
+textarea.notes{width:100%;min-height:80px;background:#0e0f11;color:#d4d4d8;border:1px solid #34363c;border-radius:6px;font:13px/1.5 -apple-system,"PingFang SC",sans-serif;padding:6px}
+#termwrap{position:relative;border:1px solid #26282d;border-radius:10px;overflow:hidden;background:#1c1c1c;box-shadow:0 12px 32px rgba(0,0,0,.45)}
+#termwrap.focus{border-color:#5b4a86}
+#cap{padding:6px 12px;font-size:12.5px;color:#8e8e96;background:#1c1d20;border-bottom:1px solid #26282d;display:flex;justify-content:space-between;align-items:center;gap:10px}
+#term{position:relative;padding:8px 0 8px 0;font:13px/var(--lh) ui-monospace,"SF Mono",Menlo,"PingFang SC",monospace;color:#e1e1e1;cursor:text;user-select:none;overflow:hidden}
+.row{display:flex;height:var(--lh);white-space:pre}
+.row span{display:inline-block;flex:none;overflow:hidden;height:var(--lh)}
+.w2{width:calc(var(--cw)*2);text-align:center}
+#kbd{position:absolute;left:-9999px;top:0;width:10px;height:10px;opacity:0}
+#editta{position:absolute;display:none;background:#1c1c1c;color:#e1e1e1;border:0;outline:0;resize:none;padding:0;margin:0;
+font:13px/var(--lh) ui-monospace,"SF Mono",Menlo,"PingFang SC",monospace;caret-color:#e1e1e1;white-space:pre-wrap}
+#measure{position:absolute;visibility:hidden;white-space:pre;font:13px ui-monospace,"SF Mono",Menlo,"PingFang SC",monospace}
+/* Epi dark theme (src/tui/theme.ts) */
+.t{color:#e1e1e1}.o{color:#c8c8c8}.m{color:#6c6c6c}.d{color:#585858}.a{color:#bb9af7}.b{color:#505058}.bm{color:#323237}
+.ok{color:#9ece6a}.er{color:#f7768e}.wa{color:#FFDB8D}.sh{color:#e0af68}.bl{color:#7aa2f7}.bo{font-weight:700}
+.ub{background:#242424}.ov{background:#1c1c1c}.cur{background:#e1e1e1!important;color:#1c1c1c!important}
+.hl{background:#bb9af7!important;color:#1c1c1c!important}.hov{cursor:pointer}
+#selftest{white-space:pre;font:12px ui-monospace,Menlo,monospace;color:#9ece6a}
+.tag{display:inline-block;font-size:11.5px;padding:0 6px;border-radius:4px;background:#2a2433;color:#c9b6f5;margin-left:6px}
+</style></head><body><main>
+
+<h1>长文折叠 · 查看与编辑 · 子任务进度</h1>
+<p class="sub">Epi TUI 交互原型（2026-10-28，决策 WF6）。按这份原型验收；你试过同意后，再按它改实现。下面的「终端」由一个渲染函数画出，配色取自 <code>src/tui/theme.ts</code>（dark）。模拟的子任务会自己往前跑（约 1.4 秒一步）。</p>
+
+<h2>怎么用</h2>
+<p>先点一下终端，然后就能打字、粘贴（<kbd>⌘V</kbd>，可以贴你自己的长文）、用方向键、按 <kbd>Enter</kbd>。鼠标可以单击、双击、滚轮。右边有<b>待你拍板的选项</b>，切换后行为立刻变化；下面的<b>测试清单</b>可以边试边勾选。最后点「复制反馈」，把结果贴回给我。</p>
+
+<div class="layout">
+<div>
+  <div class="ctl">
+    <button data-w="fit" class="on">铺满</button><button data-w="60">60 列</button><button data-w="100">100 列</button><button data-w="140">140 列</button>
+    <span style="width:10px"></span>
+    <button id="s3">填入：三段长文</button><button id="s200">填入：200 行日志</button><button id="spawn">模型再派一个子任务</button>
+    <button id="pause">暂停模拟</button><button id="reset">重置</button>
+  </div>
+  <div id="termwrap"><div id="cap"><span><b style="color:#c9c9cf">epi</b> · 原型终端 <span id="dims"></span></span><span id="hint">点一下终端再打字 / 粘贴</span></div>
+    <div id="term"></div><textarea id="kbd" autocomplete="off" spellcheck="false"></textarea><textarea id="editta" spellcheck="false"></textarea>
+  </div>
+  <span id="measure"></span>
+
+  <h2>设计一：长文折叠成标签，能看全文、能编辑</h2>
+  <table>
+  <tr><th>要素</th><th>规则</th></tr>
+  <tr><td>何时折叠</td><td>一次粘贴 ≥4 行，<b>或超过 1000 个字符</b>，就变成一个标签：<code>[Pasted: 46 lines]</code> 或 <code>[Pasted: 3.9 KB]</code>。原来的线是 10 KB，几段长文（每段几百字、不到 10 KB）会原样塞进输入框，占满屏幕。1000 字符和 Pi 自己的编辑器一致。</td></tr>
+  <tr><td>标签</td><td>是一个整体：光标跳过它，退格一次删掉整个标签，<kbd>Ctrl+Z</kbd> 一次恢复。</td></tr>
+  <tr><td>预览浮窗</td><td>刚粘贴完、或光标停在标签上时，输入框上方显示前 3 行、<code>⋮ (N more lines)</code>、后 3 行。底边提示多了 <code>click to view</code>。</td></tr>
+  <tr><td>看全文</td><td><b>单击浮窗</b>，打开查看器。它就是现在点工具输出 <code>… N more lines</code> 打开的那个浮层：自动折行、行号、<kbd>j</kbd>/<kbd>k</kbd>/滚轮滚动、<kbd>/</kbd> 搜索、<kbd>w</kbd> 折行开关、<kbd>y</kbd> 复制、<kbd>q</kbd>/<kbd>Esc</kbd> 关闭。</td></tr>
+  <tr><td>编辑</td><td>查看器里按 <kbd>e</kbd>：打开编辑框（换掉输入框的位置），<kbd>Enter</kbd> 保存、<kbd>Shift+Enter</kbd> 换行、<kbd>Esc</kbd> 取消。保存后放回原位：仍够长就还是一个标签，否则变成普通文字。<kbd>Ctrl+Z</kbd> 一次恢复原标签。真实版里编辑框内 <kbd>Ctrl+G</kbd> 还能转到外部编辑器（原型不模拟）。</td></tr>
+  <tr><td>原地展开</td><td>不变：光标在标签上按 <kbd>Enter</kbd>、双击标签、或刚粘贴完再粘贴一次，标签换成全文。</td></tr>
+  <tr><td>发出后</td><td>用户消息超过 3 行时，原来只留一个 <code>…</code>。现在写成 <code>… +N lines (click to view)</code>，单击打开查看器看全文。</td></tr>
+  </table>
+
+  <h2>设计二：单击 task 行，看子任务在做什么</h2>
+  <table>
+  <tr><th>要素</th><th>规则</th></tr>
+  <tr><td>入口</td><td>单击 <code>task</code>、<code>task_status</code>、<code>task_wait</code>、<code>task_cancel</code> 的那一行。前台任务刚启动（还在排队）也能点。</td></tr>
+  <tr><td>任务页</td><td>查看器里一页：顶部是状态、轮数、步数、正在做的事、会话文件路径；下面是子代理的对话（读它自己的会话文件）：它说的话、思考的一行、每个工具调用一行、每个结果最多 600 字。</td></tr>
+  <tr><td>实时</td><td>任务在跑时页面自动刷新，最多每 250 ms 一次；停在末尾时跟着新内容往下走，往上翻后就不再跟随。</td></tr>
+  <tr><td>其他工具行</td><td>不变：单击 <code>$ git log …</code> 这类行仍是原地展开 / 收起。</td></tr>
+  </table>
+
+  <h2>设计三：右下角 ◐ N tasks 可以点开</h2>
+  <table>
+  <tr><th>要素</th><th>规则</th></tr>
+  <tr><td>入口</td><td>单击右下角的任务计数；或输入 <code>/tasks</code>（列表）、<code>/tasks &lt;id&gt;</code>（直接进某个任务）。任务在跑、模型在输出时也能点。</td></tr>
+  <tr><td>列表页</td><td>每个任务一行，最新的在上面：状态、id、预设名、轮数、正在做的事、任务开头。单击一行或按 <kbd>Enter</kbd> 进入任务页；<kbd>Esc</kbd> 回到列表，再按一次关闭。</td></tr>
+  <tr><td>只开一个</td><td>再点一次底栏会换掉旧的浮层，不会叠出多个；切会话、退出时自动关闭。</td></tr>
+  <tr><td>不做</td><td>在任务页里 steer 或取消子任务（仍由模型调用工具完成）。</td></tr>
+  </table>
+
+  <h2>和实现分支的关系</h2>
+  <p>这三项的实现已经写在本地分支 <code>dev/fold-view-tasks</code>，<b>没有合并</b>，<code>main</code> 不含这些改动。你验收这份原型后，我按最终选定的选项改那条分支，再走审查和合并。原型里被你否掉或改掉的地方，实现跟着改。</p>
+  <div id="selftest"></div>
+</div>
+
+<div>
+  <div class="panel"><h3>待你拍板的选项 <span class="tag">切换立即生效</span></h3>
+    <div class="opt" data-k="d1"><b>D1 · 什么时候折叠粘贴</b>
+      <label><input type="radio" name="d1" value="chars1000" checked> ≥4 行，或超过 1000 字符<span class="rec">推荐</span></label>
+      <label><input type="radio" name="d1" value="kb10"> ≥4 行，或超过 10 KB（旧）</label>
+      <label><input type="radio" name="d1" value="lines4"> 只按 ≥4 行</label></div>
+    <div class="opt" data-k="d2"><b>D2 · 在输入框里单击标签</b>
+      <label><input type="radio" name="d2" value="caret" checked> 只移动光标；看全文点浮窗<span class="rec">推荐</span></label>
+      <label><input type="radio" name="d2" value="view"> 直接打开查看器</label></div>
+    <div class="opt" data-k="d5"><b>D3 · 编辑后的内容仍然很长</b>
+      <label><input type="radio" name="d5" value="refold" checked> 重新折成标签<span class="rec">推荐</span></label>
+      <label><input type="radio" name="d5" value="plain"> 展开成普通文字留在输入框</label></div>
+    <div class="opt" data-k="d3"><b>D4 · 单击 task 行</b>
+      <label><input type="radio" name="d3" value="page" checked> 打开任务页<span class="rec">推荐</span></label>
+      <label><input type="radio" name="d3" value="old"> 旧行为：原地展开最多 10 行结果（运行中什么也看不到）</label></div>
+    <div class="opt" data-k="d4"><b>D5 · 任务页显示什么</b>
+      <label><input type="radio" name="d4" value="full" checked> 完整对话（读会话文件）<span class="rec">推荐</span></label>
+      <label><input type="radio" name="d4" value="recent"> 只看最近 10 个动作（一行一个）</label></div>
+  </div>
+  <div class="panel check"><h3>测试清单</h3>
+    <label><input type="checkbox" data-c="1"> ① 点「填入：三段长文」（或贴自己的长文）→ 输入框只剩一个标签，上方出现浮窗</label>
+    <label><input type="checkbox" data-c="2"> ② 单击浮窗 → 查看器；试 <kbd>j</kbd>/<kbd>k</kbd>、滚轮、<kbd>w</kbd>、<kbd>/</kbd> 搜索、<kbd>y</kbd>、<kbd>Esc</kbd></label>
+    <label><input type="checkbox" data-c="3"> ③ 查看器里按 <kbd>e</kbd> → 改几个字 → <kbd>Enter</kbd> → 仍是标签；<kbd>Ctrl+Z</kbd> 恢复原文</label>
+    <label><input type="checkbox" data-c="4"> ④ <kbd>←</kbd> 移到标签上按 <kbd>Enter</kbd>（或双击标签）→ 原地展开；退格整块删除</label>
+    <label><input type="checkbox" data-c="5"> ⑤ 贴一段长文后 <kbd>Enter</kbd> 发送 → 消息显示 <code>… +N lines (click to view)</code>，单击看全文</label>
+    <label><input type="checkbox" data-c="6"> ⑥ 单击对话里正在运行的 <code>task</code> 行 → 任务页，内容自己往下长；<kbd>Esc</kbd> 关闭</label>
+    <label><input type="checkbox" data-c="7"> ⑦ 单击右下角 <code>◐ 1 task</code> → 列表 → 单击一行 → 任务页 → <kbd>Esc</kbd> 回列表 → <kbd>Esc</kbd> 关闭</label>
+    <label><input type="checkbox" data-c="8"> ⑧ 输入 <code>/tasks</code> 回车，结果同 ⑦</label>
+    <label><input type="checkbox" data-c="9"> ⑨ 切换 60 / 140 列（或拖窄浏览器窗口，「铺满」会跟着变），看排版和点击位置是否仍对</label>
+    <label><input type="checkbox" data-c="10"> ⑩ 把右侧选项换成另一个，体会差别</label>
+  </div>
+  <div class="panel"><h3>反馈</h3>
+    <textarea class="notes" id="notes" placeholder="哪里不对、想怎么改……"></textarea>
+    <div class="ctl" style="margin-top:8px"><button id="copyfb">复制反馈</button><span id="fbok" class="sub"></span></div>
+  </div>
+</div>
+</div>
+
+<script>
+"use strict";
+// ───────────────────────── text width (terminal cells) ─────────────────────────
+function cw(ch){const c=ch.codePointAt(0);if(c<0x1100)return 1;
+  if((c<=0x115f)||(c>=0x2e80&&c<=0xa4cf&&c!==0x303f)||(c>=0xac00&&c<=0xd7a3)||(c>=0xf900&&c<=0xfaff)||(c>=0xfe30&&c<=0xfe4f)||
+     (c>=0xff00&&c<=0xff60)||(c>=0xffe0&&c<=0xffe6)||(c>=0x1f300&&c<=0x1faff)||(c>=0x2705&&c<=0x2705)||(c>=0x20000&&c<=0x3fffd))return 2;return 1;}
+function sw(s){let n=0;for(const ch of s)n+=cw(ch);return n;}
+function fit(s,w){if(w<=0)return"";if(sw(s)<=w)return s;let o="",n=0;for(const ch of s){const c=cw(ch);if(n+c>w-1)break;o+=ch;n+=c;}return o+"…";}
+function wrap(s,w){w=Math.max(1,w);const out=[];
+  for(const para of s.split("\n")){if(para===""){out.push("");continue;}let line="",n=0;
+    for(const ch of para){const c=cw(ch);
+      if(n+c>w){const sp=line.lastIndexOf(" ");
+        if(ch!==" "&&sp>0&&sp>line.length/2){out.push(line.slice(0,sp));line=line.slice(sp+1);n=sw(line);}else{out.push(line);line="";n=0;}
+        if(ch===" "&&line==="")continue;}
+      line+=ch;n+=c;}
+    out.push(line);}
+  return out;}
+const esc=(s)=>s.replace(/[&<>"]/g,(m)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));
+
+// ───────────────────────── cell grid ─────────────────────────
+class Grid{
+  constructor(w,h){this.w=w;this.h=h;this.c=[];this.acts=[null];
+    for(let r=0;r<h;r++){const row=[];for(let i=0;i<w;i++)row.push({ch:" ",k:"",a:0,w:1});this.c.push(row);}}
+  act(a){if(!a)return 0;this.acts.push(a);return this.acts.length-1;}
+  set(r,i,cell){const row=this.c[r];
+    if(row[i].skip&&i>0)row[i-1]={ch:" ",k:row[i-1].k,a:row[i-1].a,w:1};
+    if(row[i].w===2&&i+1<this.w)row[i+1]={ch:" ",k:row[i].k,a:row[i].a,w:1};
+    row[i]=cell;}
+  put(r,col,text,k="",a=0){if(r<0||r>=this.h)return col;
+    for(const ch of text){const c=cw(ch);if(col+c>this.w)break;if(col>=0){this.set(r,col,{ch,k,a,w:c});if(c===2)this.set(r,col+1,{skip:true,k,a});}col+=c;}
+    return col;}
+  fill(r,c0,c1,k="",a=0){for(let i=Math.max(0,c0);i<Math.min(this.w,c1);i++)this.set(r,i,{ch:" ",k,a,w:1});}
+  addClass(r,c0,c1,k){if(r<0||r>=this.h)return;for(let i=Math.max(0,c0);i<Math.min(this.w,c1);i++){const cell=this.c[r][i];cell.k=(cell.k+" "+k).trim();}}
+}
+
+// ───────────────────────── state ─────────────────────────
+const T0=Date.now();
+const S={W:100,H:38,fit:true,opts:{d1:"chars1000",d2:"caret",d3:"page",d4:"full",d5:"refold"},
+  ed:{units:[],cursor:0,undo:[],justPasted:false,lastTyping:false,scroll:0},chips:{},chipSeq:0,
+  transcript:[],tScroll:0,overlay:null,editDialog:null,jobs:[],paused:false,flash:null,tick:0,busy:false,taRect:null};
+
+// ───────────────────────── editor model ─────────────────────────
+const isChip=(u)=>u!==undefined&&typeof u!=="string";
+const unitText=(u)=>isChip(u)?S.chips[u.chip].label:u;
+const expandedText=()=>S.ed.units.map((u)=>isChip(u)?S.chips[u.chip].content:u).join("");
+function pushUndo(typing=false){if(typing&&S.ed.lastTyping)return;S.ed.undo.push({units:S.ed.units.slice(),cursor:S.ed.cursor});S.ed.lastTyping=typing;}
+function undo(){const s=S.ed.undo.pop();if(!s){flash("Nothing to undo");return;}S.ed.units=s.units;S.ed.cursor=s.cursor;S.ed.justPasted=false;S.ed.lastTyping=false;}
+function bytes(s){return new TextEncoder().encode(s).length;}
+function lineCount(s){return s.replace(/\n$/,"").split("\n").length;}
+function isLong(s){const n=lineCount(s);if(n>=4)return true;
+  if(S.opts.d1==="chars1000")return s.length>1000;if(S.opts.d1==="kb10")return bytes(s)>10240;return false;}
+function labelFor(s){const n=lineCount(s);if(n>=4)return`[Pasted: ${n} lines]`;const kb=bytes(s)/1024;return`[Pasted: ${kb<10?kb.toFixed(1):Math.round(kb)} KB]`;}
+function newChip(content){const id=++S.chipSeq;S.chips[id]={id,content,label:labelFor(content)};return{chip:id};}
+function insertChars(text,typing){pushUndo(typing);const chars=[...text];S.ed.units.splice(S.ed.cursor,0,...chars);S.ed.cursor+=chars.length;S.ed.justPasted=false;}
+function handlePaste(raw){const text=raw.replace(/\r\n?/g,"\n").replace(/\t/g,"    ");if(text==="")return;
+  const prev=S.ed.units[S.ed.cursor-1];
+  if(S.ed.justPasted&&isChip(prev)){expandChipAt(S.ed.cursor-1);return;}
+  if(!isLong(text)){insertChars(text,false);return;}
+  pushUndo();S.ed.units.splice(S.ed.cursor,0,newChip(text));S.ed.cursor++;S.ed.justPasted=true;S.ed.lastTyping=false;}
+function expandChipAt(i){const u=S.ed.units[i];if(!isChip(u))return;pushUndo();const chars=[...S.chips[u.chip].content];
+  S.ed.units.splice(i,1,...chars);S.ed.cursor=i+chars.length;S.ed.justPasted=false;S.ed.lastTyping=false;}
+function deleteAt(i){if(i<0||i>=S.ed.units.length)return;pushUndo();S.ed.units.splice(i,1);S.ed.lastTyping=false;}
+/** The chip the caret is on (caret at its start), or the one just pasted (caret right after it). */
+function chipOn(){const u=S.ed.units[S.ed.cursor];if(isChip(u))return{index:S.ed.cursor,chip:S.chips[u.chip],just:false};
+  const p=S.ed.units[S.ed.cursor-1];if(S.ed.justPasted&&isChip(p))return{index:S.ed.cursor-1,chip:S.chips[p.chip],just:true};return null;}
+function replaceChip(chipId,content){const i=S.ed.units.findIndex((u)=>isChip(u)&&u.chip===chipId);
+  if(i===-1){notice("该标签已不在输入框里，编辑没有生效。","wa");return false;}
+  pushUndo();S.ed.lastTyping=false;
+  if(S.opts.d5==="refold"&&isLong(content)){S.ed.units[i]=newChip(content);S.ed.cursor=i+1;}
+  else{const chars=[...content];S.ed.units.splice(i,1,...chars);S.ed.cursor=i+chars.length;}
+  S.ed.justPasted=false;return true;}
+
+/** Rows of the draft at `inner` columns, each unit's position, and the caret's. */
+function layoutEditor(inner){const rows=[[]],pos=[];let col=0;
+  S.ed.units.forEach((u,i)=>{if(u==="\n"){pos[i]={r:rows.length-1,c:col};rows.push([]);col=0;return;}
+    const t=unitText(u),w=sw(t);if(col+w>inner&&col>0){rows.push([]);col=0;}
+    pos[i]={r:rows.length-1,c:col};rows[rows.length-1].push({t,i,chip:isChip(u)});col+=w;});
+  let cp;if(S.ed.cursor<S.ed.units.length)cp=pos[S.ed.cursor];
+  else{const last=rows.length-1;cp={r:last,c:rows[last].reduce((n,x)=>n+sw(x.t),0)};if(cp.c>=inner){rows.push([]);cp={r:rows.length-1,c:0};}}
+  return{rows,pos,cp};}
+function moveVertical(dir){const inner=promptInner();const{rows,pos,cp}=layoutEditor(inner);const tr=cp.r+dir;if(tr<0||tr>=rows.length)return;
+  let best=-1,first=-1;S.ed.units.forEach((u,i)=>{if(pos[i].r!==tr)return;if(first<0)first=i;if(pos[i].c<=cp.c)best=i;});
+  if(tr===rows.length-1){const end=rows[tr].reduce((n,x)=>n+sw(x.t),0);if(cp.c>=end){S.ed.cursor=S.ed.units.length;return;}}
+  S.ed.cursor=best>=0?best:(first>=0?first:S.ed.units.length);}
+
+// ───────────────────────── transcript ─────────────────────────
+const clock=()=>new Date().toLocaleTimeString([],{hour:"numeric",minute:"2-digit"});
+function notice(text,k="m"){S.transcript.push({kind:"notice",text,k});}
+function flash(text){S.flash={text,until:Date.now()+2200};}
+function submit(){const text=expandedText();const trimmed=text.trim();if(trimmed===""&&!S.ed.units.length)return;
+  S.ed.units=[];S.ed.cursor=0;S.ed.undo=[];S.ed.justPasted=false;S.ed.scroll=0;S.tScroll=0;
+  const cmd=/^\/tasks(?:\s+(\S+))?\s*$/.exec(trimmed);
+  if(cmd){if(cmd[1]){const job=findJob(cmd[1]);if(!job){notice(`No task job ${cmd[1]}.`,"er");return;}openPage(jobPage(job.id),true);}else openPage(listPage(),true);return;}
+  S.transcript.push({kind:"user",text:trimmed,time:clock()});S.busy=true;
+  setTimeout(()=>{const first=trimmed.split("\n")[0];
+    S.transcript.push({kind:"assistant",text:`收到，共 ${lineCount(trimmed)} 行、${trimmed.length} 个字符。（原型里的模型只复述第一行：「${fit(first,48)}」）`});
+    S.transcript.push({kind:"footer",label:"Worked for 0.6s"});S.busy=false;render();},600);}
+
+// ───────────────────────── subagent jobs (simulated) ─────────────────────────
+const SCRIPTS={
+  implementer:(task)=>[
+    {t:"user",text:task},
+    {t:"think",text:"先看第五轮的 spec 和上一轮的复审结论，再定先修哪三个 Major。"},
+    {t:"call",name:"bash",arg:"git log --oneline 8d18dc7..HEAD; git status --short"},
+    {t:"result",text:"8d18dc7 spec: round 5 design (P1 refs, P2 recovery marker, P3 fsync)\n(no changes)"},
+    {t:"call",name:"read",arg:"src/gitpaths.ts"},
+    {t:"result",text:Array.from({length:40},(_,i)=>`${String(i+1).padStart(3)}  ${["import { lockRef } from './lock.js';","export function readRefGraph(root: string) {","  const head = readHead(root);","  // resolve symbolic refs and packed-refs","  return resolveAll(root, head);","}"][i%6]}`).join("\n")},
+    {t:"text",text:"ref 图是在加锁前检查的。P1 的修法：加锁后重新读 HEAD、符号 ref 链和 packed-refs，写回前再核对一次。"},
+    {t:"call",name:"edit",arg:"src/gitpaths.ts"},
+    {t:"result",text:"Applied 2 edits (+31 −9)."},
+    {t:"call",name:"bash",arg:"npm test -- --test-name-pattern=refs"},
+    {t:"result",text:"✔ a ref moved after the check is caught before write (12ms)\n✔ packed-refs changed under the lock aborts apply (9ms)\nℹ tests 35\nℹ pass 35\nℹ fail 0"},
+    {t:"think",text:"P1 过了。接下来 P2：恢复标记要写进 .git/ 里，跟着文件夹移动。"},
+    {t:"call",name:"edit",arg:"src/bindings.ts"},
+    {t:"result",text:"Applied 1 edit (+18 −4)."},
+    {t:"call",name:"bash",arg:"npm test"},
+    {t:"result",text:"ℹ tests 412\nℹ pass 412\nℹ fail 0"},
+    {t:"final",text:"P1、P2 已修好，各一个 commit（a91c3e2、5d07b18）。新测试在旧代码上失败、新代码上通过；全套 412 个测试通过。P3（fsync）还没动，建议下一轮单独做。"},
+  ],
+  reviewer:(task)=>[
+    {t:"user",text:task},
+    {t:"call",name:"bash",arg:"git diff --stat 26f2061..4fce1c4"},
+    {t:"result",text:" src/gitpaths.ts | 42 ++++--\n src/bindings.ts | 17 +-\n 2 files changed, 48 insertions(+), 11 deletions(-)"},
+    {t:"call",name:"read",arg:"src/bindings.ts"},
+    {t:"result",text:"…(212 lines)…"},
+    {t:"final",text:"找到 3 个 Major：P1 ref 图在加锁前检查；P2 保护标记只记在项目绑定里；P3 恢复文件和绑定文件写入时没有 fsync。另有 6 个 Minor，见下。"},
+  ],
+};
+function hexId(){return Array.from({length:8},()=>"0123456789abcdef"[Math.floor(Math.random()*16)]).join("");}
+function makeJob(agent,task,startAt=0){const job={id:hexId()+"-"+hexId(),agent,task,status:"running",turns:0,steps:0,activity:undefined,log:[],recent:[],script:SCRIPTS[agent](task),next:0,phase:Math.random()};
+  S.jobs.push(job);while(job.next<startAt)advance(job);return job;}
+function findJob(id){return S.jobs.find((j)=>j.id.startsWith(id));}
+function advance(job){const ev=job.script[job.next++];if(!ev)return;job.log.push(ev);
+  if(ev.t==="think"||ev.t==="text"||(ev.t==="call"&&job.log[job.log.length-2]?.t!=="think"&&job.log[job.log.length-2]?.t!=="text"))job.turns++;
+  if(ev.t==="call"){job.steps++;job.activity=`${ev.name}: ${ev.arg}`;job.recent.push(`▸ ${ev.name} ${ev.arg}`);}
+  if(ev.t==="result"){job.activity=undefined;const last=job.recent.pop()||"";job.recent.push(last.replace("▸","✓"));}
+  job.recent=job.recent.slice(-10);
+  if(ev.t==="final"){job.turns++;job.status="completed";job.result=ev.text;job.activity=undefined;
+    S.transcript.push({kind:"notify",jobId:job.id});S.doneUntil=Date.now()+4000;}}
+function tickJobs(){if(S.paused)return;S.tick++;for(const job of S.jobs)if(job.status==="running")advance(job);render();}
+const short=(id)=>id.slice(0,8);
+
+// ───────────────────────── inspector pages ─────────────────────────
+// A page: { title, subtitle, lines(): [{t,k}], numbered, wrap, follow, edit?, openLine?(i) -> page }
+function chipPage(chip){const lines=chip.content.replace(/\n$/,"").split("\n");
+  return{title:()=>chip.label,subtitle:()=>`${lines.length} ${lines.length===1?"line":"lines"} · ${chip.content.length} chars`,
+    lines:()=>lines.map((t)=>({t,k:"o"})),numbered:true,wrap:true,edit:()=>startEdit(chip.id)};}
+function messagePage(text){const lines=text.split("\n");return{title:()=>"Message",subtitle:()=>`${lines.length} lines`,lines:()=>lines.map((t)=>({t,k:"o"})),numbered:true,wrap:true};}
+function resultPage(job){const lines=(job.result||"").split("\n");return{title:()=>`task ${short(job.id)}`,subtitle:()=>job.status,lines:()=>lines.map((t)=>({t,k:"o"})),numbered:true,wrap:false};}
+function jobLines(job){const out=[];
+  out.push({t:`${job.agent} ${job.status}  turn ${job.turns} · ${job.steps} steps`,k:job.status==="running"?"a":"ok"});
+  if(job.activity)out.push({t:`now: ${job.activity}`,k:"m"});
+  out.push({t:`session: ~/.epi/runtime/task/sessions/${job.id}.jsonl`,k:"d"},{t:"",k:""});
+  if(S.opts.d4==="recent"){out.push({t:"recent:",k:"m"});for(const r of job.recent)out.push({t:r,k:r.startsWith("✓")?"o":"a"});if(job.result)out.push({t:"",k:""},{t:job.result,k:"t"});return out;}
+  for(const ev of job.log){
+    if(ev.t==="user")out.push({t:"❯ user",k:"a"},...ev.text.split("\n").map((t)=>({t,k:"t"})),{t:"",k:""});
+    else if(ev.t==="think")out.push({t:"◇ assistant",k:"a"},{t:`∴ ${ev.text}`,k:"d"});
+    else if(ev.t==="text"||ev.t==="final"){if(out[out.length-1]?.t!=="◇ assistant"&&!(out[out.length-1]?.k==="d"))out.push({t:"◇ assistant",k:"a"});out.push(...ev.text.split("\n").map((t)=>({t,k:"t"})));if(ev.t==="final")out.push({t:"",k:""});}
+    else if(ev.t==="call"){const prev=out[out.length-1];if(!prev||(prev.t===""&&out[out.length-2]?.k!=="d")||prev.k==="d2")out.push({t:"◇ assistant",k:"a"});out.push({t:`◆ ${ev.name} ${ev.arg}`,k:"o"});}
+    else if(ev.t==="result"){const cut=ev.text.length>600?ev.text.slice(0,600)+"…":ev.text;out.push(...cut.split("\n").map((t)=>({t:`  ${t}`,k:"d"})),{t:"",k:""});}
+  }
+  if(job.status==="running")out.push({t:"… running",k:"m"});
+  return out;}
+function jobPage(id){const job=findJob(id);return{title:()=>`task ${short(job.id)}`,subtitle:()=>job.status,lines:()=>jobLines(job),numbered:false,wrap:true,follow:true};}
+function listPage(){const jobs=()=>S.jobs.slice().reverse();
+  return{title:()=>"tasks",subtitle:()=>`${S.jobs.length} ${S.jobs.length===1?"job":"jobs"}`,numbered:false,wrap:false,
+    lines:()=>jobs().map((j)=>{const g=j.status==="completed"?"✓":j.status==="running"?"◐":"·";
+      const where=j.status==="running"?`turn ${j.turns}${j.activity?` · ${j.activity}`:""}`:`${j.turns} turns`;
+      return{t:`${g} ${short(j.id)} ${j.status} ${j.agent} · ${where} · ${fit(j.task.replace(/\s+/g," "),60)}`,k:j.status==="running"?"a":"o"};}),
+    openLine:(i)=>{const j=jobs()[i];return j?jobPage(j.id):null;}};}
+function openPage(page,replace=true){S.overlay={views:[newView(page)]};}
+function newView(page){return{page,top:0,wrap:page.wrap,atEnd:!!page.follow,search:"",prompt:null,status:null,g:false};}
+function topView(){return S.overlay.views[S.overlay.views.length-1];}
+function closeOrBack(){if(S.overlay.views.length>1)S.overlay.views.pop();else S.overlay=null;}
+function openLine(i){const v=topView();const next=v.page.openLine?.(i);if(next)S.overlay.views.push(newView(next));}
+
+// ───────────────────────── edit dialog ─────────────────────────
+function startEdit(chipId){S.overlay=null;S.editDialog={chipId};const ta=document.getElementById("editta");ta.value=S.chips[chipId].content;
+  render();ta.style.display="block";ta.focus();ta.setSelectionRange(ta.value.length,ta.value.length);ta.scrollTop=ta.scrollHeight;}
+function endEdit(save){const ta=document.getElementById("editta");const d=S.editDialog;S.editDialog=null;ta.style.display="none";
+  if(save)replaceChip(d.chipId,ta.value);document.getElementById("kbd").focus();render();}
+
+// ───────────────────────── drawing ─────────────────────────
+function promptInner(){return S.W-4-6;}
+function drawPopup(g,r0,on){const avail=S.W-4;const lines=on.chip.content.replace(/\n$/,"").split("\n");
+  const body=lines.length<=6?lines:[...lines.slice(0,3),`⋮ (${lines.length-6} more lines)`,...lines.slice(-3)];
+  const hint=on.just?"click to view · paste again or double-click to expand":"click to view · enter or double-click to expand";
+  const need=Math.max(Math.max(...body.map(sw))+4,sw(hint)+6,10);const bw=Math.min(avail,Math.max(need,Math.floor(avail*0.6)));
+  const a=g.act({click:()=>openPage(chipPage(on.chip))});const c0=2;
+  g.put(r0,c0,"╭"+"─".repeat(bw-2)+"╮","b",a);
+  body.forEach((line,i)=>{const r=r0+1+i;g.put(r,c0,"│","b",a);g.fill(r,c0+1,c0+bw-1,"",a);g.put(r,c0+2,fit(line,bw-4),line.startsWith("⋮")?"m":"t",a);g.put(r,c0+bw-1,"│","b",a);});
+  const rb=r0+1+body.length,lab=` ${hint} `,fill=Math.max(1,bw-3-sw(lab));
+  g.put(rb,g.put(rb,g.put(rb,c0,"╰"+"─".repeat(fill),"b",a),lab,"m",a),"─╯","b",a);
+  for(let r=r0;r<=rb;r++)g.addClass(r,c0,c0+bw,"hov");
+  return body.length+2;}
+function popupHeight(on){if(!on)return 0;const n=lineCount(on.chip.content);return(n<=6?n:7)+2;}
+function drawPrompt(g,r0,maxRows){const fw=S.W-4,inner=fw-6,c0=2;const{rows,cp}=layoutEditor(inner);
+  if(cp.r<S.ed.scroll)S.ed.scroll=cp.r;if(cp.r>=S.ed.scroll+maxRows)S.ed.scroll=cp.r-maxRows+1;S.ed.scroll=Math.max(0,Math.min(S.ed.scroll,Math.max(0,rows.length-maxRows)));
+  const start=S.ed.scroll,shown=rows.slice(start,start+maxRows),below=rows.length-start-shown.length;
+  const border=S.busy?"a":"b";
+  const top=start>0?`─ ↑ ${start} more `:"";g.put(r0,g.put(r0,c0,"╭"+top,border),"─".repeat(Math.max(0,fw-2-sw(top)))+"╮",border);
+  const focusAct=(endIndex)=>g.act({click:()=>{S.ed.cursor=endIndex;S.ed.justPasted=false;}});
+  shown.forEach((row,ri)=>{const r=r0+1+ri,absRow=start+ri;
+    const endIndex=row.length?row[row.length-1].i+1:(rows[absRow+1]?.[0]?.i??S.ed.units.length);
+    const fa=focusAct(Math.min(endIndex,S.ed.units.length));
+    g.put(r,c0,"│ ","b",fa);g.put(r,c0+2,absRow===0?"❯ ":"  ","m",fa);g.fill(r,c0+4,c0+fw-2,"",fa);
+    let col=c0+4;for(const piece of row){const a=g.act(piece.chip?{
+        click:()=>{S.ed.cursor=piece.i;S.ed.justPasted=false;if(S.opts.d2==="view")openPage(chipPage(S.chips[S.ed.units[piece.i].chip]));},
+        dbl:()=>expandChipAt(piece.i)}:{click:()=>{S.ed.cursor=piece.i;S.ed.justPasted=false;}});
+      const t=fit(piece.t,c0+fw-2-col);g.put(r,col,t,"t",a);if(piece.chip)g.addClass(r,col,col+sw(t),"hov");col+=sw(t);}
+    g.put(r,c0+fw-2," │","b",fa);
+    if(cp.r===absRow&&!S.editDialog&&!S.overlay){const cc=c0+4+cp.c;if(cc<c0+fw-2)g.addClass(r,cc,cc+1,"cur");}});
+  const rb=r0+1+shown.length;const lab=fit(` ${below>0?`↓ ${below} more · `:""}claude-opus-5-5 (high) · ⇡323m ⇣981k `,fw-4);
+  g.put(rb,g.put(rb,g.put(rb,c0,"╰"+"─".repeat(Math.max(0,fw-3-sw(lab))),border),lab,"m"),"─╯",border);
+  return shown.length+2;}
+function drawEditDialog(g,r0,taRows){const fw=S.W-4,c0=2,d=S.editDialog;
+  g.put(r0,c0,"─".repeat(fw),"b");g.put(r0+2,c0+1,`Edit ${S.chips[d.chipId].label}`,"a");
+  S.taRect={r:r0+4,c:c0+1,rows:taRows,cols:fw-2};
+  g.put(r0+5+taRows,c0+1,fit("enter submit  shift+enter newline  escape cancel  ctrl+g external editor",fw-2),"m");
+  g.put(r0+6+taRows,c0,"─".repeat(fw),"b");return taRows+7;}
+function drawFooter(g,r){const on=chipOn();let sc;
+  if(S.editDialog)sc=[["↑↓","select"],["Enter","confirm"],["Esc","cancel"]];
+  else if(on&&!on.just)sc=[["Enter","expand"],["Shift+Enter","newline"]];
+  else if(S.busy)sc=[["Esc","stop"],["Ctrl+c","cancel"],["Ctrl+o","expand"],["Alt+Enter","steer"]];
+  else sc=[["Shift+Tab","effort"],["Ctrl+t","thinking"],["Ctrl+o","expand"],["/","commands"]];
+  const running=S.jobs.filter((j)=>j.status==="running").length;const parts=[];
+  if(running)parts.push(`◐ ${running} task${running===1?"":"s"}`);
+  const done=S.doneUntil&&Date.now()<S.doneUntil?S.transcript.filter((b)=>b.kind==="notify").length&&1:0;if(done)parts.push("✓ 1 done");
+  const right=parts.join(" · ");
+  // Like spread() in chrome.ts: the right side stays whole, the shortcuts are cut first.
+  const limit=S.W-2-(right?sw(right)+1:0);let col=2;
+  for(const[i,[k,l]]of sc.entries()){const piece=(i?"  │  ":"")+k+`:${l}`;if(col+sw(piece)>limit){if(col<limit)g.put(r,col,"…","d");break;}
+    if(i)col=g.put(r,col,"  │  ","d");col=g.put(r,col,k,"t bo");col=g.put(r,col,`:${l}`,"m");}
+  if(S.flash&&Date.now()<S.flash.until){const f=S.flash.text;g.put(r,S.W-2-sw(f)-(right?sw(right)+3:0),f,"wa");}
+  if(right){const a=g.act({click:()=>openPage(listPage())});const c=S.W-2-sw(right);g.put(r,c,right,"m",a);g.addClass(r,c,c+sw(right),"hov");}}
+
+function transcriptRows(){const rows=[],W=S.W,measure=W-4;
+  const R=(segs,bg)=>rows.push({segs,bg});
+  let prevKind=null;
+  for(const b of S.transcript){
+    const tool=b.kind==="task"||b.kind==="bash";
+    if(rows.length&&!(tool&&(prevKind==="task"||prevKind==="bash")))R([]);
+    prevKind=b.kind;
+    if(b.kind==="user"){const lines=b.text.split("\n");const collapsed=lines.length>3;const shown=collapsed?lines.slice(0,3).join("\n"):b.text;
+      const bodyW=measure-4-11;R([],true);
+      wrap(shown,bodyW).forEach((t,i)=>R([[i===0?"❯ ":"  ",i===0?"m":""],[t,"t"],...(i===0?[[null,"m",null,b.time]]:[])],true));
+      if(collapsed){const n=lines.length-3;R([["  ",""],[`… +${n} ${n===1?"line":"lines"} (click to view)`,"m",{click:()=>openPage(messagePage(b.text))}]],true);}
+      R([],true);}
+    else if(b.kind==="assistant"){wrap(b.text,measure-7).forEach((t)=>R([[" │   ","bm"],[t,"t"]]));}
+    else if(b.kind==="notice"){wrap(b.text,measure-2).forEach((t)=>R([[t,b.k]]));}
+    else if(b.kind==="footer"){R([[" ╰─ ","bm"],[b.label,"d"]]);}
+    else if(b.kind==="notify"){const j=findJob(b.jobId);R([["✓ ","ok"],["task ","a"],[short(j.id)+" ","m"],[fit(j.result.replace(/\s+/g," "),measure-20),"o"]]);
+      R([[`task_status({ jobId: "${short(j.id)}" }) for details`,"m"]]);}
+    else if(b.kind==="bash"){const a={click:()=>{b.expanded=!b.expanded;}};
+      R([[" ├─","bm"],["$ ","sh"],[b.cmd,"o",a],[null,"d",null,b.expanded?"412ms":"█▋··"]],false,);
+      rows[rows.length-1].act=a;if(b.expanded)for(const l of b.out)R([[" │   ","bm"],[l,"o"]]);}
+    else if(b.kind==="task"){const j=findJob(b.jobId);const running=j.status==="running";
+      const marker=running?(S.tick%2?"×":"+"):"◆";
+      const tail=running?` · turn ${j.turns}${j.activity?` · ${j.activity}`:""}`:` · ${j.turns} turns · ${j.result.split("\n").filter((l)=>l.trim()).length} lines · ${short(j.id)}`;
+      const a={click:()=>{if(S.opts.d3==="page")openPage(jobPage(j.id));else b.expanded=!b.expanded;}};
+      R([[" ├─","bm"],[marker+" ",running?"a":"m"],["task ","o"],[j.agent+" ","a"],[`"${fit(j.task.replace(/\s+/g," "),40)}"`,"o"],[tail,"d"],[null,"d",null,running?"█▊··":"██▍·"]]);
+      rows[rows.length-1].act=a;
+      if(b.expanded&&S.opts.d3==="old"&&!running){const lines=j.result.split("\n");
+        R([[" │   ","bm"],[`${j.agent} `,"a"],["completed ","ok"],[short(j.id),"m"]]);
+        lines.slice(0,10).forEach((l)=>R([[" │   ","bm"],[l,"o"]]));
+        if(lines.length>10)R([[" │   ","bm"],[`… ${lines.length-10} more lines`,"m",{click:()=>openPage(resultPage(j))}]]);}}
+  }
+  return rows;}
+function drawTranscriptRow(g,r,row){const W=S.W,measure=W-4;
+  if(row.bg)g.fill(r,2,2+measure,"ub");
+  const ra=row.act?g.act(row.act):0;if(ra){g.fill(r,2,2+measure,row.bg?"ub":"",ra);}
+  let col=row.bg?4:3;
+  // The right edge (time, duration bar) is placed first; the text is cut to end before it.
+  const rightSeg=row.segs.find((seg)=>seg[3]!==undefined);let limit=2+measure;
+  if(rightSeg){const rt=rightSeg[3],c=2+measure-sw(rt)-(row.bg?2:0);g.put(r,c,rt,rightSeg[1]+(row.bg?" ub":""),ra);limit=c-1;}
+  for(const seg of row.segs){const[t,k,act,right]=seg;
+    if(right!==undefined)continue;
+    const a=act?g.act(act):ra;const text=fit(t,limit-col);g.put(r,col,text,(k||"")+(row.bg?" ub":""),a);if(act||ra)g.addClass(r,col,col+sw(text),"hov");col+=sw(text);}}
+
+function drawOverlay(g){const v=topView(),p=v.page,W=S.W,H=S.H;
+  const ow=Math.max(24,Math.round(W*0.88)),inner=ow-4,lines=p.lines();
+  const gut=p.numbered?Math.max(3,String(lines.length).length):0,textW=Math.max(1,inner-(gut?gut+3:0));
+  const rows=[];lines.forEach((l,i)=>{if(v.wrap&&sw(l.t)>textW)wrap(l.t,textW).forEach((t,j)=>rows.push({t,k:l.k,ln:i,cont:j>0}));else rows.push({t:l.t,k:l.k,ln:i,cont:false});});
+  const maxBody=Math.max(1,Math.floor(H*0.82)-2),bodyH=Math.max(1,Math.min(maxBody,rows.length)),maxTop=Math.max(0,rows.length-bodyH);
+  if(p.follow&&v.atEnd)v.top=maxTop;v.top=Math.max(0,Math.min(v.top,maxTop));v.atEnd=v.top>=maxTop;v.bodyH=bodyH;v.maxTop=maxTop;v.rows=rows;
+  const oh=bodyH+2,r0=Math.floor((H-oh)/2),c0=Math.floor((W-ow)/2);
+  for(let r=r0;r<r0+oh;r++)g.fill(r,c0,c0+ow,"ov");
+  const close=" [× Esc] ",sub=p.subtitle?` (${p.subtitle()})`:"",title=fit(` ${p.title()}${sub} `,ow-4-sw(close)-2);
+  let col=g.put(r0,c0,"╭─","a");col=g.put(r0,col,title,"a bo");col=g.put(r0,col,"─".repeat(Math.max(0,ow-2-sw(title)-sw(close)-2)),"a");
+  const ca=g.act({click:()=>closeOrBack()});col=g.put(r0,col,close,"wa",ca);g.addClass(r0,col-sw(close),col,"hov");g.put(r0,col,"─╮","a");
+  const thumbH=rows.length>bodyH?Math.max(1,Math.round(bodyH*bodyH/rows.length)):bodyH,thumbTop=rows.length>bodyH?Math.round((bodyH-thumbH)*(maxTop?v.top/maxTop:0)):0;
+  for(let i=0;i<bodyH;i++){const r=r0+1+i,row=rows[v.top+i];const la=row&&p.openLine?g.act({click:()=>openLine(row.ln)}):0;
+    g.put(r,c0,"│ ","a",la);g.fill(r,c0+2,c0+ow-2,"ov",la);let c=c0+2;
+    if(row&&gut){c=g.put(r,c,row.cont?" ".repeat(gut):String(row.ln+1).padStart(gut),"d",la);c=g.put(r,c,row.cont?" ┆ ":" │ ","bm",la);}
+    if(row){const t=v.wrap?row.t:fit(row.t,textW);g.put(r,c,t,row.k||"o",la);if(la)g.addClass(r,c0+2,c0+ow-2,"hov");
+      if(v.search){let from=0,idx;while((idx=row.t.indexOf(v.search,from))>=0){const cc=c+sw(row.t.slice(0,idx));g.addClass(r,cc,cc+sw(v.search),"hl");from=idx+v.search.length;}}}
+    const bar=rows.length<=bodyH?["│","a"]:(i>=thumbTop&&i<thumbTop+thumbH?["┃","a"]:["│","bm"]);g.put(r,c0+ow-2," "+bar[0],bar[1]);g.put(r,c0+ow-2," ","");g.put(r,c0+ow-1,bar[0],bar[1]);}
+  const rb=r0+oh-1;let left;
+  if(v.prompt)left=` ${v.prompt.kind}${v.prompt.text}█ `;else if(v.status&&Date.now()<v.status.until)left=` ${v.status.text} `;
+  else{const first=rows[v.top],last=rows[Math.min(rows.length,v.top+bodyH)-1];const pct=maxTop===0?100:Math.round(v.top/maxTop*100);
+    left=` NORMAL · L${(first?.ln??0)+1}–${(last?.ln??0)+1}/${lines.length} (${pct}%)${v.g?" · g":""} `;}
+  const action=p.edit?"e edit · ":p.openLine?"click/Enter open · ":"";const back=S.overlay.views.length>1?"q back":"q close";
+  const hint=v.prompt?(v.prompt.kind==="/"?"Enter search · Esc back":"Enter go · Esc back"):`${action}j/k · gg/G · / search · w wrap:${v.wrap?"on":"off"} · y copy · ${back}`;
+  const room=ow-4,lf=fit(left,room),hr=room-sw(lf)-2,right=hr>=12?` ${fit(hint,hr-1)} `:"";
+  col=g.put(rb,c0,"╰─","a");col=g.put(rb,col,lf,v.prompt?"t":(v.status&&Date.now()<v.status.until?"ok":"a"));col=g.put(rb,col,"─".repeat(Math.max(0,room-sw(lf)-sw(right))),"a");col=g.put(rb,col,right,"m");g.put(rb,col,"─╯","a");}
+
+function render(){const W=S.W,H=S.H,g=new Grid(W,H);
+  // header
+  g.put(0,2,"~/P/s/epi  dev/fold-view-tasks","m");const ctx="13.1K / 128K";g.put(0,W-2-sw(ctx),ctx,"m");
+  // bottom area
+  const on=S.editDialog||S.overlay?null:chipOn();
+  const taRows=Math.max(6,Math.floor(H*0.3)),maxPromptRows=Math.max(5,Math.floor(H*0.3));
+  const{rows:edRows}=layoutEditor(promptInner());const promptH=Math.min(edRows.length,maxPromptRows)+2;
+  const slotH=S.editDialog?taRows+7:popupHeight(on)+promptH;const bottomH=slotH+2;
+  const tTop=2,tH=H-tTop-bottomH;
+  // transcript
+  const tr=transcriptRows();const maxScroll=Math.max(0,tr.length-tH);S.tScroll=Math.max(0,Math.min(S.tScroll,maxScroll));S.tMax=maxScroll;
+  const end=tr.length-S.tScroll,startRow=Math.max(0,end-tH),vis=tr.slice(startRow,end);
+  vis.forEach((row,i)=>drawTranscriptRow(g,tTop+(tH-vis.length)+i,row));
+  // editor slot
+  let r=H-bottomH;
+  if(S.editDialog){drawEditDialog(g,r,taRows);}else{if(on)r+=drawPopup(g,r,on);S.taRect=null;drawPrompt(g,r,maxPromptRows);}
+  drawFooter(g,H-2);
+  if(S.overlay)drawOverlay(g);
+  paint(g);placeTextarea();
+  document.getElementById("dims").textContent=`${W}×${H}`;}
+let ACTS=[null];
+function paint(g){let html="";
+  for(let r=0;r<g.h;r++){const row=g.c[r];html+='<div class="row">';let i=0;
+    while(i<g.w){const cell=row[i];if(cell.skip){i++;continue;}const da=cell.a?` data-a="${cell.a}"`:"";const dr=` data-r="${r}" data-c="${i}"`;
+      if(cell.w===2){html+=`<span class="${cell.k} w2"${da}${dr}>${esc(cell.ch)}</span>`;i+=2;continue;}
+      let j=i,txt="";while(j<g.w&&!row[j].skip&&row[j].w!==2&&row[j].k===cell.k&&row[j].a===cell.a){txt+=row[j].ch;j++;}
+      html+=`<span class="${cell.k}" style="width:calc(var(--cw)*${j-i})"${da}${dr}>${esc(txt)}</span>`;i=j;}
+    html+="</div>";}
+  document.getElementById("term").innerHTML=html;ACTS=g.acts;}
+function placeTextarea(){const ta=document.getElementById("editta");if(!S.editDialog||!S.taRect){ta.style.display="none";return;}
+  const term=document.getElementById("term"),cwPx=parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--cw")),lh=parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--lh"));
+  ta.style.display="block";ta.style.top=`${term.offsetTop+8+S.taRect.r*lh}px`;ta.style.left=`${S.taRect.c*cwPx}px`;
+  ta.style.width=`${S.taRect.cols*cwPx}px`;ta.style.height=`${S.taRect.rows*lh}px`;}
+
+// ───────────────────────── input ─────────────────────────
+function overlayKey(e){const v=topView(),k=e.key;
+  if(v.prompt){if(k==="Escape")v.prompt=null;else if(k==="Enter"){v.search=v.prompt.text;v.prompt=null;findNext(v,false,true);}
+    else if(k==="Backspace")v.prompt.text=v.prompt.text.slice(0,-1);else if(k.length===1)v.prompt.text+=k;return;}
+  const page=Math.max(1,v.bodyH||10);
+  if(k==="g"){if(v.g){v.top=0;v.atEnd=false;v.g=false;}else v.g=true;return;}v.g=false;
+  const move=(n)=>{v.top=Math.max(0,Math.min(v.maxTop??0,v.top+n));v.atEnd=v.top>=(v.maxTop??0);};
+  if(k==="j"||k==="ArrowDown")move(1);else if(k==="k"||k==="ArrowUp")move(-1);
+  else if(k===" "||k==="PageDown"||(k==="d"&&e.ctrlKey))move(page);else if(k==="PageUp"||(k==="u"&&e.ctrlKey))move(-page);
+  else if(k==="G"){v.top=v.maxTop??0;v.atEnd=true;}
+  else if(k==="w"){v.wrap=!v.wrap;v.status={text:`wrap ${v.wrap?"on":"off"}`,until:Date.now()+1500};}
+  else if(k==="y"){const text=v.page.lines().map((l)=>l.t).join("\n");navigator.clipboard?.writeText(text).catch(()=>{});v.status={text:`Copied ${v.page.lines().length} lines`,until:Date.now()+1500};}
+  else if(k==="e"&&v.page.edit){v.page.edit();}
+  else if(k==="Enter"&&v.page.openLine){openLine(v.rows?.[v.top]?.ln??0);}
+  else if(k==="/")v.prompt={kind:"/",text:""};
+  else if(k==="n"||k==="N")findNext(v,k==="N",false);
+  else if(k==="q"||k==="Escape")closeOrBack();}
+function findNext(v,back,fromTop){if(!v.search||!v.rows)return;const n=v.rows.length;
+  for(let s=1;s<=n;s++){const i=back?(v.top-s+n)%n:fromTop?(v.top+s-1)%n:(v.top+s)%n;if(v.rows[i].t.includes(v.search)){v.top=i;v.atEnd=false;return;}}
+  v.status={text:`Pattern not found: ${v.search}`,until:Date.now()+1500};}
+function editorKey(e){const k=e.key,ed=S.ed;
+  if((e.ctrlKey||e.metaKey)&&(k==="z"||k==="-"||k==="_")){undo();return true;}
+  if(e.metaKey||(e.ctrlKey&&k!=="j"))return false;
+  if(k==="Enter"){if(e.shiftKey||e.altKey){insertChars("\n",false);return true;}const on=chipOn();if(on&&!on.just){expandChipAt(on.index);return true;}submit();return true;}
+  if(k==="j"&&e.ctrlKey){insertChars("\n",false);return true;}
+  if(k==="Backspace"){if(ed.cursor>0){deleteAt(ed.cursor-1);ed.cursor--;}ed.justPasted=false;return true;}
+  if(k==="Delete"){deleteAt(ed.cursor);ed.justPasted=false;return true;}
+  if(k==="ArrowLeft"){ed.cursor=Math.max(0,ed.cursor-1);ed.justPasted=false;ed.lastTyping=false;return true;}
+  if(k==="ArrowRight"){ed.cursor=Math.min(ed.units.length,ed.cursor+1);ed.justPasted=false;ed.lastTyping=false;return true;}
+  if(k==="ArrowUp"||k==="ArrowDown"){moveVertical(k==="ArrowUp"?-1:1);ed.justPasted=false;return true;}
+  if(k==="Home"){while(ed.cursor>0&&ed.units[ed.cursor-1]!=="\n")ed.cursor--;return true;}
+  if(k==="End"){while(ed.cursor<ed.units.length&&ed.units[ed.cursor]!=="\n")ed.cursor++;return true;}
+  if(k==="Escape"){return true;}
+  if(k==="Tab"){return true;}
+  return false;}
+const kbd=document.getElementById("kbd"),termEl=document.getElementById("term"),wrapEl=document.getElementById("termwrap");
+kbd.addEventListener("keydown",(e)=>{if(e.isComposing)return;
+  if(S.overlay){if(e.metaKey&&e.key!=="c")return;e.preventDefault();overlayKey(e);render();return;}
+  if(editorKey(e)){e.preventDefault();render();}});
+kbd.addEventListener("input",(e)=>{if(e.isComposing)return;const v=kbd.value;kbd.value="";if(!v||S.overlay)return;insertChars(v,true);render();});
+kbd.addEventListener("compositionend",()=>{const v=kbd.value;kbd.value="";if(v&&!S.overlay){insertChars(v,true);render();}});
+kbd.addEventListener("paste",(e)=>{e.preventDefault();if(S.overlay)return;handlePaste(e.clipboardData.getData("text/plain"));render();});
+kbd.addEventListener("focus",()=>{wrapEl.classList.add("focus");document.getElementById("hint").textContent="可以打字、粘贴、用方向键";});
+kbd.addEventListener("blur",()=>{wrapEl.classList.remove("focus");document.getElementById("hint").textContent="点一下终端再打字 / 粘贴";});
+const editta=document.getElementById("editta");
+editta.addEventListener("keydown",(e)=>{if(e.key==="Enter"&&!e.shiftKey&&!e.isComposing){e.preventDefault();endEdit(true);}
+  else if(e.key==="Escape"){e.preventDefault();endEdit(false);}else if(e.key==="g"&&e.ctrlKey){e.preventDefault();flash("原型不模拟外部编辑器（真实版 Ctrl+G 打开 $EDITOR）");render();}});
+function actAt(e){const el=e.target.closest("span[data-a]");return el?ACTS[Number(el.dataset.a)]:null;}
+let clickTimer=null;
+termEl.addEventListener("mousedown",(e)=>{if(S.editDialog&&e.target!==editta)e.preventDefault();});
+termEl.addEventListener("click",(e)=>{if(!S.editDialog)kbd.focus();const a=actAt(e);if(e.detail>1)return;
+  if(S.overlay){const inOv=e.target.closest("span.ov,span.a,span.wa,span.hl")||(a&&a.click);if(a?.click){a.click();render();}else if(!inOv){/* outside the overlay: falls to the screen below */}render();return;}
+  if(a?.click){if(a.dbl){clearTimeout(clickTimer);a.click();render();}else{a.click();render();}}});
+termEl.addEventListener("dblclick",(e)=>{const a=actAt(e);if(a?.dbl){a.dbl();render();}});
+termEl.addEventListener("wheel",(e)=>{e.preventDefault();const n=Math.sign(e.deltaY)*3;
+  if(S.overlay){const v=topView();v.top=Math.max(0,Math.min(v.maxTop??0,v.top+n));v.atEnd=v.top>=(v.maxTop??0);}
+  else S.tScroll=Math.max(0,Math.min(S.tMax??0,S.tScroll-n));render();},{passive:false});
+
+// ───────────────────────── page controls ─────────────────────────
+const SAMPLE3=(()=>{const p="第四轮修复已完成，但还不能推送。复审又找到 3 个 Major，第五轮正在修。每个新测试在修复前失败、修复后通过，完整测试套件全过。";
+  return[p.repeat(9),"另外还有 6 个 Minor（P4–P9），例如大小写不敏感的卷上 Main 和 main 被当成两个 ref、linked worktree 自己的 ref 去主仓库目录里找等。"+p.repeat(6),"备注：每轮的 Major 数是 13 → 7 → 2 → 3，数量没再下降，但问题越来越边缘。"].join("\n");})();
+const SAMPLE200=Array.from({length:200},(_,i)=>`[${String(i).padStart(3,"0")}] ${i%17===0?"WARN":"INFO"} quarry: corpus record ${733-i} ok · ${["planner","storage","exec","wire"][i%4]} · ${(i*7)%1000}ms`).join("\n");
+function fitWidth(){if(S.fit){const cwPx=parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--cw"));S.W=Math.max(50,Math.floor((termEl.clientWidth-2)/cwPx));}}
+window.addEventListener("resize",()=>{fitWidth();render();});
+document.querySelectorAll("[data-w]").forEach((b)=>b.addEventListener("click",()=>{S.fit=b.dataset.w==="fit";if(S.fit)fitWidth();else S.W=Number(b.dataset.w);document.querySelectorAll("[data-w]").forEach((x)=>x.classList.toggle("on",x===b));render();kbd.focus();}));
+document.getElementById("s3").addEventListener("click",()=>{if(S.overlay)S.overlay=null;handlePaste(SAMPLE3);render();kbd.focus();});
+document.getElementById("s200").addEventListener("click",()=>{if(S.overlay)S.overlay=null;handlePaste(SAMPLE200);render();kbd.focus();});
+document.getElementById("spawn").addEventListener("click",()=>{const job=makeJob("implementer","You are the implementer (round "+(S.jobs.length+4)+"). Implement the round-5 spec in two commits: P1+P2+P3, then the minors. Run the full suite before each commit.");
+  S.transcript.push({kind:"assistant",text:"再派一个子任务去实现，结束后会通知我。"},{kind:"task",jobId:job.id});S.tScroll=0;render();kbd.focus();});
+document.getElementById("pause").addEventListener("click",(e)=>{S.paused=!S.paused;e.target.textContent=S.paused?"继续模拟":"暂停模拟";e.target.classList.toggle("on",S.paused);});
+document.getElementById("reset").addEventListener("click",()=>{init();render();kbd.focus();});
+document.querySelectorAll(".opt input").forEach((inp)=>inp.addEventListener("change",()=>{S.opts[inp.name]=inp.value;render();}));
+document.getElementById("copyfb").addEventListener("click",()=>{const names={d1:"D1 折叠",d2:"D2 单击标签",d5:"D3 编辑后仍长",d3:"D4 单击 task 行",d4:"D5 任务页内容"};
+  const opts=Object.entries(names).map(([k,n])=>{const el=document.querySelector(`input[name="${k}"]:checked`);return`${n}：${el.parentElement.textContent.replace("推荐","").trim()}`;});
+  const checked=[...document.querySelectorAll("[data-c]")].filter((c)=>c.checked).map((c)=>c.dataset.c);
+  const text=`原型 fold-view-tasks 反馈\n${opts.join("\n")}\n已测：${checked.length?checked.join(", "):"无"}\n备注：${document.getElementById("notes").value||"无"}`;
+  navigator.clipboard.writeText(text).then(()=>{document.getElementById("fbok").textContent="已复制";},()=>{document.getElementById("fbok").textContent="复制失败，请手动选中";});});
+
+function init(){S.ed={units:[],cursor:0,undo:[],justPasted:false,lastTyping:false,scroll:0};S.chips={};S.jobs=[];S.transcript=[];S.overlay=null;S.tScroll=0;S.busy=false;
+  if(S.editDialog){S.editDialog=null;editta.style.display="none";}
+  const review=makeJob("reviewer","You are the reviewer (fourth round). Review 2 commits 26f2061..4fce1c4 against the round-4 spec; list every Major with a repro.",99);
+  const impl=makeJob("implementer","You are the implementer (fifth round). Implement the round-5 spec: P1 refs under lock, P2 recovery marker in .git/, P3 fsync.",4);
+  S.transcript.push(
+    {kind:"user",text:"第五轮按 spec 实现，实现完交给 reviewer 复审。\n要求：\n1. 每个 Major 一个 commit\n2. 新测试先在旧代码上失败\n3. 全套测试通过再提交\n4. 不推送",time:"10:21 AM"},
+    {kind:"assistant",text:"先让 reviewer 复审第四轮的两个 commit，再派实现。"},
+    {kind:"task",jobId:review.id},
+    {kind:"bash",cmd:"git log --oneline 8d18dc7..HEAD; git status --short",out:["8d18dc7 spec: round 5 design","(no changes)"],expanded:false},
+    {kind:"task",jobId:impl.id},
+    {kind:"assistant",text:"第五轮已开始：实现 job 在后台跑，结束后会自动通知。你可以点上面的 task 行、或右下角的任务计数看它在做什么。"},
+    {kind:"footer",label:"Worked for 10.3s"});}
+
+function measureCell(){const m=document.getElementById("measure");m.textContent="M".repeat(100);const w=m.getBoundingClientRect().width/100;
+  document.documentElement.style.setProperty("--cw",`${w}px`);}
+
+// ───────────────────────── self-test (?selftest) ─────────────────────────
+function selftest(){const out=[];const ok=(name,cond)=>out.push(`${cond?"PASS":"FAIL"}  ${name}`);
+  const screen=()=>[...document.querySelectorAll("#term .row")].map((r)=>r.textContent).join("\n");
+  const clickText=(text)=>{const spans=[...document.querySelectorAll("#term span[data-a]")];const el=spans.find((s)=>s.textContent.includes(text));if(!el)return false;el.dispatchEvent(new MouseEvent("click",{bubbles:true,detail:1}));return true;};
+  const key=(k,extra={})=>kbd.dispatchEvent(new KeyboardEvent("keydown",{key:k,bubbles:true,...extra}));
+  S.paused=true;init();render();
+  handlePaste(SAMPLE3);render();
+  ok("D1 默认：三段长文（3 行、<10KB）折成 KB 标签",S.ed.units.length===1&&/\[Pasted: \d+\.\d KB\]/.test(screen()));
+  ok("浮窗出现，提示 click to view",screen().includes("click to view · paste again"));
+  ok("单击浮窗打开查看器，标题是标签",clickText("click to view · paste again")&&S.overlay&&topView().page.title().startsWith("[Pasted"));
+  render();ok("查看器底边有 e edit",screen().includes("e edit"));
+  key("e");ok("按 e 打开编辑框",!!S.editDialog&&!S.overlay);
+  editta.value=SAMPLE3+" EDITED";editta.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",bubbles:true}));
+  ok("保存后仍是一个标签，内容带 EDITED",S.ed.units.length===1&&expandedText().endsWith("EDITED"));
+  key("z",{ctrlKey:true});ok("Ctrl+Z 一次恢复原内容",expandedText()===SAMPLE3);
+  key("ArrowLeft");render();ok("← 移到标签上，底栏 Enter:expand",screen().includes("Enter:expand"));
+  key("Enter");ok("Enter 原地展开",S.ed.units.length===[...SAMPLE3].length);
+  key("z",{ctrlKey:true});key("End");key("Backspace");ok("退格整块删除标签",S.ed.units.length===0);
+  S.opts.d1="kb10";handlePaste(SAMPLE3);ok("D1=10KB：同一段长文原样进入",S.ed.units.length===[...SAMPLE3].length);S.opts.d1="chars1000";S.ed.units=[];S.ed.cursor=0;
+  handlePaste(SAMPLE200);key("Enter");render();ok("发送 200 行：消息显示 … +197 lines (click to view)",screen().includes("… +197 lines (click to view)"));
+  ok("单击它打开 Message 查看器",clickText("+197 lines")&&topView().page.title()==="Message");key("Escape");render();
+  ok("Esc 关闭查看器",!S.overlay);
+  S.tScroll=0;render();const running=S.jobs.find((j)=>j.status==="running");
+  ok("单击运行中的 task 行打开任务页",clickText(running.agent)&&topView().page.title()===`task ${short(running.id)}`);
+  render();const before=topView().page.lines().length;S.paused=false;tickJobs();tickJobs();S.paused=true;
+  ok("任务页随子任务前进而变长（实时）",topView().page.lines().length>before);key("Escape");render();
+  ok("单击右下角任务计数打开列表",clickText("◐ 1 task")&&topView().page.title()==="tasks");render();
+  key("Enter");ok("Enter 进入最新任务页",S.overlay.views.length===2&&topView().page.title().startsWith("task "));
+  key("Escape");ok("Esc 回到列表",S.overlay.views.length===1&&topView().page.title()==="tasks");key("Escape");ok("再 Esc 关闭",!S.overlay);
+  for(const ch of "/tasks")insertChars(ch,true);key("Enter");ok("/tasks 打开列表",S.overlay&&topView().page.title()==="tasks");key("Escape");
+  S.fit=false;for(const w of[60,100,140]){S.W=w;render();const rows=[...document.querySelectorAll("#term .row")];
+    const widths=rows.map((r)=>[...r.children].reduce((n,s)=>n+(s.classList.contains("w2")?2:Number((s.getAttribute("style")||"").match(/\*(\d+)/)?.[1]||0)),0));
+    ok(`${w} 列：每行正好 ${w} 格`,widths.every((x)=>x===w));}
+  S.W=100;S.opts.d3="old";render();const done=S.jobs.find((j)=>j.status==="completed");clickText(`"${fit(done.task.replace(/\s+/g," "),40)}"`.slice(0,12));render();
+  ok("D4=旧行为：单击已完成的 task 行原地展开",screen().includes(`${done.agent} completed`));S.opts.d3="page";
+  const pass=out.every((l)=>l.startsWith("PASS"));
+  document.getElementById("selftest").textContent=`SELFTEST ${pass?"OK":"FAILED"} (${out.filter((l)=>l.startsWith("PASS")).length}/${out.length})\n`+out.join("\n");
+  S.fit=true;fitWidth();init();S.paused=false;render();}
+
+measureCell();fitWidth();init();render();setInterval(tickJobs,1400);setInterval(()=>{if(S.flash||S.overlay)render();},700);
+if(location.search.includes("selftest"))selftest();else kbd.focus();
+</script>
+</main></body></html>
