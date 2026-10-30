@@ -38,8 +38,10 @@ async function waitFor(predicate, what) {
  * collects push wakes: a handed-back or background job reaches the model only through
  * `pi.sendMessage`, so that array is the delivery under test.
  */
-async function createHarness(t, root, options = {}) {
+async function createHarness(t, root, { failStopHook = false, ...options } = {}) {
   const messages = [];
+  /** `busy` is what the extension reads through `ctx.isIdle()`; flipping it models a running turn. */
+  const state = { busy: false };
   const extension = createTaskInlineExtension({
     epiHome: root,
     agentDir: join(root, "pi"),
@@ -53,7 +55,15 @@ async function createHarness(t, root, options = {}) {
   const tools = new Map();
   const handlers = new Map();
   await extension.factory({
-    events: { emit() {}, on: () => () => {} },
+    events: {
+      // The hook bridge a real `epi:hooks` answers: a decision that is illegal for `task_stop`.
+      emit(_channel, request) {
+        if (failStopHook && request?.event?.type === "task_stop") {
+          request.run = async () => ({ action: "block", reason: "stop hook said no" });
+        }
+      },
+      on: () => () => {},
+    },
     on(event, handler) {
       handlers.set(event, handler);
     },
@@ -72,14 +82,14 @@ async function createHarness(t, root, options = {}) {
     model: undefined,
     mode,
     hasUI: true,
-    isIdle: () => true,
+    isIdle: () => !state.busy,
     sessionManager: {
       getBranch: () => [],
       getSessionId: () => "session-1",
       getEntries: () => [],
     },
   });
-  return { tools, handlers, messages, context };
+  return { tools, handlers, messages, context, state };
 }
 
 test("a foreground task past its budget is handed back, not waited on", async (t) => {
@@ -191,7 +201,7 @@ test("a bounded task_wait returns progress, not a raw snapshot", async (t) => {
 
   const text = waited.content[0].text;
   assert.match(text, /^running · turn 0/, "progress first, like task_status");
-  assert.match(text, /Still running after 0\.2s/);
+  assert.match(text, /Still running after 0\.[12]s/);
   assert.match(text, /task_wait again only if you cannot continue without it/);
   // The snapshot (session path, cwd, event ring) belongs in details, never in the model's context.
   assert.doesNotMatch(text, /sessionPath|\.jsonl|createdAt|recentEvents/);
@@ -218,4 +228,42 @@ test("task_wait with no timeout uses the same budget in the TUI", async (t) => {
   assert.equal(waited.details.status, "running");
 
   await tools.get("task_cancel").execute("c3", { jobId: started.details.id }, undefined, undefined, ctx);
+});
+
+test("a wake waits for an idle session instead of queueing mid-turn", async (t) => {
+  const root = createFixture(t);
+  const { tools, handlers, messages, context, state } = await createHarness(t, root);
+  const ctx = context("tui");
+  state.busy = true;
+
+  const started = await tools.get("task").execute(
+    "c1", { task: "slow-usage", background: true }, undefined, undefined, ctx);
+  const settled = await waitFor(async () => {
+    // The list form, not `task_status({ jobId })`: a single-job pull collects the notice.
+    const list = await tools.get("task_status").execute("c2", {}, undefined, undefined, ctx);
+    return list.details.jobs[0]?.status === "completed";
+  }, "the job to settle");
+  assert.ok(settled);
+  await delay(400); // past NOTIFY_COALESCE_MS
+  assert.equal(messages.length, 0, "a busy session is not woken mid-run");
+
+  // The run ends; the notice goes out instead of being lost with the turn.
+  state.busy = false;
+  handlers.get("agent_settled")({ type: "agent_settled" }, ctx);
+  const wake = await waitFor(() => messages[0], "the deferred wake");
+  assert.equal(wake.message.customType, "epi:task-notify");
+  assert.deepEqual(wake.message.details.jobIds, [started.details.id]);
+});
+
+test("a background job whose task_stop hook rejects still delivers its result", async (t) => {
+  const root = createFixture(t);
+  const { tools, messages, context } = await createHarness(t, root, { failStopHook: true });
+
+  await tools.get("task").execute(
+    "c1", { task: "with-usage", background: true }, undefined, undefined, context("tui"));
+
+  // `block` is not a legal decision for task_stop, so the hook is broken, not a veto: the result
+  // would otherwise vanish into stderr with nobody left to read it.
+  const wake = await waitFor(() => messages[0], "the notice despite the hook error");
+  assert.match(wake.message.content, /completed: done/);
 });

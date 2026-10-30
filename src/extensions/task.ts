@@ -1331,6 +1331,7 @@ export function createTaskInlineExtension(
             // Same budget as a foreground `task`: an unbounded pull would put back exactly the block
             // the budget just removed (§13). Outside the TUI nobody can be woken, so a caller that
             // must have the answer still waits without a limit.
+            const began = Date.now();
             const budget = foregroundBudgetMs(ctx);
             const timeoutMs = params.timeoutSeconds === undefined
               ? (budget > 0 ? budget : undefined)
@@ -1347,7 +1348,9 @@ export function createTaskInlineExtension(
               collect(waited);
             }
             if (waited.status === "queued" || waited.status === "running") {
-              return stillRunningResult(waited, timeoutMs ?? 0);
+              // The elapsed time, not the budget: an aborted wait (Esc) ends early, and a receipt
+              // that claims it waited the whole budget is a lie the model would act on.
+              return stillRunningResult(waited, Date.now() - began);
             }
             if (completion !== undefined) {
               return jobResult(await completion);
