@@ -85,7 +85,7 @@
       }
     },
     {
-      "description": "Delegate work to a subagent: a separate Epi process with its own context window, which reports back only its conclusion. Use it for work that would otherwise fill this context (wide searches, long builds, independent branches of a job), and run independent subagents at once. A subagent starts with no skills, no MCP and no rules unless asked for. To fan out, issue several task calls in the same turn: they run concurrently and each returns its result, so no task_wait is needed. Each subagent costs a fresh system prompt and process start, so give each one a sizeable share (several files, not one tiny one). Pass jobId to steer a running job or resume a stopped one instead of starting one. Presets: worker (Deterministic full-runtime acceptance worker.).",
+      "description": "Delegate work to a subagent: a separate Epi process with its own context window, which reports back only its conclusion. Use it for work that would otherwise fill this context (wide searches, long builds, independent branches of a job), and run independent subagents at once. A subagent starts with no skills, no MCP and no rules unless asked for. To fan out, issue several task calls in the same turn: they run concurrently and each returns its result, so no task_wait is needed. Each subagent costs a fresh system prompt and process start, so give each one a sizeable share (several files, not one tiny one). A child still running after 5 minutes moves to the background: the call returns a receipt instead of the answer, and the answer arrives later as a message of its own. Pass jobId to steer a running job or resume a stopped one instead of starting one. Presets: worker (Deterministic full-runtime acceptance worker.).",
       "name": "task",
       "parameters": {
         "properties": {
@@ -250,6 +250,7 @@
             "type": "string"
           },
           "timeoutSeconds": {
+            "description": "How long to wait before the call returns progress instead; defaults to 300s in the TUI and is unlimited elsewhere",
             "minimum": 0.001,
             "type": "number"
           }

@@ -188,7 +188,7 @@ const TaskToolParameters = Type.Object({
 ```
 
 - **单跑或并行**：传 `task` 启动 1 个，或传 `tasks: [...]` 一次并行启动多个（最多 8 个，受 `TaskRuntime` 的 `maxConcurrency: 4` 队列调度）。
-- **默认 `background: true`**：调用立即返回 `{ id, status: "queued" | "running", ... }`（或 `{ jobs: [...] }`），绝不阻塞主会话。当主模型下一步必须立刻用到该结果时，可显式传 `background: false`。
+- **默认前台，但有等待预算**：`background: false` 时调用等到作业落定并把答复交给模型；交互 TUI 下最多等 300 秒，到期作业不杀、转后台，回执返回模型，落定后 push 唤醒（实际实现见 §13；本节早先写的「默认 `background: true`」从未落地：默认后台会让每次委派多一次往返，且结果落不进当轮上下文）。
 - **向已有 `jobId` 发消息（`jobId` + `task`）**：
   - 若 `jobId` 处于 `running`：通过 `worker.stdin` 写入 `{"type":"steer","message":task}`，返回当前最新进度快照；
   - 若 `jobId` 处于 `completed` / `partial` / `failed` / `cancelled`：基于其保留的 `~/.epi/runtime/task/sessions/<jobId>.jsonl` 重新拉起 Worker 跑新一轮。
@@ -552,3 +552,24 @@ interface MailboxEntry {
 - **列表页**：每个 Job 一行，最新的在上面。单击一行或按 Enter 打开该 Job 的页；Esc 回到列表，再按 Esc 关闭。inspector 为此加了一个页栈（`openLine`）。
 - **底栏点击**：底栏右侧的状态按 `setStatus` 的 key 分段。点到哪一段，就执行与 key 同名的扩展命令（如果有）。所以 epi:task 的状态 key 从 `epi-task` 改成 `tasks`。Pi 的扩展命令在流式输出中也立即执行，所以运行中也能点。
 - **不做**：在任务页里 steer 或取消（仍由模型调用工具完成）；完整的 `/trace` 子代理轨迹（trace-design §8 仍未实现）。
+
+## 13. 前台等待预算：超时转后台（2026-10-30，D96）
+
+**问题**：前台 `task` 把主会话整轮卡住。不是事件循环卡住，是 agent loop 卡住——一批工具调用必须 `Promise.all` 收齐才发下一次模型请求（`pi-agent-core` `agent-loop.js`），而 `runJob` 等的是 `runtime.wait(jobId)`，没有上限。唯一的边界是作业自己的 `timeoutSeconds`（默认 600 秒）。用户的原话：「否则非常的阻塞进度」。
+
+**做法**：给前台等待一个预算，默认 300 秒。到期不是杀作业，而是**放手**：
+
+1. `runtime.wait(jobId, budgetMs, signal)` 超时返回未落定的快照（这个方法本来就有超时参数，只是前台从没用过）。
+2. 返回回执而不是结果：作业 id、当前状态（`queued` / `running`）、为什么放手，以及**这正是最容易出错的地方**——模型必须知道这不是失败、答案会自己送到、不要重跑同样的活、不要习惯性 `task_wait`。
+3. `wakeOnSettle.set(jobId, true)`：落定时照常 push 唤醒。与 Esc 的唯一差别就在这里——Esc 是用户说「停」，`autoWake` 为 false，通知只搭下一条用户消息；预算是模型自己要答案，`autoWake` 保持 true。
+4. 作业本身什么都不变：仍占并发、仍可 steer、仍按 `timeoutSeconds` 超时。
+
+**只在 `mode === "tui"` 生效**。`print`/`json` 下这一轮结束进程就退出，`session_shutdown` 会连子代理一起取消，放手等于静默丢结果；`rpc` 的进程生命周期在调用方手里（`rpc-mode.js` 的 `stdin end → shutdown()`），Epi 无法承诺一次唤醒。子代理 worker 自己跑在 `mode: "print"`，所以嵌套委派也不会被放手。
+
+**预算为什么不暴露成参数**：模型算不准秒数，白占 schema；「现在就放后台」已经有 `background: true`。它是 `TaskExtensionOptions.backgroundAfterSeconds`，只给测试和宿主用，`0` 表示不设上限。
+
+**顺手修掉的重复投递**：`flushNotify` 以前只在会话空闲时才安全——会话正在跑时 `sendMessage({deliverAs:"followUp"})` 会把通知排进 Pi 的 followUp 队列，之后模型再 `task_wait` 收走同一份结果时，`mailbox.delete` 撤不回已经入队的消息，同一答复就进上下文两次。放手会让这种交叉变常见，所以 `canWake` 加了 `ctx.isIdle()` 判断：非空闲时不发，留到 `agent_settled` 再冲一次（信箱本来就有这条回边）。
+
+**`task_wait` 用同一个预算**。它和前台 `task` 一样把整轮卡住：不设上限，模型转后台后顺手一次 `task_wait`，阻塞就又变无界，前面的预算白做。所以 `timeoutSeconds` 省略时默认取同一个预算（TUI 300 秒，其他模式仍无上限——那里没人能唤醒，调用方必须拿到答案）。配套改掉「仍在跑」的结果形状：原来是 `jobResult` 对非终态快照做的 `JSON.stringify`，会把 `sessionPath`、`cwd` 和事件环一起打进上下文；现在返回进度行 + 「它还在跑，答案会自己送到，只有离不开它才再 `task_wait`」。
+
+**测试**：`test/task-background.test.mjs`。预算到期放手且作业仍在跑 / 放手后落定仍收到一条唤醒 / `print`·`json`·`rpc` 都不放手 / 预算 `0` 不放手 / 作业短于预算时返回答复而不是回执 / `task_wait` 到期返回进度而非快照 / `task_wait` 不传时用同一预算。

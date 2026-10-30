@@ -135,9 +135,26 @@ function errorResult(error) {
  */
 function startedResult(job) {
     return {
-        content: [{ type: "text", text: `Started job ${job.id} (${job.status}). Collect it with task_wait.` }],
+        content: [{
+                type: "text",
+                // Short on purpose (task-scope test): a fan-out pays this once per job, and the model only
+                // needs the id and the fact that the answer comes to it.
+                text: `Started job ${job.id} (${job.status}). Its result arrives as a message of its own.`,
+            }],
         details: job,
     };
+}
+/**
+ * What a foreground call returns when its wait ends early: the job is still going, and its answer
+ * will arrive on its own. The text has to make three things unavoidable -- this is not a failure,
+ * do not restart the work, do not block on `task_wait` out of habit -- or the model turns a
+ * 300-second budget into a 300-second `task_wait` and nothing is gained (§13).
+ */
+function handedBackText(job, why) {
+    return `Job ${job.id} is ${job.status} and keeps running in the background (${why}). ` +
+        "Its answer arrives as a new message that starts a turn, so do not restart this work: go on " +
+        "with something that does not need it, or end the turn. Call task_wait only if you cannot " +
+        "continue without it; task_cancel stops it.";
 }
 /** The answer text of a settled job, with an empty one made visible rather than rendered blank. */
 function resultText(job) {
@@ -154,6 +171,10 @@ function contextStopText(job) {
     const result = job.result ?? "";
     return result.trim().length > 0 ? `${result}\n\n${CONTEXT_STOP_REASON}` : CONTEXT_STOP_REASON;
 }
+/** How long a foreground `task` call holds the turn (§13). Past this the job moves to the
+ * background and its answer arrives as a push wake. A foreground wait is the only thing that stops
+ * the model from producing anything, so it is the only wait with a budget. */
+const DEFAULT_BACKGROUND_AFTER_SECONDS = 300;
 /** How long a settled job's completion promise stays available to task_wait/task_cancel. */
 const COMPLETION_RETENTION_MS = 10 * 60_000;
 /** Background jobs that settle within this window share one push wake (design §2.2). */
@@ -183,6 +204,22 @@ function runningStatusText(job) {
         lines.push("recent:", ...job.recentEvents);
     }
     return lines.join("\n");
+}
+/**
+ * What a bounded `task_wait` returns when the job is still going: its progress, not the raw
+ * snapshot `jobResult` prints for a non-terminal job (which would put `sessionPath`, `cwd` and the
+ * event ring into the model's context), plus the same contract the hand-back states (§13).
+ */
+function stillRunningResult(job, waitedMs) {
+    return {
+        content: [{
+                type: "text",
+                text: `${runningStatusText(job)}\n\nStill ${job.status} after ` +
+                    `${Number((waitedMs / 1_000).toFixed(1))}s: it keeps running, and its answer arrives as a ` +
+                    "message. Call task_wait again only if you cannot continue without it.",
+            }],
+        details: job,
+    };
 }
 /** One line per job in `task_status` with no jobId. */
 function jobListLine(job) {
@@ -439,6 +476,15 @@ export function createTaskInlineExtension(options) {
     });
     const availableAgents = runtime.availableAgents();
     const completionHooks = new Map();
+    /** The configured budget, in whole milliseconds; 0 means a foreground call waits without one. */
+    const backgroundAfterMs = (() => {
+        const seconds = options.backgroundAfterSeconds ?? DEFAULT_BACKGROUND_AFTER_SECONDS;
+        return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds * 1_000) : 0;
+    })();
+    /** A foreground wait holds the turn only in the interactive TUI (§13): `print`/`json` exit as
+     * soon as the turn ends and kill their jobs with it, and an rpc caller owns the process lifetime,
+     * so neither can promise a wake. Subagent workers run in `print` mode and get no budget either. */
+    const foregroundBudgetMs = (ctx) => ctx.mode === "tui" ? backgroundAfterMs : 0;
     /**
      * The live `pi` and `ctx` for this process, refreshed by every `factory(pi)` call, by
      * `session_start`, and by every tool call. Completion bookkeeping reads them *at completion
@@ -497,10 +543,19 @@ export function createTaskInlineExtension(options) {
         }
     };
     /** §11.2 #2: a wake may go out only to the session that started the job, outside a compaction. */
-    const canWake = (entry) => current.pi !== undefined &&
-        current.ctx !== undefined &&
-        !compacting &&
-        sessionId() === entry.originSessionId;
+    const canWake = (entry) => {
+        const ctx = current.ctx;
+        if (current.pi === undefined || ctx === undefined)
+            return false;
+        if (compacting)
+            return false;
+        // Only into an idle session: sent mid-run, the notice queues behind the current turn, and a
+        // `task_wait` that collects the same result cannot retract a message Pi already queued -- the
+        // answer would enter the context twice. The next `agent_settled` re-flushes (§11.2 #3).
+        if (typeof ctx.isIdle === "function" && !ctx.isIdle())
+            return false;
+        return sessionId() === entry.originSessionId;
+    };
     /** One line of a push wake: `Job <id8> <status>: <first 400 chars>`, plus the pull hint. */
     const notifyText = (job) => {
         const id = shortJobId(job.id);
@@ -613,6 +668,13 @@ export function createTaskInlineExtension(options) {
             if (pi !== undefined && ctx !== undefined) {
                 const stopDecision = await emitTaskHook(pi.events, { type: "task_stop", job }, ctx);
                 if (stopDecision.action !== "continue") {
+                    // `block`/`cancel` are not valid for `task_stop` (docs/guide/hooks.md), so this is a
+                    // broken hook, not a veto. A foreground caller sees the error below; a background or
+                    // handed-back job has no caller, and its result would vanish into stderr -- send it.
+                    if (notify || wakeOnSettle.has(job.id)) {
+                        enqueueNotify(job, wakeOnSettle.get(job.id) ?? true);
+                    }
+                    wakeOnSettle.delete(job.id);
                     throw new Error(stopDecision.reason ?? "task stop hook returned an invalid decision");
                 }
             }
@@ -643,7 +705,9 @@ export function createTaskInlineExtension(options) {
     };
     /** Start (or resume) a job and hand the model its result: a background job gets the receipt, a
      * foreground one waits for the answer (and leaves the job running if its own turn is aborted). */
-    const runJob = async (job, background, signal, onUpdate) => {
+    const runJob = async (job, background, signal, onUpdate, 
+    /** How long this call may hold the turn before it hands the job back; 0 = no limit. */
+    foregroundMs) => {
         // This run's result is new, whatever an earlier run's delivery state was.
         collect(job);
         const completion = trackCompletion(job.id, background);
@@ -653,19 +717,30 @@ export function createTaskInlineExtension(options) {
         // still queued or before its first progress line.
         onUpdate?.({ content: [{ type: "text", text: runningStatusText(job) }], details: job });
         const progress = watchJob(job.id, onUpdate);
-        const waited = await runtime.wait(job.id, undefined, signal);
-        if (signal?.aborted === true &&
-            (waited.status === "queued" || waited.status === "running")) {
+        const waited = await runtime.wait(job.id, foregroundMs > 0 ? foregroundMs : undefined, signal);
+        const waiting = waited.status === "queued" || waited.status === "running";
+        if (waiting && signal?.aborted === true) {
             progress.stop();
             // A user's own Esc keeps the notice from starting a turn on its own; a /compact abort is not
             // the user saying "stop" and keeps autoWake (§11.2 #1).
             wakeOnSettle.set(job.id, compacting);
             return {
+                content: [{ type: "text", text: handedBackText(waited, "the wait was interrupted") }],
+                details: waited,
+            };
+        }
+        if (waiting) {
+            // The budget ran out and nobody is waiting any more, so the settle must reach the model as a
+            // push wake -- and unlike Esc, `autoWake` stays on: the model asked for this answer, and the
+            // user never said stop (§13).
+            progress.stop();
+            wakeOnSettle.set(job.id, true);
+            return {
                 content: [{
                         type: "text",
-                        text: `Job ${job.id} keeps running in the background; collect it with task_wait.`,
+                        text: handedBackText(waited, `it did not finish within ${Number((foregroundMs / 1_000).toFixed(1))}s`),
                     }],
-                details: runtime.status(job.id),
+                details: waited,
             };
         }
         const settled = await completion;
@@ -965,6 +1040,17 @@ export function createTaskInlineExtension(options) {
                     await showPage(ctx, page);
                 },
             });
+            /**
+             * `task_start` gate, shared by the three ways text reaches a child (start, replace a queued
+             * job's task, steer a running one): the text a hook sees must be the text the child acts on,
+             * or a hook that blocks by text is bypassed in two steps (review P2-2, round 2 P2-A).
+             */
+            const gateTaskStart = async (hookCtx, agent, task, cwd) => {
+                const decision = await emitTaskHook(pi.events, { type: "task_start", ...(agent === undefined ? {} : { agent }), task, cwd }, hookCtx);
+                if (decision.action === "block" || decision.action === "cancel") {
+                    throw new Error(decision.reason ?? "task start blocked by Epi hook");
+                }
+            };
             pi.registerTool({
                 name: "task",
                 label: "Task",
@@ -976,6 +1062,8 @@ export function createTaskInlineExtension(options) {
                     "To fan out, issue several task calls in the same turn: they run concurrently and each",
                     "returns its result, so no task_wait is needed. Each subagent costs a fresh system prompt",
                     "and process start, so give each one a sizeable share (several files, not one tiny one).",
+                    "A child still running after 5 minutes moves to the background: the call returns a receipt",
+                    "instead of the answer, and the answer arrives later as a message of its own.",
                     "Pass jobId to steer a running job or resume a stopped one instead of starting one.",
                     availableAgents.length === 0
                         ? ""
@@ -997,20 +1085,11 @@ export function createTaskInlineExtension(options) {
                             // `task_start` must see it, or a hook that blocks by text is bypassed in two steps
                             // (review P2-2, round 2 P2-A).
                             const known = runtime.status(params.jobId);
-                            const decision = await emitTaskHook(pi.events, {
-                                type: "task_start",
-                                ...(known.agent === undefined ? {} : { agent: known.agent }),
-                                task: params.task,
-                                cwd: known.cwd,
-                            }, ctx);
-                            if (decision.action === "block" ||
-                                decision.action === "cancel") {
-                                throw new Error(decision.reason ?? "task start blocked by Epi hook");
-                            }
+                            await gateTaskStart(ctx, known.agent, params.task, known.cwd);
                             if (known.status !== "queued" && known.status !== "running") {
                                 // A settled job resumes on the same session file, so the child remembers the run
                                 // that stopped; `jobId` calls ignore the other settings (the schema says so).
-                                return runJob(runtime.resume(params.jobId, params.task), params.background === true, signal, onUpdate);
+                                return runJob(runtime.resume(params.jobId, params.task), params.background === true, signal, onUpdate, foregroundBudgetMs(ctx));
                             }
                             const steered = runtime.steer(params.jobId, params.task);
                             return {
@@ -1026,16 +1105,7 @@ export function createTaskInlineExtension(options) {
                         // `resolve` handles both cases: an absolute `cwd` wins outright, a relative one joins
                         // the session's, and `runtime.start` realpaths whatever comes out.
                         const cwd = params.cwd === undefined ? ctx.cwd : resolve(ctx.cwd, params.cwd);
-                        const startDecision = await emitTaskHook(pi.events, {
-                            type: "task_start",
-                            ...(params.agent === undefined ? {} : { agent: params.agent }),
-                            task: params.task,
-                            cwd,
-                        }, ctx);
-                        if (startDecision.action === "block" ||
-                            startDecision.action === "cancel") {
-                            throw new Error(startDecision.reason ?? "task start blocked by Epi hook");
-                        }
+                        await gateTaskStart(ctx, params.agent, params.task, cwd);
                         const started = runtime.start({
                             ...taskSettings(params),
                             task: params.task,
@@ -1051,7 +1121,7 @@ export function createTaskInlineExtension(options) {
                                 ? { forkEntries: forkableBranch(ctx.sessionManager.getBranch()) }
                                 : {}),
                         });
-                        return runJob(started, params.background === true, signal, onUpdate);
+                        return runJob(started, params.background === true, signal, onUpdate, foregroundBudgetMs(ctx));
                     }
                     catch (error) {
                         return errorResult(error);
@@ -1105,14 +1175,21 @@ export function createTaskInlineExtension(options) {
                 renderResult: renderTaskResult,
                 parameters: Type.Object({
                     jobId: Type.String(),
-                    timeoutSeconds: Type.Optional(Type.Number({ minimum: 0.001 })),
+                    timeoutSeconds: Type.Optional(Type.Number({
+                        minimum: 0.001,
+                        description: `How long to wait before the call returns progress instead; defaults to ${DEFAULT_BACKGROUND_AFTER_SECONDS}s in the TUI and is unlimited elsewhere`,
+                    })),
                 }),
                 async execute(_toolCallId, params, signal, onUpdate, ctx) {
                     current.ctx = ctx;
                     const progress = watchJob(params.jobId, onUpdate);
                     try {
+                        // Same budget as a foreground `task`: an unbounded pull would put back exactly the block
+                        // the budget just removed (§13). Outside the TUI nobody can be woken, so a caller that
+                        // must have the answer still waits without a limit.
+                        const budget = foregroundBudgetMs(ctx);
                         const timeoutMs = params.timeoutSeconds === undefined
-                            ? undefined
+                            ? (budget > 0 ? budget : undefined)
                             : Math.ceil(params.timeoutSeconds * 1_000);
                         // Wait first, then let the completion promise run the usage record and `task_stop`
                         // hook. Pi always passes an abort signal, so branching on `signal === undefined` (as
@@ -1125,7 +1202,10 @@ export function createTaskInlineExtension(options) {
                             // The result is in the model's context now; a push wake would repeat it.
                             collect(waited);
                         }
-                        if (completion !== undefined && waited.status !== "queued" && waited.status !== "running") {
+                        if (waited.status === "queued" || waited.status === "running") {
+                            return stillRunningResult(waited, timeoutMs ?? 0);
+                        }
+                        if (completion !== undefined) {
                             return jobResult(await completion);
                         }
                         return jobResult(waited);

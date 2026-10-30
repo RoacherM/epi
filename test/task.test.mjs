@@ -309,7 +309,7 @@ test("aborting the parent's turn leaves a foreground subagent running", async (t
   controller.abort();
   const receipt = await pending;
 
-  assert.match(receipt.content[0].text, /keeps running in the background; collect it with task_wait/);
+  assert.match(receipt.content[0].text, /keeps running in the background \(the wait was interrupted\)/);
   assert.equal(receipt.details.status, "running");
   const status = await tools.get("task_status").execute(
     "c2", { jobId: receipt.details.id }, undefined, undefined, context);
