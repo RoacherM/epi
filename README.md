@@ -36,6 +36,15 @@ Epi 是基于 Pi SDK 的可定制终端编程助手。自有 grok 风格 TUI，�
 
 ## 最近更新
 
+**0.2.5：异步子代理即时消费与 Worktree 隔离、内置 Monitor 流式监控、微信图片粘贴修复与 Magpie Gemini 轨迹规范化**
+
+[→ 特性展示](docs/showcase/0.2.5/README.md)
+
+- **异步子代理（`epi:task`）升级**：主会话忙碌时可在 `turn_end` / `agent_before_settle` 即时收取后台子代理完成与里程碑通知（按 `${jobId}:${run}` 精确去重）；新增 `"steer"` / `"enqueue"` / `"interrupt"` 三种运行中纠偏策略、子代理内置 `report_progress` 工具、`isolation: "worktree"` 独立 Git 工作树隔离、以及 `task({ tasks })` / `task_wait({ jobIds, mode })` / `task_cancel({ jobIds, all })` 批量并行控制。
+- **内置流式后台监控（`Monitor` / `monitor_stop` / `monitor_list`）**：随 `epi:task` 提供后台命令 `stdout` 行流与 WebSocket 帧流监控，支持 200ms 窗口批量聚合、令牌桶限流（突发 10、每 2s 恢复 1、连续抑制 30s 自动熔断）、独立进程组树清理（`killTree`）与 `<EPI_HOME>/runtime/monitors` 日志落盘。
+- **微信复制图片粘贴 `EPERM` 修复**：粘贴沙盒不可读路径（如 macOS 微信临时目录 `EPERM`/`EACCES`）不再导致 TUI 崩溃，自动回退读取系统剪贴板中的图片位图并插入 `[Image #N]` chip。
+- **Magpie Antigravity Gemini 轨迹规范化**：保留 Antigravity 自有 `thoughtSignature`、将空白文本分片上的有效签名转移给同轮 `functionCall`、剔除空回合并合并连续同角色回合（`functionResponse` 置前）。
+
 **0.2.4：Magpie 跨渠道签名清理、Gemini 签名兜底与旧 `models.json` 兼容**
 
 [→ 特性展示](docs/showcase/0.2.4/README.md)
