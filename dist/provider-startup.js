@@ -85,7 +85,36 @@ async function refreshCatalogs(modelRuntime, providers, settled) {
  *      rpc starts in the background: a client that closes stdin right away would end the process
  *      inside it and leave models-store.json.lock behind, which the next epi waits 30 s for.
  */
+const patchedRuntimes = new WeakSet();
+const patchedProviders = new WeakSet();
+/** Pi's composeModelProvider applies models.json before returning from getModels(), and calls
+ * native.filterModels only inside getAvailable(). Applying native.filterModels to composed.getModels
+ * keeps getModels() and getModel() (used by --model, session restore and findInitialModel) aligned
+ * with the native provider's resolved catalog metadata even when models.json has a legacy entry. */
+function applyNativeModelFilter(modelRuntime) {
+    for (const id of modelRuntime.getRegisteredProviderIds()) {
+        const native = modelRuntime.getRegisteredNativeProvider(id);
+        const composed = modelRuntime.getProvider(id);
+        if (!native?.filterModels || !composed || composed === native || patchedProviders.has(composed))
+            continue;
+        patchedProviders.add(composed);
+        const rawGetModels = composed.getModels.bind(composed);
+        composed.getModels = () => native.filterModels(rawGetModels(), undefined);
+    }
+}
+function installNativeModelFilterHook(modelRuntime) {
+    if (patchedRuntimes.has(modelRuntime))
+        return;
+    patchedRuntimes.add(modelRuntime);
+    const rawRefresh = modelRuntime.refresh.bind(modelRuntime);
+    modelRuntime.refresh = async (options) => {
+        const result = await rawRefresh(options);
+        applyNativeModelFilter(modelRuntime);
+        return result;
+    };
+}
 export async function settleRegisteredProviders(modelRuntime) {
+    installNativeModelFilterHook(modelRuntime);
     const providers = modelRuntime.getRegisteredProviderIds();
     const settled = { warnings: [], notRunning: [] };
     await refreshCatalogs(modelRuntime, providers, settled);
@@ -94,6 +123,7 @@ export async function settleRegisteredProviders(modelRuntime) {
         await modelRuntime.refresh({ allowNetwork: false });
         unsettled = await hasUnsettledAuth(modelRuntime, providers);
     }
+    applyNativeModelFilter(modelRuntime);
     if (unsettled) {
         settled.warnings.push({
             type: "warning",

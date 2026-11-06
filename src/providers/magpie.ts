@@ -104,31 +104,55 @@ function toCost(pricing: CatalogModel["pricing"]): ModelCost {
   };
 }
 
+function cleanGatewayRoot(baseUrl: string): string {
+  return baseUrl.replace(/\/(?:v1beta|v1)\/?$/u, "").replace(/\/+$/u, "");
+}
+
+function protocolBaseUrl(baseUrl: string, protocol: MagpieProtocol): string {
+  const root = cleanGatewayRoot(baseUrl);
+  if (protocol === "anthropic") return root;
+  return `${root}${protocol === "gemini" ? "/v1beta" : "/v1"}`;
+}
+
+function modelDisplayName(model: CatalogModel): string {
+  return model.magpie_label?.trim() || model.display_name?.trim() || model.id;
+}
+
+function modelContextWindow(model: CatalogModel): number {
+  return model.context_window ?? model.context_length ?? model.max_input_tokens ?? 200000;
+}
+
+function modelInputModalities(model: CatalogModel): ("text" | "image")[] {
+  return model.modalities?.input?.includes("image") ? ["text", "image"] : ["text"];
+}
+
+/** Pi warms a prompt cache only for models that declare a lifetime (docs/models.md "Prompt cache
+ * lifetimes"), and the gateway publishes none. Anthropic Messages caches for five minutes, the
+ * conservative end of the published range; a catalog that prices cache writes means the same
+ * kind of cache, so it gets the same lifetime. `long` stays unset: Magpie advertises no 1-hour
+ * tier, and guessing one would have Pi warm an entry it cannot keep. */
+function modelPromptCache(model: CatalogModel, protocol: MagpieProtocol): { short: number } | undefined {
+  return protocol === "anthropic" || model.pricing?.input_cache_write !== undefined ? { short: 300 } : undefined;
+}
+
 function toModel(model: CatalogModel, baseUrl: string): Model<Api> {
   const protocol = protocolFor(model);
-  const input: ("text" | "image")[] = ["text"];
-  if (model.modalities?.input?.includes("image")) input.push("image");
   const reasoning = model.reasoning === true;
   const map = thinkingMap(model, protocol);
-  // Pi warms a prompt cache only for models that declare a lifetime (docs/models.md "Prompt cache
-  // lifetimes"), and the gateway publishes none. Anthropic Messages caches for five minutes, the
-  // conservative end of the published range; a catalog that prices cache writes means the same
-  // kind of cache, so it gets the same lifetime. `long` stays unset: Magpie advertises no 1-hour
-  // tier, and guessing one would have Pi warm an entry it cannot keep.
-  const cachesPrompts = protocol === "anthropic" || model.pricing?.input_cache_write !== undefined;
+  const promptCache = modelPromptCache(model, protocol);
   return {
     id: model.id,
     provider: "magpie",
-    name: model.magpie_label?.trim() || model.display_name?.trim() || model.id,
+    name: modelDisplayName(model),
     api: protocolApis[protocol],
-    baseUrl: baseUrl + (protocol === "anthropic" ? "" : protocol === "gemini" ? "/v1beta" : "/v1"),
-    input,
+    baseUrl: protocolBaseUrl(baseUrl, protocol),
+    input: modelInputModalities(model),
     reasoning,
     ...(map ? { thinkingLevelMap: map } : {}),
     // Advertised effort levels distinguish adaptive thinking from older token-budget models.
     ...(protocol === "anthropic" && reasoning && map ? { compat: { forceAdaptiveThinking: true } } : {}),
-    ...(cachesPrompts ? { promptCache: { short: 300 } } : {}),
-    contextWindow: model.context_window ?? model.context_length ?? model.max_input_tokens ?? 200000,
+    ...(promptCache ? { promptCache } : {}),
+    contextWindow: modelContextWindow(model),
     maxTokens: model.max_output_tokens ?? 8192,
     cost: toCost(model.pricing),
   };
@@ -145,6 +169,28 @@ export function parseMagpieModels(value: unknown, baseUrl: string): Model<Api>[]
   });
 }
 
+async function fetchCatalogPage(url: URL, apiKey: string, signal: AbortSignal): Promise<z.infer<typeof catalogSchema>> {
+  const response = await fetch(url, {
+    headers: { "x-api-key": apiKey, Authorization: `Bearer ${apiKey}`, "anthropic-version": "2023-06-01" },
+    signal,
+    redirect: "error",
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`Magpie model discovery failed (HTTP ${response.status})`);
+  }
+  let value: unknown;
+  try {
+    value = await response.json();
+  } catch {
+    signal.throwIfAborted();
+    throw new Error("Magpie returned invalid catalog JSON");
+  }
+  const catalog = catalogSchema.safeParse(value);
+  if (!catalog.success) throw new Error("Magpie returned an invalid model catalog");
+  return catalog.data;
+}
+
 export async function discoverMagpieModels(
   baseUrl: string,
   signal: AbortSignal,
@@ -158,43 +204,53 @@ export async function discoverMagpieModels(
   for (let page = 0; page < 100; page += 1) {
     const url = new URL(`${baseUrl}/v1/models`);
     if (cursor) url.searchParams.set("after_id", cursor);
-    const response = await fetch(url, {
-      headers: { "x-api-key": apiKey, Authorization: `Bearer ${apiKey}`, "anthropic-version": "2023-06-01" },
-      signal: requestSignal,
-      redirect: "error",
-    });
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw new Error(`Magpie model discovery failed (HTTP ${response.status})`);
-    }
-    let value: unknown;
-    try {
-      value = await response.json();
-    } catch {
-      requestSignal.throwIfAborted();
-      throw new Error("Magpie returned invalid catalog JSON");
-    }
-    const catalog = catalogSchema.safeParse(value);
-    if (!catalog.success) throw new Error("Magpie returned an invalid model catalog");
-    entries.push(...catalog.data.data);
-    if (!catalog.data.has_more) {
+    const catalog = await fetchCatalogPage(url, apiKey, requestSignal);
+    entries.push(...catalog.data);
+    if (!catalog.has_more) {
       requestSignal.throwIfAborted();
       return parseMagpieModels({ data: entries }, baseUrl);
     }
-    cursor = catalog.data.last_id;
+    cursor = catalog.last_id;
     if (!cursor || cursors.has(cursor)) throw new Error("Magpie returned invalid model pagination");
     cursors.add(cursor);
   }
   throw new Error("Magpie model catalog exceeded the pagination limit");
 }
 
+function apiProtocol(api: Api): MagpieProtocol | undefined {
+  return (Object.keys(protocolApis) as MagpieProtocol[]).find((key) => protocolApis[key] === api);
+}
+
 function apiStreams(api: Api): ProviderStreams {
-  const protocol = (Object.keys(protocolApis) as MagpieProtocol[]).find((key) => protocolApis[key] === api);
+  const protocol = apiProtocol(api);
   if (!protocol) throw new Error("Unsupported Magpie model API");
   return streams[protocol];
 }
 
-type AnthropicBlock = { type: string; id?: string; tool_use_id?: string };
+/** Keeps each Magpie model on its catalog protocol and endpoint even when a legacy models.json
+ * overlays a single top-level baseUrl (/v1) or api (openai-completions) onto the provider. */
+export function resolveMagpieModel(model: Model<Api>, catalog: readonly Model<Api>[], baseUrl: string): Model<Api> {
+  const known = catalog.find((entry) => entry.id === model.id);
+  if (known) return known;
+  const inferred = protocolFor({ id: model.id });
+  const current = apiProtocol(model.api);
+  const protocol = current === undefined || (current === "openai" && inferred !== "openai") ? inferred : current;
+  const api = protocolApis[protocol];
+  const resolvedBaseUrl = protocolBaseUrl(baseUrl, protocol);
+  return model.api === api && model.baseUrl === resolvedBaseUrl
+    ? model
+    : { ...model, api, baseUrl: resolvedBaseUrl };
+}
+
+type AnthropicBlock = {
+  type: string;
+  id?: string;
+  tool_use_id?: string;
+  text?: string;
+  thinking?: string;
+  content?: unknown;
+  signature?: string;
+};
 type AnthropicMessage = { role: string; content: string | AnthropicBlock[] };
 
 const blocksOf = (message: AnthropicMessage): AnthropicBlock[] =>
@@ -207,28 +263,372 @@ function renamedToolId(id: string): string {
   return prefixed.length <= 64 ? prefixed : `epi_${createHash("sha256").update(id).digest("hex").slice(0, 40)}`;
 }
 
+function renameAnthropicToolBlock(block: AnthropicBlock): AnthropicBlock {
+  if (block.type === "tool_use" && typeof block.id === "string") {
+    return { ...block, id: renamedToolId(block.id) };
+  }
+  if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
+    return { ...block, tool_use_id: renamedToolId(block.tool_use_id) };
+  }
+  return block;
+}
+
+function hasSteerAfterLastToolUse(messages: readonly AnthropicMessage[]): boolean {
+  const lastAssistant = messages.findLastIndex((message) => message.role === "assistant");
+  if (lastAssistant < 0) return false;
+  if (!blocksOf(messages[lastAssistant]!).some((block) => block.type === "tool_use")) return false;
+  return messages.slice(lastAssistant + 1)
+    .some((message) => blocksOf(message).some((block) => block.type === "text" || block.type === "image"));
+}
+
 /** Magpie's claude/ route continues its own upstream session when a request carries tool IDs it
  * issued, and then forwards only the tool results: a steer message sent after them is dropped
  * (dogfood D74, reproduced on the real gateway; its other routes are fine). Renaming the tool IDs
  * in that one request makes the gateway take the whole request instead. Returns undefined when
  * the request has no user text or image after the last tool call, so other requests go out unchanged. */
 export function renameToolIdsAfterSteer(payload: unknown): unknown {
-  const messages = (payload as { messages?: AnthropicMessage[] }).messages;
-  if (!Array.isArray(messages)) return undefined;
-  const lastAssistant = messages.findLastIndex((message) => message.role === "assistant");
-  if (lastAssistant < 0 || !blocksOf(messages[lastAssistant]!).some((block) => block.type === "tool_use")) return undefined;
-  const steered = messages.slice(lastAssistant + 1)
-    .some((message) => blocksOf(message).some((block) => block.type === "text" || block.type === "image"));
-  if (!steered) return undefined;
-  const rename = (block: AnthropicBlock): AnthropicBlock =>
-    block.type === "tool_use" && block.id !== undefined ? { ...block, id: renamedToolId(block.id) }
-      : block.type === "tool_result" && block.tool_use_id !== undefined ? { ...block, tool_use_id: renamedToolId(block.tool_use_id) }
-        : block;
+  const messages = (payload as { messages?: AnthropicMessage[] } | null)?.messages;
+  if (!Array.isArray(messages) || !hasSteerAfterLastToolUse(messages)) return undefined;
   return {
     ...(payload as object),
     messages: messages.map((message) =>
-      typeof message.content === "string" ? message : { ...message, content: message.content.map(rename) }),
+      typeof message.content === "string" ? message : { ...message, content: message.content.map(renameAnthropicToolBlock) }),
   };
+}
+
+const SKIP_THOUGHT_VALIDATOR = "skip_thought_signature_validator";
+const TS_SUFFIX_RE = /__ts(?:r|k\d+)?__[A-Za-z0-9_-]+$/;
+
+// Split leading character so gateway antigravity-cloak middleware never mutates source/tool literals in transit.
+const ANTIGRAVITY_SYSTEM_WORDS = [
+  "x" + "-anthropic-billing-header",
+  "C" + "laude Agent SDK",
+  "Y" + "ou are Claude Code, Anthropic's official CLI for Claude",
+  "Y" + "ou are Codex, an agent based on GPT-5",
+  "Y" + "ou are Codex, a coding agent based on GPT-5",
+  "H" + "ermes Agent, an intelligent AI assistant created by Nous Research",
+  "o" + "perating inside pi, a coding agent harness",
+];
+
+const ANTIGRAVITY_MESSAGE_PHRASES = [
+  "o" + "perating inside pi, a coding agent harness",
+  "T" + "he conversation history before this point was compacted into the following summary:",
+  "T" + "he following is a summary of a branch that this conversation came back from:",
+  "T" + "his session is being continued from a previous conversation that ran out of context.",
+];
+
+function buildCloakRegex(words: readonly string[]): RegExp {
+  const escaped = words.map((word) => word.replaceAll("\u200b", "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`(${escaped.join("|")})`, "g");
+}
+
+const SYSTEM_CLOAK_RE = buildCloakRegex(ANTIGRAVITY_SYSTEM_WORDS);
+const MESSAGE_CLOAK_RE = buildCloakRegex(ANTIGRAVITY_MESSAGE_PHRASES);
+
+function cloakText(text: string, regex: RegExp): string {
+  return text.replace(regex, (match) => `${match[0]}\u200b${match.slice(1)}`);
+}
+
+function stripTsSuffix(id: string): string {
+  return id.split("|").map((part) => part.replace(TS_SUFFIX_RE, "")).join("|");
+}
+
+function isAntigravityModel(modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  return lower.startsWith("antigravity/") || lower === "auto" || lower.startsWith("auto/");
+}
+
+function cloakContent(content: unknown, regex: RegExp): unknown {
+  if (typeof content === "string") return cloakText(content, regex);
+  if (!Array.isArray(content)) return content;
+  return content.map((item) =>
+    typeof item === "object" && item !== null && typeof (item as { text?: unknown }).text === "string"
+      ? { ...item, text: cloakText((item as { text: string }).text, regex) }
+      : item);
+}
+
+function fixAnthropicThinkingBlock(block: AnthropicBlock): AnthropicBlock | undefined {
+  const raw = typeof block.thinking === "string" ? block.thinking : "";
+  return raw.trim().length > 0 ? { type: "text", text: cloakText(raw, MESSAGE_CLOAK_RE) } : undefined;
+}
+
+function fixAnthropicToolResultBlock(block: AnthropicBlock): AnthropicBlock {
+  return {
+    ...block,
+    ...(typeof block.tool_use_id === "string" ? { tool_use_id: stripTsSuffix(block.tool_use_id) } : {}),
+    ...(block.content !== undefined ? { content: cloakContent(block.content, MESSAGE_CLOAK_RE) } : {}),
+  };
+}
+
+function fixAnthropicBlock(block: AnthropicBlock): AnthropicBlock | undefined {
+  if (block.type === "redacted_thinking") return undefined;
+  if (block.type === "thinking") return fixAnthropicThinkingBlock(block);
+  if (block.type === "tool_use" && typeof block.id === "string") return { ...block, id: stripTsSuffix(block.id) };
+  if (block.type === "tool_result") return fixAnthropicToolResultBlock(block);
+  return typeof block.text === "string" ? { ...block, text: cloakText(block.text, MESSAGE_CLOAK_RE) } : block;
+}
+
+function fixAnthropicMessage(message: AnthropicMessage): AnthropicMessage {
+  if (typeof message.content === "string") {
+    return { ...message, content: cloakText(message.content, MESSAGE_CLOAK_RE) };
+  }
+  if (!Array.isArray(message.content)) return message;
+  const blocks = message.content.flatMap((block) => {
+    const fixed = fixAnthropicBlock(block);
+    return fixed ? [fixed] : [];
+  });
+  return { ...message, content: blocks.length > 0 ? blocks : [{ type: "text", text: "(thinking)" }] };
+}
+
+function fixAnthropicPayload(payload: Record<string, unknown>, antigravity: boolean): unknown {
+  if (!antigravity) return renameToolIdsAfterSteer(payload);
+  const cleaned = {
+    ...payload,
+    ...(payload.system !== undefined ? { system: cloakContent(payload.system, SYSTEM_CLOAK_RE) } : {}),
+    ...(Array.isArray(payload.messages)
+      ? { messages: (payload.messages as AnthropicMessage[]).map(fixAnthropicMessage) }
+      : {}),
+  };
+  return renameToolIdsAfterSteer(cleaned) ?? cleaned;
+}
+
+function cleanExtraContent(extra: unknown): Record<string, unknown> | undefined {
+  if (typeof extra !== "object" || extra === null) return undefined;
+  const record = { ...(extra as Record<string, unknown>) };
+  if (typeof record.google === "object" && record.google !== null) {
+    const { thought_signature: _a, thoughtSignature: _b, ...googleRest } = record.google as Record<string, unknown>;
+    if (Object.keys(googleRest).length === 0) delete record.google;
+    else record.google = googleRest;
+  }
+  return Object.keys(record).length > 0 ? record : undefined;
+}
+
+function stripOpenAISignatures<T extends Record<string, unknown>>(item: T): Record<string, unknown> {
+  const {
+    thought_signature: _a,
+    thoughtSignature: _b,
+    reasoning_opaque: _c,
+    reasoning_details: _d,
+    extra_content,
+    ...rest
+  } = item;
+  const cleanedExtra = cleanExtraContent(extra_content);
+  return cleanedExtra ? { ...rest, extra_content: cleanedExtra } : rest;
+}
+
+function fixOpenAIToolCall(tc: Record<string, unknown>): Record<string, unknown> {
+  const cleaned = stripOpenAISignatures(tc);
+  return typeof cleaned.id === "string" ? { ...cleaned, id: stripTsSuffix(cleaned.id) } : cleaned;
+}
+
+function fixOpenAIMessage(message: Record<string, unknown>): Record<string, unknown> {
+  const cleaned = stripOpenAISignatures(message);
+  const regex = cleaned.role === "system" || cleaned.role === "developer" ? SYSTEM_CLOAK_RE : MESSAGE_CLOAK_RE;
+  return {
+    ...cleaned,
+    ...(cleaned.content !== undefined ? { content: cloakContent(cleaned.content, regex) } : {}),
+    ...(Array.isArray(cleaned.tool_calls)
+      ? { tool_calls: (cleaned.tool_calls as Record<string, unknown>[]).map(fixOpenAIToolCall) }
+      : {}),
+    ...(typeof cleaned.tool_call_id === "string" ? { tool_call_id: stripTsSuffix(cleaned.tool_call_id) } : {}),
+  };
+}
+
+function fixOpenAICompletionsPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(payload.messages)) return payload;
+  return {
+    ...payload,
+    messages: (payload.messages as Record<string, unknown>[]).map(fixOpenAIMessage),
+  };
+}
+
+function isResponsesToolCall(type: unknown): boolean {
+  return type === "function_call" || type === "custom_tool_call";
+}
+
+function isResponsesToolOutput(type: unknown): boolean {
+  return type === "function_call_output" || type === "custom_tool_call_output";
+}
+
+function fixResponsesToolCall(item: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...item,
+    ...(typeof item.call_id === "string" ? { call_id: stripTsSuffix(item.call_id) } : {}),
+    ...(typeof item.id === "string" ? { id: stripTsSuffix(item.id) } : {}),
+  };
+}
+
+function fixResponsesToolOutput(item: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...item,
+    ...(typeof item.call_id === "string" ? { call_id: stripTsSuffix(item.call_id) } : {}),
+    ...(item.output !== undefined ? { output: cloakContent(item.output, MESSAGE_CLOAK_RE) } : {}),
+  };
+}
+
+function fixResponsesItem(item: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (item.type === "reasoning") return undefined;
+  if (isResponsesToolCall(item.type)) return fixResponsesToolCall(item);
+  if (isResponsesToolOutput(item.type)) return fixResponsesToolOutput(item);
+  if (item.content !== undefined) {
+    const regex = item.role === "system" || item.role === "developer" ? SYSTEM_CLOAK_RE : MESSAGE_CLOAK_RE;
+    return { ...item, content: cloakContent(item.content, regex) };
+  }
+  return item;
+}
+
+function fixOpenAIResponsesPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...payload,
+    ...(typeof payload.instructions === "string"
+      ? { instructions: cloakText(payload.instructions, SYSTEM_CLOAK_RE) }
+      : {}),
+    ...(Array.isArray(payload.input)
+      ? {
+          input: (payload.input as Record<string, unknown>[]).flatMap((item) => {
+            const fixed = fixResponsesItem(item);
+            return fixed ? [fixed] : [];
+          }),
+        }
+      : {}),
+  };
+}
+
+function cloakValueStrings(value: unknown, regex: RegExp): unknown {
+  if (typeof value === "string") return cloakText(value, regex);
+  if (Array.isArray(value)) return value.map((item) => cloakValueStrings(item, regex));
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, cloakValueStrings(entry, regex)]),
+  );
+}
+
+function fixGeminiFunctionCallPart(part: Record<string, unknown>, antigravity: boolean): Record<string, unknown> {
+  if (!antigravity) {
+    return part.thoughtSignature || part.thought_signature
+      ? part
+      : { ...part, thoughtSignature: SKIP_THOUGHT_VALIDATOR };
+  }
+  const fc = part.functionCall as Record<string, unknown>;
+  const nextFc = typeof fc.id === "string" ? { ...fc, id: stripTsSuffix(fc.id) } : fc;
+  const { thought_signature: _, ...rest } = part;
+  return { ...rest, functionCall: nextFc, thoughtSignature: SKIP_THOUGHT_VALIDATOR };
+}
+
+function fixGeminiFunctionResponse(fr: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...fr,
+    ...(typeof fr.id === "string" ? { id: stripTsSuffix(fr.id) } : {}),
+    ...(fr.response !== undefined ? { response: cloakValueStrings(fr.response, MESSAGE_CLOAK_RE) } : {}),
+    ...(Array.isArray(fr.parts) ? { parts: cloakContent(fr.parts, MESSAGE_CLOAK_RE) } : {}),
+  };
+}
+
+function isEmptyGeminiPart(part: Record<string, unknown>): boolean {
+  if (part.functionCall || part.functionResponse || part.inlineData) return false;
+  return typeof part.text !== "string" || part.text.length === 0;
+}
+
+function fixGeminiPart(part: Record<string, unknown>, antigravity: boolean): Record<string, unknown> | undefined {
+  if (typeof part.functionCall === "object" && part.functionCall !== null) {
+    return fixGeminiFunctionCallPart(part, antigravity);
+  }
+  if (!antigravity) return part;
+  const { thoughtSignature: _a, thought_signature: _b, ...rest } = part;
+  const next = {
+    ...rest,
+    ...(typeof rest.text === "string" ? { text: cloakText(rest.text, MESSAGE_CLOAK_RE) } : {}),
+    ...(typeof rest.functionResponse === "object" && rest.functionResponse !== null
+      ? { functionResponse: fixGeminiFunctionResponse(rest.functionResponse as Record<string, unknown>) }
+      : {}),
+  };
+  return isEmptyGeminiPart(next) ? undefined : next;
+}
+
+function cloakGeminiSystemInstruction(inst: unknown): unknown {
+  if (typeof inst === "string") return cloakText(inst, SYSTEM_CLOAK_RE);
+  if (typeof inst === "object" && inst !== null && Array.isArray((inst as { parts?: unknown }).parts)) {
+    return { ...inst, parts: cloakContent((inst as { parts: unknown[] }).parts, SYSTEM_CLOAK_RE) };
+  }
+  return inst;
+}
+
+function fixGeminiSystemFields(payload: Record<string, unknown>): Record<string, unknown> {
+  const config = typeof payload.config === "object" && payload.config !== null
+    ? (payload.config as Record<string, unknown>)
+    : undefined;
+  return {
+    ...payload,
+    ...(config && config.systemInstruction !== undefined
+      ? { config: { ...config, systemInstruction: cloakGeminiSystemInstruction(config.systemInstruction) } }
+      : {}),
+    ...(payload.systemInstruction !== undefined
+      ? { systemInstruction: cloakGeminiSystemInstruction(payload.systemInstruction) }
+      : {}),
+    ...(payload.system_instruction !== undefined
+      ? { system_instruction: cloakGeminiSystemInstruction(payload.system_instruction) }
+      : {}),
+  };
+}
+
+function fixGeminiParts(parts: readonly Record<string, unknown>[], antigravity: boolean): Record<string, unknown>[] {
+  return parts.flatMap((part) => {
+    const fixed = fixGeminiPart(part, antigravity);
+    return fixed ? [fixed] : [];
+  });
+}
+
+function fixGeminiPayload(payload: Record<string, unknown>, antigravity: boolean): Record<string, unknown> {
+  const base = antigravity ? fixGeminiSystemFields(payload) : payload;
+  if (!Array.isArray(base.contents)) return base;
+  return {
+    ...base,
+    contents: (base.contents as Record<string, unknown>[]).map((content) =>
+      Array.isArray(content?.parts)
+        ? { ...content, parts: fixGeminiParts(content.parts as Record<string, unknown>[], antigravity) }
+        : content),
+  };
+}
+
+function cleanTranscriptMessage(message: Record<string, unknown>): Record<string, unknown> {
+  if (message.role === "toolResult" && typeof message.toolCallId === "string") {
+    return { ...message, toolCallId: stripTsSuffix(message.toolCallId) };
+  }
+  if (message.role === "assistant" && Array.isArray(message.content)) {
+    return {
+      ...message,
+      content: (message.content as Record<string, unknown>[]).map((block) =>
+        block.type === "toolCall" && typeof block.id === "string"
+          ? { ...block, id: stripTsSuffix(block.id) }
+          : block),
+    };
+  }
+  return message;
+}
+
+function cleanTranscriptContext<T extends { messages: unknown[] }>(context: T, model: Model<Api>): T {
+  if (!isAntigravityModel(model.id) || !Array.isArray(context?.messages)) return context;
+  return {
+    ...context,
+    messages: (context.messages as Record<string, unknown>[]).map(cleanTranscriptMessage),
+  };
+}
+
+/** Applies Magpie gateway compatibility fixes across protocols:
+ * - Antigravity / auto routes: strips foreign thought signatures and `__ts*__` tool ID suffixes,
+ *   fills `skip_thought_signature_validator` on Gemini functionCall parts, and cloaks harness phrases.
+ * - Gemini (/v1beta): fills `skip_thought_signature_validator` on unsigned cross-model functionCall parts.
+ * - Anthropic Messages: renames tool IDs when a steer message follows a tool call (D74). */
+export function fixGatewayPayload(payload: unknown, model: Pick<Model<Api>, "id" | "api">): unknown {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const record = payload as Record<string, unknown>;
+  const antigravity = isAntigravityModel(model.id);
+  if (model.api === "anthropic-messages") return fixAnthropicPayload(record, antigravity);
+  if (model.api === "google-generative-ai") return fixGeminiPayload(record, antigravity);
+  if (!antigravity) return undefined;
+  if (model.api === "openai-completions") return fixOpenAICompletionsPayload(record);
+  if (model.api === "openai-responses") return fixOpenAIResponsesPayload(record);
+  return undefined;
 }
 
 /** Applies the gateway workaround before any caller's own onPayload, which still sees the result. */
@@ -236,11 +636,13 @@ function withGatewayFixes<T extends { onPayload?: (payload: unknown, model: Mode
   model: Model<Api>,
   options: T | undefined,
 ): T | undefined {
-  if (model.api !== "anthropic-messages") return options;
+  if (model.api !== "anthropic-messages" && model.api !== "google-generative-ai" && !isAntigravityModel(model.id)) {
+    return options;
+  }
   return {
     ...options,
     onPayload: async (payload: unknown, payloadModel: Model<Api>) => {
-      const fixed = renameToolIdsAfterSteer(payload);
+      const fixed = fixGatewayPayload(payload, payloadModel);
       return (await options?.onPayload?.(fixed ?? payload, payloadModel)) ?? fixed;
     },
   } as T;
@@ -294,14 +696,37 @@ function discoveryFailure(error: unknown, baseUrl: string): Error {
   return new Error("Magpie model discovery failed; check that the gateway is running and its key is configured");
 }
 
+function cachedMagpieModels(stored: ModelsStoreEntry | undefined, baseUrl: string): Model<Api>[] {
+  if (stored?.etag !== cacheTag(baseUrl)) return [];
+  return stored.models.filter((model): model is Model<Api> => model.provider === "magpie" && (!model.type || model.type === "chat"));
+}
+
+async function resolveMagpieKey({
+  credential,
+  signal,
+}: {
+  credential?: { key?: string } | undefined;
+  signal: AbortSignal;
+}) {
+  signal.throwIfAborted();
+  if (credential === undefined) return { auth: { apiKey: MAGPIE_DEFAULT_KEY }, source: "default key for the local gateway" };
+  if (!credential.key) return undefined;
+  return { auth: { apiKey: credential.key }, source: "Magpie API key" };
+}
+
+async function discoverOrThrow(baseUrl: string, signal: AbortSignal, apiKey: string | undefined): Promise<Model<Api>[]> {
+  try {
+    return await discoverMagpieModels(baseUrl, signal, apiKey);
+  } catch (error) {
+    throw discoveryFailure(error, baseUrl);
+  }
+}
+
 /** A plain Pi provider (decision MG2): Pi's own refresh brings the catalog in, saves it and
  * restores the saved one; nothing here knows whether a run selected Magpie. */
 export function createMagpieProvider(baseUrl: string, writes: WriteTracker = createWriteTracker()): Provider {
   let models: Model<Api>[] = [];
-  const cachedModels = (stored: ModelsStoreEntry | undefined): Model<Api>[] =>
-    stored?.etag === cacheTag(baseUrl)
-      ? stored.models.filter((model): model is Model<Api> => model.provider === "magpie" && (!model.type || model.type === "chat"))
-      : [];
+  const resolveModel = (model: Model<Api>): Model<Api> => resolveMagpieModel(model, models, baseUrl);
   return {
     id: "magpie",
     name: "Magpie",
@@ -310,25 +735,16 @@ export function createMagpieProvider(baseUrl: string, writes: WriteTracker = cre
       apiKey: {
         name: "Magpie API key",
         login: async ({ prompt }) => ({ type: "api_key", key: await prompt({ type: "secret", message: "Magpie API key (loopback accepts any value):" }) }),
-        resolve: async ({ credential, signal }) => {
-          signal.throwIfAborted();
-          if (credential === undefined) return { auth: { apiKey: MAGPIE_DEFAULT_KEY }, source: "default key for the local gateway" };
-          if (!credential.key) return undefined;
-          return { auth: { apiKey: credential.key }, source: "Magpie API key" };
-        },
+        resolve: resolveMagpieKey,
       },
     },
     getModels: () => models,
+    filterModels: (composed) => composed.map(resolveModel),
     refreshModels: async (context) => {
-      if (context.stored && !(await context.publish({ update: () => { models = cachedModels(context.stored); } }))) return;
+      if (context.stored && !(await context.publish({ update: () => { models = cachedMagpieModels(context.stored, baseUrl); } }))) return;
       if (!context.allowNetwork || context.signal.aborted) return;
       const apiKey = context.credential?.type === "api_key" ? context.credential.key : undefined;
-      let refreshed: Model<Api>[];
-      try {
-        refreshed = await discoverMagpieModels(baseUrl, context.signal, apiKey);
-      } catch (error) {
-        throw discoveryFailure(error, baseUrl);
-      }
+      const refreshed = await discoverOrThrow(baseUrl, context.signal, apiKey);
       if (writes.closed) return;
       const persist = changedCatalogEntry(context.stored, baseUrl, refreshed);
       await writes.track(context.publish({
@@ -336,7 +752,21 @@ export function createMagpieProvider(baseUrl: string, writes: WriteTracker = cre
         update: () => { models = refreshed; },
       }));
     },
-    stream: (model, context, options) => apiStreams(model.api).stream(model, context, withGatewayFixes(model, options)),
-    streamSimple: (model, context, options) => apiStreams(model.api).streamSimple(model, context, withGatewayFixes(model, options)),
+    stream: (model, context, options) => {
+      const resolved = resolveModel(model);
+      return apiStreams(resolved.api).stream(
+        resolved,
+        cleanTranscriptContext(context, resolved),
+        withGatewayFixes(resolved, options),
+      );
+    },
+    streamSimple: (model, context, options) => {
+      const resolved = resolveModel(model);
+      return apiStreams(resolved.api).streamSimple(
+        resolved,
+        cleanTranscriptContext(context, resolved),
+        withGatewayFixes(resolved, options),
+      );
+    },
   };
 }

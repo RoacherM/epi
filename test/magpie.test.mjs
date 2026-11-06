@@ -8,7 +8,15 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createModels, InMemoryModelsStore, InMemoryCredentialStore, Type } from "@earendil-works/pi-ai";
 
-import { createMagpieProvider, createWriteTracker, discoverMagpieModels, parseMagpieModels, renameToolIdsAfterSteer } from "../dist/providers/magpie.js";
+import {
+  createMagpieProvider,
+  createWriteTracker,
+  discoverMagpieModels,
+  fixGatewayPayload,
+  parseMagpieModels,
+  renameToolIdsAfterSteer,
+  resolveMagpieModel,
+} from "../dist/providers/magpie.js";
 import { magpieCatalog, startMagpieServer } from "./fixtures/magpie-server.mjs";
 
 function run(command, args, options) {
@@ -751,3 +759,386 @@ test("isolated Task worker calls Magpie, and refreshes the catalog like every ot
   await runWorker("other/echo");
   assert.equal(catalogRequests(server).length, 1);
 });
+
+test("fixGatewayPayload strips cross-channel signatures, __ts*__ tool IDs and cloaks phrases across all four protocols (#11)", () => {
+  // Split leading character in test input literals so gateway antigravity-cloak middleware never mutates source/read output.
+  const phraseOperating = "o" + "perating inside pi, a coding agent harness";
+  const phraseSdk = "C" + "laude Agent SDK";
+  const phraseCompacted = "T" + "he conversation history before this point was compacted into the following summary:";
+  const phraseBranch = "T" + "he following is a summary of a branch that this conversation came back from:";
+  const phraseContinued = "T" + "his session is being continued from a previous conversation that ran out of context.";
+  const phraseCodex = "Y" + "ou are Codex, a coding agent based on GPT-5";
+  assert.equal(phraseOperating.includes("\u200b"), false);
+
+  // 1. Anthropic Messages (antigravity/claude-sonnet-4-6)
+  const anthropicIn = {
+    model: "antigravity/claude-sonnet-4-6",
+    system: [
+      {
+        type: "text",
+        text: `You are an expert assistant ${phraseOperating}. Using ${phraseSdk}.`,
+      },
+    ],
+    messages: [
+      {
+        role: "user",
+        content: `${phraseCompacted}\n<summary>ok</summary>`,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: `plan ${phraseCompacted}`, signature: "foreign_sig" },
+          { type: "thinking", thinking: "   ", signature: "empty_sig" },
+          { type: "redacted_thinking", data: "enc" },
+          { type: "tool_use", id: "call_1__tsk16__xyz", name: "bash", input: {} },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "call_1__tsk16__xyz",
+            content: `${phraseBranch}\ndone`,
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "redacted_thinking", data: "only_redacted" }],
+      },
+    ],
+  };
+  const anthropicOut = fixGatewayPayload(anthropicIn, {
+    id: "antigravity/claude-sonnet-4-6",
+    api: "anthropic-messages",
+  });
+
+  assert.equal(
+    anthropicOut.system[0].text,
+    "You are an expert assistant o\u200bperating inside pi, a coding agent harness. Using C\u200blaude Agent SDK.",
+  );
+  assert.equal(
+    anthropicOut.messages[0].content,
+    "T\u200bhe conversation history before this point was compacted into the following summary:\n<summary>ok</summary>",
+  );
+  // Stripped thinking blocks become plain text blocks (empty ones and redacted_thinking are dropped)
+  assert.deepEqual(anthropicOut.messages[1].content, [
+    {
+      type: "text",
+      text: "plan T\u200bhe conversation history before this point was compacted into the following summary:",
+    },
+    { type: "tool_use", id: "call_1", name: "bash", input: {} },
+  ]);
+  assert.deepEqual(anthropicOut.messages[2].content, [
+    {
+      type: "tool_result",
+      tool_use_id: "call_1",
+      content: "T\u200bhe following is a summary of a branch that this conversation came back from:\ndone",
+    },
+  ]);
+  // Message whose thinking blocks were all dropped falls back to a non-empty placeholder text block
+  assert.deepEqual(anthropicOut.messages[3].content, [{ type: "text", text: "(thinking)" }]);
+
+  // Idempotence: a second pass produces the exact same output with no double U+200B
+  const anthropicTwice = fixGatewayPayload(anthropicOut, {
+    id: "antigravity/claude-sonnet-4-6",
+    api: "anthropic-messages",
+  });
+  assert.deepEqual(anthropicTwice, anthropicOut);
+  assert.equal(JSON.stringify(anthropicTwice).includes("\u200b\u200b"), false);
+
+  // Steer after tool call on antigravity/claude-sonnet-4-6 strips __ts*__ first, then prefixes epi_
+  const steeredAnthropic = fixGatewayPayload({
+    messages: [
+      ...anthropicOut.messages.slice(0, 1),
+      { role: "assistant", content: [{ type: "tool_use", id: "call_1__tsk16__xyz", name: "bash", input: {} }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "call_1__tsk16__xyz", content: "ok" }] },
+      { role: "user", content: [{ type: "text", text: "steer" }] },
+    ],
+  }, { id: "antigravity/claude-sonnet-4-6", api: "anthropic-messages" });
+  assert.equal(steeredAnthropic.messages[1].content[0].id, "epi_call_1");
+  assert.equal(steeredAnthropic.messages[2].content[0].tool_use_id, "epi_call_1");
+
+  // 2. OpenAI Chat Completions (antigravity/* and auto/*)
+  const openaiOut = fixGatewayPayload({
+    model: "antigravity/claude-sonnet-4-6",
+    messages: [
+      { role: "system", content: `You are ${phraseOperating}.` },
+      { role: "user", content: phraseContinued },
+      {
+        role: "assistant",
+        content: null,
+        thought_signature: "sig_msg",
+        reasoning_opaque: "opaque_blob",
+        reasoning_details: [{ type: "reasoning.encrypted", data: "enc" }],
+        extra_content: { google: { thought_signature: "g_sig" }, keep: 1 },
+        tool_calls: [
+          {
+            id: "call_abc__ts__YWJj",
+            type: "function",
+            thought_signature: "sig_tc",
+            reasoning_details: [{ type: "reasoning.encrypted", data: "enc2" }],
+            extra_content: { google: { thoughtSignature: "g_sig2" } },
+            function: { name: "read", arguments: "{}" },
+          },
+        ],
+      },
+      { role: "tool", tool_call_id: "call_abc__ts__YWJj", content: "ok" },
+    ],
+  }, { id: "antigravity/claude-sonnet-4-6", api: "openai-completions" });
+
+  assert.equal(openaiOut.messages[0].content, "You are o\u200bperating inside pi, a coding agent harness.");
+  assert.equal(
+    openaiOut.messages[1].content,
+    "T\u200bhis session is being continued from a previous conversation that ran out of context.",
+  );
+  assert.equal("thought_signature" in openaiOut.messages[2], false);
+  assert.equal("reasoning_opaque" in openaiOut.messages[2], false);
+  assert.equal("reasoning_details" in openaiOut.messages[2], false);
+  assert.deepEqual(openaiOut.messages[2].extra_content, { keep: 1 });
+  assert.deepEqual(openaiOut.messages[2].tool_calls, [
+    { id: "call_abc", type: "function", function: { name: "read", arguments: "{}" } },
+  ]);
+  assert.equal(openaiOut.messages[3].tool_call_id, "call_abc");
+
+  // 3. OpenAI Responses (auto/*)
+  const responsesOut = fixGatewayPayload({
+    model: "auto/default",
+    instructions: `${phraseCodex}, ${phraseOperating}.`,
+    input: [
+      { type: "reasoning", id: "rs_1", encrypted_content: "enc_blob", summary: [] },
+      { type: "function_call", id: "fc_1__tsr__99", call_id: "call_1__tsr__99", name: "bash", arguments: "{}" },
+      {
+        type: "function_call_output",
+        call_id: "call_1__tsr__99",
+        output: `${phraseCompacted}\ndone`,
+      },
+    ],
+  }, { id: "auto/default", api: "openai-responses" });
+
+  assert.equal(
+    responsesOut.instructions,
+    "Y\u200bou are Codex, a coding agent based on GPT-5, o\u200bperating inside pi, a coding agent harness.",
+  );
+  // Reasoning items are dropped completely so stateless Responses (store: false) never sees unencrypted rs_* items
+  assert.deepEqual(responsesOut.input, [
+    { type: "function_call", id: "fc_1", call_id: "call_1", name: "bash", arguments: "{}" },
+    {
+      type: "function_call_output",
+      call_id: "call_1",
+      output: "T\u200bhe conversation history before this point was compacted into the following summary:\ndone",
+    },
+  ]);
+
+  // 4. Google Generative AI (antigravity/gemini-4-argon and non-antigravity Gemini fallback)
+  const geminiOut = fixGatewayPayload({
+    model: "antigravity/gemini-4-argon",
+    config: {
+      systemInstruction: `You are an assistant ${phraseOperating}.`,
+    },
+    systemInstruction: {
+      parts: [{ text: `You are an assistant ${phraseOperating}.` }],
+    },
+    contents: [
+      {
+        role: "model",
+        parts: [
+          { text: "", thought: true, thoughtSignature: "empty_thought_sig" },
+          { text: "thinking", thought: true, thoughtSignature: "foreign_sig" },
+          { functionCall: { id: "call_9__tsk16__abc", name: "bash", args: {} }, thought_signature: "bad_sig" },
+        ],
+      },
+      {
+        role: "user",
+        parts: [
+          {
+            functionResponse: {
+              id: "call_9__tsk16__abc",
+              name: "bash",
+              response: {
+                output: `${phraseCompacted}\nok`,
+              },
+            },
+          },
+        ],
+      },
+    ],
+  }, { id: "antigravity/gemini-4-argon", api: "google-generative-ai" });
+
+  assert.equal(
+    geminiOut.config.systemInstruction,
+    "You are an assistant o\u200bperating inside pi, a coding agent harness.",
+  );
+  assert.equal(
+    geminiOut.systemInstruction.parts[0].text,
+    "You are an assistant o\u200bperating inside pi, a coding agent harness.",
+  );
+  // Empty thought signature carrier part is removed; non-empty thought text part stays without signature
+  assert.deepEqual(geminiOut.contents[0].parts, [
+    { text: "thinking", thought: true },
+    {
+      functionCall: { id: "call_9", name: "bash", args: {} },
+      thoughtSignature: "skip_thought_signature_validator",
+    },
+  ]);
+  assert.deepEqual(geminiOut.contents[1].parts[0].functionResponse, {
+    id: "call_9",
+    name: "bash",
+    response: {
+      output: "T\u200bhe conversation history before this point was compacted into the following summary:\nok",
+    },
+  });
+
+  // Non-antigravity Gemini model fills skip_thought_signature_validator only on unsigned functionCall parts
+  const nonAgGemini = fixGatewayPayload({
+    contents: [
+      {
+        role: "model",
+        parts: [
+          { functionCall: { name: "bash", args: {} } },
+          { functionCall: { name: "read", args: {} }, thoughtSignature: "YWJj" },
+        ],
+      },
+    ],
+  }, { id: "gemini/gemini-4-pro", api: "google-generative-ai" });
+  assert.equal(nonAgGemini.contents[0].parts[0].thoughtSignature, "skip_thought_signature_validator");
+  assert.equal(nonAgGemini.contents[0].parts[1].thoughtSignature, "YWJj");
+});
+
+test("streaming to antigravity/gemini-3-flash and auto/* after cross-model tool call cleans transcript IDs, injects skip_thought_signature_validator and cloaks prompts (#11)", async (t) => {
+  const server = await serverFor(t);
+  const { provider, models } = await loadedProvider(server, [
+    ...magpieCatalog,
+    { id: "auto/chat", native_endpoints: ["/v1/chat/completions"] },
+  ]);
+  const gemini = provider.getModels().find((model) => model.id === "antigravity/gemini-3-flash");
+  const autoChat = provider.getModels().find((model) => model.id === "auto/chat");
+  const phraseOperating = "o" + "perating inside pi, a coding agent harness";
+  const phraseCompacted = "T" + "he conversation history before this point was compacted into the following summary:";
+  const crossModelContext = {
+    messages: [
+      {
+        role: "system",
+        content: `You are an expert coding assistant ${phraseOperating}.`,
+        timestamp: 0,
+      },
+      {
+        role: "user",
+        content: `${phraseCompacted}\nRun echo`,
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1__tsr__99|fc_1__tsr__99", name: "echo", arguments: { value: "hi" } }],
+        api: "openai-responses",
+        provider: "magpie",
+        model: "codex/gpt-test",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "toolUse",
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1__tsr__99|fc_1__tsr__99",
+        toolName: "echo",
+        content: [{ type: "text", text: "done" }],
+        isError: false,
+        timestamp: 3,
+      },
+    ],
+  };
+  const result = await models.streamSimple(gemini, crossModelContext, { maxTokens: 64 }).result();
+  assert.equal(result.stopReason, "stop", result.errorMessage);
+  const request = server.state.requests.at(-1);
+  assert.ok(request.url.startsWith("/v1beta/models/antigravity/gemini-3-flash:streamGenerateContent"), request.url);
+  assert.match(request.body.systemInstruction.parts[0].text, /o\u200bperating inside pi/);
+  assert.match(request.body.contents[0].parts[0].text, /^T\u200bhe conversation history before this point/);
+  const fcPart = request.body.contents[1].parts.find((part) => part.functionCall);
+  assert.equal(fcPart.thoughtSignature, "skip_thought_signature_validator");
+  assert.doesNotMatch(fcPart.functionCall.id ?? "", /__ts/);
+
+  // Replay the same pipe-separated Responses tool call into auto/chat (openai-completions):
+  // cleanTranscriptContext strips __tsr__99 from both segments before pi-ai's normalizeToolCallId runs.
+  const autoResult = await models.streamSimple(autoChat, crossModelContext, { maxTokens: 64 }).result();
+  assert.equal(autoResult.stopReason, "stop", autoResult.errorMessage);
+  const autoReq = server.state.requests.at(-1);
+  assert.equal(autoReq.url, "/v1/chat/completions");
+  const assistantMsg = autoReq.body.messages.find((msg) => msg.role === "assistant");
+  const toolMsg = autoReq.body.messages.find((msg) => msg.role === "tool");
+  assert.doesNotMatch(assistantMsg.tool_calls[0].id, /__ts/);
+  assert.equal(toolMsg.tool_call_id, assistantMsg.tool_calls[0].id);
+});
+
+test("legacy static providers.magpie in models.json does not break per-protocol baseUrl, api or catalog metadata (#11)", async (t) => {
+  const server = await serverFor(t);
+  const fixture = setup(t, server.baseUrl);
+  // Simulate a legacy ~/.epi/pi/models.json with top-level /v1, openai-completions, and incomplete model entries
+  writeFileSync(
+    join(fixture.epiHome, "pi", "models.json"),
+    JSON.stringify({
+      providers: {
+        magpie: {
+          baseUrl: `${server.baseUrl}/v1`,
+          api: "openai-completions",
+          apiKey: "magpie",
+          models: [
+            { id: "claude/claude-opus-test", name: "Legacy Claude" },
+            { id: "antigravity/gemini-3-flash", name: "Legacy Gemini" },
+          ],
+        },
+      },
+    }),
+  );
+  for (const [id, expectedPathPrefix] of [
+    ["claude/claude-opus-test", "/v1/messages"],
+    ["antigravity/gemini-3-flash", "/v1beta/models/antigravity/gemini-3-flash:streamGenerateContent"],
+    ["codex/gpt-test", "/v1/responses"],
+  ]) {
+    server.state.requests.length = 0;
+    const output = await cliRun(fixture, ["--provider", "magpie", "--model", id, ...printArgs]);
+    assert.equal(output.stdout.trim(), "MAGPIE_OK 你好", `${id}: ${output.stderr}`);
+    const inference = server.state.requests.find((request) => !request.url.startsWith("/v1/models"));
+    assert.ok(inference?.url.startsWith(expectedPathPrefix), `expected ${expectedPathPrefix}, got ${inference?.url}`);
+  }
+  // Verify catalog metadata (reasoning: true, thinkingLevelMap, compat.thinkingFormat = "anthropic-adaptive")
+  // survives --model resolution even when models.json has a partial entry lacking reasoning:
+  server.state.requests.length = 0;
+  const thinkingOut = await cliRun(fixture, [
+    "--provider",
+    "magpie",
+    "--model",
+    "claude/claude-opus-test",
+    "--thinking",
+    "high",
+    "--no-tools",
+    "--no-session",
+    "-p",
+    "hi",
+  ]);
+  assert.equal(thinkingOut.stdout.trim(), "MAGPIE_OK 你好", thinkingOut.stderr);
+  const thinkingReq = server.state.requests.find((request) => request.url.startsWith("/v1/messages"));
+  assert.equal(thinkingReq?.body.thinking?.type, "adaptive");
+  assert.deepEqual(thinkingReq?.body.output_config, { effort: "high" });
+
+  // Direct unit check for uncataloged model fallback when baseUrl has a /v1 suffix
+  const uncatalogedGemini = resolveMagpieModel(
+    {
+      id: "antigravity/gemini-4-argon",
+      provider: "magpie",
+      name: "Gemini 4",
+      api: "openai-completions",
+      baseUrl: `${server.baseUrl}/v1`,
+      input: ["text"],
+      reasoning: true,
+      contextWindow: 128000,
+      maxTokens: 8192,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
+    [],
+    `${server.baseUrl}/v1`,
+  );
+  assert.equal(uncatalogedGemini.api, "google-generative-ai");
+  assert.equal(uncatalogedGemini.baseUrl, `${server.baseUrl}/v1beta`);
+});
+

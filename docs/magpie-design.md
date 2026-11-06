@@ -67,13 +67,19 @@
 
 刷新失败保留已有列表，同时由 SDK 或启动警告报告错误（网关没运行的情况见上表）。key、HTTP body、带密钥的 URL 不出现在错误消息里。factory 每次加载创建独立 provider 状态；在线刷新通过 SDK 的 generation-checked publication 防止过期响应覆盖新目录；中止不发布目录。
 
-## 网关的会话续接（D74）
+## 网关的会话续接（D74）与跨渠道兼容（#11）
 
 Magpie 的 `claude/` 路由在请求里带着它自己发过的 `tool_use` ID 时，会接着自己上游的会话走，只转发 tool result，同一轮里其他的用户文字被丢掉。所以 Alt+Enter 插话（steer）发到了网关，模型却看不到。用记录请求的代理实测：Epi 发出的请求里有这条消息；把 ID 换成网关不认识的，同样的请求就能被看到。Responses、Gemini 和 `antigravity/claude-*`（同样走 Messages）没有这个问题。
 
 处理（我定的）：Messages 协议的请求里，如果最后一个带工具调用的助手消息之后有用户文字，provider 通过 pi-ai 公开的 `onPayload` 给这一次请求的工具 ID 加 `epi_` 前缀，网关就会处理整个请求。其他请求原样发出；调用方自己的 `onPayload` 仍然执行，看到的是改过的请求。改名后的 ID 不超过 Anthropic 的 64 字符上限：加前缀会超长时（例如从 Responses 模型切过来的长 ID），改用 ID 的 sha256 前 40 位。只有图片的插话也算插话。
 
 代价（Fable 审查 F2）：插话的那次请求和下一次请求的前缀都和缓存对不上，每次插话多两次完整的 prompt cache 未命中。插话不常用，可以接受。网关修好后可以删掉这段。
+
+此外（#11）：
+
+- **Antigravity 与跨渠道签名/工具 ID/提示词脱敏**：同一会话从其他渠道切到 `antigravity/*`（或 `auto/*`）时，在 `stream`/`streamSimple` 进入 pi-ai 前先清理 `context.messages` 中工具调用与结果 ID（含 `callId|itemId` 两段）末尾的 `__ts(?:r|k\d+)?__[A-Za-z0-9_-]+$` 后缀，并在四种协议的 `onPayload` 中继续兜底剥离 `__ts*__` 后缀、移除不兼容的异源思维块与签名（Messages 将 `thinking` 块转为普通 `text` 块并移除 `redacted_thinking`；Chat Completions 移除 `thought_signature`/`reasoning_opaque`/`reasoning_details`/`extra_content.google.thought_signature`；Responses 移除 `reasoning` 项；Gemini 移除非 `functionCall` part 的 `thoughtSignature` 并过滤残留空 part），同时在系统提示词与会话/工具输出里的 harness 标识词及压缩摘要模板句首字符后插入 `U+200B`（词表首字符拆分定义且与网关 `@magpie-community/middleware-antigravity-cloak` 幂等对齐）。
+- **Gemini 跨模型工具调用签名兜底**：在 `google-generative-ai`（`/v1beta`）协议下，pi-ai 的 `google-shared.js` 遇到跨模型历史 `functionCall` 时不写 `thoughtSignature`，而 Gemini 3/4 要求历史 `functionCall` 必须带有效签名或 `"skip_thought_signature_validator"`。`withGatewayFixes` 对缺失签名的 `functionCall` part（以及 `antigravity/*` / `auto/*` 下的所有 `functionCall` part）自动补齐 `thoughtSignature: "skip_thought_signature_validator"`。
+- **忽略旧 `models.json` 的静态 `providers.magpie` 覆盖**：若用户 `<EPI_HOME>/pi/models.json` 残留了早期手动配置的静态 `providers.magpie`（如顶层 `"baseUrl": "http://127.0.0.1:3425/v1"`、`"api": "openai-completions"` 或缺失 `reasoning`/`thinkingLevelMap` 的静态条目），Pi 的 `applyModelsJson` 会覆盖目录模型。`createMagpieProvider` 在 `filterModels`、`stream` 与 `streamSimple` 中按自身目录和协议规则还原每个模型的完整目录元数据、`api` 与 `baseUrl`，且 `settleRegisteredProviders` 将 `native.filterModels` 同步挂到 `composed.getModels()` 上，保证 `--model`、会话恢复与默认模型选择拿到的也是完整目录模型。
 
 ## 验证
 
