@@ -1,4 +1,6 @@
 import type { ResourceSource } from "./manifest.js";
+export type TaskIsolationMode = "none" | "worktree";
+export type TaskSteerStrategy = "steer" | "enqueue" | "interrupt";
 /** An `agents/*.md` preset: defaults for the nine orthogonal subagent settings
  * (docs/subagents-design.md §7). Every one is optional; an explicit `task` argument overrides it. */
 export interface TaskAgentDefinition {
@@ -10,6 +12,9 @@ export interface TaskAgentDefinition {
     timeoutSeconds: number;
     maxTurns: number | undefined;
     context: "fresh" | "fork" | undefined;
+    isolation?: TaskIsolationMode | undefined;
+    background?: boolean | undefined;
+    updateStrategy?: TaskSteerStrategy | undefined;
     rules: boolean | undefined;
     skills: boolean | string[] | undefined;
     mcp: boolean | string[] | undefined;

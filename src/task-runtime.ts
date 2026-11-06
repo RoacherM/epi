@@ -22,7 +22,13 @@ import { availableParallelism } from "node:os";
 import { EpiConfigError } from "./errors.js";
 import { rewritePiText } from "./pi-output.js";
 import { singleLine } from "./task-result.js";
-import type { TaskAgentDefinition } from "./task-agents.js";
+import type { TaskAgentDefinition, TaskIsolationMode, TaskSteerStrategy } from "./task-agents.js";
+import {
+  cleanupCleanWorktree,
+  createTaskWorktree,
+  inspectTaskWorktree,
+  type TaskWorktreeState,
+} from "./task-worktree.js";
 
 /** Used when neither the call nor an `agents/*.md` preset sets one. */
 export const DEFAULT_TASK_TIMEOUT_SECONDS = 600;
@@ -219,8 +225,13 @@ function addTaskUsage(total?: TaskUsage, run?: TaskUsage): TaskUsage | undefined
 }
 
 /** The per-run snapshot fields; kept out of `snapshot` to stay under its complexity cap. */
-const runFields = (job: InternalTaskJob): Pick<TaskJobSnapshot, "runUsage" | "artifactError"> => ({
-  ...(job.runUsage === undefined ? {} : { runUsage: job.runUsage }), ...(job.artifactError === undefined ? {} : { artifactError: job.artifactError }),
+const runFields = (
+  job: InternalTaskJob,
+): Pick<TaskJobSnapshot, "runUsage" | "artifactError" | "worktreePath" | "diffStat"> => ({
+  ...(job.runUsage === undefined ? {} : { runUsage: job.runUsage }),
+  ...(job.artifactError === undefined ? {} : { artifactError: job.artifactError }),
+  ...(job.worktree?.worktreeRoot === undefined ? {} : { worktreePath: job.worktree.worktreeRoot }),
+  ...(job.diffStat === undefined ? {} : { diffStat: job.diffStat }),
 });
 
 export type TaskJobStatus =
@@ -319,6 +330,8 @@ export interface TaskJobSnapshot {
   stoppedBy?: "maxTurns" | "context";
   /** Which run this snapshot describes; a resumed job's delivery belongs to its latest run. */
   run?: number;
+  worktreePath?: string;
+  diffStat?: string;
   stdoutArtifact?: string;
   stderrArtifact?: string;
   artifactError?: string;
@@ -349,6 +362,8 @@ export interface TaskRuntimeOptions {
    * is passed: the caller snapshots what it needs, so a progress tick costs no deep copy here.
    * Used by the task extension's status bar and by a foreground wait's `onUpdate` refresh. */
   onChange?: (jobId: string) => void;
+  /** Called when a subagent calls `report_progress({ summary, notifyParent: true })`. */
+  onMilestone?: (job: TaskJobSnapshot, summary: string) => void;
 }
 
 /** One `task` call's settings. Everything but `task` and `cwd` is optional; an `agent` preset
@@ -362,6 +377,7 @@ export interface StartTaskRequest {
    * be running the child on a cheaper model than the parent). */
   inheritedModel?: string | undefined;
   context?: "fresh" | "fork" | undefined;
+  isolation?: TaskIsolationMode | undefined;
   /** Parent session entries for `context: "fork"`, already stripped of the unfinished tool call
    * (the `task` call itself) by the caller -- see `forkableBranch`. */
   forkEntries?: readonly unknown[] | undefined;
@@ -401,10 +417,11 @@ interface WorkerProgressEvent {
   type: "progress";
   turns?: number;
   steps?: number;
-  phase?: "tool_start" | "tool_end" | "turn_end" | "compaction";
+  phase?: "tool_start" | "tool_end" | "turn_end" | "compaction" | "report";
   tool?: string;
   target?: string;
   summary?: string;
+  notifyParent?: boolean;
   reason?: "manual" | "threshold" | "overflow";
   tokensBefore?: number;
   tokensAfter?: number;
@@ -420,6 +437,8 @@ interface InternalTaskJob {
   sessionPath: string;
   task: string;
   cwd: string;
+  worktree: TaskWorktreeState | undefined;
+  diffStat: string | undefined;
   status: TaskJobStatus;
   createdAt: number;
   startedAt: number | undefined;
@@ -671,6 +690,11 @@ export class TaskRuntime {
       );
     }
     const id = randomUUID();
+    const isolation = request.isolation ?? agent?.isolation ?? "none";
+    const worktree =
+      isolation === "worktree"
+        ? createTaskWorktree(this.options.epiHome, id, cwd)
+        : undefined;
     const job: InternalTaskJob = {
       id,
       agent,
@@ -678,7 +702,9 @@ export class TaskRuntime {
       timeoutSeconds,
       sessionPath: join(this.options.sessionRoot, `${id}.jsonl`),
       task: request.task,
-      cwd,
+      cwd: worktree?.workerCwd ?? cwd,
+      worktree,
+      diffStat: undefined,
       status: "queued",
       createdAt: Date.now(),
       startedAt: undefined,
@@ -737,7 +763,7 @@ export class TaskRuntime {
    * parent. A queued job has no process to talk to yet, so its task text is replaced before it
    * starts (development.md §12.4); a finished job cannot be steered at all.
    */
-  steer(jobId: string, message: string): TaskJobSnapshot {
+  steer(jobId: string, message: string, strategy?: TaskSteerStrategy): TaskJobSnapshot {
     const job = this.findJob(jobId);
     const shortId = job.id.slice(0, 8);
     if (job.status === "queued") {
@@ -752,7 +778,8 @@ export class TaskRuntime {
     if (stdin === undefined || !stdin.writable) {
       throw new Error(`job ${shortId} is running but its worker is no longer accepting input`);
     }
-    stdin.write(`${JSON.stringify({ type: "steer", message })}\n`);
+    const effectiveStrategy: TaskSteerStrategy = strategy ?? job.agent?.updateStrategy ?? "steer";
+    stdin.write(`${JSON.stringify({ type: "steer", message, strategy: effectiveStrategy })}\n`);
     return this.snapshot(job);
   }
 
@@ -784,7 +811,7 @@ export class TaskRuntime {
       finishedAt: undefined, stoppedBy: undefined, workerResult: undefined, protocolError: undefined,
       terminationCause: undefined, currentActivity: undefined, progressTurns: 0, stepsBase: job.steps,
       runUsage: undefined, stdoutArtifact: undefined, stderrArtifact: undefined,
-      artifactError: undefined, settled: false,
+      artifactError: undefined, diffStat: undefined, settled: false,
     });
     const { promise: completion, resolve: resolveCompletion } = Promise.withResolvers<void>();
     job.completion = completion;
@@ -806,16 +833,42 @@ export class TaskRuntime {
     signal?: AbortSignal,
   ): Promise<TaskJobSnapshot> {
     const job = this.findJob(jobId);
-    if (job.settled) {
-      return this.snapshot(job);
+    if (!job.settled && signal?.aborted !== true) {
+      await this.waitForSignalOrTimeout(job.completion, timeoutMs, signal);
     }
-    if (signal?.aborted === true) {
-      return this.snapshot(job);
-    }
+    return this.snapshot(job);
+  }
 
+  async waitMany(
+    jobIds: readonly string[],
+    mode: "all" | "any" = "all",
+    timeoutMs?: number,
+    signal?: AbortSignal,
+  ): Promise<TaskJobSnapshot[]> {
+    if (jobIds.length === 0) {
+      throw new Error("jobIds must be a non-empty array");
+    }
+    const jobs = jobIds.map((id) => this.findJob(id));
+    const alreadyReady =
+      mode === "any" ? jobs.some((job) => job.settled) : jobs.every((job) => job.settled);
+    if (!alreadyReady && signal?.aborted !== true) {
+      const target =
+        mode === "any"
+          ? Promise.race(jobs.map((job) => job.completion))
+          : Promise.all(jobs.map((job) => job.completion));
+      await this.waitForSignalOrTimeout(target, timeoutMs, signal);
+    }
+    return jobs.map((job) => this.snapshot(job));
+  }
+
+  private async waitForSignalOrTimeout(
+    target: Promise<unknown>,
+    timeoutMs?: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
     let timeout: NodeJS.Timeout | undefined;
     let abortHandler: (() => void) | undefined;
-    const waiters: Promise<unknown>[] = [job.completion];
+    const waiters: Promise<unknown>[] = [target];
     if (timeoutMs !== undefined) {
       if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
         throw new Error("timeoutMs must be a positive integer");
@@ -836,7 +889,6 @@ export class TaskRuntime {
     if (signal !== undefined && abortHandler !== undefined) {
       signal.removeEventListener("abort", abortHandler);
     }
-    return this.snapshot(job);
   }
 
   async cancel(jobId: string): Promise<TaskJobSnapshot> {
@@ -862,12 +914,29 @@ export class TaskRuntime {
     return this.snapshot(job);
   }
 
+  async cancelMany(jobIds?: readonly string[], all?: boolean): Promise<TaskJobSnapshot[]> {
+    if (all === true) {
+      const active = [...this.jobs.values()].filter((job) => !job.settled);
+      return Promise.all(active.map((job) => this.cancel(job.id)));
+    }
+    if (jobIds === undefined || jobIds.length === 0) {
+      throw new Error("provide jobId, jobIds, or all: true");
+    }
+    const jobs = jobIds.map((id) => this.findJob(id));
+    return Promise.all(jobs.map((job) => this.cancel(job.id)));
+  }
+
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
     const active = [...this.jobs.values()]
       .filter((job) => !job.settled)
       .map((job) => this.cancel(job.id));
     await Promise.all(active);
+    for (const job of this.jobs.values()) {
+      if (job.worktree !== undefined) {
+        cleanupCleanWorktree(job.worktree);
+      }
+    }
   }
 
   /** A state change the UI cares about; a throwing listener must not kill a worker. */
@@ -1206,37 +1275,54 @@ export class TaskRuntime {
     if (typeof event.summary === "string") {
       job.lastSummary = singleLine(event.summary, PROGRESS_SUMMARY_LIMIT);
     }
-    const tool = typeof event.tool === "string"
-      ? singleLine(event.tool, PROGRESS_TOOL_LIMIT)
-      : "";
-    const target = typeof event.target === "string"
-      ? singleLine(event.target, PROGRESS_TARGET_LIMIT)
-      : "";
-    const label = [tool, target].filter((part) => part.length > 0).join(" ");
-    if (event.phase === "tool_start") {
-      job.currentActivity = [tool, target].filter((part) => part.length > 0).join(": ");
-      if (label.length > 0) this.pushRecentEvent(job, `▸ ${label}`);
-    } else if (event.phase === "tool_end") {
-      job.currentActivity = undefined;
-      const last = job.recentEvents[job.recentEvents.length - 1];
-      if (label.length === 0) {
-        // Nothing to name; the in-progress activity is still cleared.
-      } else if (last === `▸ ${label}`) {
-        job.recentEvents[job.recentEvents.length - 1] = `✓ ${label}`;
-      } else {
-        this.pushRecentEvent(job, `✓ ${label}`);
+    this.applyProgressPhase(job, event);
+    this.notifyChange(job.id);
+  }
+
+  private applyProgressPhase(job: InternalTaskJob, event: WorkerProgressEvent): void {
+    if (event.phase === "report") {
+      if (job.lastSummary !== undefined && job.lastSummary.length > 0) {
+        this.pushRecentEvent(job, `◆ ${job.lastSummary}`);
+        if (event.notifyParent === true) {
+          this.notifyMilestone(job, job.lastSummary);
+        }
       }
-    } else if (event.phase === "compaction") {
-      // A child compacting itself is progress the parent must be able to see: how often it worked,
-      // and how much window it got back. A failed attempt still gets a recent-event line, but only
-      // a successful one counts towards `· N compactions` (review round 2 item 6).
+      return;
+    }
+    if (event.phase === "compaction") {
       if (event.ok === true) job.compactions += 1;
       const before = formatTokenCount(event.tokensBefore);
       const after = formatTokenCount(event.tokensAfter);
       const compacted = event.ok === true && before.length > 0 && after.length > 0;
       this.pushRecentEvent(job, compacted ? `⟲ compacted ${before}→${after}` : "⟲ compaction failed");
+      return;
     }
-    this.notifyChange(job.id);
+    const tool = typeof event.tool === "string" ? singleLine(event.tool, PROGRESS_TOOL_LIMIT) : "";
+    const target = typeof event.target === "string" ? singleLine(event.target, PROGRESS_TARGET_LIMIT) : "";
+    const label = [tool, target].filter((part) => part.length > 0).join(" ");
+    if (event.phase === "tool_start") {
+      job.currentActivity = [tool, target].filter((part) => part.length > 0).join(": ");
+      if (label.length > 0) this.pushRecentEvent(job, `▸ ${label}`);
+      return;
+    }
+    if (event.phase === "tool_end") {
+      job.currentActivity = undefined;
+      if (label.length === 0) return;
+      const last = job.recentEvents[job.recentEvents.length - 1];
+      if (last === `▸ ${label}`) {
+        job.recentEvents[job.recentEvents.length - 1] = `✓ ${label}`;
+      } else {
+        this.pushRecentEvent(job, `✓ ${label}`);
+      }
+    }
+  }
+
+  private notifyMilestone(job: InternalTaskJob, summary: string): void {
+    try {
+      this.options.onMilestone?.(this.snapshot(job), summary);
+    } catch {
+      // A milestone listener's bug is not the job's failure.
+    }
   }
 
   private pushRecentEvent(job: InternalTaskJob, entry: string): void {
@@ -1274,6 +1360,13 @@ export class TaskRuntime {
 
   private finish(job: InternalTaskJob): void {
     if (!job.settled) {
+      if (job.worktree !== undefined) {
+        const inspection = inspectTaskWorktree(job.worktree);
+        job.diffStat = inspection.diffStat;
+        if (job.result !== undefined && job.diffStat !== undefined) {
+          job.result = `${job.result}\n[worktree: ${job.worktree.worktreeRoot} (${job.diffStat})]`;
+        }
+      }
       job.settled = true;
       job.resolveCompletion();
       this.notifyChange(job.id);
