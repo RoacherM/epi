@@ -6,6 +6,7 @@ import { errorText } from "./errors.js";
 import { viewTextChip } from "./chip-view.js";
 import { createExtensionUIContext } from "./ext-host.js";
 import { readGitBranch } from "../git-branch.js";
+import { pasteUnreadableImagePath } from "./key-handlers.js";
 import { installKeybindings } from "./keybindings.js";
 import { createKeyActions } from "./keys.js";
 import { ChipEditor, unattachedImageLabels } from "./paste-chips.js";
@@ -95,7 +96,11 @@ export async function runTuiApp(options) {
     const editor = new ChipEditor(tui, {
         borderColor: (text) => theme.fg("border", text),
         selectList: getSelectListTheme(),
-    }, { getCwd: () => session.sessionManager.getCwd(), getHighestImageNumber: () => transcript.highestImageNumber });
+    }, {
+        getCwd: () => session.sessionManager.getCwd(),
+        getHighestImageNumber: () => transcript.highestImageNumber,
+        onUnreadableImagePath: (path, rawText, error) => void pasteUnreadableImagePath(commandHost, path, rawText, error),
+    });
     // The prompt frame's bottom-right label (docs/statusbar-design.md): the default formats session
     // token stats; an extension replaces it wholesale via ui.setStatusLine. The slot is app-level,
     // not per-session -- a replacement survives /new, /resume and /reload (unlike widgets/footers,

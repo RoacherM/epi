@@ -53,11 +53,25 @@ export declare function decidePasteChip(text: string): {
 /** Resolves a single-line pasted string to an existing image file's absolute path, or undefined
  * (not a path, or the file doesn't exist) -- mirrors file-arguments.ts's own `~`/relative handling. */
 export declare function resolveImagePath(candidate: string, cwd: string): string | undefined;
-/** Sniffs a file's first bytes for a supported image format; undefined if it isn't one. */
+/** Sniffs a file's first bytes for a supported image format; undefined if it isn't one or cannot be read. */
 export declare function sniffImageFile(path: string): {
     bytes: Buffer;
     mimeType: string;
 } | undefined;
+export type PastedImageFileResult = {
+    kind: "image";
+    bytes: Buffer;
+    mimeType: string;
+} | {
+    kind: "unreadable";
+    path: string;
+    error: NodeJS.ErrnoException;
+} | {
+    kind: "none";
+};
+/** Resolves and sniffs a single-line pasted image path, distinguishing permission errors (e.g. macOS
+ * container sandbox EPERM on WeChat's RWTemp image path when pasting via Cmd+V) from ordinary non-paths. */
+export declare function readPastedImageFile(candidate: string, cwd: string): PastedImageFileResult;
 interface ChipEditorOptions extends EditorOptions {
     /** Read live so an image path pasted after /resume resolves against the new session's cwd. */
     getCwd: () => string;
@@ -66,6 +80,10 @@ interface ChipEditorOptions extends EditorOptions {
      * sent text, so the transcript shows the chip's own number. Read live; without it the editor
      * keeps counting up from its own last chip. */
     getHighestImageNumber?: () => number;
+    /** Called when a single-line paste resolves to a file path that threw EPERM/EACCES on open/stat
+     * (such as a WeChat sandboxed image path on macOS Cmd+V); lets the host fall back to clipboard
+     * image bytes or surface a notice instead of crashing. */
+    onUnreadableImagePath?: (path: string, rawText: string, error: NodeJS.ErrnoException) => void;
 }
 /**
  * Wraps pi-tui's `Editor`, adding atomic paste/image chips on top of its public API. See the
@@ -75,6 +93,7 @@ export declare class ChipEditor {
     private readonly inner;
     private readonly getCwd;
     private readonly getHighestImageNumber;
+    private readonly onUnreadableImagePath;
     private lastImageId;
     /** Content of every text chip pasted into this draft, by content id; see the module comment. */
     private textContents;
@@ -172,6 +191,7 @@ export declare class ChipEditor {
      * we can decide chip-or-not *before* the inner editor ever applies its own (different) fold. */
     private bufferPaste;
     private handlePaste;
+    private tryPasteImagePath;
     /** The last edit's sync() saw a new, contentless `label` at `start`; give it its content. */
     private attachContent;
     /** Replaces a text chip's content with `content` (edited in the viewer), as one undo step. The
