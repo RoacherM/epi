@@ -36,6 +36,14 @@ Epi 是基于 Pi SDK 的可定制终端编程助手。自有 grok 风格 TUI，�
 
 ## 最近更新
 
+**0.2.4：Magpie 跨渠道签名清理、Gemini 签名兜底与旧 `models.json` 兼容**
+
+[→ 特性展示](docs/showcase/0.2.4/README.md)
+
+- **Antigravity 与 `auto/*` 跨渠道清理与脱敏**：同一会话从其他渠道切到 `antigravity/*` 或 `auto/*` 时，自动剥离工具调用与结果 ID（含 `callId|itemId` 双段）末尾的 `__ts*__` 后缀、清理四种协议中不兼容的异源思维块与签名，并对系统提示词与会话/工具输出里的 harness 标识词及压缩摘要模板句做幂等零宽空格（`U+200B`）脱敏。
+- **Gemini 跨模型工具调用签名兜底**：在 `/v1beta`（`google-generative-ai`）协议下，自动为缺失签名的跨模型历史 `functionCall`（以及 `antigravity/*` / `auto/*` 下的所有 `functionCall`）补齐 `"skip_thought_signature_validator"`，消除 Gemini 3/4 工具续轮 400。
+- **忽略旧 `models.json` 静态 `providers.magpie` 覆盖**：即使 `<EPI_HOME>/pi/models.json` 残留早期静态 `providers.magpie`（如顶层 `/v1`、`openai-completions` 或缺失 `reasoning` 的模型项），仍按 Magpie 实时目录还原每个模型的协议、端点与完整推理/缓存元数据。
+
 **0.2.3：子代理不再卡住主会话**
 
 [→ 特性展示](docs/showcase/0.2.3/README.md)

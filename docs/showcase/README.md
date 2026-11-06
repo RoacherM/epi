@@ -4,6 +4,7 @@
 
 | 版本 | 内容 |
 |---|---|
+| [0.2.4](0.2.4/README.md) | Magpie 内置 provider：Antigravity / `auto/*` 跨渠道签名与 `__ts*__` 清理及提示词脱敏、Gemini `skip_thought_signature_validator` 兜底、忽略旧 `models.json` 静态覆盖。无界面变化 |
 | [0.2.3](0.2.3/README.md) | 前台子代理等待有 5 分钟预算：到期不杀作业，转后台并送回执，答案落定自己开一轮；`task_wait` 同一预算。无界面变化 |
 | [0.2.2](0.2.2/README.md) | 长文折叠：单击看全文、按 e 编辑；子代理任务页：单击 task 行、底栏计数或 `/tasks` 实时查看 |
 | [0.2.1](0.2.1/README.md) | 子代理的可靠交付:信箱回执、底栏微提示、实时任务行 |
