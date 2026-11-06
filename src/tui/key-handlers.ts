@@ -98,6 +98,29 @@ export async function pasteClipboard(host: CommandHost): Promise<void> {
   }
 }
 
+/** A single-line bracketed paste resolved to a file path that could not be opened due to EPERM/EACCES
+ * (e.g. Cmd+V in macOS terminal after copying an image in WeChat, which puts both its sandboxed
+ * container file URL and the image bitmap on NSPasteboard): prefer the clipboard image if present,
+ * otherwise insert the pasted text and surface the permission error. */
+export async function pasteUnreadableImagePath(
+  host: CommandHost,
+  path: string,
+  rawText: string,
+  error: unknown,
+): Promise<void> {
+  try {
+    const paste = await readClipboardForPaste(readClipboardImage, async () => null);
+    if (paste.kind === "image") {
+      host.insertImage(paste.bytes, paste.mimeType);
+      return;
+    }
+  } catch {
+    // Fall through to inserting the pasted path and reporting the original read error.
+  }
+  host.insertEditorText(rawText);
+  host.notice(`Could not read ${path}: ${errorText(error)}`, "error");
+}
+
 /** `app.suspend` (Ctrl+Z, not on Windows): suspend to the shell, restoring the fullscreen UI on SIGCONT. */
 export function suspendToShell(host: CommandHost): void {
   if (process.platform === "win32") {

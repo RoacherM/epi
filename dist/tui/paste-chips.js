@@ -179,11 +179,38 @@ export function resolveImagePath(candidate, cwd) {
         return undefined;
     }
 }
-/** Sniffs a file's first bytes for a supported image format; undefined if it isn't one. */
+/** Sniffs a file's first bytes for a supported image format; undefined if it isn't one or cannot be read. */
 export function sniffImageFile(path) {
-    const bytes = readFileSync(path);
-    const mimeType = detectSupportedImageMimeType(bytes.subarray(0, 4100));
-    return mimeType ? { bytes, mimeType } : undefined;
+    try {
+        const bytes = readFileSync(path);
+        const mimeType = detectSupportedImageMimeType(bytes.subarray(0, 4100));
+        return mimeType ? { bytes, mimeType } : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+/** Resolves and sniffs a single-line pasted image path, distinguishing permission errors (e.g. macOS
+ * container sandbox EPERM on WeChat's RWTemp image path when pasting via Cmd+V) from ordinary non-paths. */
+export function readPastedImageFile(candidate, cwd) {
+    if (candidate === "" || candidate.includes("\n"))
+        return { kind: "none" };
+    const expanded = candidate === "~" || candidate.startsWith("~/") ? join(homedir(), candidate.slice(1)) : candidate;
+    const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
+    try {
+        if (!statSync(absolute).isFile())
+            return { kind: "none" };
+        const bytes = readFileSync(absolute);
+        const mimeType = detectSupportedImageMimeType(bytes.subarray(0, 4100));
+        return mimeType ? { kind: "image", bytes, mimeType } : { kind: "none" };
+    }
+    catch (error) {
+        const code = error?.code;
+        if (code === "EPERM" || code === "EACCES") {
+            return { kind: "unreadable", path: absolute, error: error };
+        }
+        return { kind: "none" };
+    }
 }
 function chipMatches(text, regex) {
     return [...text.matchAll(regex)].map((match) => {
@@ -222,6 +249,7 @@ export class ChipEditor {
     inner;
     getCwd;
     getHighestImageNumber;
+    onUnreadableImagePath;
     lastImageId = 0;
     /** Content of every text chip pasted into this draft, by content id; see the module comment. */
     textContents = new Map();
@@ -242,6 +270,7 @@ export class ChipEditor {
     constructor(tui, theme, options) {
         this.getCwd = options.getCwd;
         this.getHighestImageNumber = options.getHighestImageNumber ?? (() => this.lastImageId);
+        this.onUnreadableImagePath = options.onUnreadableImagePath;
         this.inner = new piTui.Editor(tui, theme, options);
         this.inner.onChange = (text) => this.onChange?.(text);
         this.inner.onSubmit = (text) => this.deliverSubmit(text);
@@ -570,14 +599,8 @@ export class ChipEditor {
                 return;
             }
         }
-        if (!filtered.includes("\n")) {
-            const path = resolveImagePath(filtered.trim(), this.getCwd());
-            const sniffed = path && sniffImageFile(path);
-            if (sniffed) {
-                this.insertImageChip(sniffed.bytes, sniffed.mimeType);
-                return;
-            }
-        }
+        if (this.tryPasteImagePath(filtered))
+            return;
         const decision = decidePasteChip(filtered);
         if (decision === undefined) {
             this.insertTextAtCursor(filtered);
@@ -588,6 +611,20 @@ export class ChipEditor {
         this.attachContent(decision.label, filtered, start);
         const after = this.inner.getCursor();
         this.lastPastedChip = { line: after.line, col: after.col };
+    }
+    tryPasteImagePath(filtered) {
+        if (filtered.includes("\n"))
+            return false;
+        const pasted = readPastedImageFile(filtered.trim(), this.getCwd());
+        if (pasted.kind === "image") {
+            this.insertImageChip(pasted.bytes, pasted.mimeType);
+            return true;
+        }
+        if (pasted.kind === "unreadable" && this.onUnreadableImagePath) {
+            this.onUnreadableImagePath(pasted.path, filtered, pasted.error);
+            return true;
+        }
+        return false;
     }
     /** The last edit's sync() saw a new, contentless `label` at `start`; give it its content. */
     attachContent(label, content, start) {

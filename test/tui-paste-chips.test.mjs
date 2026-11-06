@@ -3,7 +3,7 @@
 // See test/tui-pi-args.test.mjs-style harness tests in test/tui-paste-chips-app.test.mjs for the
 // end-to-end behaviors (popup show/hide on real cursor movement, submit, the Ctrl+V/@image seams).
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,7 +11,8 @@ import test from "node:test";
 import { getSelectListTheme } from "@earendil-works/pi-coding-agent";
 
 import { PROMPT_COLUMNS, PromptFrame } from "../dist/tui/chrome.js";
-import { ChipEditor, decidePasteChip, resolveImagePath, sniffImageFile } from "../dist/tui/paste-chips.js";
+import { pasteUnreadableImagePath } from "../dist/tui/key-handlers.js";
+import { ChipEditor, decidePasteChip, readPastedImageFile, resolveImagePath, sniffImageFile } from "../dist/tui/paste-chips.js";
 import { pastePreview } from "../dist/tui/paste-preview.js";
 import { piTui } from "../dist/tui/pi-tui.js";
 import { createEpiTheme } from "../dist/tui/theme.js";
@@ -101,6 +102,80 @@ test("sniffImageFile detects a real PNG by magic bytes, not by extension", (t) =
   writeFileSync(path, ONE_PIXEL_PNG);
   const sniffed = sniffImageFile(path);
   assert.equal(sniffed.mimeType, "image/png");
+});
+
+test("unreadable pasted image path (e.g. WeChat sandbox EPERM/EACCES) never crashes and falls back to clipboard image or notice", async (t) => {
+  const dir = tempDir(t);
+  const lockedPath = join(dir, "wechat-temp.jpg");
+  writeFileSync(lockedPath, ONE_PIXEL_PNG);
+  chmodSync(lockedPath, 0o000);
+  t.after(() => {
+    try {
+      chmodSync(lockedPath, 0o600);
+    } catch {
+      // ignore
+    }
+  });
+
+  // 1. sniffImageFile returns undefined instead of throwing EACCES/EPERM
+  assert.equal(sniffImageFile(lockedPath), undefined);
+
+  // 2. readPastedImageFile classifies permission errors as "unreadable"
+  const classified = readPastedImageFile(lockedPath, dir);
+  assert.equal(classified.kind, "unreadable");
+  assert.equal(classified.path, lockedPath);
+
+  // 3. ChipEditor without onUnreadableImagePath inserts the path text without throwing
+  const plainEditor = makeEditor(dir);
+  paste(plainEditor, lockedPath);
+  assert.equal(plainEditor.getText(), lockedPath);
+
+  // 4. With onUnreadableImagePath + clipboard image (WeChat Cmd+V), inserts [Image #1]
+  const clipImageFile = join(dir, "clip-image.png");
+  writeFileSync(clipImageFile, ONE_PIXEL_PNG);
+  const prevClip = process.env.EPI_TEST_CLIPBOARD_FILE;
+  t.after(() => {
+    if (prevClip === undefined) delete process.env.EPI_TEST_CLIPBOARD_FILE;
+    else process.env.EPI_TEST_CLIPBOARD_FILE = prevClip;
+  });
+  process.env.EPI_TEST_CLIPBOARD_FILE = clipImageFile;
+
+  const notices = [];
+  const hostEditor = new ChipEditor(
+    fakeTui(),
+    { borderColor: (text) => text, selectList: getSelectListTheme() },
+    {
+      getCwd: () => dir,
+      onUnreadableImagePath: (path, rawText, error) => {
+        void pasteUnreadableImagePath(
+          {
+            insertImage: (bytes, mimeType) => hostEditor.insertImageChip(bytes, mimeType),
+            insertEditorText: (text) => hostEditor.insertTextAtCursor(text),
+            notice: (msg, tone) => notices.push({ msg, tone }),
+          },
+          path,
+          rawText,
+          error,
+        );
+      },
+    },
+  );
+  paste(hostEditor, lockedPath);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(hostEditor.getText(), "[Image #1]");
+  assert.equal(notices.length, 0);
+
+  // 5. When clipboard holds no image, inserts the raw path and reports an error notice
+  const clipEmptyFile = join(dir, "clip-empty.txt");
+  writeFileSync(clipEmptyFile, "");
+  process.env.EPI_TEST_CLIPBOARD_FILE = clipEmptyFile;
+  hostEditor.clearDraft();
+  paste(hostEditor, lockedPath);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(hostEditor.getText(), lockedPath);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].tone, "error");
+  assert.match(notices[0].msg, /Could not read/);
 });
 
 // ── paste -> text chip ────────────────────────────────────────────────────

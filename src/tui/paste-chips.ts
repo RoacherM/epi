@@ -228,11 +228,40 @@ export function resolveImagePath(candidate: string, cwd: string): string | undef
   }
 }
 
-/** Sniffs a file's first bytes for a supported image format; undefined if it isn't one. */
+/** Sniffs a file's first bytes for a supported image format; undefined if it isn't one or cannot be read. */
 export function sniffImageFile(path: string): { bytes: Buffer; mimeType: string } | undefined {
-  const bytes = readFileSync(path);
-  const mimeType = detectSupportedImageMimeType(bytes.subarray(0, 4100));
-  return mimeType ? { bytes, mimeType } : undefined;
+  try {
+    const bytes = readFileSync(path);
+    const mimeType = detectSupportedImageMimeType(bytes.subarray(0, 4100));
+    return mimeType ? { bytes, mimeType } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export type PastedImageFileResult =
+  | { kind: "image"; bytes: Buffer; mimeType: string }
+  | { kind: "unreadable"; path: string; error: NodeJS.ErrnoException }
+  | { kind: "none" };
+
+/** Resolves and sniffs a single-line pasted image path, distinguishing permission errors (e.g. macOS
+ * container sandbox EPERM on WeChat's RWTemp image path when pasting via Cmd+V) from ordinary non-paths. */
+export function readPastedImageFile(candidate: string, cwd: string): PastedImageFileResult {
+  if (candidate === "" || candidate.includes("\n")) return { kind: "none" };
+  const expanded = candidate === "~" || candidate.startsWith("~/") ? join(homedir(), candidate.slice(1)) : candidate;
+  const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
+  try {
+    if (!statSync(absolute).isFile()) return { kind: "none" };
+    const bytes = readFileSync(absolute);
+    const mimeType = detectSupportedImageMimeType(bytes.subarray(0, 4100));
+    return mimeType ? { kind: "image", bytes, mimeType } : { kind: "none" };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EPERM" || code === "EACCES") {
+      return { kind: "unreadable", path: absolute, error: error as NodeJS.ErrnoException };
+    }
+    return { kind: "none" };
+  }
 }
 
 function chipMatches(text: string, regex: RegExp): ChipMatch[] {
@@ -271,6 +300,10 @@ interface ChipEditorOptions extends EditorOptions {
    * sent text, so the transcript shows the chip's own number. Read live; without it the editor
    * keeps counting up from its own last chip. */
   getHighestImageNumber?: () => number;
+  /** Called when a single-line paste resolves to a file path that threw EPERM/EACCES on open/stat
+   * (such as a WeChat sandboxed image path on macOS Cmd+V); lets the host fall back to clipboard
+   * image bytes or surface a notice instead of crashing. */
+  onUnreadableImagePath?: (path: string, rawText: string, error: NodeJS.ErrnoException) => void;
 }
 
 /**
@@ -281,6 +314,7 @@ export class ChipEditor {
   private readonly inner: Editor;
   private readonly getCwd: () => string;
   private readonly getHighestImageNumber: () => number;
+  private readonly onUnreadableImagePath: ((path: string, rawText: string, error: NodeJS.ErrnoException) => void) | undefined;
   private lastImageId = 0;
   /** Content of every text chip pasted into this draft, by content id; see the module comment. */
   private textContents = new Map<number, { label: string; content: string }>();
@@ -303,6 +337,7 @@ export class ChipEditor {
   constructor(tui: TUI, theme: EditorTheme, options: ChipEditorOptions) {
     this.getCwd = options.getCwd;
     this.getHighestImageNumber = options.getHighestImageNumber ?? (() => this.lastImageId);
+    this.onUnreadableImagePath = options.onUnreadableImagePath;
     this.inner = new piTui.Editor(tui, theme, options);
     this.inner.onChange = (text) => this.onChange?.(text);
     this.inner.onSubmit = (text) => this.deliverSubmit(text);
@@ -644,14 +679,7 @@ export class ChipEditor {
       }
     }
 
-    if (!filtered.includes("\n")) {
-      const path = resolveImagePath(filtered.trim(), this.getCwd());
-      const sniffed = path && sniffImageFile(path);
-      if (sniffed) {
-        this.insertImageChip(sniffed.bytes, sniffed.mimeType);
-        return;
-      }
-    }
+    if (this.tryPasteImagePath(filtered)) return;
 
     const decision = decidePasteChip(filtered);
     if (decision === undefined) {
@@ -663,6 +691,20 @@ export class ChipEditor {
     this.attachContent(decision.label, filtered, start);
     const after = this.inner.getCursor();
     this.lastPastedChip = { line: after.line, col: after.col };
+  }
+
+  private tryPasteImagePath(filtered: string): boolean {
+    if (filtered.includes("\n")) return false;
+    const pasted = readPastedImageFile(filtered.trim(), this.getCwd());
+    if (pasted.kind === "image") {
+      this.insertImageChip(pasted.bytes, pasted.mimeType);
+      return true;
+    }
+    if (pasted.kind === "unreadable" && this.onUnreadableImagePath) {
+      this.onUnreadableImagePath(pasted.path, filtered, pasted.error);
+      return true;
+    }
+    return false;
   }
 
   /** The last edit's sync() saw a new, contentless `label` at `start`; give it its content. */
