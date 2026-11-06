@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { appendFileSync, readFileSync, unlinkSync } from "node:fs";
+import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -73,6 +73,33 @@ if (capsule.task === "sleep") {
     ok: true,
     output: command?.type === "steer" ? `steered:${command.message}` : `no-steer:${command?.type ?? "eof"}`,
   });
+} else if (capsule.task === "steer-strategy-wait") {
+  emit({ type: "progress", turns: 1, steps: 1, phase: "tool_start", tool: "bash", target: "sleep 1" });
+  const command = await readFirstCommand();
+  emit({ type: "progress", turns: 1, steps: 1, phase: "tool_end", tool: "bash", target: "sleep 1" });
+  emit({
+    type: "result",
+    ok: true,
+    output: command?.type === "steer"
+      ? `steered:${command.strategy ?? "steer"}:${command.message}`
+      : `no-steer:${command?.type ?? "eof"}`,
+  });
+} else if (capsule.task === "milestone-report") {
+  emit({
+    type: "progress",
+    turns: 1,
+    steps: 2,
+    phase: "report",
+    summary: "halfway milestone",
+    notifyParent: true,
+  });
+  await delay(60);
+  emit({ type: "result", ok: true, output: "milestone-finished" });
+} else if (capsule.task === "touch-worktree") {
+  writeFileSync(join(capsule.cwd, "worktree-touched.txt"), "modified\n");
+  emit({ type: "result", ok: true, output: `cwd:${capsule.cwd}` });
+} else if (capsule.task === "echo-cwd") {
+  emit({ type: "result", ok: true, output: `cwd:${capsule.cwd}` });
 } else if (capsule.task === "malformed-then-steer") {
   // A line that is not JSON must not stop this worker from handling the next one.
   const command = await readFirstCommand();

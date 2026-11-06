@@ -15,6 +15,9 @@ interface AgentFrontmatter extends Record<string, unknown> {
   timeoutSeconds?: unknown;
 }
 
+export type TaskIsolationMode = "none" | "worktree";
+export type TaskSteerStrategy = "steer" | "enqueue" | "interrupt";
+
 /** An `agents/*.md` preset: defaults for the nine orthogonal subagent settings
  * (docs/subagents-design.md §7). Every one is optional; an explicit `task` argument overrides it. */
 export interface TaskAgentDefinition {
@@ -26,6 +29,9 @@ export interface TaskAgentDefinition {
   timeoutSeconds: number;
   maxTurns: number | undefined;
   context: "fresh" | "fork" | undefined;
+  isolation?: TaskIsolationMode | undefined;
+  background?: boolean | undefined;
+  updateStrategy?: TaskSteerStrategy | undefined;
   rules: boolean | undefined;
   skills: boolean | string[] | undefined;
   mcp: boolean | string[] | undefined;
@@ -95,6 +101,10 @@ const AGENT_KEYS: Readonly<Record<string, true>> = {
   timeoutSeconds: true,
   maxTurns: true,
   context: true,
+  isolation: true,
+  background: true,
+  async: true,
+  updateStrategy: true,
   rules: true,
   skills: true,
   mcp: true,
@@ -140,6 +150,35 @@ function parseContext(value: unknown, filePath: string): "fresh" | "fork" | unde
     throw new EpiConfigError(`${filePath}: context must be "fresh" or "fork"`);
   }
   return value;
+}
+
+function parseIsolation(value: unknown, filePath: string): TaskIsolationMode | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value !== "none" && value !== "worktree") {
+    throw new EpiConfigError(`${filePath}: isolation must be "none" or "worktree"`);
+  }
+  return value;
+}
+
+function parseUpdateStrategy(value: unknown, filePath: string): TaskSteerStrategy | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value !== "steer" && value !== "enqueue" && value !== "interrupt") {
+    throw new EpiConfigError(`${filePath}: updateStrategy must be "steer", "enqueue", or "interrupt"`);
+  }
+  return value;
+}
+
+function parseBackground(frontmatter: AgentFrontmatter, filePath: string): boolean | undefined {
+  const bg = parseBoolean(frontmatter.background, filePath, "background");
+  const asyncVal = parseBoolean(frontmatter.async, filePath, "async");
+  if (bg !== undefined && asyncVal !== undefined && bg !== asyncVal) {
+    throw new EpiConfigError(`${filePath}: background and async cannot disagree`);
+  }
+  return bg ?? asyncVal;
 }
 
 /** Reads one agent file's frontmatter, wrapping a YAML syntax error and rejecting any key outside
@@ -212,6 +251,9 @@ function loadAgentDirectory(
       timeoutSeconds: timeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS,
       maxTurns: parsePositiveInteger(parsed.frontmatter.maxTurns, filePath, "maxTurns"),
       context: parseContext(parsed.frontmatter.context, filePath),
+      isolation: parseIsolation(parsed.frontmatter.isolation, filePath),
+      background: parseBackground(parsed.frontmatter, filePath),
+      updateStrategy: parseUpdateStrategy(parsed.frontmatter.updateStrategy, filePath),
       rules: parseBoolean(parsed.frontmatter.rules, filePath, "rules"),
       skills: parseSwitchList(parsed.frontmatter.skills, filePath, "skills"),
       mcp: parseSwitchList(parsed.frontmatter.mcp, filePath, "mcp"),

@@ -13,9 +13,11 @@ import {
   SessionManager,
   SettingsManager,
   type AgentSession,
+  type ExtensionAPI,
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { Type } from "typebox";
 
 import {
   readPreloadedSkills,
@@ -25,6 +27,7 @@ import {
 } from "./assembly.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { childProjectTrust } from "./project.js";
+import type { TaskSteerStrategy } from "./task-agents.js";
 import { collectEntryUsage, finalAssistantText, finalAssistantTextFromEntries, singleLine } from "./task-result.js";
 import type { TaskCapsule, TaskUsage } from "./task-runtime.js";
 import { trackRequestOutcome } from "./request-outcome.js";
@@ -68,10 +71,11 @@ interface WorkerProgressEvent {
   type: "progress";
   turns: number;
   steps: number;
-  phase: "tool_start" | "tool_end" | "turn_end" | "compaction";
+  phase: "tool_start" | "tool_end" | "turn_end" | "compaction" | "report";
   tool?: string;
   target?: string;
   summary?: string;
+  notifyParent?: boolean;
   /** Compaction only: why Pi compacted, how large the window was, and whether it worked. */
   reason?: "manual" | "threshold" | "overflow";
   tokensBefore?: number;
@@ -99,13 +103,22 @@ const PROGRESS_SUMMARY_LIMIT = 200;
 
 let activeSession: AgentSession | undefined;
 let interrupted = false;
-// Set when `session.prompt()` returns: the agent loop is over, so a later steer is reported back as
-// dropped instead of lost.
+let interruptRequested = false;
+let hadInterrupt = false;
+let stoppedAtMaxTurns = false;
+let inPromptCall = false;
+let currentTurns = 0;
+let currentSteps = 0;
+// Set when `session.prompt()` and all enqueued follow-ups return: the agent loop is over, so a later
+// steer is reported back as dropped instead of lost.
 let loopFinished = false;
 // Steers that arrived before there was a session to steer (review round 1 P2-1): the parent marks a
 // job `running` at spawn, so one can land while this child is still assembling. Held in arrival
 // order, delivered as soon as the session exists.
-const pendingSteers: string[] = [];
+const pendingSteers: Array<{ text: string; strategy: TaskSteerStrategy }> = [];
+// Follow-up prompts queued by `strategy: "enqueue"`, `strategy: "interrupt"`, or a late `"steer"`
+// that arrived just as a turn settled.
+const pendingFollowUps: string[] = [];
 // Set just before the session is disposed, so the failure path can still report what was spent.
 let spentUsage: TaskUsage | undefined;
 // How many session entries already existed when this run started. Usage is summed from the raw
@@ -182,7 +195,7 @@ async function interrupt(): Promise<void> {
  * was running was orphaned (review round 1 P1-1). A steer is a parent's instruction, not user input
  * at a prompt: it is not expanded, and it must never be able to take the run down.
  */
-function deliverSteer(text: string): void {
+function deliverSteer(text: string, strategy: TaskSteerStrategy = "steer"): void {
   if (loopFinished) {
     // Report the text verbatim so the parent can resume this job with it; a steer that lands after
     // the loop cannot be delivered. Not `singleLine`d: folding its newlines would change it.
@@ -191,13 +204,40 @@ function deliverSteer(text: string): void {
   }
   const session = activeSession;
   if (session === undefined) {
-    pendingSteers.push(text);
+    pendingSteers.push({ text, strategy });
+    return;
+  }
+  if (strategy === "interrupt") {
+    pendingFollowUps.length = 0;
+    pendingFollowUps.push(text);
+    if (inPromptCall) {
+      interruptRequested = true;
+      hadInterrupt = true;
+      stoppedAtMaxTurns = false;
+      void session.abort();
+    }
     return;
   }
   try {
-    session.agent.steer({
-      role: "user", content: [{ type: "text", text }], timestamp: Date.now(),
-    });
+    if (strategy === "enqueue") {
+      if (session.isStreaming && !stoppedAtMaxTurns) {
+        session.agent.followUp({
+          role: "user", content: [{ type: "text", text }], timestamp: Date.now(),
+        });
+      } else {
+        stoppedAtMaxTurns = false;
+        pendingFollowUps.push(text);
+      }
+      return;
+    }
+    if (!stoppedAtMaxTurns) {
+      session.agent.steer({
+        role: "user", content: [{ type: "text", text }], timestamp: Date.now(),
+      });
+    } else {
+      stoppedAtMaxTurns = false;
+      pendingFollowUps.push(text);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`task worker: steer failed: ${message}\n`);
@@ -242,7 +282,11 @@ function handleParentCommand(line: string): void {
     process.stderr.write("task worker: ignoring stdin command without a type\n");
     return;
   }
-  const { type, message } = command as { type: unknown; message?: unknown };
+  const { type, message, strategy } = command as {
+    type: unknown;
+    message?: unknown;
+    strategy?: unknown;
+  };
   if (type === "abort") {
     void interrupt();
     return;
@@ -255,7 +299,9 @@ function handleParentCommand(line: string): void {
     process.stderr.write("task worker: ignoring a steer without a message\n");
     return;
   }
-  deliverSteer(message);
+  const steerStrategy: TaskSteerStrategy =
+    strategy === "enqueue" || strategy === "interrupt" ? strategy : "steer";
+  deliverSteer(message, steerStrategy);
 }
 
 /**
@@ -322,6 +368,55 @@ function childCompactionGuard(manager: SettingsManager): InlineExtension {
   };
 }
 
+function createReportProgressExtension(): InlineExtension {
+  return {
+    name: "epi:child-report-progress",
+    factory(pi: ExtensionAPI) {
+      pi.registerTool({
+        name: "report_progress",
+        label: "Report Progress",
+        description:
+          "Report a concise milestone or status summary to the parent task runner without ending this subagent run.",
+        parameters: Type.Object({
+          summary: Type.String({ description: "Single-line milestone or status summary" }),
+          notifyParent: Type.Optional(
+            Type.Boolean({ description: "Wake or notify the parent session immediately with this milestone" }),
+          ),
+        }),
+        async execute(_toolCallId, params) {
+          currentSteps += 1;
+          const summary = singleLine(params.summary, PROGRESS_SUMMARY_LIMIT);
+          emit({
+            type: "progress",
+            turns: currentTurns,
+            steps: currentSteps,
+            phase: "report",
+            summary,
+            ...(params.notifyParent === true ? { notifyParent: true } : {}),
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: summary.length > 0 ? `Progress reported: ${summary}` : "Progress reported.",
+              },
+            ],
+            details: { summary, notifyParent: params.notifyParent === true },
+          };
+        },
+      });
+    },
+  };
+}
+
+function resolveChildTools(capsule: TaskCapsule): string[] | undefined {
+  if (capsule.tools === undefined) return undefined;
+  const hasModifiers = capsule.tools.some((entry) => entry.startsWith("+") || entry.startsWith("-"));
+  if (hasModifiers || capsule.tools.includes("report_progress")) return capsule.tools;
+  if ((capsule.excludeTools ?? []).includes("report_progress")) return capsule.tools;
+  return [...capsule.tools, "report_progress"];
+}
+
 /** The extra system text a child gets: its own instructions, plus any preloaded SKILL.md bodies
  * (design §3, skills Preload mode), which save the child its first `read` turn. */
 function appendSystemPrompt(
@@ -384,6 +479,7 @@ async function startChildSession(capsule: TaskCapsule): Promise<AgentSession> {
   const extensionFactories: InlineExtension[] = [
     createMagpieInlineExtension(),
     childCompactionGuard(settingsManager),
+    createReportProgressExtension(),
     ...buildInlineExtensions(
       assembly,
       capsule.epiHome,
@@ -446,6 +542,7 @@ async function startChildSession(capsule: TaskCapsule): Promise<AgentSession> {
   // Everything already in the file belongs to a previous run: a fork child is seeded with the
   // parent's entries, and this child must not report the parent's spend as its own.
   usageBaseline = sessionManager.getEntries().length;
+  const childTools = resolveChildTools(capsule);
   const { session } = await createAgentSession({
     cwd: capsule.cwd,
     agentDir: capsule.agentDir,
@@ -457,14 +554,14 @@ async function startChildSession(capsule: TaskCapsule): Promise<AgentSession> {
     ...(resolvedModel?.thinkingLevel === undefined
       ? {}
       : { thinkingLevel: resolvedModel.thinkingLevel }),
-    ...(capsule.tools === undefined ? {} : { tools: capsule.tools }),
+    ...(childTools === undefined ? {} : { tools: childTools }),
     ...(capsule.excludeTools === undefined ? {} : { excludeTools: capsule.excludeTools }),
   });
   activeSession = session;
   // Anything steered while this session was still being assembled goes in now, in arrival order.
   // Queued before the first prompt, it lands in that prompt's own first request.
-  for (const text of pendingSteers.splice(0)) {
-    deliverSteer(text);
+  for (const item of pendingSteers.splice(0)) {
+    deliverSteer(item.text, item.strategy);
   }
   // Extensions only get their ctx (and their session_start) once bound. Without this a child's
   // hooks, MCP and Manifest extensions would load but never run. "print" is the honest mode: this
@@ -481,6 +578,28 @@ async function startChildSession(capsule: TaskCapsule): Promise<AgentSession> {
   // only -- the user's settings file is never written (docs/development.md §12.4).
   applyChildCompactionSettings(settingsManager, session.model);
   return session;
+}
+
+async function runSessionPrompts(session: AgentSession, initialTask: string): Promise<void> {
+  const promptOnce = async (text: string, initial: boolean): Promise<void> => {
+    inPromptCall = true;
+    try {
+      if (initial) {
+        await session.prompt(text);
+      } else {
+        await session.prompt(text, { expandPromptTemplates: false });
+      }
+    } finally {
+      inPromptCall = false;
+    }
+  };
+  await promptOnce(initialTask, true);
+  while (!interrupted && (interruptRequested || pendingFollowUps.length > 0)) {
+    interruptRequested = false;
+    const nextText = pendingFollowUps.shift();
+    if (nextText === undefined) continue;
+    await promptOnce(nextText, false);
+  }
 }
 
 async function main(): Promise<void> {
@@ -505,9 +624,6 @@ async function main(): Promise<void> {
   }
   emit({ type: "started", pid: process.pid });
 
-  let turns = 0;
-  let steps = 0;
-  let stoppedAtMaxTurns = false;
   // A context overflow Pi could not recover from by compacting. The final assistant message is the
   // provider's overflow error, which would otherwise be reported as a bare failure (design §12.4).
   let overflowUnrecoverable = false;
@@ -516,18 +632,20 @@ async function main(): Promise<void> {
   const toolTargets = new Map<string, { tool: string; target: string }>();
   const unsubscribe = session.subscribe((event) => {
     if (event.type === "tool_execution_start") {
-      steps += 1;
+      if (event.toolName === "report_progress") return;
+      currentSteps += 1;
       const tool = singleLine(event.toolName, PROGRESS_TOOL_LIMIT);
       const target = toolTarget(event.args);
       toolTargets.set(event.toolCallId, { tool, target });
-      emit({ type: "progress", turns, steps, phase: "tool_start", tool, target });
+      emit({ type: "progress", turns: currentTurns, steps: currentSteps, phase: "tool_start", tool, target });
       return;
     }
     if (event.type === "tool_execution_end") {
+      if (event.toolName === "report_progress") return;
       const known = toolTargets.get(event.toolCallId);
       toolTargets.delete(event.toolCallId);
       emit({
-        type: "progress", turns, steps, phase: "tool_end",
+        type: "progress", turns: currentTurns, steps: currentSteps, phase: "tool_end",
         tool: known?.tool ?? singleLine(event.toolName, PROGRESS_TOOL_LIMIT),
         target: known?.target ?? "",
       });
@@ -537,7 +655,7 @@ async function main(): Promise<void> {
       const ok = event.result !== undefined && event.errorMessage === undefined;
       if (!ok && event.reason === "overflow" && !event.aborted) overflowUnrecoverable = true;
       emit({
-        type: "progress", turns, steps, phase: "compaction", reason: event.reason, ok,
+        type: "progress", turns: currentTurns, steps: currentSteps, phase: "compaction", reason: event.reason, ok,
         ...(event.result === undefined ? {} : {
           tokensBefore: event.result.tokensBefore,
           ...(event.result.estimatedTokensAfter === undefined
@@ -550,12 +668,12 @@ async function main(): Promise<void> {
     if (event.type !== "turn_end") return;
     // The turn the abort cuts short still emits turn_end; counting it would report more turns than
     // the budget allowed.
-    if (stoppedAtMaxTurns) return;
-    turns += 1;
+    if (stoppedAtMaxTurns || interruptRequested) return;
+    currentTurns += 1;
     // `turn_end.message` is this turn's assistant message; a turn that only called tools has no
     // text, which is a legitimate empty summary.
     emit({
-      type: "progress", turns, steps, phase: "turn_end",
+      type: "progress", turns: currentTurns, steps: currentSteps, phase: "turn_end",
       summary: singleLine(finalAssistantText([event.message]), PROGRESS_SUMMARY_LIMIT),
     });
     // Design §3 (execution budget): stop *between* turns, so the work already done and the session
@@ -564,7 +682,7 @@ async function main(): Promise<void> {
     // report a finished job as unfinished.
     if (
       capsule.maxTurns !== undefined &&
-      turns >= capsule.maxTurns &&
+      currentTurns >= capsule.maxTurns &&
       event.toolResults.length > 0
     ) {
       stoppedAtMaxTurns = true;
@@ -573,7 +691,7 @@ async function main(): Promise<void> {
   });
 
   try {
-    await session.prompt(capsule.task);
+    await runSessionPrompts(session, capsule.task);
     // Everything after this point is reporting; a steer arriving now is undeliverable.
     loopFinished = true;
     if (interrupted) {
@@ -596,11 +714,11 @@ async function main(): Promise<void> {
         ok: true,
         partial: true,
         stopped: "context",
-        turns,
+        turns: currentTurns,
         usage: collectEntryUsage(entries, usageBaseline),
         // Only the work: the parent appends the stop reason after it truncates (review round 2
         // P2-1), so a long answer cannot push it off the end.
-        output: finalAssistantTextFromEntries(entries, usageBaseline),
+        output: finalAssistantTextFromEntries(entries, usageBaseline, hadInterrupt),
       });
     } else {
       if (requestError !== undefined) throw new Error(requestError);
@@ -609,9 +727,9 @@ async function main(): Promise<void> {
         ok: true,
         // Only when it happened: a plain finished run keeps the protocol line it always had.
         ...(stoppedAtMaxTurns ? { partial: true, stopped: "maxTurns" as const } : {}),
-        turns,
+        turns: currentTurns,
         usage: collectEntryUsage(entries, usageBaseline),
-        output: finalAssistantTextFromEntries(entries, usageBaseline, stoppedAtMaxTurns),
+        output: finalAssistantTextFromEntries(entries, usageBaseline, stoppedAtMaxTurns || hadInterrupt),
       });
     }
   } finally {

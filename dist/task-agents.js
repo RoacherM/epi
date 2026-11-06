@@ -48,6 +48,10 @@ const AGENT_KEYS = {
     timeoutSeconds: true,
     maxTurns: true,
     context: true,
+    isolation: true,
+    background: true,
+    async: true,
+    updateStrategy: true,
     rules: true,
     skills: true,
     mcp: true,
@@ -85,6 +89,32 @@ function parseContext(value, filePath) {
         throw new EpiConfigError(`${filePath}: context must be "fresh" or "fork"`);
     }
     return value;
+}
+function parseIsolation(value, filePath) {
+    if (value === undefined) {
+        return undefined;
+    }
+    if (value !== "none" && value !== "worktree") {
+        throw new EpiConfigError(`${filePath}: isolation must be "none" or "worktree"`);
+    }
+    return value;
+}
+function parseUpdateStrategy(value, filePath) {
+    if (value === undefined) {
+        return undefined;
+    }
+    if (value !== "steer" && value !== "enqueue" && value !== "interrupt") {
+        throw new EpiConfigError(`${filePath}: updateStrategy must be "steer", "enqueue", or "interrupt"`);
+    }
+    return value;
+}
+function parseBackground(frontmatter, filePath) {
+    const bg = parseBoolean(frontmatter.background, filePath, "background");
+    const asyncVal = parseBoolean(frontmatter.async, filePath, "async");
+    if (bg !== undefined && asyncVal !== undefined && bg !== asyncVal) {
+        throw new EpiConfigError(`${filePath}: background and async cannot disagree`);
+    }
+    return bg ?? asyncVal;
 }
 /** Reads one agent file's frontmatter, wrapping a YAML syntax error and rejecting any key outside
  * the documented set (hard rule 4: a typo or an unimplemented design field must not be silently
@@ -146,6 +176,9 @@ function loadAgentDirectory(directory, source) {
             timeoutSeconds: timeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS,
             maxTurns: parsePositiveInteger(parsed.frontmatter.maxTurns, filePath, "maxTurns"),
             context: parseContext(parsed.frontmatter.context, filePath),
+            isolation: parseIsolation(parsed.frontmatter.isolation, filePath),
+            background: parseBackground(parsed.frontmatter, filePath),
+            updateStrategy: parseUpdateStrategy(parsed.frontmatter.updateStrategy, filePath),
             rules: parseBoolean(parsed.frontmatter.rules, filePath, "rules"),
             skills: parseSwitchList(parsed.frontmatter.skills, filePath, "skills"),
             mcp: parseSwitchList(parsed.frontmatter.mcp, filePath, "mcp"),

@@ -59,12 +59,36 @@ export interface TaskExtensionOptions {
  * `task({ task })` runs a nameless child with no skills, no MCP and no rules -- each switch is
  * paid for only when asked for. An `agent` preset supplies defaults these override.
  */
+const TaskBatchItemSchema = Type.Object({
+  task: Type.String({ description: "What the subagent must do" }),
+  agent: Type.Optional(Type.String({ description: "Preset from agents/*.md" })),
+  cwd: Type.Optional(Type.String({ description: "Working directory for this subagent" })),
+  background: Type.Optional(Type.Boolean({ description: "Run this subagent in the background" })),
+  isolation: Type.Optional(
+    Type.Union([Type.Literal("none"), Type.Literal("worktree")], {
+      description: "'worktree' runs this subagent in an isolated detached git worktree",
+    }),
+  ),
+  model: Type.Optional(Type.String({ description: "Model override for this subagent" })),
+});
+
 const TaskToolParameters = Type.Object({
-  task: Type.String({ description: "What the subagent must do, in full: it cannot see this conversation. With jobId, the steering or resume instruction instead" }),
-  jobId: Type.Optional(Type.String({ description: "Steer this running job, or resume this stopped one; other settings are ignored except background, which makes a resume return at once" })),
+  task: Type.Optional(Type.String({ description: "What the subagent must do, in full: it cannot see this conversation. With jobId, the steering or resume instruction instead" })),
+  tasks: Type.Optional(Type.Array(TaskBatchItemSchema, { minItems: 1, description: "Launch multiple subagents in parallel in one call" })),
+  jobId: Type.Optional(Type.String({ description: "Steer this running job, or resume this stopped one; other settings are ignored except background and strategy" })),
+  strategy: Type.Optional(
+    Type.Union([Type.Literal("steer"), Type.Literal("enqueue"), Type.Literal("interrupt")], {
+      description: "With jobId on a running job: 'steer' (after current tool), 'enqueue' (after current turn), or 'interrupt' (abort current turn and run immediately)",
+    }),
+  ),
   agent: Type.Optional(Type.String({ description: "Preset from agents/*.md; omit for a plain subagent" })),
   cwd: Type.Optional(Type.String({ description: "Absolute or session-relative working directory" })),
-  background: Type.Optional(Type.Boolean({ default: false, description: "Return only a job id and keep working; collect it later with task_wait. Not needed for parallelism: several task calls in one turn already run at once" })),
+  background: Type.Optional(Type.Boolean({ description: "Return only a job id and keep working; collect it later with task_wait. Not needed for parallelism: several task calls in one turn already run at once" })),
+  isolation: Type.Optional(
+    Type.Union([Type.Literal("none"), Type.Literal("worktree")], {
+      description: "'worktree' runs the subagent in an isolated detached git worktree",
+    }),
+  ),
   context: Type.Optional(Type.Union([Type.Literal("fresh"), Type.Literal("fork")], {
     description: "'fresh' (default) starts empty; 'fork' copies this conversation's history so far",
   })),
@@ -95,6 +119,7 @@ function taskSettings(params: TaskToolParams): Omit<StartTaskRequest, "task" | "
   return {
     ...(params.agent === undefined ? {} : { agent: params.agent }),
     ...(params.context === undefined ? {} : { context: params.context }),
+    ...(params.isolation === undefined ? {} : { isolation: params.isolation }),
     ...(params.model === undefined ? {} : { model: params.model }),
     ...(params.systemPrompt === undefined ? {} : { systemPrompt: params.systemPrompt }),
     ...(params.rules === undefined ? {} : { rules: params.rules }),
@@ -381,12 +406,13 @@ function renderTaskCall(
 ): Component {
   let body: string;
   let extra = "";
+  const taskText = args.task ?? (args.tasks !== undefined ? `${args.tasks.length} tasks` : "");
   if (args.jobId !== undefined) {
-    const verb = args.background === true ? "resume" : "steer";
-    body = `${theme.fg("toolOutput", verb)} ${theme.fg("muted", shortJobId(args.jobId))} ${theme.fg("toolOutput", quoteTask(args.task))}`;
+    const verb = args.background === true ? "resume" : (args.strategy ?? "steer");
+    body = `${theme.fg("toolOutput", verb)} ${theme.fg("muted", shortJobId(args.jobId))} ${theme.fg("toolOutput", quoteTask(taskText))}`;
   } else {
     const agent = args.agent !== undefined ? `${theme.fg("accent", args.agent)} ` : "";
-    body = `${theme.fg("toolOutput", "task")} ${agent}${theme.fg("toolOutput", quoteTask(args.task))}`;
+    body = `${theme.fg("toolOutput", "task")} ${agent}${theme.fg("toolOutput", quoteTask(taskText))}`;
     if (args.background === true) extra = theme.fg("dim", "bg");
   }
   return new CallLine("◆", theme, body, context, extra);
@@ -421,14 +447,34 @@ function quoteTask(text: string): string {
   return `"${cut}"`;
 }
 
-const renderWaitCall = (args: { jobId?: string }, theme: Theme, context: ToolRenderContext): Component =>
-  new CallLine("◆", theme, `${theme.fg("toolOutput", "wait")} ${theme.fg("muted", shortJobId(args.jobId ?? ""))}`, context);
+const renderWaitCall = (
+  args: { jobId?: string; jobIds?: string[]; mode?: "all" | "any" },
+  theme: Theme,
+  context: ToolRenderContext,
+): Component => {
+  const target =
+    args.jobIds !== undefined
+      ? `${args.jobIds.map(shortJobId).join(", ")}${args.mode === "any" ? " (any)" : ""}`
+      : shortJobId(args.jobId ?? "");
+  return new CallLine("◆", theme, `${theme.fg("toolOutput", "wait")} ${theme.fg("muted", target)}`, context);
+};
 
 const renderStatusCall = (args: { jobId?: string }, theme: Theme, context: ToolRenderContext): Component =>
   new CallLine("◆", theme, `${theme.fg("toolOutput", "status")} ${theme.fg("muted", args.jobId === undefined ? "all" : shortJobId(args.jobId))}`, context);
 
-const renderCancelCall = (args: { jobId?: string }, theme: Theme, context: ToolRenderContext): Component =>
-  new CallLine("◆", theme, `${theme.fg("toolOutput", "cancel")} ${theme.fg("muted", shortJobId(args.jobId ?? ""))}`, context);
+const renderCancelCall = (
+  args: { jobId?: string; jobIds?: string[]; all?: boolean },
+  theme: Theme,
+  context: ToolRenderContext,
+): Component => {
+  const target =
+    args.all === true
+      ? "all"
+      : args.jobIds !== undefined
+        ? args.jobIds.map(shortJobId).join(", ")
+        : shortJobId(args.jobId ?? "");
+  return new CallLine("◆", theme, `${theme.fg("toolOutput", "cancel")} ${theme.fg("muted", target)}`, context);
+};
 
 /**
  * Shared by task/task_status/task_wait/task_cancel: all resolve to a TaskJobSnapshot via
@@ -532,6 +578,7 @@ export function createTaskInlineExtension(
     globalAgentsDir: join(options.epiHome, "agents"),
     projectAgentsDir: options.projectAgentsDir,
   });
+  const agentsByName = new Map(agents.map((agent) => [agent.name, agent]));
   const workerPath = options.workerPath ?? fileURLToPath(
     new URL("../worker.js", import.meta.url),
   );
@@ -549,7 +596,7 @@ export function createTaskInlineExtension(
    * Set lives outside `factory` so the runtime's single `onChange` survives session switches; each
    * session's factory adds its own listener (its own `refreshStatus`, its own foreground waits). */
   const changeListeners = new Set<(jobId: string) => void>();
-  // `refreshStatus` is declared later; the onChange fan-out goes through a stable function.
+  // `refreshStatus` and `enqueueMilestone` are declared below; the callbacks go through stable functions.
   const runtime = new TaskRuntime({
     workerPath,
     agentDir: options.agentDir,
@@ -573,6 +620,9 @@ export function createTaskInlineExtension(
       : { killGraceMs: options.killGraceMs }),
     onChange: (jobId) => {
       for (const fn of [...changeListeners]) fn(jobId);
+    },
+    onMilestone: (job, summary) => {
+      enqueueMilestone(job, summary);
     },
   });
   const availableAgents = runtime.availableAgents();
@@ -638,7 +688,8 @@ export function createTaskInlineExtension(
   // ---------------------------------------------------------------------------
 
   interface MailboxEntry {
-    /** The settled job this notice reports. */
+    key: string;
+    /** The settled or running job this notice reports. */
     job: TaskJobSnapshot;
     /** The run the notice is for; a resume's result is new and replaces the old entry. */
     run: number;
@@ -648,6 +699,8 @@ export function createTaskInlineExtension(
     /** False after the user Esc'd the notice's turn (or the foreground wait that produced it):
      * the notice stops starting turns on its own and rides the next user prompt instead. */
     autoWake: boolean;
+    /** Present when this notice is a mid-run `report_progress` milestone rather than a final result. */
+    milestone?: string;
   }
 
   const mailbox = new Map<string, MailboxEntry>();
@@ -671,25 +724,81 @@ export function createTaskInlineExtension(
     if (compacting) return false;
     // Only into an idle session: sent mid-run, the notice queues behind the current turn, and a
     // `task_wait` that collects the same result cannot retract a message Pi already queued -- the
-    // answer would enter the context twice. The next `agent_settled` re-flushes (§11.2 #3).
+    // answer would enter the context twice. Mid-run pickup happens at `turn_end` / `agent_before_settle`.
     if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return false;
     return sessionId() === entry.originSessionId;
   };
 
   /** One line of a push wake: `Job <id8> <status>: <first 400 chars>`, plus the pull hint. */
-  const notifyText = (job: TaskJobSnapshot): string => {
-    const id = shortJobId(job.id);
-    const summary = singleLine(job.result ?? job.error ?? "", NOTIFY_SUMMARY_LIMIT);
-    return `Job ${id} ${job.status}: ${summary}\ntask_status({ jobId: "${id}" }) for details`;
+  const notifyText = (entry: MailboxEntry): string => {
+    const id = shortJobId(entry.job.id);
+    if (entry.milestone !== undefined) {
+      return `Job ${id} progress: ${entry.milestone}\ntask_status({ jobId: "${id}" }) for details`;
+    }
+    const summary = singleLine(entry.job.result ?? entry.job.error ?? "", NOTIFY_SUMMARY_LIMIT);
+    return `Job ${id} ${entry.job.status}: ${summary}\ntask_status({ jobId: "${id}" }) for details`;
   };
 
-  const notifyPayload = (entries: MailboxEntry[]) => ({
-    customType: "epi:task-notify",
-    content: entries.map((entry) => notifyText(entry.job)).join("\n\n"),
-    display: true,
-    // `message_end`'s receipt matches the persisted message back to its entries by these ids.
-    details: { jobIds: entries.map((entry) => entry.job.id) },
-  });
+  const notifyPayload = (entries: MailboxEntry[]) => {
+    const inFlight = runtime.list().filter((job) => job.status === "queued" || job.status === "running");
+    const footer =
+      inFlight.length === 0
+        ? ""
+        : `\n\nIn flight: ${inFlight.map((job) => `${shortJobId(job.id)} (${job.agent ?? "task"} ${job.status})`).join(", ")}`;
+    return {
+      customType: "epi:task-notify",
+      content: `${entries.map(notifyText).join("\n\n")}${footer}`,
+      display: true,
+      // `message_end`'s and boundary receipts match the persisted message back to its entries by these keys.
+      details: {
+        jobIds: entries.map((entry) => entry.key),
+        receipts: entries.map((entry) => `${entry.key}:${entry.run}`),
+      },
+    };
+  };
+
+  const buildMidRunDraft = (entries: MailboxEntry[]) => {
+    const payload = notifyPayload(entries);
+    return {
+      type: "custom_message" as const,
+      customType: payload.customType,
+      content: payload.content,
+      display: payload.display,
+      details: payload.details,
+    };
+  };
+
+  const deleteReceiptEntries = (details: { jobIds?: unknown; receipts?: unknown } | undefined): boolean => {
+    let deleted = false;
+    if (Array.isArray(details?.receipts)) {
+      const receipts = new Set(details.receipts.filter((r): r is string => typeof r === "string"));
+      for (const entry of mailbox.values()) {
+        if (receipts.has(`${entry.key}:${entry.run}`) && mailbox.delete(entry.key)) deleted = true;
+      }
+      return deleted;
+    }
+    if (Array.isArray(details?.jobIds)) {
+      for (const id of details.jobIds) {
+        if (typeof id === "string" && mailbox.delete(id)) deleted = true;
+      }
+    }
+    return deleted;
+  };
+
+  const reconcileDeliveredFromBranch = (): void => {
+    let deleted = false;
+    const branch = current.ctx?.sessionManager.getBranch() ?? [];
+    for (const raw of branch) {
+      const entry = raw as {
+        type?: unknown;
+        customType?: unknown;
+        details?: { jobIds?: unknown; receipts?: unknown };
+      };
+      if (entry.type !== "custom_message" || entry.customType !== "epi:task-notify") continue;
+      if (deleteReceiptEntries(entry.details)) deleted = true;
+    }
+    if (deleted) refreshStatus();
+  };
 
   /** The micro-batch wake (design §2.2/§11.2 #3): everything deliverable in the window goes out as
    * one `epi:task-notify` follow-up. Entries are marked `sent`, not deleted -- only a `message_end`
@@ -718,11 +827,35 @@ export function createTaskInlineExtension(
     notifyTimer.unref();
   };
 
+  const clearJobMilestones = (jobId: string): void => {
+    const prefix = `${jobId}:milestone:`;
+    for (const key of mailbox.keys()) {
+      if (key.startsWith(prefix)) mailbox.delete(key);
+    }
+  };
+
+  function enqueueMilestone(job: TaskJobSnapshot, summary: string): void {
+    const key = `${job.id}:milestone:${job.steps ?? 0}:${Date.now()}`;
+    mailbox.set(key, {
+      key,
+      job,
+      run: job.run ?? 0,
+      originSessionId: sessionId(),
+      state: "unsent",
+      autoWake: true,
+      milestone: summary,
+    });
+    refreshStatus();
+    scheduleFlush();
+  }
+
   /** §11.2 #1: a settled job nobody collected enters the ledger and, when allowed, pushes a wake. */
   const enqueueNotify = (job: TaskJobSnapshot, autoWake: boolean): void => {
     // The pull that already handed this run's result to the model suppresses the wake.
     if (collectedRuns.get(job.id) === (job.run ?? 0)) return;
+    clearJobMilestones(job.id);
     mailbox.set(job.id, {
+      key: job.id,
       job,
       run: job.run ?? 0,
       originSessionId: sessionId(),
@@ -739,6 +872,7 @@ export function createTaskInlineExtension(
   const collectedRuns = new Map<string, number>();
   const collect = (job: TaskJobSnapshot): void => {
     collectedRuns.set(job.id, job.run ?? 0);
+    clearJobMilestones(job.id);
     if (mailbox.delete(job.id)) refreshStatus();
   };
 
@@ -754,7 +888,7 @@ export function createTaskInlineExtension(
     const running = jobs.filter((job) => job.status === "running").length;
     const queued = jobs.filter((job) => job.status === "queued").length;
     const settled = [...mailbox.values()].filter(
-      (entry) => entry.originSessionId === sessionId(),
+      (entry) => entry.milestone === undefined && entry.originSessionId === sessionId(),
     );
     const failed = settled.filter((entry) => entry.job.status !== "completed").length;
     const done = settled.length - failed;
@@ -1066,20 +1200,53 @@ export function createTaskInlineExtension(
       // The receipt (§11.2 #3): a persisted epi:task-notify message is real delivery; delete its
       // entries. The notify message itself re-enters mailbox on settle only if never persisted.
       pi.on("message_end", (event) => {
-        const message = event.message as { role?: unknown; customType?: unknown; details?: unknown };
+        const message = event.message as {
+          role?: unknown;
+          customType?: unknown;
+          details?: { jobIds?: unknown; receipts?: unknown };
+        };
         if (message.role !== "custom" || message.customType !== "epi:task-notify") return;
-        const ids = (message.details as { jobIds?: unknown } | undefined)?.jobIds;
-        if (!Array.isArray(ids)) return;
-        for (const id of ids) {
-          if (typeof id === "string") mailbox.delete(id);
-        }
+        if (deleteReceiptEntries(message.details)) refreshStatus();
+      });
+
+      pi.on("turn_start", () => {
+        reconcileDeliveredFromBranch();
+      });
+
+      // Busy mid-run notification pickup: when tool results finish and the agent loop continues to
+      // another model call, attach any unsent task notifications as a boundary draft so the model
+      // sees background completions and milestones immediately between turns.
+      pi.on("turn_end", (event) => {
+        if (event.toolResults.length === 0) return undefined;
+        const id = sessionId();
+        const ready = [...mailbox.values()].filter(
+          (entry) => entry.state === "unsent" && entry.originSessionId === id,
+        );
+        if (ready.length === 0) return undefined;
+        for (const entry of ready) entry.state = "sent";
         refreshStatus();
+        return { entries: [...event.entries, buildMidRunDraft(ready)] };
+      });
+
+      // If a background task settles right as the parent turn is about to settle, keep the same run
+      // going instead of waiting for a separate followUp turn.
+      pi.on("agent_before_settle", (event) => {
+        if (event.outcome === "aborted" || compacting) return undefined;
+        const id = sessionId();
+        const ready = [...mailbox.values()].filter(
+          (entry) => entry.state === "unsent" && entry.autoWake && entry.originSessionId === id,
+        );
+        if (ready.length === 0) return undefined;
+        for (const entry of ready) entry.state = "sent";
+        refreshStatus();
+        return { entries: [...event.entries, buildMidRunDraft(ready)], continue: true };
       });
 
       // A run ended. Entries still "sent" got no receipt: the follow-up was cleared (Esc, Alt+Up)
       // or the run died first -- back to unsent (§11.2 #3). An aborted run also drops autoWake: the
       // user just said stop, so the notice rides the next prompt instead of starting a turn.
       pi.on("agent_settled", (event) => {
+        reconcileDeliveredFromBranch();
         for (const entry of mailbox.values()) {
           if (entry.state !== "sent") continue;
           entry.state = "unsent";
@@ -1183,6 +1350,92 @@ export function createTaskInlineExtension(
         }
       };
 
+      const isBackgroundFor = (explicit: boolean | undefined, agentName: string | undefined): boolean => {
+        if (explicit !== undefined) return explicit;
+        return agentName !== undefined && agentsByName.get(agentName)?.background === true;
+      };
+
+      const executeTaskBatch = async (
+        params: TaskToolParams,
+        signal: AbortSignal | undefined,
+        ctx: ExtensionContext,
+      ): Promise<AgentToolResult<unknown>> => {
+        const items = params.tasks ?? [];
+        const startedJobs: Array<{ job: TaskJobSnapshot; background: boolean }> = [];
+        for (const item of items) {
+          const agentName = item.agent ?? params.agent;
+          const itemCwd = item.cwd ?? params.cwd;
+          const cwd = itemCwd === undefined ? ctx.cwd : resolve(ctx.cwd, itemCwd);
+          await gateTaskStart(ctx, agentName, item.task, cwd);
+          const started = runtime.start({
+            ...taskSettings(params),
+            ...(agentName === undefined ? {} : { agent: agentName }),
+            ...(item.isolation === undefined ? {} : { isolation: item.isolation }),
+            ...(item.model === undefined ? {} : { model: item.model }),
+            task: item.task,
+            cwd,
+            inheritedModel: inheritedModelReference(ctx.model, ctx.thinkingLevel),
+          });
+          const bg = isBackgroundFor(item.background ?? params.background, agentName);
+          collect(started);
+          void trackCompletion(started.id, bg);
+          startedJobs.push({ job: started, background: bg });
+        }
+        const fgIds = startedJobs.filter((entry) => !entry.background).map((entry) => entry.job.id);
+        if (fgIds.length > 0) {
+          const budget = foregroundBudgetMs(ctx);
+          await runtime.waitMany(fgIds, "all", budget > 0 ? budget : undefined, signal);
+        }
+        const snapshots = startedJobs.map((entry) => {
+          const snap = runtime.status(entry.job.id);
+          if (!entry.background && snap.status !== "queued" && snap.status !== "running") {
+            collect(snap);
+          }
+          return snap;
+        });
+        return {
+          content: [{ type: "text", text: snapshots.map(jobListLine).join("\n") }],
+          details: { jobs: snapshots },
+        };
+      };
+
+      const executeTaskJobId = async (
+        params: TaskToolParams,
+        signal: AbortSignal | undefined,
+        onUpdate: ((partial: AgentToolResult<unknown>) => void) | undefined,
+        ctx: ExtensionContext,
+      ): Promise<AgentToolResult<unknown>> => {
+        const taskText = params.task ?? "";
+        const known = runtime.status(params.jobId!);
+        await gateTaskStart(ctx, known.agent, taskText, known.cwd);
+        if (known.status !== "queued" && known.status !== "running") {
+          return runJob(
+            runtime.resume(params.jobId!, taskText),
+            params.background === true,
+            signal,
+            onUpdate,
+            foregroundBudgetMs(ctx),
+          );
+        }
+        const steered = runtime.steer(params.jobId!, taskText, params.strategy);
+        const strategyLabel = params.strategy ?? "steer";
+        const suffix =
+          strategyLabel === "interrupt"
+            ? "; it interrupts the current turn and starts immediately."
+            : strategyLabel === "enqueue"
+              ? "; it is queued for after the current turn."
+              : "; it applies after the current tool call.";
+        return {
+          content: [{
+            type: "text",
+            text: steered.status === "running"
+              ? `Steered job ${shortJobId(steered.id)}${suffix}\n\n${runningStatusText(steered)}`
+              : `Replaced job ${shortJobId(steered.id)}'s task before it started.`,
+          }],
+          details: steered,
+        };
+      };
+
       pi.registerTool({
         name: "task",
         label: "Task",
@@ -1209,59 +1462,29 @@ export function createTaskInlineExtension(
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
           current.ctx = ctx;
           try {
-            // `task({ jobId, task })` acts on an existing job, not a new one: a running job is
-            // steered, a settled one resumed in place (design §2.3). Every other field is ignored.
-            if (params.jobId !== undefined) {
-              // Whatever the job's state, the text becomes instructions the child will act on (a
-              // queued job's replacement task, a running job's steer, a resume's next message), so
-              // `task_start` must see it, or a hook that blocks by text is bypassed in two steps
-              // (review P2-2, round 2 P2-A).
-              const known = runtime.status(params.jobId);
-              await gateTaskStart(ctx, known.agent, params.task, known.cwd);
-              if (known.status !== "queued" && known.status !== "running") {
-                // A settled job resumes on the same session file, so the child remembers the run
-                // that stopped; `jobId` calls ignore the other settings (the schema says so).
-                return runJob(
-                  runtime.resume(params.jobId, params.task),
-                  params.background === true,
-                  signal,
-                  onUpdate,
-                  foregroundBudgetMs(ctx),
-                );
-              }
-              const steered = runtime.steer(params.jobId, params.task);
-              return {
-                content: [{
-                  type: "text",
-                  text: steered.status === "running"
-                    ? `Steered job ${shortJobId(steered.id)}; it applies after the current tool call.\n\n${runningStatusText(steered)}`
-                    : `Replaced job ${shortJobId(steered.id)}'s task before it started.`,
-                }],
-                details: steered,
-              };
+            if (params.tasks !== undefined && params.tasks.length > 0) {
+              return await executeTaskBatch(params, signal, ctx);
             }
-            // `resolve` handles both cases: an absolute `cwd` wins outright, a relative one joins
-            // the session's, and `runtime.start` realpaths whatever comes out.
+            if (params.task === undefined) {
+              throw new Error("task must be a non-empty string");
+            }
+            if (params.jobId !== undefined) {
+              return await executeTaskJobId(params, signal, onUpdate, ctx);
+            }
             const cwd = params.cwd === undefined ? ctx.cwd : resolve(ctx.cwd, params.cwd);
             await gateTaskStart(ctx, params.agent, params.task, cwd);
             const started = runtime.start({
               ...taskSettings(params),
               task: params.task,
               cwd,
-              // Design §3: the fallback when neither the call nor an `agents/*.md` preset names a
-              // model. Passed separately from `model` so it stays *below* the preset in
-              // precedence: a preset exists precisely to run a child on a different (often
-              // cheaper) model than the parent. Always sent now: a `model: ":low"` call still needs
-              // the parent's model as the base the thinking suffix attaches to (review pack A P1).
               inheritedModel: inheritedModelReference(ctx.model, ctx.thinkingLevel),
               ...(params.context === "fork"
-                // The parent's branch minus this turn's unfinished tool call (design §9.1).
                 ? { forkEntries: forkableBranch(ctx.sessionManager.getBranch()) }
                 : {}),
             });
             return runJob(
               started,
-              params.background === true,
+              isBackgroundFor(params.background, params.agent),
               signal,
               onUpdate,
               foregroundBudgetMs(ctx),
@@ -1310,15 +1533,49 @@ export function createTaskInlineExtension(
         },
       });
 
+      const executeBatchWait = async (
+        jobIds: readonly string[],
+        mode: "all" | "any",
+        timeoutMs: number | undefined,
+        signal: AbortSignal | undefined,
+      ): Promise<AgentToolResult<unknown>> => {
+        const snapshots = await runtime.waitMany(jobIds, mode, timeoutMs, signal);
+        const resolved: TaskJobSnapshot[] = [];
+        for (const snap of snapshots) {
+          if (snap.status !== "queued" && snap.status !== "running") {
+            collect(snap);
+            const completion = completionHooks.get(snap.id);
+            resolved.push(completion !== undefined ? await completion : snap);
+          } else {
+            resolved.push(snap);
+          }
+        }
+        const blocks = resolved.map((job) =>
+          job.status === "queued" || job.status === "running"
+            ? `${jobListLine(job)}\n${runningStatusText(job)}`
+            : `${jobListLine(job)}\n${(jobResult(job).content[0] as { text?: string } | undefined)?.text ?? ""}`,
+        );
+        return {
+          content: [{ type: "text", text: blocks.join("\n\n") }],
+          details: { jobs: resolved },
+        };
+      };
+
       pi.registerTool({
         name: "task_wait",
         label: "Task wait",
-        description: "Wait for an Epi task job to finish or until timeoutSeconds elapses.",
+        description: "Wait for one or more Epi task jobs to finish or until timeoutSeconds elapses.",
         executionMode: "parallel",
         renderCall: opensJobPage(renderWaitCall, jobPage),
         renderResult: renderTaskResult,
         parameters: Type.Object({
-          jobId: Type.String(),
+          jobId: Type.Optional(Type.String({ description: "Single job id to wait for" })),
+          jobIds: Type.Optional(Type.Array(Type.String(), { minItems: 1, description: "Multiple job ids to wait for" })),
+          mode: Type.Optional(
+            Type.Union([Type.Literal("all"), Type.Literal("any")], {
+              description: "With jobIds: wait for 'all' (default) or 'any' job to settle",
+            }),
+          ),
           timeoutSeconds: Type.Optional(Type.Number({
             minimum: 0.001,
             description: `How long to wait before the call returns progress instead; defaults to ${DEFAULT_BACKGROUND_AFTER_SECONDS}s in the TUI and is unlimited elsewhere`,
@@ -1326,36 +1583,32 @@ export function createTaskInlineExtension(
         }),
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
           current.ctx = ctx;
+          const budget = foregroundBudgetMs(ctx);
+          const timeoutMs = params.timeoutSeconds === undefined
+            ? (budget > 0 ? budget : undefined)
+            : Math.ceil(params.timeoutSeconds * 1_000);
+          if (params.jobIds !== undefined && params.jobIds.length > 0) {
+            try {
+              return await executeBatchWait(params.jobIds, params.mode ?? "all", timeoutMs, signal);
+            } catch (error) {
+              return errorResult(error);
+            }
+          }
+          if (params.jobId === undefined) {
+            return errorResult(new Error("provide jobId or jobIds"));
+          }
           const progress = watchJob(params.jobId, onUpdate);
           try {
-            // Same budget as a foreground `task`: an unbounded pull would put back exactly the block
-            // the budget just removed (§13). Outside the TUI nobody can be woken, so a caller that
-            // must have the answer still waits without a limit.
             const began = Date.now();
-            const budget = foregroundBudgetMs(ctx);
-            const timeoutMs = params.timeoutSeconds === undefined
-              ? (budget > 0 ? budget : undefined)
-              : Math.ceil(params.timeoutSeconds * 1_000);
-            // Wait first, then let the completion promise run the usage record and `task_stop`
-            // hook. Pi always passes an abort signal, so branching on `signal === undefined` (as
-            // this once did) skipped both on every real call.
             const waited = await runtime.wait(params.jobId, timeoutMs, signal);
-            // Looked up by the id the wait resolved, not the text the caller typed: the model may
-            // have copied the 8-character form out of `task_status` (review round 1 P1-2).
             const completion = completionHooks.get(waited.id);
             if (waited.status !== "queued" && waited.status !== "running") {
-              // The result is in the model's context now; a push wake would repeat it.
               collect(waited);
             }
             if (waited.status === "queued" || waited.status === "running") {
-              // The elapsed time, not the budget: an aborted wait (Esc) ends early, and a receipt
-              // that claims it waited the whole budget is a lie the model would act on.
               return stillRunningResult(waited, Date.now() - began);
             }
-            if (completion !== undefined) {
-              return jobResult(await completion);
-            }
-            return jobResult(waited);
+            return jobResult(completion !== undefined ? await completion : waited);
           } catch (error) {
             return errorResult(error);
           } finally {
@@ -1367,16 +1620,39 @@ export function createTaskInlineExtension(
       pi.registerTool({
         name: "task_cancel",
         label: "Task cancel",
-        description: "Cancel a queued or running Epi task job and its process tree.",
+        description: "Cancel one or more queued or running Epi task jobs and their process trees.",
         executionMode: "parallel",
         renderCall: opensJobPage(renderCancelCall, jobPage),
         renderResult: renderTaskResult,
-        parameters: Type.Object({ jobId: Type.String() }),
+        parameters: Type.Object({
+          jobId: Type.Optional(Type.String({ description: "Single job id to cancel" })),
+          jobIds: Type.Optional(Type.Array(Type.String(), { minItems: 1, description: "Multiple job ids to cancel" })),
+          all: Type.Optional(Type.Boolean({ description: "Cancel all queued and running jobs" })),
+        }),
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
           current.ctx = ctx;
           try {
+            if (params.jobIds !== undefined || params.all === true) {
+              const cancelledList = await runtime.cancelMany(params.jobIds, params.all);
+              for (const item of cancelledList) {
+                collect(item);
+                const completion = completionHooks.get(item.id);
+                if (completion !== undefined) await completion;
+              }
+              return {
+                content: [{
+                  type: "text",
+                  text: cancelledList.length === 0
+                    ? "No active task jobs to cancel."
+                    : cancelledList.map(jobListLine).join("\n"),
+                }],
+                details: { jobs: cancelledList },
+              };
+            }
+            if (params.jobId === undefined) {
+              throw new Error("provide jobId, jobIds, or all: true");
+            }
             const cancelled = await runtime.cancel(params.jobId);
-            // Cancelling is the model collecting the job; do not also push it.
             collect(cancelled);
             const completion = completionHooks.get(cancelled.id);
             if (completion !== undefined) {

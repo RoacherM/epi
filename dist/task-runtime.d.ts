@@ -1,4 +1,4 @@
-import type { TaskAgentDefinition } from "./task-agents.js";
+import type { TaskAgentDefinition, TaskIsolationMode, TaskSteerStrategy } from "./task-agents.js";
 /** Used when neither the call nor an `agents/*.md` preset sets one. */
 export declare const DEFAULT_TASK_TIMEOUT_SECONDS = 600;
 /**
@@ -137,6 +137,8 @@ export interface TaskJobSnapshot {
     stoppedBy?: "maxTurns" | "context";
     /** Which run this snapshot describes; a resumed job's delivery belongs to its latest run. */
     run?: number;
+    worktreePath?: string;
+    diffStat?: string;
     stdoutArtifact?: string;
     stderrArtifact?: string;
     artifactError?: string;
@@ -166,6 +168,8 @@ export interface TaskRuntimeOptions {
      * is passed: the caller snapshots what it needs, so a progress tick costs no deep copy here.
      * Used by the task extension's status bar and by a foreground wait's `onUpdate` refresh. */
     onChange?: (jobId: string) => void;
+    /** Called when a subagent calls `report_progress({ summary, notifyParent: true })`. */
+    onMilestone?: (job: TaskJobSnapshot, summary: string) => void;
 }
 /** One `task` call's settings. Everything but `task` and `cwd` is optional; an `agent` preset
  * supplies defaults that an explicit field overrides (docs/subagents-design.md §3). */
@@ -178,6 +182,7 @@ export interface StartTaskRequest {
      * be running the child on a cheaper model than the parent). */
     inheritedModel?: string | undefined;
     context?: "fresh" | "fork" | undefined;
+    isolation?: TaskIsolationMode | undefined;
     /** Parent session entries for `context: "fork"`, already stripped of the unfinished tool call
      * (the `task` call itself) by the caller -- see `forkableBranch`. */
     forkEntries?: readonly unknown[] | undefined;
@@ -235,7 +240,7 @@ export declare class TaskRuntime {
      * parent. A queued job has no process to talk to yet, so its task text is replaced before it
      * starts (development.md §12.4); a finished job cannot be steered at all.
      */
-    steer(jobId: string, message: string): TaskJobSnapshot;
+    steer(jobId: string, message: string, strategy?: TaskSteerStrategy): TaskJobSnapshot;
     /**
      * Start another run on a settled job, in place (design §2.3): same id, `createdAt` and session
      * file; a `jobId` call ignores every other field.
@@ -247,7 +252,10 @@ export declare class TaskRuntime {
      * it started. Only `cancel` and process exit stop a job.
      */
     wait(jobId: string, timeoutMs?: number, signal?: AbortSignal): Promise<TaskJobSnapshot>;
+    waitMany(jobIds: readonly string[], mode?: "all" | "any", timeoutMs?: number, signal?: AbortSignal): Promise<TaskJobSnapshot[]>;
+    private waitForSignalOrTimeout;
     cancel(jobId: string): Promise<TaskJobSnapshot>;
+    cancelMany(jobIds?: readonly string[], all?: boolean): Promise<TaskJobSnapshot[]>;
     shutdown(): Promise<void>;
     /** A state change the UI cares about; a throwing listener must not kill a worker. */
     private notifyChange;
@@ -279,6 +287,8 @@ export declare class TaskRuntime {
      * Unknown phases still update the counters they carry: the protocol is additive.
      */
     private applyProgress;
+    private applyProgressPhase;
+    private notifyMilestone;
     private pushRecentEvent;
     private terminateWorker;
     private signalWorker;
