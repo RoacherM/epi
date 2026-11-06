@@ -3,6 +3,7 @@ import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { EpiConfigError } from "./errors.js";
 import { BUILT_IN_EXTENSION_NAMES, resolveManifest, } from "./manifest.js";
 import { resolveProjectManifest, } from "./project.js";
+import { resolveHomeDir } from "./paths.js";
 import { discoverSkillRoots } from "./skill-discovery.js";
 /** How to turn a loaded built-in off (decision H3/K4), for messages about something it broke. A
  * built-in listed in `"extensions"` must leave that list too: the same name in both is an error. */
@@ -198,10 +199,12 @@ export function readPreloadedSkills(assembly) {
 }
 export function resolveAssembly(options) {
     const globalManifest = resolveManifest(options.globalManifestPath, "global");
+    const homeDir = resolveHomeDir(options.environment);
     const project = resolveProjectManifest({
         cwd: options.cwd,
         agentDir: options.agentDir,
         globalManifestPath: options.globalManifestPath,
+        homeDir,
         noProject: options.noProject,
         trustOverride: options.projectTrustOverride,
     });
@@ -229,6 +232,7 @@ export function resolveAssembly(options) {
     return {
         agentDir: options.agentDir,
         globalManifest: globalManifest.path,
+        homeDir,
         globalManifestLoaded: globalManifest.loaded,
         projectDiscovery: project.discovery,
         projectManifest: project.state,

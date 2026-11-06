@@ -20,7 +20,7 @@ import { reportRunFailure } from "./errors.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { isInteractivePiRun } from "./interactive.js";
 import { isListModelsRun, runListModels } from "./list-models.js";
-import { resolveEpiPaths } from "./paths.js";
+import { resolveEpiPaths, resolveHomeDir } from "./paths.js";
 import { rewritePiOutput } from "./pi-output.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { installProviderCostValidation } from "./provider-validation.js";
@@ -38,6 +38,26 @@ import { EPI_VERSION } from "./version.js";
 export { EPI_VERSION };
 
 const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
+
+/** Resolves once everything already written to stdout and stderr has been handed to the OS: a
+ * write callback runs in order, so an empty write's runs after every earlier chunk. Needed before
+ * `process.exit`, which drops whatever an async pipe still holds. `timeoutMs` bounds the wait for
+ * a reader that never drains (the TUI's exit must not hang on a stuck log consumer, D35/D41); the
+ * timer is unref'd so it never keeps the process alive by itself, which means the process can
+ * also end naturally while waiting (a corked stream has no write in flight to hold it): callers
+ * set `process.exitCode` first so that exit still reports their code. */
+async function flushStandardStreams(timeoutMs?: number): Promise<void> {
+  const flushed = Promise.all([process.stdout, process.stderr].map((stream) =>
+    new Promise<void>((resolve) => stream.write("", () => resolve()))));
+  if (timeoutMs === undefined) {
+    await flushed;
+    return;
+  }
+  await Promise.race([flushed, new Promise<void>((resolve) => setTimeout(resolve, timeoutMs).unref())]);
+}
+
+/** How long the TUI's exit waits for stdout/stderr to drain (dogfood D64). */
+const TUI_EXIT_FLUSH_TIMEOUT_MS = 5000;
 
 /** `epi <subcommand>`: routed before any flag parsing, and only when it is the first argument
  * (`epi -p update` is a prompt), never forwarded to Pi's own CLI dispatcher (docs/cli-design.md
@@ -227,7 +247,7 @@ async function maybeAskProjectTrust(
     return;
   }
   const paths = resolveEpiPaths(environment);
-  const candidate = findNearestProjectManifest(cwd, paths.globalManifest);
+  const candidate = findNearestProjectManifest(cwd, paths.globalManifest, resolveHomeDir(environment));
   if (candidate === undefined) {
     return;
   }
@@ -333,7 +353,11 @@ export async function runEpi(argv: readonly string[]): Promise<void> {
     const code = await tui.runTuiV2(prepared, extensionFactories).catch(reportRunFailure);
     // Pi's interactive shutdown() ends in process.exit(0) too. Waiting for the event loop to drain
     // instead left the process running with the TUI gone whenever anything still held it open, such
-    // as a compaction request that ignored its abort (dogfood D35, D41).
+    // as a compaction request that ignored its abort (dogfood D35, D41). But flush first, as the
+    // print path below does: stderr on a pipe is async, and exiting with writes still queued cut
+    // off the last of an extension's shutdown log or error, even the whole final error (D64).
+    process.exitCode = code;
+    await flushStandardStreams(TUI_EXIT_FLUSH_TIMEOUT_MS);
     process.exit(code);
   }
   // `--list-models` is Epi's own (dogfood D48): piMain's drops the extension diagnostics `-p` stops
@@ -370,7 +394,6 @@ export async function runEpi(argv: readonly string[]): Promise<void> {
   // and on failure. rpc and every error exit call process.exit themselves and never get here.
   // Exit once stdout and stderr are flushed, as Pi's package commands do "so bad
   // extensions cannot keep one-shot commands alive".
-  await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
-  await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
+  await flushStandardStreams();
   process.exit(process.exitCode ?? 0);
 }

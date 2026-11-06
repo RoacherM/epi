@@ -120,3 +120,38 @@ test("/trust: no project found from the current directory", (t) => {
   const { output } = JSON.parse(result.stdout);
   assert.match(output, /No \.epi\/epi\.json project found/);
 });
+
+// D68 (G5 review round 2): /trust re-read process.env for its lookup, so with an injected HOME it
+// offered to trust that HOME even though the run's assembly had excluded its ~/.epi/epi.json. It
+// now uses the run's own identity (globalManifestPath + homeDir).
+test("/trust uses the run's home, not this process's HOME (D68)", async (t) => {
+  const { prepareEpiRun } = await import("../dist/host.js");
+  const { projectIdentityFromPrepared } = await import("../dist/tui/start.js");
+  const { runTrust } = await import("../dist/tui/commands.js");
+  const { installEpiTheme } = await import("../dist/tui/theme.js");
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "epi-trust-home-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  const cwd = join(home, "work");
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  mkdirSync(cwd);
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1 }));
+  assert.notEqual(process.env.HOME, home);
+  const prepared = prepareEpiRun([], { HOME: home, EPI_HOME: join(root, "epi-home") }, cwd);
+  installEpiTheme(prepared.agentDir, "dark");
+  const notices = [];
+  let offered = false;
+  await runTrust({
+    cwd,
+    agentDir: prepared.agentDir,
+    projectIdentity: projectIdentityFromPrepared(prepared, cwd),
+    notice: (text) => notices.push(text),
+    takeEditorSlot(component) {
+      offered = true;
+      queueMicrotask(() => component.handleInput("\x1b"));
+      return () => {};
+    },
+  });
+  assert.equal(offered, false, "offered to trust the injected HOME as a project");
+  assert.match(notices.join("\n"), /No \.epi\/epi\.json project found/);
+});

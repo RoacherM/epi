@@ -15,7 +15,7 @@ import {
   type ResolvedManifest,
   type ResourceSource,
 } from "../manifest.js";
-import { resolveEpiPaths } from "../paths.js";
+import { resolveEpiPaths, resolveHomeDir } from "../paths.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "../project.js";
 import { discoverSkillRoots } from "../skill-discovery.js";
 
@@ -561,7 +561,7 @@ export function runListCommand(argv: readonly string[]): number {
   const globalManifest = resolveManifest(global.path, "global");
   const manifests: ResolvedManifest[] = [globalManifest];
   describeManifest("Global", globalManifest, lines);
-  const projectCandidate = findNearestProjectManifest(process.cwd(), global.path);
+  const projectCandidate = findNearestProjectManifest(process.cwd(), global.path, resolveHomeDir(process.env));
   let trustedProjectRoot: string | undefined;
   if (projectCandidate === undefined) {
     lines.push("Project: (none found)");

@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -209,4 +210,83 @@ test("conflicting project trust overrides fail before Pi", () => {
 
   assert.equal(result.status, 2);
   assert.match(result.stderr, /cannot be used together/);
+});
+
+// Dogfood D68: only `<EPI_HOME>/epi.json` was skipped, so with EPI_HOME pointed elsewhere a cwd
+// under home found `<home>/.epi/epi.json` -- the global manifest of a default install -- as a
+// project: `epi list` showed it "not trusted", startup offered to trust the home folder, and
+// --approve loaded it as project config.
+function homeFixture(t) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "epi-home-manifest-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  const cwd = join(home, "work", "repo");
+  mkdirSync(join(home, ".epi"), { recursive: true });
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(join(home, ".epi", "epi.json"), JSON.stringify({ version: 1 }));
+  const otherEpiHome = join(root, "other-epi-home");
+  return { root, home, cwd, otherEpiHome };
+}
+
+function dryRunIn(cwd, env, flags = []) {
+  const result = spawnSync(process.execPath, [cliPath.pathname, ...flags, "--dry-run"], {
+    cwd,
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, EPI_OFFLINE: "1", ...env },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+test("<home>/.epi/epi.json is never a project manifest, even with EPI_HOME elsewhere (D68)", (t) => {
+  const { home, cwd, otherEpiHome } = homeFixture(t);
+  for (const flags of [[], ["--approve"]]) {
+    const output = dryRunIn(cwd, { HOME: home, EPI_HOME: otherEpiHome }, flags);
+    assert.equal(output.projectDiscovery, "none", JSON.stringify({ flags, project: output.projectManifest }));
+    assert.equal(output.projectManifest, null);
+  }
+  // The default install is unchanged: there it is the global manifest.
+  const defaults = dryRunIn(cwd, { HOME: home });
+  assert.equal(defaults.projectDiscovery, "none");
+  assert.equal(defaults.globalManifest, join(home, ".epi", "epi.json"));
+});
+
+test("a symlinked ~/.epi is still recognised as the global manifest, not a project (D68)", (t) => {
+  const { root, home, cwd } = homeFixture(t);
+  // ~/.epi is a link into a dotfiles checkout, and EPI_HOME names the link target.
+  const dotfiles = join(root, "dotfiles-epi");
+  rmSync(join(home, ".epi"), { recursive: true });
+  mkdirSync(dotfiles);
+  writeFileSync(join(dotfiles, "epi.json"), JSON.stringify({ version: 1 }));
+  symlinkSync(dotfiles, join(home, ".epi"));
+  for (const env of [{ HOME: home }, { HOME: home, EPI_HOME: dotfiles }]) {
+    assert.equal(dryRunIn(cwd, env).projectDiscovery, "none", JSON.stringify(env));
+  }
+});
+
+test("a real project under home is still found when EPI_HOME is elsewhere (D68)", (t) => {
+  const { home, cwd, otherEpiHome } = homeFixture(t);
+  const project = join(home, "work");
+  mkdirSync(join(project, ".epi"));
+  writeFileSync(join(project, ".epi", "epi.json"), JSON.stringify({ version: 1 }));
+  const output = dryRunIn(cwd, { HOME: home, EPI_HOME: otherEpiHome });
+  assert.equal(output.projectDiscovery, "ignored");
+  assert.equal(output.projectManifest.path, join(project, ".epi", "epi.json"));
+});
+
+// D68 review: the fix must follow the run's own environment through every lookup, not
+// process.env: prepareEpiRun with an injected HOME (distinct from this process's), its /reload
+// closure, and the session identity built from it all have to skip that HOME's ~/.epi/epi.json.
+test("an injected HOME's ~/.epi/epi.json is not a project for prepare, reload or session identity (D68)", async (t) => {
+  const { prepareEpiRun } = await import("../dist/host.js");
+  const { projectIdentityFromPrepared } = await import("../dist/tui/start.js");
+  const { home, cwd, otherEpiHome } = homeFixture(t);
+  assert.notEqual(process.env.HOME, home);
+  const env = { HOME: home, EPI_HOME: otherEpiHome };
+  for (const flags of [[], ["--approve"]]) {
+    const prepared = prepareEpiRun(flags, env, cwd);
+    assert.equal(prepared.assembly.projectDiscovery, "none", `prepare ${flags}`);
+    assert.equal(prepared.resolveAssembly().projectDiscovery, "none", `reload ${flags}`);
+    assert.equal(projectIdentityFromPrepared(prepared, cwd).root, undefined, `identity ${flags}`);
+  }
 });

@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { EpiArgumentError, EpiConfigError } from "../errors.js";
 import { BUILT_IN_EXTENSION_NAMES, BUILT_IN_EXTENSIONS, resolveManifest, } from "../manifest.js";
-import { resolveEpiPaths } from "../paths.js";
+import { resolveEpiPaths, resolveHomeDir } from "../paths.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "../project.js";
 import { discoverSkillRoots } from "../skill-discovery.js";
 function globalTarget() {
@@ -517,7 +517,7 @@ export function runListCommand(argv) {
     const globalManifest = resolveManifest(global.path, "global");
     const manifests = [globalManifest];
     describeManifest("Global", globalManifest, lines);
-    const projectCandidate = findNearestProjectManifest(process.cwd(), global.path);
+    const projectCandidate = findNearestProjectManifest(process.cwd(), global.path, resolveHomeDir(process.env));
     let trustedProjectRoot;
     if (projectCandidate === undefined) {
         lines.push("Project: (none found)");

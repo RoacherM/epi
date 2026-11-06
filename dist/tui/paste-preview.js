@@ -1,8 +1,37 @@
 import { dropTrailingNewline } from "./paste-chips.js";
 import { piTui } from "./pi-tui.js";
-const { truncateToWidth, visibleWidth } = piTui;
+const { sliceByColumn, truncateToWidth, visibleWidth } = piTui;
 function fit(text, width) {
     return truncateToWidth(text, Math.max(0, width), "…");
+}
+/** Shortens a long path in the middle, `/var/fold…/shot.png`, keeping the whole file name whenever
+ * it fits: that is the part the reader wants, so it gets its columns first and the directory
+ * prefix gets what is left. With no room for a prefix the separator, then the ellipsis, give way
+ * to the name (`…/shot.png`, `…shot.png`, `shot.png`). Only a file name too long to show alone
+ * falls back to keeping both ends of the path. */
+function fitMiddle(text, width) {
+    const total = visibleWidth(text);
+    if (total <= width)
+        return text;
+    if (width <= 1)
+        return fit(text, width);
+    const slash = text.lastIndexOf("/");
+    if (slash !== -1) {
+        const name = text.slice(slash + 1);
+        const nameWidth = visibleWidth(name);
+        const room = width - nameWidth;
+        if (room >= 3)
+            return `${sliceByColumn(text, 0, room - 2, true)}…/${name}`;
+        if (room === 2)
+            return `…/${name}`;
+        if (room === 1)
+            return `…${name}`;
+        if (room === 0)
+            return name;
+    }
+    const tail = Math.floor((width - 1) / 2);
+    const head = width - 1 - tail;
+    return `${sliceByColumn(text, 0, head, true)}…${sliceByColumn(text, total - tail, tail, true)}`;
 }
 // grok's popup reads roughly 40 columns against a much wider input box (item 7, docs/tui-design.md
 // 4.3): never narrower than the content needs, but widened toward (not capped at -- min() below
@@ -62,18 +91,39 @@ function pictureFor(theme, image, cache) {
     }
     return picture;
 }
+/** Without a terminal graphics protocol (Herdr, tmux, Orca, VS Code, ...) there is no picture to
+ * draw, so the box becomes a details card instead of an empty frame, as grok does: the title names
+ * the image and the body lists what the picture would have told you. */
+function imageDetailsCard(theme, image, format, size, width) {
+    const title = `Image #${image.id}`;
+    const rows = [["Format", format]];
+    if (image.width !== undefined && image.height !== undefined)
+        rows.push(["Dimensions", `${image.width} x ${image.height}`]);
+    rows.push(["Size", size]);
+    if (image.path !== undefined)
+        rows.push(["Path", image.path]);
+    const lines = rows.map(([name, value]) => `${theme.fg("muted", `${name}:`)} ${value}`);
+    const boxWidth = popupWidth(width, lines, title);
+    const inner = Math.max(1, boxWidth - 4);
+    const body = rows.map(([name, value]) => {
+        const label = `${name}: `;
+        const room = Math.max(1, inner - visibleWidth(label));
+        const fitted = name === "Path" ? fitMiddle(value, room) : fit(value, room);
+        return fit(`${theme.fg("muted", label)}${fitted}`, inner);
+    });
+    return box(theme, boxWidth, body, fit(title, Math.max(1, boxWidth - 6)), undefined);
+}
 function imagePopup(theme, chip, width, cache) {
     const { image } = chip;
     const format = image.mimeType.split("/")[1]?.toUpperCase() ?? "IMAGE";
-    const dimensions = image.width !== undefined && image.height !== undefined ? `${image.width}x${image.height} · ` : "";
     const size = `${(image.byteLength / 1024).toFixed(1)} KB`;
+    if (!piTui.getCapabilities().images)
+        return imageDetailsCard(theme, image, format, size, width);
+    const dimensions = image.width !== undefined && image.height !== undefined ? `${image.width}x${image.height} · ` : "";
     const title = `Image #${image.id} ─ ${format} · ${dimensions}${size}`;
     const boxWidth = popupWidth(width, [], title);
     const inner = Math.max(1, boxWidth - 4);
     const fittedTitle = fit(title, Math.max(1, boxWidth - 6));
-    const capabilities = piTui.getCapabilities();
-    if (!capabilities.images)
-        return box(theme, boxWidth, [], fittedTitle, undefined);
     return box(theme, boxWidth, pictureFor(theme, image, cache).render(inner), fittedTitle, undefined);
 }
 /** Empty when nothing is being previewed, so it costs zero rows in the layout otherwise. A left

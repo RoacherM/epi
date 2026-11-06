@@ -41,8 +41,9 @@ extensionFactories = buildInlineExtensions(prepared.assembly, prepared.epiHome, 
  * started in that very folder look like "a different project" to project-guard.ts. */
 export function projectIdentityFromPrepared(prepared, cwd) {
     return {
-        root: findNearestProjectManifest(cwd, prepared.assembly.globalManifest)?.root,
+        root: findNearestProjectManifest(cwd, prepared.assembly.globalManifest, prepared.assembly.homeDir)?.root,
         globalManifestPath: prepared.assembly.globalManifest,
+        homeDir: prepared.assembly.homeDir,
     };
 }
 export async function startupOptionsFromPiArgs(piArgs, cwd) {

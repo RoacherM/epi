@@ -324,11 +324,14 @@ test("Ctrl+V with an image on the clipboard (via the test seam) becomes an [Imag
   const clipboardFile = join(clipboardDir, "clipboard.png");
   writeFileSync(clipboardFile, ONE_PIXEL_PNG);
   const { marks } = runApp(t, [fixture("faux-echo-images.mjs")], [
-    ["waitReady"], ["key", "ctrl+v"], ["waitFor", "Image #1 ─ PNG · 1x1 · 0.1 KB"], ["mark", "afterPaste"],
+    ["waitReady"], ["key", "ctrl+v"], ["waitFor", "Dimensions: 1 x 1"], ["mark", "afterPaste"],
     ["key", "enter"], ["waitFor", "ECHO:[Image #1]|IMAGES:image/png"], ["mark", "sent"], ["key", "ctrl+d"],
   ], { env: { EPI_TEST_CLIPBOARD_FILE: clipboardFile } });
   assert.match(marks.afterPaste, /\[Image #1\]/);
-  assert.match(marks.afterPaste, /Image #1 ─ PNG · 1x1 · 0\.1 KB/);
+  // The harness has no graphics terminal, so the preview is the details card (paste-preview.ts).
+  assert.match(marks.afterPaste, /Image #1 /);
+  assert.match(marks.afterPaste, /Format: PNG/);
+  assert.match(marks.afterPaste, /Size: 0\.1 KB/);
   assert.match(marks.sent, /ECHO:\[Image #1\]\|IMAGES:image\/png/);
 });
 

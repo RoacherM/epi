@@ -3,12 +3,36 @@ import { dirname, join, resolve } from "node:path";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { EpiConfigError } from "./errors.js";
 import { resolveManifest, } from "./manifest.js";
-export function findNearestProjectManifest(cwd, globalManifestPath) {
+import { resolveHomeDir } from "./paths.js";
+/** A path as the filesystem resolves it, symlinks included, so two spellings of one file compare
+ * equal (macOS's /tmp is /private/tmp; ~/.epi is often a dotfiles link). A missing file falls back
+ * to its plain absolute path: it can't be the existing manifest the search is looking at anyway. */
+function canonicalPath(path) {
+    try {
+        return realpathSync(path);
+    }
+    catch {
+        return resolve(path);
+    }
+}
+/**
+ * The nearest `<dir>/.epi/epi.json` at or above `cwd` that is not a global manifest. Two are
+ * global, never a project's: the one Epi is running with (`<EPI_HOME>/epi.json`), and the one at
+ * `<home>/.epi/epi.json`, which is the global manifest of every default install. Excluding only
+ * the first meant that with `EPI_HOME` set elsewhere, any cwd under home found `~/.epi/epi.json` as
+ * a project, offered to trust the home folder, and once trusted loaded the user's global config as
+ * a project's, extensions included (dogfood D68). `homeDir` is required, not read from
+ * `process.env` here: every discovery in one run must use the home that run was prepared with.
+ */
+export function findNearestProjectManifest(cwd, globalManifestPath, homeDir) {
     let current = realpathSync(cwd);
-    const excludedManifest = resolve(globalManifestPath);
+    const excluded = new Set([
+        canonicalPath(globalManifestPath),
+        canonicalPath(join(homeDir, ".epi", "epi.json")),
+    ]);
     while (true) {
         const manifestPath = join(current, ".epi", "epi.json");
-        if (resolve(manifestPath) !== excludedManifest && existsSync(manifestPath)) {
+        if (existsSync(manifestPath) && !excluded.has(canonicalPath(manifestPath))) {
             return { root: current, manifestPath };
         }
         const parent = dirname(current);
@@ -46,11 +70,11 @@ export function readProjectTrustDecision(agentDir, cwd) {
  * This is what keeps `task({ cwd: "../B" })` from loading an untrusted project B when the parent
  * was started in a trusted project A (review pack A P1).
  */
-export function childProjectTrust(parentProjectRoot, parentTrusted, cwd, globalManifestPath) {
+export function childProjectTrust(parentProjectRoot, parentTrusted, cwd, globalManifestPath, homeDir = resolveHomeDir(process.env)) {
     if (!parentTrusted || parentProjectRoot === undefined) {
         return false;
     }
-    const candidate = findNearestProjectManifest(cwd, globalManifestPath);
+    const candidate = findNearestProjectManifest(cwd, globalManifestPath, homeDir);
     if (candidate === undefined) {
         return false;
     }
@@ -67,7 +91,7 @@ export function resolveProjectManifest(options) {
     if (options.noProject) {
         return { discovery: "disabled", state: undefined, manifest: undefined };
     }
-    const candidate = findNearestProjectManifest(options.cwd, options.globalManifestPath);
+    const candidate = findNearestProjectManifest(options.cwd, options.globalManifestPath, options.homeDir);
     if (candidate === undefined) {
         return { discovery: "none", state: undefined, manifest: undefined };
     }

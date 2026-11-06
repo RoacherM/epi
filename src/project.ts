@@ -8,6 +8,7 @@ import {
   resolveManifest,
   type ResolvedManifest,
 } from "./manifest.js";
+import { resolveHomeDir } from "./paths.js";
 
 export type ProjectDiscovery = "disabled" | "none" | "ignored" | "loaded";
 
@@ -33,20 +34,47 @@ export interface ResolveProjectOptions {
   cwd: string;
   agentDir: string;
   globalManifestPath: string;
+  /** The run's home directory (paths.ts's resolveHomeDir of the run's environment): its
+   * `.epi/epi.json` is a global manifest, never a project's (D68). */
+  homeDir: string;
   noProject: boolean;
   trustOverride: boolean | undefined;
 }
 
+/** A path as the filesystem resolves it, symlinks included, so two spellings of one file compare
+ * equal (macOS's /tmp is /private/tmp; ~/.epi is often a dotfiles link). A missing file falls back
+ * to its plain absolute path: it can't be the existing manifest the search is looking at anyway. */
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/**
+ * The nearest `<dir>/.epi/epi.json` at or above `cwd` that is not a global manifest. Two are
+ * global, never a project's: the one Epi is running with (`<EPI_HOME>/epi.json`), and the one at
+ * `<home>/.epi/epi.json`, which is the global manifest of every default install. Excluding only
+ * the first meant that with `EPI_HOME` set elsewhere, any cwd under home found `~/.epi/epi.json` as
+ * a project, offered to trust the home folder, and once trusted loaded the user's global config as
+ * a project's, extensions included (dogfood D68). `homeDir` is required, not read from
+ * `process.env` here: every discovery in one run must use the home that run was prepared with.
+ */
 export function findNearestProjectManifest(
   cwd: string,
   globalManifestPath: string,
+  homeDir: string,
 ): ProjectManifestCandidate | undefined {
   let current = realpathSync(cwd);
-  const excludedManifest = resolve(globalManifestPath);
+  const excluded = new Set([
+    canonicalPath(globalManifestPath),
+    canonicalPath(join(homeDir, ".epi", "epi.json")),
+  ]);
 
   while (true) {
     const manifestPath = join(current, ".epi", "epi.json");
-    if (resolve(manifestPath) !== excludedManifest && existsSync(manifestPath)) {
+    if (existsSync(manifestPath) && !excluded.has(canonicalPath(manifestPath))) {
       return { root: current, manifestPath };
     }
 
@@ -94,11 +122,12 @@ export function childProjectTrust(
   parentTrusted: boolean,
   cwd: string,
   globalManifestPath: string,
+  homeDir: string = resolveHomeDir(process.env),
 ): boolean {
   if (!parentTrusted || parentProjectRoot === undefined) {
     return false;
   }
-  const candidate = findNearestProjectManifest(cwd, globalManifestPath);
+  const candidate = findNearestProjectManifest(cwd, globalManifestPath, homeDir);
   if (candidate === undefined) {
     return false;
   }
@@ -121,6 +150,7 @@ export function resolveProjectManifest(
   const candidate = findNearestProjectManifest(
     options.cwd,
     options.globalManifestPath,
+    options.homeDir,
   );
   if (candidate === undefined) {
     return { discovery: "none", state: undefined, manifest: undefined };
