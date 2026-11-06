@@ -1004,6 +1004,55 @@ test("fixGatewayPayload strips cross-channel signatures, __ts*__ tool IDs and cl
   }, { id: "gemini/gemini-4-pro", api: "google-generative-ai" });
   assert.equal(nonAgGemini.contents[0].parts[0].thoughtSignature, "skip_thought_signature_validator");
   assert.equal(nonAgGemini.contents[0].parts[1].thoughtSignature, "YWJj");
+
+  // Antigravity Gemini: preserves own Antigravity thoughtSignature, transfers sig from blank text part,
+  // drops empty turns, merges consecutive same-role turns with functionResponse first, and only sets
+  // skip_thought_signature_validator on the first functionCall in a turn.
+  const ownSig = "EmcKZQFpFH0TBt7g==";
+  const geminiTrajectoryOut = fixGatewayPayload({
+    contents: [
+      {
+        role: "model",
+        parts: [
+          { text: "thinking", thought: true, thoughtSignature: ownSig },
+          { text: "", thoughtSignature: ownSig },
+          { functionCall: { name: "edit", args: { path: "a.rs" } } },
+          { functionCall: { name: "read", args: { path: "b.rs" } }, thoughtSignature: "foreign_sig_2" },
+        ],
+      },
+      {
+        role: "user",
+        parts: [{ text: "switch font" }, { inlineData: { mimeType: "image/png", data: "AA==" } }],
+      },
+      {
+        role: "model",
+        parts: [{ text: "   " }],
+      },
+      {
+        role: "user",
+        parts: [{ functionResponse: { name: "edit", response: { output: "ok" } } }],
+      },
+    ],
+  }, { id: "antigravity/gemini-4-argon", api: "google-generative-ai" });
+
+  assert.deepEqual(geminiTrajectoryOut.contents, [
+    {
+      role: "model",
+      parts: [
+        { text: "thinking", thought: true, thoughtSignature: ownSig },
+        { functionCall: { name: "edit", args: { path: "a.rs" } }, thoughtSignature: ownSig },
+        { functionCall: { name: "read", args: { path: "b.rs" } } },
+      ],
+    },
+    {
+      role: "user",
+      parts: [
+        { functionResponse: { name: "edit", response: { output: "ok" } } },
+        { text: "switch font" },
+        { inlineData: { mimeType: "image/png", data: "AA==" } },
+      ],
+    },
+  ]);
 });
 
 test("streaming to antigravity/gemini-3-flash and auto/* after cross-model tool call cleans transcript IDs, injects skip_thought_signature_validator and cloaks prompts (#11)", async (t) => {

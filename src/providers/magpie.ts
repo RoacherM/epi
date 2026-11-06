@@ -298,6 +298,11 @@ export function renameToolIdsAfterSteer(payload: unknown): unknown {
 
 const SKIP_THOUGHT_VALIDATOR = "skip_thought_signature_validator";
 const TS_SUFFIX_RE = /__ts(?:r|k\d+)?__[A-Za-z0-9_-]+$/;
+const ANTIGRAVITY_GEMINI_SIG_RE = /^E[A-Za-z0-9+/]*(?:AWkUfR|FpFH0T|aRR9)[A-Za-z0-9+/]*={0,2}$/;
+
+function isOwnGeminiSig(sig: unknown): sig is string {
+  return typeof sig === "string" && ANTIGRAVITY_GEMINI_SIG_RE.test(sig);
+}
 
 // Split leading character so gateway antigravity-cloak middleware never mutates source/tool literals in transit.
 const ANTIGRAVITY_SYSTEM_WORDS = [
@@ -511,8 +516,13 @@ function fixGeminiFunctionCallPart(part: Record<string, unknown>, antigravity: b
   }
   const fc = part.functionCall as Record<string, unknown>;
   const nextFc = typeof fc.id === "string" ? { ...fc, id: stripTsSuffix(fc.id) } : fc;
-  const { thought_signature: _, ...rest } = part;
-  return { ...rest, functionCall: nextFc, thoughtSignature: SKIP_THOUGHT_VALIDATOR };
+  const { thought_signature: _a, thoughtSignature, ...rest } = part;
+  const keepSig = isOwnGeminiSig(thoughtSignature) || thoughtSignature === SKIP_THOUGHT_VALIDATOR;
+  return {
+    ...rest,
+    functionCall: nextFc,
+    ...(keepSig ? { thoughtSignature } : {}),
+  };
 }
 
 function fixGeminiFunctionResponse(fr: Record<string, unknown>): Record<string, unknown> {
@@ -524,9 +534,18 @@ function fixGeminiFunctionResponse(fr: Record<string, unknown>): Record<string, 
   };
 }
 
-function isEmptyGeminiPart(part: Record<string, unknown>): boolean {
-  if (part.functionCall || part.functionResponse || part.inlineData) return false;
-  return typeof part.text !== "string" || part.text.length === 0;
+function isBlankGeminiPart(part: Record<string, unknown>): boolean {
+  if (
+    part.functionCall ||
+    part.functionResponse ||
+    part.inlineData ||
+    part.fileData ||
+    part.executableCode ||
+    part.codeExecutionResult
+  ) {
+    return false;
+  }
+  return typeof part.text !== "string" || part.text.trim().length === 0;
 }
 
 function fixGeminiPart(part: Record<string, unknown>, antigravity: boolean): Record<string, unknown> | undefined {
@@ -534,15 +553,17 @@ function fixGeminiPart(part: Record<string, unknown>, antigravity: boolean): Rec
     return fixGeminiFunctionCallPart(part, antigravity);
   }
   if (!antigravity) return part;
-  const { thoughtSignature: _a, thought_signature: _b, ...rest } = part;
+  const { thoughtSignature, thought_signature: _b, ...rest } = part;
+  const keepSig = isOwnGeminiSig(thoughtSignature) || thoughtSignature === SKIP_THOUGHT_VALIDATOR;
   const next = {
     ...rest,
+    ...(keepSig ? { thoughtSignature } : {}),
     ...(typeof rest.text === "string" ? { text: cloakText(rest.text, MESSAGE_CLOAK_RE) } : {}),
     ...(typeof rest.functionResponse === "object" && rest.functionResponse !== null
       ? { functionResponse: fixGeminiFunctionResponse(rest.functionResponse as Record<string, unknown>) }
       : {}),
   };
-  return isEmptyGeminiPart(next) ? undefined : next;
+  return isBlankGeminiPart(next) ? undefined : next;
 }
 
 function cloakGeminiSystemInstruction(inst: unknown): unknown {
@@ -571,22 +592,72 @@ function fixGeminiSystemFields(payload: Record<string, unknown>): Record<string,
   };
 }
 
+function transferBlankSignature(parts: readonly Record<string, unknown>[], fixed: Record<string, unknown>[]): void {
+  let carrySig: string | undefined;
+  for (const part of parts) {
+    if (isBlankGeminiPart(part) && isOwnGeminiSig(part.thoughtSignature)) carrySig = part.thoughtSignature;
+  }
+  if (!carrySig) return;
+  const target = fixed.find((part) => part.functionCall || !part.thought) ?? fixed[0];
+  if (target && !isOwnGeminiSig(target.thoughtSignature)) target.thoughtSignature = carrySig;
+}
+
+function normalizeTurnFunctionCallSigs(parts: Record<string, unknown>[]): void {
+  let seenFnCall = false;
+  for (const part of parts) {
+    if (!part.functionCall) continue;
+    if (!seenFnCall) {
+      seenFnCall = true;
+      if (!isOwnGeminiSig(part.thoughtSignature) && part.thoughtSignature !== SKIP_THOUGHT_VALIDATOR) {
+        part.thoughtSignature = SKIP_THOUGHT_VALIDATOR;
+      }
+    } else if (part.thoughtSignature !== undefined && !isOwnGeminiSig(part.thoughtSignature)) {
+      delete part.thoughtSignature;
+    }
+  }
+}
+
 function fixGeminiParts(parts: readonly Record<string, unknown>[], antigravity: boolean): Record<string, unknown>[] {
-  return parts.flatMap((part) => {
-    const fixed = fixGeminiPart(part, antigravity);
-    return fixed ? [fixed] : [];
+  const fixed = parts.flatMap((part) => {
+    const next = fixGeminiPart(part, antigravity);
+    return next ? [next] : [];
   });
+  if (antigravity) transferBlankSignature(parts, fixed);
+  return fixed;
+}
+
+function orderUserParts(parts: Record<string, unknown>[]): Record<string, unknown>[] {
+  if (!parts.some((p) => p.functionResponse) || !parts.some((p) => !p.functionResponse)) return parts;
+  return [...parts.filter((p) => p.functionResponse), ...parts.filter((p) => !p.functionResponse)];
+}
+
+function normalizeAntigravityContents(contents: Record<string, unknown>[]): Record<string, unknown>[] {
+  const merged: Record<string, unknown>[] = [];
+  for (const entry of contents) {
+    const parts = Array.isArray(entry?.parts) ? (entry.parts as Record<string, unknown>[]) : [];
+    if (parts.length === 0) continue;
+    const prev = merged.at(-1);
+    if (prev && prev.role === entry.role) {
+      const combined = [...(prev.parts as Record<string, unknown>[]), ...parts];
+      prev.parts = prev.role === "user" ? orderUserParts(combined) : combined;
+    } else {
+      merged.push({ ...entry, parts: [...parts] });
+    }
+  }
+  for (const entry of merged) normalizeTurnFunctionCallSigs(entry.parts as Record<string, unknown>[]);
+  return merged;
 }
 
 function fixGeminiPayload(payload: Record<string, unknown>, antigravity: boolean): Record<string, unknown> {
   const base = antigravity ? fixGeminiSystemFields(payload) : payload;
   if (!Array.isArray(base.contents)) return base;
+  const mapped = (base.contents as Record<string, unknown>[]).map((content) =>
+    Array.isArray(content?.parts)
+      ? { ...content, parts: fixGeminiParts(content.parts as Record<string, unknown>[], antigravity) }
+      : content);
   return {
     ...base,
-    contents: (base.contents as Record<string, unknown>[]).map((content) =>
-      Array.isArray(content?.parts)
-        ? { ...content, parts: fixGeminiParts(content.parts as Record<string, unknown>[], antigravity) }
-        : content),
+    contents: antigravity ? normalizeAntigravityContents(mapped) : mapped,
   };
 }
 
