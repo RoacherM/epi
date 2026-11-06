@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>后台子代理与 Monitor —— Epi TUI 原型</title>
+<style>
+:root{color-scheme:dark;--bg:#1c1c1c;--text:#e1e1e1;--out:#c8c8c8;--muted:#6c6c6c;--dim:#585858;
+--rail:#323237;--amber:#e0af68;--accent:#bb9af7;--ok:#9ece6a;--err:#f7768e}
+*{box-sizing:border-box}
+body{margin:0;padding:40px 24px 80px;background:#0e0f11;color:#d4d4d8;
+font:15px/1.7 -apple-system,"SF Pro Text","PingFang SC",sans-serif}
+main{max-width:1080px;margin:0 auto}
+h1{font-size:25px;font-weight:650;color:#ececee;margin:0 0 4px}
+h2{font-size:18px;font-weight:650;color:#ececee;margin:36px 0 6px}
+p,li{color:#a5a5ad;max-width:78ch}
+p{margin:6px 0}
+.sub{color:#71717a;font-size:14px}
+code{font:12.5px ui-monospace,"SF Mono",Menlo,monospace;color:#9db8c4}
+table{border-collapse:collapse;margin:10px 0;font-size:14px;width:100%}
+td,th{border:1px solid #26282d;padding:7px 12px;text-align:left;vertical-align:top;color:#a5a5ad}
+th{color:#c9c9cf;font-weight:600;background:#16171a;white-space:nowrap}
+.term{position:relative;margin:12px 0 6px;border:1px solid #26282d;border-radius:10px;overflow:hidden;background:var(--bg);
+box-shadow:0 12px 32px rgba(0,0,0,.4)}
+.resizable{resize:horizontal;min-width:360px;max-width:100%;width:100%}
+.cap{padding:7px 13px;font-size:12.5px;color:#8e8e96;background:#1c1d20;border-bottom:1px solid #26282d;
+display:flex;justify-content:space-between;gap:12px;align-items:center}
+.cap b{color:#c9c9cf;font-weight:600}
+.cap button{font:12px ui-monospace,Menlo,monospace;background:#26282d;color:#c9c9cf;border:1px solid #34363c;
+border-radius:5px;padding:2px 9px;cursor:pointer}
+.cap button.on{background:#3a2f55;border-color:#bb9af7}
+pre{margin:0;padding:12px 14px 14px;overflow:hidden;color:var(--text);
+font:12.5px/1.55 ui-monospace,"SF Mono",Menlo,"PingFang SC",monospace;white-space:pre}
+.legend{font-size:13px;color:#8e8e96;margin:4px 2px 20px;max-width:82ch}
+.t{color:var(--text)}.o{color:var(--out)}.m{color:var(--muted)}.d{color:var(--dim)}
+.a{color:var(--amber)}.r{color:var(--rail)}.c{color:var(--accent)}.g{color:var(--ok)}.e{color:var(--err)}
+.click{cursor:pointer}.click:hover{background:#27282e}
+</style></head><body><main>
+
+<h1>后台子代理与 Monitor</h1>
+<p class="sub">原型 v2（2026-11-06）。界面上不多造新概念：还是原来的工具行、原来的底栏和原来的 <code>/tasks</code> 弹窗，只是让子代理和后台监控能边跑边汇报、随时插话。</p>
+
+<h2>界面上只有 3 处变化</h2>
+<table>
+<tr><th>哪里</th><th>怎么表现</th></tr>
+<tr><td><b>1. <code>monitor</code> 工具行</b></td><td>和 <code>task</code> 工具行长一个样：<code>├─◆ monitor "盯 dev server 报错"</code>。在后台盯着命令输出，抓到匹配的报错行或进程挂了才通知主对话；平时安静待着。</td></tr>
+<tr><td><b>2. 后台消息随时插进来</b></td><td>以前主对话在干活时，后台跑完的任务得等整轮结束才看得到。现在主对话每跑完一步工具，刚出炉的后台结果、子代理进度、或 <code>monitor</code> 抓到的报错就会作为一行 <code>◆ notify</code> 接在下面，主对话顺手就能处理。</td></tr>
+<tr><td><b>3. <code>/tasks</code> 和底栏把两者放一起</b></td><td>右下角底栏计数把后台子代理和 monitor 算在一起（如 <code>◐ 2 tasks</code>）。点一下底栏或输 <code>/tasks</code>，列表里同时列出子代理和 monitor，点进去看各自的对话或日志。</td></tr>
+</table>
+
+<h2>一、一轮完整演示（可点任务行或 <code>/tasks</code> 按钮）</h2>
+<div class="term resizable" id="liveBox">
+  <div class="cap">
+    <b>主对话边聊边收后台消息</b>
+    <span>
+      <span id="cols"></span>
+      <button id="b60">60 列</button>
+      <button id="b88" class="on">88 列</button>
+      <button id="b120">120 列</button>
+      <button id="btasks">/tasks</button>
+      <button id="bpause">暂停</button>
+    </span>
+  </div>
+  <pre id="live"></pre>
+</div>
+<p class="legend">演示流程：① 后台派出子代理改代码（独立 worktree），同时起一个 <code>monitor</code> 盯服务日志 → ② 主对话继续和你聊别的、读文件 → ③ 读文件刚结束，<code>monitor</code> 抓到报错、子代理跑完测试，两条消息直接插进当前回合 → ④ 点顶栏 <b>/tasks</b>（或直接点终端里的 <code>task</code> / <code>monitor</code> 行）看详情。</p>
+
+<h2>二、四个关键画面（固定 88 列）</h2>
+<div class="term"><div class="cap"><b>A · 后台派出 task 和 monitor，主对话立刻空出来</b><span>不阻塞当前对话</span></div><pre id="snapA"></pre></div>
+<div class="term"><div class="cap"><b>B · 主对话正在跑别的工具，后台结果顺手插进来</b><span>不用等整轮结束</span></div><pre id="snapB"></pre></div>
+<div class="term"><div class="cap"><b>C · 给正在跑的子代理补一句话（默认顺延 vs 立即打断重来）</b><span>按情况选</span></div><pre id="snapC"></pre></div>
+<div class="term"><div class="cap"><b>D · 点开 /tasks，子代理和 monitor 在一张表里</b><span>单击任意一行看详情</span></div><pre id="snapD"></pre></div>
+
+<script>
+"use strict";
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const wlen = (s) => [...s].reduce((n, ch) => n + (ch.charCodeAt(0) > 255 ? 2 : 1), 0);
+function padRight(s, w) {
+  const diff = Math.max(0, w - wlen(s));
+  return s + " ".repeat(diff);
+}
+function cut(s, w) {
+  let out = "", cur = 0;
+  for (const ch of s) {
+    const cw = ch.charCodeAt(0) > 255 ? 2 : 1;
+    if (cur + cw > w - 1) return out + "…";
+    out += ch;
+    cur += cw;
+  }
+  return out;
+}
+
+function line(spine, bodyHtml, rightText, cols, clickAttr = "") {
+  const plainBody = bodyHtml.replace(/<[^>]+>/g, "");
+  const leftW = wlen(spine) + wlen(plainBody);
+  const rightW = rightText ? wlen(rightText) : 0;
+  const gap = Math.max(1, cols - leftW - rightW);
+  const cls = clickAttr ? ` class="click" ${clickAttr}` : "";
+  return `<span${cls}><span class="r">${esc(spine)}</span>${bodyHtml}${" ".repeat(gap)}<span class="d">${esc(rightText || "")}</span></span>`;
+}
+
+function renderScene(step, cols, overlayMode) {
+  if (overlayMode) {
+    return renderTasksPopup(cols, overlayMode);
+  }
+  const rows = [];
+  rows.push(`<span class="c">❯</span> <span class="t">${esc(cut("后台把 auth 改成 JWT，再盯一下 dev server 日志；我们继续看网关限流。", cols - 3))}</span>`);
+  rows.push(`<span class="r">│</span>`);
+
+  // 1. Background task + monitor started
+  const taskDone = step >= 4;
+  const taskMark = taskDone ? `<span class="g">✓</span>` : `<span class="c">+</span>`;
+  const taskTail = taskDone ? "done · worktree +84 -21" : "bg · worktree · turn 2";
+  rows.push(
+    line(
+      "├─",
+      `${taskMark} <span class="o">${esc(cut('task coder "把 auth 改成 JWT 并跑单测"', Math.max(20, cols - 32)))}</span> <span class="d">· ${taskTail}</span>`,
+      taskDone ? "███·" : "██··",
+      cols,
+      'data-open="task"'
+    )
+  );
+
+  const monHit = step >= 3;
+  rows.push(
+    line(
+      "├─",
+      `<span class="c">+</span> <span class="o">${esc(cut('monitor "dev server 报错" (npm run dev)', Math.max(20, cols - 28)))}</span> <span class="d">· ${monHit ? "1 match" : "watching"}</span>`,
+      "█···",
+      cols,
+      'data-open="mon"'
+    )
+  );
+
+  rows.push(`<span class="r">│</span> <span class="t">${esc(cut("好，子代理和日志监控都在后台跑着了。我现在直接帮你看网关限流：", cols - 3))}</span>`);
+
+  if (step >= 2) {
+    rows.push(
+      line(
+        "├─",
+        `<span class="a">◆</span> <span class="o">${esc(cut("read src/gateway/rate-limit.ts", Math.max(16, cols - 18)))}</span> <span class="d">· 142 lines</span>`,
+        "█···",
+        cols
+      )
+    );
+  }
+
+  if (step >= 3) {
+    rows.push(
+      line(
+        "├─",
+        `<span class="e">!</span> <span class="o">${esc(cut("notify monitor m-9f8e7d: ERROR ECONNREFUSED 127.0.0.1:5432", Math.max(20, cols - 12)))}</span>`,
+        "now",
+        cols,
+        'data-open="mon"'
+      )
+    );
+  }
+
+  if (step >= 4) {
+    rows.push(
+      line(
+        "├─",
+        `<span class="g">✓</span> <span class="o">${esc(cut("notify task a1b2c3d4: JWT 改造完成，18 个单测全过", Math.max(20, cols - 12)))}</span>`,
+        "now",
+        cols,
+        'data-open="task"'
+      )
+    );
+    rows.push(`<span class="r">│</span>`);
+    rows.push(`<span class="r">╰─</span><span class="t">${esc(cut("网关限流看完了；顺便告诉你：后台 JWT 改造已跑通单测，不过监控发现本地 Postgres 5432 没起来。", cols - 3))}</span>`);
+  }
+
+  rows.push("");
+  const runningCount = (taskDone ? 0 : 1) + 1;
+  const footerLeft = "Enter send · /tasks inspect";
+  const footerRight = `◐ ${runningCount} task${runningCount > 1 ? "s" : ""}`;
+  const fGap = Math.max(1, cols - wlen(footerLeft) - wlen(footerRight));
+  rows.push(`<span class="m">${esc(footerLeft)}</span>${" ".repeat(fGap)}<span class="c click" data-open="list">${esc(footerRight)}</span>`);
+  return rows.join("\n");
+}
+
+function renderTasksPopup(cols, mode) {
+  const boxW = Math.min(cols, 84);
+  const inner = boxW - 4;
+  const top = `<span class="r">╭─</span> <span class="t">tasks</span> <span class="m">${mode === "list" ? "(单击行看详情，再点 /tasks 关闭)" : "(点此处返回列表)"}</span> <span class="r">${"─".repeat(Math.max(1, inner - 38))}╮</span>`;
+  const bot = `<span class="r">╰${"─".repeat(boxW - 2)}╯</span>`;
+  const wrapRow = (html, attr = "") => `<span class="click" ${attr}><span class="r">│</span> ${html}</span>`;
+
+  if (mode === "task") {
+    return [
+      top,
+      wrapRow(`<span class="g">✓</span> <span class="c">a1b2c3d4</span> · coder · worktree (3 files +84 -21)`, 'data-open="list"'),
+      wrapRow(`<span class="m">────────────────────────────────────────────────────</span>`, 'data-open="list"'),
+      wrapRow(`<span class="c">❯</span> <span class="t">把 auth 改成 JWT 并跑单测</span>`, 'data-open="list"'),
+      wrapRow(`<span class="r">├─</span><span class="a">◆</span> <span class="o">edit src/auth.ts (+58 -19)</span>`, 'data-open="list"'),
+      wrapRow(`<span class="r">├─</span><span class="a">◆</span> <span class="o">report_progress "JWT 校验写完，开始跑测试"</span>`, 'data-open="list"'),
+      wrapRow(`<span class="r">╰─</span><span class="a">$</span> <span class="o">npm test -- test/auth.test.mjs (18 passed)</span>`, 'data-open="list"'),
+      bot,
+    ].join("\n");
+  }
+  if (mode === "mon") {
+    return [
+      top,
+      wrapRow(`<span class="c">◐</span> <span class="c">m-9f8e7d</span> · monitor "dev server 报错" · <code>npm run dev</code>`, 'data-open="list"'),
+      wrapRow(`<span class="m">filter: /ERROR|ECONNREFUSED/ · 已捕获 1 条匹配</span>`, 'data-open="list"'),
+      wrapRow(`<span class="m">────────────────────────────────────────────────────</span>`, 'data-open="list"'),
+      wrapRow(`<span class="e">[20:12:08] ERROR: ECONNREFUSED 127.0.0.1:5432</span>`, 'data-open="list"'),
+      bot,
+    ].join("\n");
+  }
+  return [
+    top,
+    wrapRow(`<span class="g">✓</span> <span class="c">a1b2c3d4</span>  coder    <span class="o">${esc(cut("把 auth 改成 JWT 并跑单测 · worktree +84 -21", inner - 22))}</span>`, 'data-open="task"'),
+    wrapRow(`<span class="c">◐</span> <span class="c">m-9f8e7d</span>  monitor  <span class="o">${esc(cut("dev server 报错 (npm run dev) · 1 match", inner - 22))}</span>`, 'data-open="mon"'),
+    bot,
+  ].join("\n");
+}
+
+function renderSnapC(cols) {
+  return [
+    `<span class="c">❯</span> <span class="t">子代理还在跑的时候，主对话随时能给它补指令：</span>`,
+    `<span class="r">│</span>`,
+    line("├─", `<span class="a">◆</span> <span class="o">task a1b2c3d4 "跑完顺便把 README 也改了"</span> <span class="d">· 默认：不打断当前命令，接着做</span>`, "█···", cols),
+    line("╰─", `<span class="a">◆</span> <span class="o">task a1b2c3d4 "停一下，改用 Postgres" (interrupt)</span> <span class="d">· 立即停掉手头命令重来</span>`, "█···", cols),
+  ].join("\n");
+}
+
+let cols = 88, step = 1, paused = false, overlay = null;
+const liveEl = document.getElementById("live");
+const colsEl = document.getElementById("cols");
+
+function drawLive() {
+  colsEl.textContent = `${cols} 列 `;
+  liveEl.innerHTML = renderScene(step, cols, overlay);
+  liveEl.querySelectorAll("[data-open]").forEach((el) => {
+    el.onclick = () => {
+      const target = el.getAttribute("data-open");
+      overlay = overlay === target ? null : target;
+      document.getElementById("btasks").classList.toggle("on", Boolean(overlay));
+      drawLive();
+    };
+  });
+}
+
+setInterval(() => {
+  if (paused || overlay) return;
+  step = (step % 4) + 1;
+  drawLive();
+}, 1800);
+
+document.getElementById("b60").onclick = () => { cols = 60; setColBtn("b60"); drawLive(); };
+document.getElementById("b88").onclick = () => { cols = 88; setColBtn("b88"); drawLive(); };
+document.getElementById("b120").onclick = () => { cols = 120; setColBtn("b120"); drawLive(); };
+function setColBtn(id) {
+  ["b60", "b88", "b120"].forEach((k) => document.getElementById(k).classList.toggle("on", k === id));
+}
+document.getElementById("btasks").onclick = () => {
+  overlay = overlay ? null : "list";
+  document.getElementById("btasks").classList.toggle("on", Boolean(overlay));
+  drawLive();
+};
+document.getElementById("bpause").onclick = (e) => {
+  paused = !paused;
+  e.target.classList.toggle("on", paused);
+  e.target.textContent = paused ? "继续" : "暂停";
+};
+
+document.getElementById("snapA").innerHTML = renderScene(1, 88, null);
+document.getElementById("snapB").innerHTML = renderScene(4, 88, null);
+document.getElementById("snapC").innerHTML = renderSnapC(88);
+document.getElementById("snapD").innerHTML = renderTasksPopup(88, "list");
+drawLive();
+</script>
+</main></body></html>
