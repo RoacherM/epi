@@ -60,8 +60,9 @@ export async function createRuntimeFromPrepared(
  * started in that very folder look like "a different project" to project-guard.ts. */
 export function projectIdentityFromPrepared(prepared: PreparedEpiRun, cwd: string): ProjectIdentity {
   return {
-    root: findNearestProjectManifest(cwd, prepared.assembly.globalManifest)?.root,
+    root: findNearestProjectManifest(cwd, prepared.assembly.globalManifest, prepared.assembly.homeDir)?.root,
     globalManifestPath: prepared.assembly.globalManifest,
+    homeDir: prepared.assembly.homeDir,
   };
 }
 

@@ -16,6 +16,8 @@ export interface ProjectIdentity {
   /** The project root this process assembled its manifest from; undefined for no project. */
   readonly root: string | undefined;
   readonly globalManifestPath: string;
+  /** The home the run was prepared with (assembly.ts's `homeDir`, D68). */
+  readonly homeDir: string;
 }
 
 /**
@@ -25,7 +27,7 @@ export interface ProjectIdentity {
  */
 function refusalForCwd(targetCwd: string, identity: ProjectIdentity): string | undefined {
   if (!existsSync(targetCwd)) return undefined;
-  const targetRoot = findNearestProjectManifest(targetCwd, identity.globalManifestPath)?.root;
+  const targetRoot = findNearestProjectManifest(targetCwd, identity.globalManifestPath, identity.homeDir)?.root;
   return targetRoot === identity.root
     ? undefined
     : `This session belongs to a different project (${targetCwd}).`;

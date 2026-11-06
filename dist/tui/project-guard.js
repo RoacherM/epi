@@ -17,7 +17,7 @@ import { findNearestProjectManifest } from "../project.js";
 function refusalForCwd(targetCwd, identity) {
     if (!existsSync(targetCwd))
         return undefined;
-    const targetRoot = findNearestProjectManifest(targetCwd, identity.globalManifestPath)?.root;
+    const targetRoot = findNearestProjectManifest(targetCwd, identity.globalManifestPath, identity.homeDir)?.root;
     return targetRoot === identity.root
         ? undefined
         : `This session belongs to a different project (${targetCwd}).`;

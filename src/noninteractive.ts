@@ -94,8 +94,9 @@ async function createRuntime(
       externalExtensionPaths: prepared.assembly.externalExtensions.map((extension) => extension.value),
       assembly: prepared.assembly,
       projectIdentity: {
-        root: findNearestProjectManifest(cwd, prepared.assembly.globalManifest)?.root,
+        root: findNearestProjectManifest(cwd, prepared.assembly.globalManifest, prepared.assembly.homeDir)?.root,
         globalManifestPath: prepared.assembly.globalManifest,
+        homeDir: prepared.assembly.homeDir,
       },
       warn: (message) => reportDiagnostics([{ type: "warning", message }]),
     });

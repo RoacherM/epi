@@ -14,7 +14,7 @@ import { EpiArgumentError } from "../errors.js";
 import { assertProjectTrustedFor, isHelpRequested } from "./manifest-cli.js";
 import { emptyStateMessage, loadNativeMcpConfig } from "../extensions/mcp.js";
 import { manifestDisables } from "../manifest.js";
-import { resolveEpiPaths } from "../paths.js";
+import { resolveEpiPaths, resolveHomeDir } from "../paths.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "../project.js";
 const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
 const { addMcpServerConfig, removeMcpServerConfig, getMcpToolExposure } = (await import(pathToFileURL(join(piDist, "extensions", "mcp", "config.js")).href));
@@ -164,7 +164,7 @@ function assertLocalAllowed(ctx, approveOverride) {
  * `epi --approve`/`--no-approve` (src/project.ts's resolveProjectManifest); nothing is persisted. */
 function resolveListConfig(ctx, approveOverride, command) {
     const paths = resolveEpiPaths(process.env);
-    const candidate = findNearestProjectManifest(ctx.cwd, paths.globalManifest);
+    const candidate = findNearestProjectManifest(ctx.cwd, paths.globalManifest, resolveHomeDir(process.env));
     const trusted = candidate !== undefined && (approveOverride ?? readProjectTrustDecision(paths.agentDir, ctx.cwd) === true);
     const ignoredPath = candidate === undefined ? undefined : join(candidate.root, ".epi", "mcp.json");
     const untrustedNote = candidate === undefined || trusted

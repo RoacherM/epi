@@ -104,8 +104,9 @@ export function createEpiRuntimeExtensions(initialIdentity, initialAssembly, res
                 if (event.targetSessionFile === undefined)
                     return undefined;
                 launchProject ??= {
-                    root: findNearestProjectManifest(launchCwd, initialAssembly.globalManifest)?.root,
+                    root: findNearestProjectManifest(launchCwd, initialAssembly.globalManifest, initialAssembly.homeDir)?.root,
                     globalManifestPath: initialAssembly.globalManifest,
+                    homeDir: initialAssembly.homeDir,
                 };
                 const refusal = crossProjectRefusal(event.targetSessionFile, launchProject);
                 if (refusal === undefined)

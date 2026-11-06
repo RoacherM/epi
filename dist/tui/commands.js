@@ -3,7 +3,6 @@
 import { CredentialSynchronizationError, ExtensionSelectorComponent, LoginDialogComponent, ModelSelectorComponent, OAuthSelectorComponent, resolveCliModel, } from "@earendil-works/pi-coding-agent";
 import { dialog, selectInEditorSlot } from "./dialogs.js";
 import { errorText } from "./errors.js";
-import { resolveEpiPaths } from "../paths.js";
 import { findNearestProjectManifest } from "../project.js";
 import { projectTrustOptions, saveProjectTrustChoice } from "../trust-prompt.js";
 const CANCELLED = "Login cancelled";
@@ -277,7 +276,10 @@ export async function runModel(host, query, options = {}) {
 }
 /** `/trust`: same options and store as the first-run prompt (src/trust-prompt.ts), for the current project root. */
 export async function runTrust(host) {
-    const candidate = findNearestProjectManifest(host.cwd, resolveEpiPaths(process.env).globalManifest);
+    // The run's own discovery context, not process.env: an injected HOME must not be offered as a
+    // project here when the assembly already excluded it (D68).
+    const { globalManifestPath, homeDir } = host.projectIdentity;
+    const candidate = findNearestProjectManifest(host.cwd, globalManifestPath, homeDir);
     if (candidate === undefined) {
         host.notice("No .epi/epi.json project found from the current directory.", "warning");
         return;

@@ -164,6 +164,7 @@ function childAssemblyFromCapsule(capsule, home) {
     capsule.projectTrusted,
     capsule.cwd,
     globalManifestPath,
+    home,
   );
   const base = resolveAssembly({
     agentDir: capsule.agentDir,

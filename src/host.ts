@@ -20,7 +20,7 @@ import { reportRunFailure } from "./errors.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { isInteractivePiRun } from "./interactive.js";
 import { isListModelsRun, runListModels } from "./list-models.js";
-import { resolveEpiPaths } from "./paths.js";
+import { resolveEpiPaths, resolveHomeDir } from "./paths.js";
 import { rewritePiOutput } from "./pi-output.js";
 import { findNearestProjectManifest, readProjectTrustDecision } from "./project.js";
 import { installProviderCostValidation } from "./provider-validation.js";
@@ -227,7 +227,7 @@ async function maybeAskProjectTrust(
     return;
   }
   const paths = resolveEpiPaths(environment);
-  const candidate = findNearestProjectManifest(cwd, paths.globalManifest);
+  const candidate = findNearestProjectManifest(cwd, paths.globalManifest, resolveHomeDir(environment));
   if (candidate === undefined) {
     return;
   }
