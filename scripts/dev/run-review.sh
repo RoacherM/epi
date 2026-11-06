@@ -11,12 +11,12 @@ resolve_model() {
   for t in "$tier" 1 2 3; do
     (( t < tier )) && continue
     case $t in
-      1) for m in auto/gemini-4-argon devin/gemini-4-argon factory/gemini-4-argon; do
+      1) for m in auto/gemini-4-argon devin/gemini-4-argon factory/gemini-4-argon antigravity/gemini-4-argon; do
            grep -qx "$m" <<<"$models" && { echo "$m"; return 0; }
          done; m=$(grep -E '(^|/)gemini-4-argon$' <<<"$models" | grep -v 'disabled' | head -1 || true) ;;
-      2) for m in auto/claude-opus-5-5 devin/claude-opus-5-5 factory/claude-opus-5-5; do
+      2) for m in devin/swe-2 devin/swe-2-high-lightning; do
            grep -qx "$m" <<<"$models" && { echo "$m"; return 0; }
-         done; m=$(grep -E '(^|/)claude-opus-5-5$' <<<"$models" | head -1 || true) ;;
+         done; m=$(grep -E '^devin/swe-' <<<"$models" | head -1 || true) ;;
       3) for m in factory/deepseek-v4.1-flash devin/deepseek-v4-1-flash-1017; do
            grep -qx "$m" <<<"$models" && { echo "$m"; return 0; }
          done; m=$(grep -E 'deepseek-v4([.-]1)?-flash' <<<"$models" | head -1 || true) ;;
@@ -101,7 +101,7 @@ cmd_start() {
   model=$(resolve_model "$tier")
   echo "$model" | tee "$dir/model.txt"
   prompt="Read $dir/pack.md and conduct the review under its budget and rules. Write notes to $dir/review-notes.md and final report to $dir/review.md."
-  nohup $EPI -p --provider magpie --model "$model" --thinking medium "$prompt" >"$dir/run.out" 2>"$dir/run.err" &
+  nohup $EPI -p --provider magpie --model "$model" --thinking high "$prompt" >"$dir/run.out" 2>"$dir/run.err" &
   echo $! >"$dir/pid"
 }
 
