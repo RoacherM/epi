@@ -16,6 +16,7 @@ const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const hangingCompact = fileURLToPath(new URL("./fixtures/faux-hanging-compact.mjs", import.meta.url));
 const fakeEditor = fileURLToPath(new URL("./fixtures/fake-editor.mjs", import.meta.url));
 const fakeSuspend = fileURLToPath(new URL("./fixtures/fake-suspend.mjs", import.meta.url));
+const stderrBurst = fileURLToPath(new URL("./fixtures/stderr-burst-on-shutdown.mjs", import.meta.url));
 
 // Compact once the projected context passes 8K tokens: the first turn stays under that, a prompt of
 // ~10K tokens goes over it, so Pi compacts before sending it (see tui-compaction.test.mjs).
@@ -164,6 +165,48 @@ test("the epi process exits on Ctrl+D even while a compaction request ignores it
   // The last thing written leaves the alternate screen and shows the cursor, with no frame after it.
   assert.match(result.stdout, /\x1b\[\?1049l\x1b\[\?25h\x1b\[\?2026l$/);
   assert.equal(result.rawModes.at(-1), "raw=false");
+});
+
+// Dogfood D64: the TUI path called process.exit right after the session closed, while stderr on a
+// pipe (an async stream) could still hold queued writes, so the tail of an extension's shutdown log
+// -- or the whole final error behind it -- was lost; the print path already flushed first. The
+// reader pauses over the exit so the 4 MiB burst can't drain before process.exit runs.
+// Only meaningful where pipe writes are asynchronous (macOS): Node writes pipes synchronously on
+// Linux, so there this passes even without the flush and cannot catch a regression.
+test("the epi process flushes stderr before exiting the TUI, even when the reader is slow", async (t) => {
+  const { root, env } = makeHome(t);
+  writeFileSync(join(env.EPI_HOME, "epi.json"), JSON.stringify({ version: 1, extensions: [hangingCompact, stderrBurst] }));
+  const child = spawn(process.execPath, ["--import", fakeTty, cli, "--no-project", "--provider", "epi-faux", "--model", "compactor"], {
+    cwd: root,
+    env: { ...env, EPI_FAKE_TTY_LOG: join(root, "tty.log") },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  t.after(() => child.kill("SIGKILL"));
+  let stdout = "";
+  const chunks = [];
+  child.stdout.on("data", (data) => { stdout += data; });
+  child.stderr.on("data", (data) => chunks.push(data));
+  const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+  const deadline = Date.now() + 15_000;
+  while (!stdout.includes("❯")) {
+    if (Date.now() > deadline) throw new Error(`never drew the prompt; stderr: ${Buffer.concat(chunks)}`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  child.stderr.pause();
+  child.stdin.write("\x04");
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  child.stderr.resume();
+  // One bounded wait for both the exit and the end of stderr, so a regression that never exits
+  // fails here instead of hanging the test run.
+  const ended = new Promise((resolve) => (child.stderr.readableEnded ? resolve() : child.stderr.on("end", resolve)));
+  const status = await Promise.race([
+    Promise.all([exited, ended]).then(([code]) => code),
+    new Promise((resolve) => setTimeout(() => resolve("did not exit"), 10_000)),
+  ]);
+  assert.equal(status, 0);
+  const stderr = Buffer.concat(chunks).toString("utf8");
+  assert.ok(stderr.includes("D64-BEGIN"), "the burst never started");
+  assert.ok(stderr.includes("\nD64-END\n"), `stderr was cut off after ${stderr.length} bytes`);
 });
 
 // A session_start handler that never returns keeps bind() awaiting; the keys are live by then, and

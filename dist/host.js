@@ -21,6 +21,23 @@ import { EPI_VERSION } from "./version.js";
 // scripts/model-snapshot.mjs imports EPI_VERSION from dist/host.js.
 export { EPI_VERSION };
 const SDK_ENTRY = "@earendil-works/pi-coding-agent#main";
+/** Resolves once everything already written to stdout and stderr has been handed to the OS: a
+ * write callback runs in order, so an empty write's runs after every earlier chunk. Needed before
+ * `process.exit`, which drops whatever an async pipe still holds. `timeoutMs` bounds the wait for
+ * a reader that never drains (the TUI's exit must not hang on a stuck log consumer, D35/D41); the
+ * timer is unref'd so it never keeps the process alive by itself, which means the process can
+ * also end naturally while waiting (a corked stream has no write in flight to hold it): callers
+ * set `process.exitCode` first so that exit still reports their code. */
+async function flushStandardStreams(timeoutMs) {
+    const flushed = Promise.all([process.stdout, process.stderr].map((stream) => new Promise((resolve) => stream.write("", () => resolve()))));
+    if (timeoutMs === undefined) {
+        await flushed;
+        return;
+    }
+    await Promise.race([flushed, new Promise((resolve) => setTimeout(resolve, timeoutMs).unref())]);
+}
+/** How long the TUI's exit waits for stdout/stderr to drain (dogfood D64). */
+const TUI_EXIT_FLUSH_TIMEOUT_MS = 5000;
 /** `epi <subcommand>`: routed before any flag parsing, and only when it is the first argument
  * (`epi -p update` is a prompt), never forwarded to Pi's own CLI dispatcher (docs/cli-design.md
  * §3) -- each reads/writes the Manifest or Epi's own agent directory directly. */
@@ -251,7 +268,11 @@ export async function runEpi(argv) {
         const code = await tui.runTuiV2(prepared, extensionFactories).catch(reportRunFailure);
         // Pi's interactive shutdown() ends in process.exit(0) too. Waiting for the event loop to drain
         // instead left the process running with the TUI gone whenever anything still held it open, such
-        // as a compaction request that ignored its abort (dogfood D35, D41).
+        // as a compaction request that ignored its abort (dogfood D35, D41). But flush first, as the
+        // print path below does: stderr on a pipe is async, and exiting with writes still queued cut
+        // off the last of an extension's shutdown log or error, even the whole final error (D64).
+        process.exitCode = code;
+        await flushStandardStreams(TUI_EXIT_FLUSH_TIMEOUT_MS);
         process.exit(code);
     }
     // `--list-models` is Epi's own (dogfood D48): piMain's drops the extension diagnostics `-p` stops
@@ -284,8 +305,7 @@ export async function runEpi(argv) {
     // and on failure. rpc and every error exit call process.exit themselves and never get here.
     // Exit once stdout and stderr are flushed, as Pi's package commands do "so bad
     // extensions cannot keep one-shot commands alive".
-    await new Promise((resolve) => process.stdout.write("", () => resolve()));
-    await new Promise((resolve) => process.stderr.write("", () => resolve()));
+    await flushStandardStreams();
     process.exit(process.exitCode ?? 0);
 }
 //# sourceMappingURL=host.js.map
