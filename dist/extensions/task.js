@@ -610,7 +610,10 @@ export function createTaskInlineExtension(options) {
             content: `${entries.map(notifyText).join("\n\n")}${footer}`,
             display: true,
             // `message_end`'s and boundary receipts match the persisted message back to its entries by these keys.
-            details: { jobIds: entries.map((entry) => entry.key) },
+            details: {
+                jobIds: entries.map((entry) => entry.key),
+                receipts: entries.map((entry) => `${entry.key}:${entry.run}`),
+            },
         };
     };
     const buildMidRunDraft = (entries) => {
@@ -623,6 +626,24 @@ export function createTaskInlineExtension(options) {
             details: payload.details,
         };
     };
+    const deleteReceiptEntries = (details) => {
+        let deleted = false;
+        if (Array.isArray(details?.receipts)) {
+            const receipts = new Set(details.receipts.filter((r) => typeof r === "string"));
+            for (const entry of mailbox.values()) {
+                if (receipts.has(`${entry.key}:${entry.run}`) && mailbox.delete(entry.key))
+                    deleted = true;
+            }
+            return deleted;
+        }
+        if (Array.isArray(details?.jobIds)) {
+            for (const id of details.jobIds) {
+                if (typeof id === "string" && mailbox.delete(id))
+                    deleted = true;
+            }
+        }
+        return deleted;
+    };
     const reconcileDeliveredFromBranch = () => {
         let deleted = false;
         const branch = current.ctx?.sessionManager.getBranch() ?? [];
@@ -630,13 +651,8 @@ export function createTaskInlineExtension(options) {
             const entry = raw;
             if (entry.type !== "custom_message" || entry.customType !== "epi:task-notify")
                 continue;
-            const ids = entry.details?.jobIds;
-            if (!Array.isArray(ids))
-                continue;
-            for (const id of ids) {
-                if (typeof id === "string" && mailbox.delete(id))
-                    deleted = true;
-            }
+            if (deleteReceiptEntries(entry.details))
+                deleted = true;
         }
         if (deleted)
             refreshStatus();
@@ -1042,14 +1058,8 @@ export function createTaskInlineExtension(options) {
                 const message = event.message;
                 if (message.role !== "custom" || message.customType !== "epi:task-notify")
                     return;
-                const ids = message.details?.jobIds;
-                if (!Array.isArray(ids))
-                    return;
-                for (const id of ids) {
-                    if (typeof id === "string")
-                        mailbox.delete(id);
-                }
-                refreshStatus();
+                if (deleteReceiptEntries(message.details))
+                    refreshStatus();
             });
             pi.on("turn_start", () => {
                 reconcileDeliveredFromBranch();

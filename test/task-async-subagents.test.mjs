@@ -275,6 +275,35 @@ test("busy mid-run pickup delivers milestones and background completions via tur
     toolResults: [{ type: "toolResult" }],
   });
   assert.equal(secondTurnEnd, undefined);
+
+  // Resume the same job in the background while parent is still busy (regression test for run-2 receipt):
+  // the run-1 receipt already on `branch` must not delete run-2's notification on the next `turn_start`.
+  const listed1 = await tools.get("task_status").execute("l1", {}, undefined, undefined, context);
+  writeFileSync(listed1.details.jobs[0].sessionPath, "");
+  await taskTool.execute(
+    "t-r2",
+    { jobId, task: "second-run-ok", background: true },
+    undefined,
+    undefined,
+    context,
+  );
+  for (let i = 0; i < 60; i += 1) {
+    const listed2 = await tools.get("task_status").execute("l2", {}, undefined, undefined, context);
+    const job = listed2.details.jobs.find((j) => j.id === jobId);
+    if (job?.status === "completed" && job.run === 2) break;
+    await delay(25);
+  }
+  await delay(25);
+  handlers.get("turn_start")?.({});
+  const run2TurnEnd = handlers.get("turn_end")?.({
+    entries: [],
+    toolResults: [{ type: "toolResult" }],
+  });
+  assert.ok(run2TurnEnd);
+  assert.match(run2TurnEnd.entries[0].content, /fake:second-run-ok/);
+  branch.push(run2TurnEnd.entries[0]);
+  handlers.get("turn_start")?.({});
+
   idle = true;
   handlers.get("agent_settled")?.({ aborted: false });
   await delay(350);
