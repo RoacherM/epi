@@ -16,7 +16,7 @@
 | 顾问 | `epi -p` 独立只读会话（主控把背景材料写成文件交给它） | 仅在**同一个问题第二次出现 / 方案迟迟收不拢**时调用 |
 | 用户 | — | 需求歧义拍板；推送/PR/发布人工闸门（G2） |
 
-- **审查模型三级回退（WF3）**：① `gemini-4-argon`（`auto/` 优先，`devin/`、`factory/` 次之，排除 `-disabled`）；② `claude-opus-5-5`（thinking 固定 `medium`，禁 `high`）；③ `deepseek-v4.1-flash`（`factory/deepseek-v4.1-flash`、`devin/deepseek-v4-1-flash-1017`）。一律通过 `scripts/dev/run-review.sh` 启动与等待，禁止手写 `nohup epi -p` 或固定长 `sleep`。
+- **审查模型三级回退（WF3）**：① `gemini-4-argon`（`auto/` 优先，`devin/`、`factory/`、`antigravity/` 次之，排除 `-disabled`，thinking `high`）；② `devin/swe-2`（thinking `high`）；③ `deepseek-v4.1-flash`（`factory/deepseek-v4.1-flash`、`devin/deepseek-v4-1-flash-1017`）。一律通过 `scripts/dev/run-review.sh` 启动与等待，禁止手写 `nohup epi -p` 或固定长 `sleep`。
 - **子代理（WF5，2026-10-25）**：主控与 worker 都用内置 `task` 工具委派，不再装 `npm:pi-subagents`。硬规则：
   - 要读**不打算改的**文件（Pi 的 `node_modules` 源码、长文档、别的模块）时，`task(agent="reader", task="…问题…，用 文件:行号 回答")`；只在要改的文件、或 <150 行的文件才自己读。
   - 跑全套测试（`node --test test/*.test.mjs`）、`precheck` 之外的长命令，用 `task(agent="runner", task="在 <目录> 跑 <命令>，报失败")`。

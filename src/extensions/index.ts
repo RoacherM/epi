@@ -11,6 +11,7 @@ import { EpiConfigError } from "../errors.js";
 import type { ResolvedInlineExtension } from "../manifest.js";
 import { resolveEffectiveHooks } from "../hooks-config.js";
 import { createHooksInlineExtension, hooksForChild } from "./hooks.js";
+import { createMonitorInlineExtension } from "./monitor.js";
 import { createTaskInlineExtension } from "./task.js";
 import { createEpiRuntimeExtensions } from "./runtime.js";
 import type { EpiRuntimeIdentity } from "../runtime-identity.js";
@@ -89,6 +90,10 @@ export function buildInlineExtensions(
                   ? join(assembly.projectManifest.root, ".epi", "agents")
                   : undefined,
               projectTrusted: assembly.projectManifest?.loaded === true,
+            }),
+            createMonitorInlineExtension({
+              epiHome,
+              agentDir: assembly.agentDir,
             }),
           );
           break;

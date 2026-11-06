@@ -4,6 +4,7 @@ import { builtInOffInstruction } from "../assembly.js";
 import { EpiConfigError } from "../errors.js";
 import { resolveEffectiveHooks } from "../hooks-config.js";
 import { createHooksInlineExtension, hooksForChild } from "./hooks.js";
+import { createMonitorInlineExtension } from "./monitor.js";
 import { createTaskInlineExtension } from "./task.js";
 import { createEpiRuntimeExtensions } from "./runtime.js";
 import { createEpiMcpExtension, filterMcpServers, loadNativeMcpConfig } from "./mcp.js";
@@ -53,6 +54,9 @@ subagent) {
                             ? join(assembly.projectManifest.root, ".epi", "agents")
                             : undefined,
                         projectTrusted: assembly.projectManifest?.loaded === true,
+                    }), createMonitorInlineExtension({
+                        epiHome,
+                        agentDir: assembly.agentDir,
                     }));
                     break;
                 case "epi:mcp": {

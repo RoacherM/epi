@@ -60,55 +60,39 @@ export interface TaskExtensionOptions {
  * paid for only when asked for. An `agent` preset supplies defaults these override.
  */
 const TaskBatchItemSchema = Type.Object({
-  task: Type.String({ description: "What the subagent must do" }),
-  agent: Type.Optional(Type.String({ description: "Preset from agents/*.md" })),
-  cwd: Type.Optional(Type.String({ description: "Working directory for this subagent" })),
-  background: Type.Optional(Type.Boolean({ description: "Run this subagent in the background" })),
-  isolation: Type.Optional(
-    Type.Union([Type.Literal("none"), Type.Literal("worktree")], {
-      description: "'worktree' runs this subagent in an isolated detached git worktree",
-    }),
-  ),
-  model: Type.Optional(Type.String({ description: "Model override for this subagent" })),
+  task: Type.String(),
+  agent: Type.Optional(Type.String()),
+  cwd: Type.Optional(Type.String()),
+  background: Type.Optional(Type.Boolean()),
+  isolation: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("worktree")])),
+  model: Type.Optional(Type.String()),
 });
 
 const TaskToolParameters = Type.Object({
-  task: Type.Optional(Type.String({ description: "What the subagent must do, in full: it cannot see this conversation. With jobId, the steering or resume instruction instead" })),
-  tasks: Type.Optional(Type.Array(TaskBatchItemSchema, { minItems: 1, description: "Launch multiple subagents in parallel in one call" })),
-  jobId: Type.Optional(Type.String({ description: "Steer this running job, or resume this stopped one; other settings are ignored except background and strategy" })),
+  task: Type.Optional(Type.String({ description: "Subagent instructions, or steering/resume prompt with jobId" })),
+  tasks: Type.Optional(Type.Array(TaskBatchItemSchema, { minItems: 1, description: "Parallel subagent batch" })),
+  jobId: Type.Optional(Type.String({ description: "Running job to steer or stopped job to resume" })),
   strategy: Type.Optional(
-    Type.Union([Type.Literal("steer"), Type.Literal("enqueue"), Type.Literal("interrupt")], {
-      description: "With jobId on a running job: 'steer' (after current tool), 'enqueue' (after current turn), or 'interrupt' (abort current turn and run immediately)",
-    }),
+    Type.Union([Type.Literal("steer"), Type.Literal("enqueue"), Type.Literal("interrupt")]),
   ),
-  agent: Type.Optional(Type.String({ description: "Preset from agents/*.md; omit for a plain subagent" })),
-  cwd: Type.Optional(Type.String({ description: "Absolute or session-relative working directory" })),
-  background: Type.Optional(Type.Boolean({ description: "Return only a job id and keep working; collect it later with task_wait. Not needed for parallelism: several task calls in one turn already run at once" })),
+  agent: Type.Optional(Type.String({ description: "Preset from agents/*.md" })),
+  cwd: Type.Optional(Type.String({ description: "Working directory" })),
+  background: Type.Optional(Type.Boolean({ description: "Run asynchronously and report back when done" })),
   isolation: Type.Optional(
-    Type.Union([Type.Literal("none"), Type.Literal("worktree")], {
-      description: "'worktree' runs the subagent in an isolated detached git worktree",
-    }),
+    Type.Union([Type.Literal("none"), Type.Literal("worktree")]),
   ),
-  context: Type.Optional(Type.Union([Type.Literal("fresh"), Type.Literal("fork")], {
-    description: "'fresh' (default) starts empty; 'fork' copies this conversation's history so far",
-  })),
-  model: Type.Optional(Type.String({ description: "provider/id, provider/id:thinking, or :thinking to keep the model" })),
-  systemPrompt: Type.Optional(Type.String({ description: "Extra system instructions for the subagent" })),
-  rules: Type.Optional(Type.Boolean({ description: "Give the subagent this run's Rules (AGENTS.md). Default false" })),
-  skills: Type.Optional(Type.Union([Type.Boolean(), Type.Array(Type.String())], {
-    description: "true lists every skill; a name array preloads those SKILL.md files. Default none",
-  })),
-  mcp: Type.Optional(Type.Union([Type.Boolean(), Type.Array(Type.String())], {
-    description: "true connects every configured MCP server; a name array only those. Default none",
-  })),
-  tools: Type.Optional(Type.Array(Type.String(), { description: 'Tool allowlist, or +name/-name to adjust the default set' })),
-  excludeTools: Type.Optional(Type.Array(Type.String(), { description: "Tool denylist; patterns allowed (mcp__github__*)" })),
-  hooks: Type.Optional(Type.Boolean({ description: "Apply this run's hooks.json inside the subagent. Default true" })),
-  extensions: Type.Optional(Type.Union([Type.Boolean(), Type.Array(Type.String())], {
-    description: "Manifest extensions to load in the subagent. Default all",
-  })),
-  maxTurns: Type.Optional(Type.Integer({ minimum: 1, description: "Stop after this many turns and return what is done" })),
-  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TASK_TIMEOUT_SECONDS, description: `Kill the subagent after this long. Default 600, maximum ${MAX_TASK_TIMEOUT_SECONDS}` })),
+  context: Type.Optional(Type.Union([Type.Literal("fresh"), Type.Literal("fork")])),
+  model: Type.Optional(Type.String({ description: "provider/id[:thinking] or :thinking" })),
+  systemPrompt: Type.Optional(Type.String()),
+  rules: Type.Optional(Type.Boolean()),
+  skills: Type.Optional(Type.Union([Type.Boolean(), Type.Array(Type.String())])),
+  mcp: Type.Optional(Type.Union([Type.Boolean(), Type.Array(Type.String())])),
+  tools: Type.Optional(Type.Array(Type.String())),
+  excludeTools: Type.Optional(Type.Array(Type.String())),
+  hooks: Type.Optional(Type.Boolean()),
+  extensions: Type.Optional(Type.Union([Type.Boolean(), Type.Array(Type.String())])),
+  maxTurns: Type.Optional(Type.Integer({ minimum: 1 })),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TASK_TIMEOUT_SECONDS })),
 });
 
 type TaskToolParams = Static<typeof TaskToolParameters>;

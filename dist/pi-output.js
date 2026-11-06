@@ -7,8 +7,9 @@ import { builtInOffInstruction } from "./assembly.js";
 export const EXTENSION_LOAD_FAILURE_HINT = 'Hint: Fix the extension, or remove it from the Manifest that declares it ("epi list" shows which).';
 /** Pi names an inline extension `<inline:NAME>` in its load errors. epi:mcp also loads `codemode`
  * and `tool-search` (src/extensions/index.ts), so their failures are turned off with it. */
-const BUILT_IN_PATH = /^<inline:(epi:(?:task|mcp|hooks)|codemode|tool-search)>$/;
+const BUILT_IN_PATH = /^<inline:(epi:(?:task|monitor|mcp|hooks)|codemode|tool-search)>$/;
 const LOADED_WITH = {
+    "epi:monitor": "epi:task",
     codemode: "epi:mcp",
     "tool-search": "epi:mcp",
 };

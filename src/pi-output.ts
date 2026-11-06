@@ -13,8 +13,9 @@ export const EXTENSION_LOAD_FAILURE_HINT =
 
 /** Pi names an inline extension `<inline:NAME>` in its load errors. epi:mcp also loads `codemode`
  * and `tool-search` (src/extensions/index.ts), so their failures are turned off with it. */
-const BUILT_IN_PATH = /^<inline:(epi:(?:task|mcp|hooks)|codemode|tool-search)>$/;
+const BUILT_IN_PATH = /^<inline:(epi:(?:task|monitor|mcp|hooks)|codemode|tool-search)>$/;
 const LOADED_WITH: Readonly<Record<string, BuiltInExtensionName>> = {
+  "epi:monitor": "epi:task",
   codemode: "epi:mcp",
   "tool-search": "epi:mcp",
 };

@@ -103,6 +103,7 @@ test("no Manifest: epi:task, epi:mcp, epi:hooks and epi:web are all built, with 
   assert.deepEqual(builtExtensionNames(fixture, assembly), [
     "epi:runtime",
     "epi:task",
+    "epi:monitor",
     "epi:mcp",
     "codemode",
     "tool-search",
