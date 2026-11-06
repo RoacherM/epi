@@ -869,26 +869,105 @@ test("once the cursor has moved and come back, the hint switches to enter-to-exp
   assert.match(body, /enter or double-click to expand/);
 });
 
-test("the image popup title shows format, dimensions and size", () => {
+/** Pins the terminal's image protocol for one test; the popup's two layouts depend on it, and the
+ * test process otherwise inherits whatever terminal the developer runs it in. */
+function withImages(images, fn) {
+  piTui.setCapabilities({ images, trueColor: true, hyperlinks: false });
+  try {
+    return fn();
+  } finally {
+    piTui.resetCapabilitiesCache();
+  }
+}
+
+const plainLines = (popup, width) => popup.render(width).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+
+test("on a graphics terminal the image popup title shows format, dimensions and size", () => withImages("kitty", () => {
   const editor = makeEditor();
   editor.insertImageChip(ONE_PIXEL_PNG, "image/png");
   const popup = pastePreview(theme, () => editor.chipAtCursor());
-  const body = popup.render(40).map((line) => line.replace(/\x1b\[[0-9;]*m/g, "")).join("\n");
-  assert.match(body, /Image #1 ─ PNG · 1x1 · 0\.1 KB/);
-});
+  assert.match(plainLines(popup, 40).join("\n"), /Image #1 ─ PNG · 1x1 · 0\.1 KB/);
+}));
+
+// Herdr, tmux, Orca and friends draw no picture: like grok, the popup becomes a details card instead
+// of an empty frame with only a title.
+test("without terminal graphics the image popup is a details card", () => withImages(null, () => {
+  const editor = makeEditor();
+  editor.insertImageChip(ONE_PIXEL_PNG, "image/png");
+  const popup = pastePreview(theme, () => editor.chipAtCursor());
+  const lines = plainLines(popup, 120);
+  assert.match(lines[0], /^╭─+ Image #1 ─╮$/);
+  assert.deepEqual(lines.slice(1, -1).map((line) => line.slice(2, -2).trimEnd()), ["Format: PNG", "Dimensions: 1 x 1", "Size: 0.1 KB"]);
+  assert.match(lines.at(-1), /^╰─+╯$/);
+  for (const line of lines) assert.equal(piTui.visibleWidth(line), piTui.visibleWidth(lines[0]), JSON.stringify(line));
+}));
+
+test("the details card shows a dropped file's path, shortened in the middle so the file name stays", (t) => withImages(null, () => {
+  const dir = join(tempDir(t), "a-rather-long-directory-name-that-will-not-fit", "and-another-one");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "screenshot-2026.png");
+  writeFileSync(file, ONE_PIXEL_PNG);
+  const editor = makeEditor();
+  editor.handleInput(`\x1b[200~${file}\x1b[201~`);
+  const popup = pastePreview(theme, () => editor.chipForPopup());
+  const wide = plainLines(popup, 400).find((line) => line.includes("Path: "));
+  assert.ok(wide.includes(`Path: ${file}`), wide);
+  const narrow = plainLines(popup, 60);
+  const path = narrow.find((line) => line.includes("Path: "));
+  assert.match(path, /Path: \/.*….*screenshot-2026\.png │$/);
+  for (const line of narrow) assert.ok(piTui.visibleWidth(line) <= 60, JSON.stringify(line));
+}));
+
+// Review of D91: halving the columns between the two ends cut the file name even when it fit.
+test("at 40 columns a long path still shows the whole file name, ASCII or CJK", (t) => withImages(null, () => {
+  for (const name of ["screenshot-2026.png", "截图文件名称.png"]) {
+    const dir = join(tempDir(t), "a-rather-long-directory-name-that-will-not-fit", "还有一层很长的目录");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, name);
+    writeFileSync(file, ONE_PIXEL_PNG);
+    const editor = makeEditor();
+    editor.handleInput(`\x1b[200~${file}\x1b[201~`);
+    const lines = plainLines(pastePreview(theme, () => editor.chipForPopup()), 40);
+    const path = lines.find((line) => line.includes("Path: "));
+    assert.ok(path.includes(`…/${name}`), `${name}: ${path}`);
+    for (const line of lines) assert.ok(piTui.visibleWidth(line) <= 40, JSON.stringify(line));
+  }
+}));
+
+// G5 review round 2: counting the "/" and the ellipsis into the file name's width still cut a name
+// that fit exactly, or with one column to spare. The 40-column card leaves 30 columns for the path.
+test("a file name as wide as the path room, or one or two columns less, is shown whole", () => withImages(null, () => {
+  const fit = (path) => {
+    const lines = plainLines(pastePreview(theme, () => ({ kind: "image", image: { id: 1, mimeType: "image/png", byteLength: 67, path } })), 40);
+    for (const line of lines) assert.ok(piTui.visibleWidth(line) <= 40, JSON.stringify(line));
+    return lines.find((line) => line.includes("Path: ")).slice(2, -2).trimEnd().slice("Path: ".length);
+  };
+  const name = (width) => `${"n".repeat(width - 4)}.png`;
+  assert.equal(fit(`/long/directory/${name(30)}`), name(30));
+  assert.equal(fit(`/long/directory/${name(29)}`), `…${name(29)}`);
+  assert.equal(fit(`/long/directory/${name(28)}`), `…/${name(28)}`);
+  assert.equal(fit(`/long/directory/${name(27)}`), `/…/${name(27)}`);
+}));
+
+test("a clipboard image has no path line", () => withImages(null, () => {
+  const editor = makeEditor();
+  editor.insertImageChip(ONE_PIXEL_PNG, "image/png");
+  const popup = pastePreview(theme, () => editor.chipAtCursor());
+  assert.ok(!plainLines(popup, 120).some((line) => line.includes("Path:")));
+}));
 
 // Item 7: popup style like grok -- the image title sits on the *top* border (not a body row), and
 // the box is narrower than the full available width when its content doesn't need it all (grok's
 // own popup reads roughly 40 columns against a much wider input box).
-test("the image popup title is on the top border, not a body row", () => {
+test("the image popup title is on the top border, not a body row", () => withImages("kitty", () => {
   const editor = makeEditor();
   editor.insertImageChip(ONE_PIXEL_PNG, "image/png");
   const popup = pastePreview(theme, () => editor.chipAtCursor());
-  const lines = popup.render(120).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+  const lines = plainLines(popup, 120);
   assert.match(lines[0], /^╭.*Image #1 ─ PNG · 1x1 · 0\.1 KB.*╮$/);
   assert.match(lines.at(-1), /^╰─+╯$/); // plain bottom rule: images never show an expand hint
   assert.ok(piTui.visibleWidth(lines[0]) < 120, "should not stretch to the full available width");
-});
+}));
 
 // Item 7: bottom border reads `╰─ hint ─╯` -- a dash right after the corner on both ends, not the
 // hint running straight into the corner.
@@ -918,12 +997,16 @@ test("text and image popups fit widths 40, 80 and 120", () => {
   const imageEditor = makeEditor();
   imageEditor.insertImageChip(ONE_PIXEL_PNG, "image/png");
   const imagePopup = pastePreview(theme, () => imageEditor.chipAtCursor());
-  for (const width of [40, 80, 120]) {
-    for (const popup of [textPopup, imagePopup]) {
-      for (const line of popup.render(width)) {
-        assert.ok(piTui.visibleWidth(line) <= width, `width ${width}: ${JSON.stringify(line)}`);
+  for (const images of ["kitty", null]) {
+    withImages(images, () => {
+      for (const width of [40, 80, 120]) {
+        for (const popup of [textPopup, imagePopup]) {
+          for (const line of popup.render(width)) {
+            assert.ok(piTui.visibleWidth(line) <= width, `${images} width ${width}: ${JSON.stringify(line)}`);
+          }
+        }
       }
-    }
+    });
   }
 });
 

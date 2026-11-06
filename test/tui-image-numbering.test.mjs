@@ -208,9 +208,10 @@ describe("image numbering", { concurrency: Math.min(8, Math.max(2, availablePara
     ]);
     assert.match(since(marks.beforeFork, marks.afterFork), /Forked to new session\./);
     // Forked from the first message: the history holds no image, but the editor holds `a1 [Image
-    // #1]` again (with its image), so the new chip is #2. The preview's title names the new chip.
+    // #1]` again (with its image), so the new chip is #2. The preview's title names the new chip (the
+    // harness has no graphics terminal, so the preview is the details card: `╭── Image #2 ─╮`).
     assert.match(since(marks.afterFork, marks.chip), /a1 \[Image #1\] ?\[Image #2\]/);
-    assert.match(since(marks.afterFork, marks.chip), /Image #2 ─ PNG/);
+    assert.match(since(marks.afterFork, marks.chip), /Image #2 ─╮/);
   });
 
   test("/clone keeps the history's images: the next paste continues after them", async (t) => {
@@ -558,7 +559,7 @@ describe("image numbering", { concurrency: Math.min(8, Math.max(2, availablePara
     ]);
     assert.match(marks.failed, /No (API key|model)/);
     // The caret is back at the chip's end: the image preview shows only if the chip has its data.
-    assert.match(since(marks.typed, marks.back), /Image #1 ─ PNG/);
+    assert.match(since(marks.typed, marks.back), /Image #1 ─╮/);
   });
 
   test("finding 3: /fork resends the chosen message's image under its label", async (t) => {
@@ -595,7 +596,7 @@ describe("image numbering", { concurrency: Math.min(8, Math.max(2, availablePara
       ["key", "ctrl+d"],
     ]);
     assert.match(marks.first, /ECHO:first \[Image #1\]\|IMAGES:1/);
-    assert.doesNotMatch(since(marks.first, marks.typed), /Image #1 ─ PNG/);
+    assert.doesNotMatch(since(marks.first, marks.typed), /Image #1 ─╮/);
     const sent = since(marks.typed, marks.sent);
     assert.match(sent, /ECHO:about \[Image #1\]\|IMAGES:0/);
     assert.match(sent, /No image attached for \[Image #1\]; sent as text\./);
@@ -699,7 +700,7 @@ describe("image numbering", { concurrency: Math.min(8, Math.max(2, availablePara
     const { marks } = await run([
       ["waitReady"], settled, ["type", "a2"], ["key", "enter"], turnDone("ECHO:a2"), ["mark", "before"],
       ["type", "/fork"], ["key", "enter"], ["waitFor", "Fork from Message"], ["key", "up"], ["key", "enter"],
-      ["waitFor", "Forked to new session."], ["waitFor", "Image #1 ─ PNG", { all: true }], ["mark", "forked"],
+      ["waitFor", "Forked to new session."], ["waitFor", "Image #1 ─╮", { all: true }], ["mark", "forked"],
       ["key", "enter"], settled, ["mark", "sent"],
       ["key", "ctrl+d"],
     ], ["--no-project", "@pic.png", "look"]);

@@ -20,6 +20,9 @@ export interface ImageChipMeta {
     byteLength: number;
     width: number | undefined;
     height: number | undefined;
+    /** The file it came from when the image was a dropped or pasted file path; clipboard images
+     * have none. Shown only in the text-only preview card (paste-preview.ts). */
+    path?: string;
 }
 export type ChipInfo = {
     kind: "text";
@@ -60,6 +63,7 @@ export declare function sniffImageFile(path: string): {
 } | undefined;
 export type PastedImageFileResult = {
     kind: "image";
+    path: string;
     bytes: Buffer;
     mimeType: string;
 } | {
@@ -157,11 +161,11 @@ export declare class ChipEditor {
      * arbitrary text itself (restoreDraftImages) ahead of one `setText()` call, rather than at the
      * current cursor. Returns the `[Image #N]` label to place in that text. `preferredId` (the
      * number the image was sent under) is used unless the draft holds a different image under it. */
-    registerImage(bytes: Uint8Array, mimeType: string, preferredId?: number): string;
+    registerImage(bytes: Uint8Array, mimeType: string, preferredId?: number, path?: string): string;
     /** Ctrl+V with an image on the clipboard, or an `@image`-equivalent drop: adds an `[Image #N]`
      * chip at the cursor. `bytes` are kept as-is; AgentSession resizes for the model at send time
      * (agent-session.js's `_normalizePromptImages`), so there's no need to do it here too. */
-    insertImageChip(bytes: Uint8Array, mimeType: string): void;
+    insertImageChip(bytes: Uint8Array, mimeType: string, path?: string): void;
     /** The chip the caret sits *on*. Two passes, so two adjacent chips (`A.end === B.start`, no
      * character between them) resolve consistently to the second one at their shared boundary instead
      * of getting stuck on the first: (1) a chip that strictly contains the caret (`start <= col <

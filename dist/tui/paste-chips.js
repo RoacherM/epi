@@ -202,7 +202,7 @@ export function readPastedImageFile(candidate, cwd) {
             return { kind: "none" };
         const bytes = readFileSync(absolute);
         const mimeType = detectSupportedImageMimeType(bytes.subarray(0, 4100));
-        return mimeType ? { kind: "image", bytes, mimeType } : { kind: "none" };
+        return mimeType ? { kind: "image", path: absolute, bytes, mimeType } : { kind: "none" };
     }
     catch (error) {
         const code = error?.code;
@@ -385,7 +385,7 @@ export class ChipEditor {
      * arbitrary text itself (restoreDraftImages) ahead of one `setText()` call, rather than at the
      * current cursor. Returns the `[Image #N]` label to place in that text. `preferredId` (the
      * number the image was sent under) is used unless the draft holds a different image under it. */
-    registerImage(bytes, mimeType, preferredId) {
+    registerImage(bytes, mimeType, preferredId, path) {
         const base64 = Buffer.from(bytes).toString("base64");
         const usable = preferredId !== undefined && (this.imageChips.get(preferredId) === undefined || this.imageChips.get(preferredId)?.base64 === base64);
         const id = usable ? preferredId : Math.max(this.getHighestImageNumber(), ...this.imageChips.keys(), ...imageLabelNumbers(this.inner.getText())) + 1;
@@ -398,14 +398,15 @@ export class ChipEditor {
             byteLength: bytes.byteLength,
             width: dimensions?.widthPx,
             height: dimensions?.heightPx,
+            ...(path === undefined ? {} : { path }),
         });
         return `[Image #${id}]`;
     }
     /** Ctrl+V with an image on the clipboard, or an `@image`-equivalent drop: adds an `[Image #N]`
      * chip at the cursor. `bytes` are kept as-is; AgentSession resizes for the model at send time
      * (agent-session.js's `_normalizePromptImages`), so there's no need to do it here too. */
-    insertImageChip(bytes, mimeType) {
-        const label = this.registerImage(bytes, mimeType);
+    insertImageChip(bytes, mimeType, path) {
+        const label = this.registerImage(bytes, mimeType, undefined, path);
         this.lastPastedChip = undefined;
         this.insertTextAtCursor(label);
     }
@@ -617,7 +618,7 @@ export class ChipEditor {
             return false;
         const pasted = readPastedImageFile(filtered.trim(), this.getCwd());
         if (pasted.kind === "image") {
-            this.insertImageChip(pasted.bytes, pasted.mimeType);
+            this.insertImageChip(pasted.bytes, pasted.mimeType, pasted.path);
             return true;
         }
         if (pasted.kind === "unreadable" && this.onUnreadableImagePath) {
