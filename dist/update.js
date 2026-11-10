@@ -151,6 +151,8 @@ Examples:
                                extension is refetched on the next run, not only the one named here.
 `;
 }
+const UPDATE_TRUST_FLAGS = new Set(["-a", "--approve", "-na", "--no-approve"]);
+const UPDATE_TARGET_FLAGS = new Set(["--self", "--extensions", "--models", "--all"]);
 /** `epi update [--self|--extensions|--models|--all] [<source>]` (docs/cli-design.md §3). A bare
  * `<source>` with no flag is the same as `--extensions <source>`: it does not scope the clear to
  * that one extension (there is no per-source cache to target -- see clearExtensionPackageCache's
@@ -159,20 +161,23 @@ export function parseUpdateArgs(argv) {
     let target;
     let source;
     for (const argument of argv) {
-        if (argument === "--self" || argument === "--extensions" || argument === "--models" || argument === "--all") {
+        if (UPDATE_TRUST_FLAGS.has(argument))
+            continue;
+        if (UPDATE_TARGET_FLAGS.has(argument)) {
             if (target !== undefined) {
                 throw new EpiArgumentError("epi update accepts only one of --self, --extensions, --models, --all");
             }
             target = argument.slice(2);
-            continue;
         }
-        if (argument.startsWith("-")) {
+        else if (argument.startsWith("-")) {
             throw new EpiArgumentError(`Unknown option for epi update: ${argument}`);
         }
-        if (source !== undefined) {
+        else if (source !== undefined) {
             throw new EpiArgumentError("epi update accepts at most one source");
         }
-        source = argument;
+        else {
+            source = argument;
+        }
     }
     if (source !== undefined && target !== undefined && target !== "extensions") {
         throw new EpiArgumentError(`epi update <source> is only valid with --extensions (or no flag)`);

@@ -58,7 +58,10 @@ function parseMinExpiry(value: string | undefined): number {
   return Number(match[1]) * DURATION_UNIT_MS[match[2]!.toLowerCase()]!;
 }
 
-function parseAuthArgv(argv: readonly string[]): ParsedAuthArgs {
+const AUTH_TRUST_FLAGS = new Set(["-a", "--approve", "-na", "--no-approve"]);
+
+function parseAuthArgv(rawArgv: readonly string[]): ParsedAuthArgs {
+  const argv = rawArgv.filter((arg) => !AUTH_TRUST_FLAGS.has(arg));
   const commandToken = argv[0];
   const kind = AUTH_KINDS.find((candidate) => candidate === commandToken);
   if (kind === undefined) {

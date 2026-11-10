@@ -247,15 +247,36 @@ async function maybeAskProjectTrust(
   args.projectTrustOverride = choice.trusted;
 }
 
+const SUBCOMMAND_TRUST_FLAGS = new Set(["-a", "--approve", "-na", "--no-approve"]);
+
+function matchSubcommand(argv: readonly string[]): { subcommand: string; subcommandArgv: string[] } | undefined {
+  let index = 0;
+  while (index < argv.length && SUBCOMMAND_TRUST_FLAGS.has(argv[index]!)) {
+    index += 1;
+  }
+  const subcommand = argv[index];
+  if (subcommand === undefined || !EPI_SUBCOMMANDS.has(subcommand)) {
+    return undefined;
+  }
+  return {
+    subcommand,
+    subcommandArgv: [...argv.slice(0, index), ...argv.slice(index + 1)],
+  };
+}
+
 export async function runEpi(argv: readonly string[]): Promise<void> {
   // Subcommands read/write Epi's own agent directory (~/.epi/pi) directly, never through
   // prepareEpiRun -- set the isolation guard (never Pi's default ~/.pi/agent) before each, but not
   // before --help/--version, which must work even with an invalid EPI_HOME.
-  const subcommand = argv[0];
-  if (subcommand !== undefined && EPI_SUBCOMMANDS.has(subcommand)) {
+  const matchedSubcommand = matchSubcommand(argv);
+  if (matchedSubcommand !== undefined) {
     const agentDir = resolveEpiPaths(process.env).agentDir;
     process.env.PI_CODING_AGENT_DIR = agentDir;
-    process.exitCode = await runSubcommand(subcommand, argv.slice(1), agentDir);
+    process.exitCode = await runSubcommand(
+      matchedSubcommand.subcommand,
+      matchedSubcommand.subcommandArgv,
+      agentDir,
+    );
     return;
   }
 

@@ -552,7 +552,8 @@ export function runListCommand(argv: readonly string[]): number {
     process.stdout.write(renderListHelp());
     return 0;
   }
-  if (argv.length > 0) {
+  const { local, approveOverride, rest } = parseScopeFlags(argv);
+  if (local || rest.length > 0) {
     throw new EpiArgumentError("epi list takes no arguments");
   }
   const epiPaths = resolveEpiPaths(process.env);
@@ -568,7 +569,7 @@ export function runListCommand(argv: readonly string[]): number {
   } else {
     // Same rule as every real run (DEVELOPMENT.md §8.2 rule 1): before a trust decision, at most
     // check the Manifest exists -- never read its declared Rules/Skills/Extensions.
-    const trusted = readProjectTrustDecision(epiPaths.agentDir, process.cwd()) === true;
+    const trusted = approveOverride ?? readProjectTrustDecision(epiPaths.agentDir, process.cwd()) === true;
     if (!trusted) {
       lines.push(`Project (${projectCandidate.manifestPath}): not trusted -- not read (epi --approve or /trust)`);
     } else {

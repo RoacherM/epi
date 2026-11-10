@@ -136,6 +136,18 @@ test("update is an Epi subcommand only in first position", (t) => {
   assert.equal(subcommand.status, 2, subcommand.stderr);
   assert.equal(subcommand.stderr, "epi: Unknown option for epi update: --bogus\n");
 
+  // Shell aliases like `alias epi="epi --approve"` place trust flags before the subcommand token;
+  // they must still dispatch to the subcommand instead of falling through into the chat TUI.
+  for (const flag of ["--approve", "-a", "--no-approve", "-na"]) {
+    const aliasedUpdate = run([flag, "update", "--bogus"]);
+    assert.equal(aliasedUpdate.status, 2, `${flag}: ${aliasedUpdate.stderr}`);
+    assert.equal(aliasedUpdate.stderr, "epi: Unknown option for epi update: --bogus\n");
+  }
+  const aliasedList = run(["--approve", "list"]);
+  assert.equal(aliasedList.status, 0, aliasedList.stderr);
+  const aliasedAuth = run(["--approve", "auth", "--help"]);
+  assert.equal(aliasedAuth.status, 0, aliasedAuth.stderr);
+
   const prompt = run(["--no-project", "-p", "update"]);
   assert.equal(prompt.status, 0, prompt.stderr);
   assert.match(prompt.stdout, /ECHO:update/);
@@ -144,6 +156,9 @@ test("update is an Epi subcommand only in first position", (t) => {
 test("epi update's own argument parser accepts --self/--extensions/--models/--all and a bare source", async () => {
   const { parseUpdateArgs } = await import("../dist/update.js");
   assert.deepEqual(parseUpdateArgs([]), { target: "self" });
+  assert.deepEqual(parseUpdateArgs(["--approve"]), { target: "self" });
+  assert.deepEqual(parseUpdateArgs(["-a", "--models"]), { target: "models" });
+  assert.deepEqual(parseUpdateArgs(["--no-approve", "-na", "--self"]), { target: "self" });
   assert.deepEqual(parseUpdateArgs(["--self"]), { target: "self" });
   assert.deepEqual(parseUpdateArgs(["--models"]), { target: "models" });
   assert.deepEqual(parseUpdateArgs(["--all"]), { target: "all" });

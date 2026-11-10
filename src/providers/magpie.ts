@@ -373,26 +373,93 @@ function fixAnthropicBlock(block: AnthropicBlock): AnthropicBlock | undefined {
   return typeof block.text === "string" ? { ...block, text: cloakText(block.text, MESSAGE_CLOAK_RE) } : block;
 }
 
-function fixAnthropicMessage(message: AnthropicMessage): AnthropicMessage {
+const MAGPIE_PLACEHOLDER_RE = /\{\{[A-Z][A-Z0-9_]*_[a-z2-7]{8}\}\}/;
+const MAGPIE_PLACEHOLDER_NOTE =
+  "Values written like {{NAME_ab23cd45}} are placeholders for sensitive data handled by the gateway.";
+
+function hasGatewayPlaceholder(value: unknown): boolean {
+  return value !== undefined && MAGPIE_PLACEHOLDER_RE.test(JSON.stringify(value));
+}
+
+function hasAssistantToolUse(messages: readonly AnthropicMessage[]): boolean {
+  return messages.some(
+    (message) => message.role === "assistant" && blocksOf(message).some((block) => block.type === "tool_use"),
+  );
+}
+
+/** Factory /v1/messages rejects assistant turns that have a text block after tool_use with 400
+ * ("This model does not support assistant message prefill. The conversation must end with a user message."). */
+function orderAssistantBlocks(blocks: AnthropicBlock[]): AnthropicBlock[] {
+  const firstToolUse = blocks.findIndex((block) => block.type === "tool_use");
+  if (firstToolUse < 0 || !blocks.slice(firstToolUse + 1).some((block) => block.type !== "tool_use")) {
+    return blocks;
+  }
+  return [
+    ...blocks.filter((block) => block.type !== "tool_use"),
+    ...blocks.filter((block) => block.type === "tool_use"),
+  ];
+}
+
+/** Magpie's withNoteAnthropic attaches its placeholder note to system when system or tools already
+ * satisfies redact.HasPlaceholder ({{NAME_<base32>}}), and otherwise appends a text block to the
+ * earliest redacted message—which puts text after tool_use when the first redacted token is in a
+ * tool call's arguments. */
+function withSystemPlaceholderGuard(system: unknown): unknown {
+  if (typeof system === "string") return `${system}\n\n${MAGPIE_PLACEHOLDER_NOTE}`;
+  if (Array.isArray(system)) return [...system, { type: "text", text: MAGPIE_PLACEHOLDER_NOTE }];
+  return [{ type: "text", text: MAGPIE_PLACEHOLDER_NOTE }];
+}
+
+function fixAnthropicMessage(message: AnthropicMessage, antigravity: boolean): AnthropicMessage {
   if (typeof message.content === "string") {
-    return { ...message, content: cloakText(message.content, MESSAGE_CLOAK_RE) };
+    return antigravity ? { ...message, content: cloakText(message.content, MESSAGE_CLOAK_RE) } : message;
   }
   if (!Array.isArray(message.content)) return message;
-  const blocks = message.content.flatMap((block) => {
-    const fixed = fixAnthropicBlock(block);
-    return fixed ? [fixed] : [];
-  });
-  return { ...message, content: blocks.length > 0 ? blocks : [{ type: "text", text: "(thinking)" }] };
+  const blocks = antigravity
+    ? message.content.flatMap((block) => {
+      const fixed = fixAnthropicBlock(block);
+      return fixed ? [fixed] : [];
+    })
+    : message.content;
+  const ordered = message.role === "assistant" ? orderAssistantBlocks(blocks) : blocks;
+  if (!antigravity && ordered === message.content) return message;
+  return { ...message, content: ordered.length > 0 ? ordered : [{ type: "text", text: "(thinking)" }] };
+}
+
+function resolveAnthropicSystem(
+  payload: Record<string, unknown>,
+  antigravity: boolean,
+  fixedMessages: AnthropicMessage[] | undefined,
+): { system?: unknown; changed: boolean } {
+  const baseSystem = antigravity && payload.system !== undefined
+    ? cloakContent(payload.system, SYSTEM_CLOAK_RE)
+    : payload.system;
+  if (
+    fixedMessages &&
+    hasAssistantToolUse(fixedMessages) &&
+    !hasGatewayPlaceholder(baseSystem) &&
+    !hasGatewayPlaceholder(payload.tools)
+  ) {
+    return { system: withSystemPlaceholderGuard(baseSystem), changed: true };
+  }
+  if (antigravity && baseSystem !== undefined) {
+    return { system: baseSystem, changed: true };
+  }
+  return { changed: false };
 }
 
 function fixAnthropicPayload(payload: Record<string, unknown>, antigravity: boolean): unknown {
-  if (!antigravity) return renameToolIdsAfterSteer(payload);
+  const messages = Array.isArray(payload.messages) ? (payload.messages as AnthropicMessage[]) : undefined;
+  const fixedMessages = messages?.map((message) => fixAnthropicMessage(message, antigravity));
+  const messagesChanged = fixedMessages?.some((message, index) => message !== messages?.[index]) ?? false;
+  const resolvedSystem = resolveAnthropicSystem(payload, antigravity, fixedMessages);
+  if (!antigravity && !messagesChanged && !resolvedSystem.changed) {
+    return renameToolIdsAfterSteer(payload);
+  }
   const cleaned = {
     ...payload,
-    ...(payload.system !== undefined ? { system: cloakContent(payload.system, SYSTEM_CLOAK_RE) } : {}),
-    ...(Array.isArray(payload.messages)
-      ? { messages: (payload.messages as AnthropicMessage[]).map(fixAnthropicMessage) }
-      : {}),
+    ...(resolvedSystem.changed ? { system: resolvedSystem.system } : {}),
+    ...(fixedMessages ? { messages: fixedMessages } : {}),
   };
   return renameToolIdsAfterSteer(cleaned) ?? cleaned;
 }

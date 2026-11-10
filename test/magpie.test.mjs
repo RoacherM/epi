@@ -859,6 +859,46 @@ test("fixGatewayPayload strips cross-channel signatures, __ts*__ tool IDs and cl
   }, { id: "antigravity/claude-sonnet-4-6", api: "anthropic-messages" });
   assert.equal(steeredAnthropic.messages[1].content[0].id, "epi_call_1");
   assert.equal(steeredAnthropic.messages[2].content[0].tool_use_id, "epi_call_1");
+  assert.match(JSON.stringify(steeredAnthropic.system), /\{\{NAME_ab23cd45\}\}/);
+
+  // Non-antigravity Anthropic Messages (e.g. factory/claude-opus-5-5):
+  // 1) orders assistant tool_use blocks after text blocks so Factory never rejects with
+  //    400 "This model does not support assistant message prefill. The conversation must end with a user message."
+  // 2) guards system with a valid base32 placeholder ({{NAME_ab23cd45}}) when assistant tool_use is present
+  //    so Magpie's withNoteAnthropic attaches any redaction note to system instead of appending a text block
+  //    after tool_use inside the assistant message.
+  const factoryToolTurn = fixGatewayPayload({
+    model: "factory/claude-opus-5-5",
+    system: "You are a helpful assistant.",
+    messages: [
+      { role: "user", content: "split pane" },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "toolu_1", name: "bash", input: { command: "herdr-app do pane.split --pane p1bf51d6875e97a1ca7c017d6c56d4cb1" } },
+          { type: "text", text: "running split" },
+        ],
+      },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "ok" }] },
+    ],
+  }, { id: "factory/claude-opus-5-5", api: "anthropic-messages" });
+  assert.match(factoryToolTurn.system, /\{\{NAME_ab23cd45\}\}/);
+  assert.deepEqual(
+    factoryToolTurn.messages[1].content.map((block) => block.type),
+    ["text", "tool_use"],
+  );
+  // Idempotent on a second pass (no further rewrite needed), and untouched when there is no assistant tool_use or steer
+  assert.equal(
+    fixGatewayPayload(factoryToolTurn, { id: "factory/claude-opus-5-5", api: "anthropic-messages" }),
+    undefined,
+  );
+  assert.equal(
+    fixGatewayPayload(
+      { system: "plain", messages: [{ role: "user", content: "hi" }] },
+      { id: "factory/claude-opus-5-5", api: "anthropic-messages" },
+    ),
+    undefined,
+  );
 
   // 2. OpenAI Chat Completions (antigravity/* and auto/*)
   const openaiOut = fixGatewayPayload({
