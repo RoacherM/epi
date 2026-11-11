@@ -112,6 +112,7 @@ export async function pasteUnreadableImagePath(
     const paste = await readClipboardForPaste(readClipboardImage, async () => null);
     if (paste.kind === "image") {
       host.insertImage(paste.bytes, paste.mimeType);
+      host.notice(`Used clipboard image; ${path} is not readable.`, "info");
       return;
     }
   } catch {

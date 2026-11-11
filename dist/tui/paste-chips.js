@@ -49,9 +49,9 @@
 // caret landed strictly inside a span, it's stepped the rest of the way to whichever boundary the
 // move was heading toward, so typing never lands mid-label.
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveHomeDir } from "../paths.js";
 import { piTui } from "./pi-tui.js";
 // Pi's magic-number sniffer (utils/mime.js) isn't part of the public API; loaded the same way
 // key-handlers.ts loads Pi's clipboard readers. Used synchronously inside handlePaste, so it's
@@ -165,13 +165,21 @@ export function decidePasteChip(text) {
     const label = lines >= MIN_PASTE_LINES ? `[Pasted: ${lines} lines]` : `[Pasted: ${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB]`;
     return { label, lines, bytes };
 }
+const PASTED_IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg|tiff?|heic|heif|avif)$/i;
+function expandPastedPath(candidate, cwd) {
+    if (candidate === "" || candidate.includes("\n"))
+        return undefined;
+    const expanded = candidate === "~" || candidate.startsWith("~/")
+        ? join(resolveHomeDir(process.env), candidate.slice(1))
+        : candidate;
+    return isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
+}
 /** Resolves a single-line pasted string to an existing image file's absolute path, or undefined
  * (not a path, or the file doesn't exist) -- mirrors file-arguments.ts's own `~`/relative handling. */
 export function resolveImagePath(candidate, cwd) {
-    if (candidate === "" || candidate.includes("\n"))
+    const absolute = expandPastedPath(candidate, cwd);
+    if (absolute === undefined)
         return undefined;
-    const expanded = candidate === "~" || candidate.startsWith("~/") ? join(homedir(), candidate.slice(1)) : candidate;
-    const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
     try {
         return existsSync(absolute) && statSync(absolute).isFile() ? absolute : undefined;
     }
@@ -190,13 +198,13 @@ export function sniffImageFile(path) {
         return undefined;
     }
 }
-/** Resolves and sniffs a single-line pasted image path, distinguishing permission errors (e.g. macOS
- * container sandbox EPERM on WeChat's RWTemp image path when pasting via Cmd+V) from ordinary non-paths. */
+/** Resolves and sniffs a single-line pasted image path, distinguishing permission errors on image-named
+ * paths (e.g. macOS container sandbox EPERM on WeChat's RWTemp image path when pasting via Cmd+V) from
+ * ordinary non-image paths or plain words in an unsearchable directory. */
 export function readPastedImageFile(candidate, cwd) {
-    if (candidate === "" || candidate.includes("\n"))
+    const absolute = expandPastedPath(candidate, cwd);
+    if (absolute === undefined)
         return { kind: "none" };
-    const expanded = candidate === "~" || candidate.startsWith("~/") ? join(homedir(), candidate.slice(1)) : candidate;
-    const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
     try {
         if (!statSync(absolute).isFile())
             return { kind: "none" };
@@ -206,7 +214,7 @@ export function readPastedImageFile(candidate, cwd) {
     }
     catch (error) {
         const code = error?.code;
-        if (code === "EPERM" || code === "EACCES") {
+        if ((code === "EPERM" || code === "EACCES") && PASTED_IMAGE_EXT_RE.test(absolute)) {
             return { kind: "unreadable", path: absolute, error: error };
         }
         return { kind: "none" };

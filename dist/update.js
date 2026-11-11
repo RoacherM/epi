@@ -151,18 +151,25 @@ Examples:
                                extension is refetched on the next run, not only the one named here.
 `;
 }
-const UPDATE_TRUST_FLAGS = new Set(["-a", "--approve", "-na", "--no-approve"]);
+const UPDATE_PREFIX_FLAGS = new Set(["-a", "--approve", "-na", "--no-approve", "--no-project"]);
 const UPDATE_TARGET_FLAGS = new Set(["--self", "--extensions", "--models", "--all"]);
+function stripUpdatePrefixFlags(argv) {
+    const sawApprove = argv.includes("-a") || argv.includes("--approve");
+    const sawNoApprove = argv.includes("-na") || argv.includes("--no-approve");
+    if (sawApprove && sawNoApprove) {
+        throw new EpiArgumentError("--approve and --no-approve cannot be used together");
+    }
+    return argv.filter((argument) => !UPDATE_PREFIX_FLAGS.has(argument));
+}
 /** `epi update [--self|--extensions|--models|--all] [<source>]` (docs/cli-design.md §3). A bare
  * `<source>` with no flag is the same as `--extensions <source>`: it does not scope the clear to
  * that one extension (there is no per-source cache to target -- see clearExtensionPackageCache's
  * doc comment), it just gets echoed in the printed message. */
-export function parseUpdateArgs(argv) {
+export function parseUpdateArgs(rawArgv) {
+    const argv = stripUpdatePrefixFlags(rawArgv);
     let target;
     let source;
     for (const argument of argv) {
-        if (UPDATE_TRUST_FLAGS.has(argument))
-            continue;
         if (UPDATE_TARGET_FLAGS.has(argument)) {
             if (target !== undefined) {
                 throw new EpiArgumentError("epi update accepts only one of --self, --extensions, --models, --all");

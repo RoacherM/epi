@@ -69,8 +69,9 @@ export type PastedImageFileResult = {
 } | {
     kind: "none";
 };
-/** Resolves and sniffs a single-line pasted image path, distinguishing permission errors (e.g. macOS
- * container sandbox EPERM on WeChat's RWTemp image path when pasting via Cmd+V) from ordinary non-paths. */
+/** Resolves and sniffs a single-line pasted image path, distinguishing permission errors on image-named
+ * paths (e.g. macOS container sandbox EPERM on WeChat's RWTemp image path when pasting via Cmd+V) from
+ * ordinary non-image paths or plain words in an unsearchable directory. */
 export declare function readPastedImageFile(candidate: string, cwd: string): PastedImageFileResult;
 interface ChipEditorOptions extends EditorOptions {
     /** Read live so an image path pasted after /resume resolves against the new session's cwd. */

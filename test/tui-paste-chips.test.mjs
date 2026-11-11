@@ -105,32 +105,43 @@ test("sniffImageFile detects a real PNG by magic bytes, not by extension", (t) =
 });
 
 test("unreadable pasted image path (e.g. WeChat sandbox EPERM/EACCES) never crashes and falls back to clipboard image or notice", async (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("chmod 0o000 files remain readable when running as root");
+    return;
+  }
   const dir = tempDir(t);
   const lockedPath = join(dir, "wechat-temp.jpg");
+  const lockedNonImage = join(dir, "notes.txt");
   writeFileSync(lockedPath, ONE_PIXEL_PNG);
+  writeFileSync(lockedNonImage, "secret notes");
   chmodSync(lockedPath, 0o000);
+  chmodSync(lockedNonImage, 0o000);
   t.after(() => {
-    try {
-      chmodSync(lockedPath, 0o600);
-    } catch {
-      // ignore
+    for (const p of [lockedPath, lockedNonImage]) {
+      try {
+        chmodSync(p, 0o600);
+      } catch {
+        // ignore
+      }
     }
   });
 
   // 1. sniffImageFile returns undefined instead of throwing EACCES/EPERM
   assert.equal(sniffImageFile(lockedPath), undefined);
 
-  // 2. readPastedImageFile classifies permission errors as "unreadable"
+  // 2. readPastedImageFile classifies permission errors as "unreadable" ONLY for image extensions
   const classified = readPastedImageFile(lockedPath, dir);
   assert.equal(classified.kind, "unreadable");
   assert.equal(classified.path, lockedPath);
+  assert.deepEqual(readPastedImageFile(lockedNonImage, dir), { kind: "none" });
 
   // 3. ChipEditor without onUnreadableImagePath inserts the path text without throwing
   const plainEditor = makeEditor(dir);
   paste(plainEditor, lockedPath);
   assert.equal(plainEditor.getText(), lockedPath);
 
-  // 4. With onUnreadableImagePath + clipboard image (WeChat Cmd+V), inserts [Image #1]
+  // 4. With onUnreadableImagePath + clipboard image (WeChat Cmd+V), inserts [Image #1] and informs user,
+  //    while pasting an unreadable non-image path (notes.txt) NEVER attaches stale clipboard image!
   const clipImageFile = join(dir, "clip-image.png");
   writeFileSync(clipImageFile, ONE_PIXEL_PNG);
   const prevClip = process.env.EPI_TEST_CLIPBOARD_FILE;
@@ -160,12 +171,22 @@ test("unreadable pasted image path (e.g. WeChat sandbox EPERM/EACCES) never cras
       },
     },
   );
+  paste(hostEditor, lockedNonImage);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(hostEditor.getText(), lockedNonImage, "unreadable non-image path must stay plain text");
+  assert.equal(hostEditor.getImageAttachments().length, 0);
+  assert.equal(notices.length, 0);
+
+  hostEditor.clearDraft();
   paste(hostEditor, lockedPath);
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(hostEditor.getText(), "[Image #1]");
-  assert.equal(notices.length, 0);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].tone, "info");
+  assert.match(notices[0].msg, /Used clipboard image; .*wechat-temp\.jpg is not readable/);
 
   // 5. When clipboard holds no image, inserts the raw path and reports an error notice
+  notices.length = 0;
   const clipEmptyFile = join(dir, "clip-empty.txt");
   writeFileSync(clipEmptyFile, "");
   process.env.EPI_TEST_CLIPBOARD_FILE = clipEmptyFile;

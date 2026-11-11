@@ -35,112 +35,125 @@ function parseMinExpiry(value) {
     }
     return Number(match[1]) * DURATION_UNIT_MS[match[2].toLowerCase()];
 }
-const AUTH_TRUST_FLAGS = new Set(["-a", "--approve", "-na", "--no-approve"]);
-function parseAuthArgv(rawArgv) {
-    const argv = rawArgv.filter((arg) => !AUTH_TRUST_FLAGS.has(arg));
-    const commandToken = argv[0];
-    const kind = AUTH_KINDS.find((candidate) => candidate === commandToken);
-    if (kind === undefined) {
-        throw new EpiArgumentError(`Unknown auth command ${JSON.stringify(commandToken ?? "")}. Use "epi auth print-api-key", "epi auth print-bearer-token", or "epi auth check".`);
+const AUTH_PREFIX_FLAGS = new Set(["-a", "--approve", "-na", "--no-approve", "--no-project"]);
+const CHECK_ONLY_FLAGS = new Set(["--json", "--credentials", "--no-refresh"]);
+function assertNoConflictingTrustFlags(rawArgv) {
+    const sawApprove = rawArgv.includes("-a") || rawArgv.includes("--approve");
+    const sawNoApprove = rawArgv.includes("-na") || rawArgv.includes("--no-approve");
+    if (sawApprove && sawNoApprove) {
+        throw new EpiArgumentError("--approve and --no-approve cannot be used together");
     }
+}
+function parseCheckFlag(kind, argument, flags) {
+    if (kind !== "check") {
+        throw new EpiArgumentError(`${argument} is only supported by auth check`);
+    }
+    flags.json ||= argument === "--json";
+    flags.credentials ||= argument === "--credentials";
+    flags.noRefresh ||= argument === "--no-refresh";
+}
+function parseMinExpiryArg(kind, value) {
+    if (kind !== "print-bearer-token") {
+        throw new EpiArgumentError("--min-expiry is only supported by print-bearer-token");
+    }
+    return parseMinExpiry(value);
+}
+function parseAuthOptions(kind, commandToken, argv) {
     let provider;
     let model;
-    let json = false;
-    let credentials = false;
-    let noRefresh = false;
+    const checkFlags = { json: false, credentials: false, noRefresh: false };
     let minExpiryMs;
     for (let index = 1; index < argv.length; index += 1) {
         const argument = argv[index];
-        if (argument === "--provider") {
+        if (argument === "--provider")
             provider = argv[++index];
-            continue;
-        }
-        if (argument === "--model") {
+        else if (argument === "--model")
             model = argv[++index];
-            continue;
-        }
-        if (argument === "--min-expiry") {
-            if (kind !== "print-bearer-token") {
-                throw new EpiArgumentError("--min-expiry is only supported by print-bearer-token");
-            }
-            minExpiryMs = parseMinExpiry(argv[++index]);
-            continue;
-        }
-        if (argument === "--json" || argument === "--credentials" || argument === "--no-refresh") {
-            if (kind !== "check") {
-                throw new EpiArgumentError(`${argument} is only supported by auth check`);
-            }
-            if (argument === "--json")
-                json = true;
-            else if (argument === "--credentials")
-                credentials = true;
-            else
-                noRefresh = true;
-            continue;
-        }
-        throw new EpiArgumentError(`Unknown option ${argument} for epi auth ${commandToken}`);
+        else if (argument === "--min-expiry")
+            minExpiryMs = parseMinExpiryArg(kind, argv[++index]);
+        else if (CHECK_ONLY_FLAGS.has(argument))
+            parseCheckFlag(kind, argument, checkFlags);
+        else
+            throw new EpiArgumentError(`Unknown option ${argument} for epi auth ${commandToken}`);
     }
     if (!provider && !model) {
         throw new EpiArgumentError(`epi auth ${commandToken} requires --provider <provider> or --model <model>`);
     }
     return {
-        kind,
         ...(provider === undefined ? {} : { provider }),
         ...(model === undefined ? {} : { model }),
-        json,
-        credentials,
-        noRefresh,
+        ...checkFlags,
         ...(minExpiryMs === undefined ? {} : { minExpiryMs }),
     };
+}
+function parseAuthArgv(rawArgv) {
+    assertNoConflictingTrustFlags(rawArgv);
+    const argv = rawArgv.filter((arg) => !AUTH_PREFIX_FLAGS.has(arg));
+    const commandToken = argv[0];
+    const kind = AUTH_KINDS.find((candidate) => candidate === commandToken);
+    if (kind === undefined || commandToken === undefined) {
+        throw new EpiArgumentError(`Unknown auth command ${JSON.stringify(commandToken ?? "")}. Use "epi auth print-api-key", "epi auth print-bearer-token", or "epi auth check".`);
+    }
+    return { kind, ...parseAuthOptions(kind, commandToken, argv) };
+}
+function resolveExplicitProvider(providerName, modelName, modelRuntime) {
+    const provider = modelRuntime.getProvider(providerName);
+    if (!provider) {
+        throw new EpiArgumentError(`Unknown provider "${providerName}". Use --list-models to see available providers.`);
+    }
+    if (!modelName)
+        return [{ id: provider.id }];
+    const resolved = resolveCliModel({ cliProvider: provider.id, cliModel: modelName, modelRuntime });
+    if (resolved.error || !resolved.model) {
+        throw new EpiArgumentError(resolved.error ?? "Unable to resolve the requested provider/model");
+    }
+    return [{ id: provider.id, model: resolved.model }];
+}
+function resolveCandidateProviders(args, modelRuntime, credentialTypes) {
+    if (args.provider) {
+        return resolveExplicitProvider(args.provider, args.model, modelRuntime);
+    }
+    const cliModelOpt = args.model === undefined ? {} : { cliModel: args.model };
+    const matches = [];
+    for (const provider of modelRuntime.getProviders()) {
+        if (!credentialTypes.has(provider.id))
+            continue;
+        const resolved = resolveCliModel({ cliProvider: provider.id, ...cliModelOpt, modelRuntime });
+        if (resolved.model && !resolved.error && !resolved.warning?.includes("Using custom model id")) {
+            matches.push({ id: provider.id, model: resolved.model });
+        }
+    }
+    if (matches.length === 0) {
+        throw new EpiArgumentError(`Model "${args.model}" not found. Use --list-models to see available models.`);
+    }
+    return matches;
+}
+function missingCredentialError(args, kind, providerId, type) {
+    if (args.provider && kind === "api_key" && type === "oauth") {
+        return new EpiArgumentError(`Provider "${providerId}" is configured with OAuth, not an API key`);
+    }
+    if (args.provider && kind === "bearer_token" && type !== "oauth") {
+        return new EpiArgumentError(`Provider "${providerId}" is not configured with an OAuth bearer token`);
+    }
+    return new EpiArgumentError(`No usable ${kind === "api_key" ? "API key" : "OAuth bearer token"} is configured`);
+}
+function credentialMatchesKind(kind, type) {
+    return kind === "api_key" ? type !== "oauth" : type === "oauth";
 }
 /** Mirrors Pi's resolveCredentialForPrint (dist/cli/credential-print.js): pick the provider (and
  * optionally the model), then read its resolved credential of the requested kind. */
 async function resolvePrintCredential(args, modelRuntime, signal) {
     const kind = args.kind === "print-api-key" ? "api_key" : "bearer_token";
     const credentialTypes = new Map((await modelRuntime.listCredentials({ signal })).map((credential) => [credential.providerId, credential.type]));
-    // `Model<Api>` isn't exported by pi-coding-agent; resolveCliModel's own return type carries it,
-    // and getAuth's model overload accepts it structurally, so an inferred/loose type is enough here.
-    const providers = [];
-    if (args.provider) {
-        const provider = modelRuntime.getProvider(args.provider);
-        if (!provider) {
-            throw new EpiArgumentError(`Unknown provider "${args.provider}". Use --list-models to see available providers.`);
-        }
-        if (args.model) {
-            const resolved = resolveCliModel({ cliProvider: provider.id, cliModel: args.model, modelRuntime });
-            if (resolved.error || !resolved.model) {
-                throw new EpiArgumentError(resolved.error ?? "Unable to resolve the requested provider/model");
-            }
-            providers.push({ id: provider.id, model: resolved.model });
-        }
-        else {
-            providers.push({ id: provider.id });
-        }
-    }
-    else {
-        for (const provider of modelRuntime.getProviders()) {
-            if (!credentialTypes.has(provider.id))
-                continue;
-            const resolved = resolveCliModel({ cliProvider: provider.id, ...(args.model === undefined ? {} : { cliModel: args.model }), modelRuntime });
-            if (resolved.model && !resolved.error && !resolved.warning?.includes("Using custom model id")) {
-                providers.push({ id: provider.id, model: resolved.model });
-            }
-        }
-        if (providers.length === 0) {
-            throw new EpiArgumentError(`Model "${args.model}" not found. Use --list-models to see available models.`);
-        }
-    }
+    const providers = resolveCandidateProviders(args, modelRuntime, credentialTypes);
+    const authOptions = {
+        ...(kind === "bearer_token" ? { minOAuthValidityMs: args.minExpiryMs ?? 30 * 60_000 } : {}),
+        signal,
+    };
     const credentials = [];
     for (const provider of providers) {
-        const type = credentialTypes.get(provider.id);
-        if (kind === "api_key" && type === "oauth")
+        if (!credentialMatchesKind(kind, credentialTypes.get(provider.id)))
             continue;
-        if (kind === "bearer_token" && type !== "oauth")
-            continue;
-        const authOptions = {
-            ...(kind === "bearer_token" ? { minOAuthValidityMs: args.minExpiryMs ?? 30 * 60_000 } : {}),
-            signal,
-        };
         const auth = provider.model
             ? await modelRuntime.getAuth(provider.model, authOptions)
             : await modelRuntime.getAuth(provider.id, authOptions);
@@ -152,14 +165,7 @@ async function resolvePrintCredential(args, modelRuntime, signal) {
         return credentials[0].value;
     if (credentials.length === 0) {
         const providerId = providers[0]?.id;
-        const type = providerId ? credentialTypes.get(providerId) : undefined;
-        if (args.provider && kind === "api_key" && type === "oauth") {
-            throw new EpiArgumentError(`Provider "${providerId}" is configured with OAuth, not an API key`);
-        }
-        if (args.provider && kind === "bearer_token" && type !== "oauth") {
-            throw new EpiArgumentError(`Provider "${providerId}" is not configured with an OAuth bearer token`);
-        }
-        throw new EpiArgumentError(`No usable ${kind === "api_key" ? "API key" : "OAuth bearer token"} is configured`);
+        throw missingCredentialError(args, kind, providerId, providerId ? credentialTypes.get(providerId) : undefined);
     }
     throw new EpiArgumentError(`Multiple configured providers matched (${credentials.map(({ providerId }) => providerId).join(", ")}). Specify --provider.`);
 }

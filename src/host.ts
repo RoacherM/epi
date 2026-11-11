@@ -16,7 +16,7 @@ import { guardClosedStdout } from "./closed-stdout.js";
 import { runAuthCommand } from "./commands/auth-cli.js";
 import { runConfigCommand, runInstallCommand, runListCommand, runRemoveCommand } from "./commands/manifest-cli.js";
 import { runMcpCommand } from "./commands/mcp-cli.js";
-import { reportRunFailure } from "./errors.js";
+import { EpiArgumentError, reportRunFailure } from "./errors.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { isInteractivePiRun } from "./interactive.js";
 import { isListModelsRun, runListModels } from "./list-models.js";
@@ -247,11 +247,43 @@ async function maybeAskProjectTrust(
   args.projectTrustOverride = choice.trusted;
 }
 
-const SUBCOMMAND_TRUST_FLAGS = new Set(["-a", "--approve", "-na", "--no-approve"]);
+const SUBCOMMAND_PREFIX_FLAGS = new Set([
+  "-a",
+  "--approve",
+  "-na",
+  "--no-approve",
+  "--no-project",
+  "--offline",
+]);
+
+function normalizeSubcommandArgv(
+  subcommand: string,
+  prefix: readonly string[],
+  rest: readonly string[],
+): string[] {
+  const sawApprove = prefix.includes("-a") || prefix.includes("--approve");
+  const sawNoApprove = prefix.includes("-na") || prefix.includes("--no-approve");
+  if (sawApprove && sawNoApprove) {
+    throw new EpiArgumentError("--approve and --no-approve cannot be used together");
+  }
+  const forwarded = prefix.filter((flag) => flag === "--offline");
+  if (subcommand === "update" || subcommand === "auth") {
+    return [...rest, ...forwarded];
+  }
+  if (subcommand === "mcp") {
+    if (rest.length === 0 || rest.includes("-h") || rest.includes("--help")) {
+      return [...rest];
+    }
+    const noProject = prefix.includes("--no-project");
+    const effective = noProject ? ["--no-approve"] : sawApprove ? ["--approve"] : sawNoApprove ? ["--no-approve"] : [];
+    return [rest[0]!, ...effective, ...forwarded, ...rest.slice(1)];
+  }
+  return [...prefix, ...rest];
+}
 
 function matchSubcommand(argv: readonly string[]): { subcommand: string; subcommandArgv: string[] } | undefined {
   let index = 0;
-  while (index < argv.length && SUBCOMMAND_TRUST_FLAGS.has(argv[index]!)) {
+  while (index < argv.length && SUBCOMMAND_PREFIX_FLAGS.has(argv[index]!)) {
     index += 1;
   }
   const subcommand = argv[index];
@@ -260,8 +292,30 @@ function matchSubcommand(argv: readonly string[]): { subcommand: string; subcomm
   }
   return {
     subcommand,
-    subcommandArgv: [...argv.slice(0, index), ...argv.slice(index + 1)],
+    subcommandArgv: normalizeSubcommandArgv(subcommand, argv.slice(0, index), argv.slice(index + 1)),
   };
+}
+
+function writeDryRunReport(prepared: PreparedEpiRun): void {
+  const output = {
+    epiVersion: EPI_VERSION,
+    piVersion: PI_VERSION,
+    sdkEntry: SDK_ENTRY,
+    epiHome: prepared.epiHome,
+    agentDir: prepared.agentDir,
+    globalManifest: prepared.assembly.globalManifest,
+    globalManifestLoaded: prepared.assembly.globalManifestLoaded,
+    projectDiscovery: prepared.assembly.projectDiscovery,
+    projectManifest: prepared.assembly.projectManifest ?? null,
+    runtimeIdentity: prepared.runtimeIdentity,
+    piResourceArgs: [...BASE_PI_RESOURCE_ARGS],
+    rules: prepared.assembly.rules,
+    skills: prepared.assembly.skills,
+    inlineExtensions: prepared.assembly.inlineExtensions,
+    disabledExtensions: prepared.assembly.disabledExtensions,
+    externalExtensions: prepared.assembly.externalExtensions,
+  };
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
 
 export async function runEpi(argv: readonly string[]): Promise<void> {
@@ -322,25 +376,7 @@ export async function runEpi(argv: readonly string[]): Promise<void> {
   ];
 
   if (prepared.args.dryRun) {
-    const output = {
-      epiVersion: EPI_VERSION,
-      piVersion: PI_VERSION,
-      sdkEntry: SDK_ENTRY,
-      epiHome: prepared.epiHome,
-      agentDir: prepared.agentDir,
-      globalManifest: prepared.assembly.globalManifest,
-      globalManifestLoaded: prepared.assembly.globalManifestLoaded,
-      projectDiscovery: prepared.assembly.projectDiscovery,
-      projectManifest: prepared.assembly.projectManifest ?? null,
-      runtimeIdentity: prepared.runtimeIdentity,
-      piResourceArgs: [...BASE_PI_RESOURCE_ARGS],
-      rules: prepared.assembly.rules,
-      skills: prepared.assembly.skills,
-      inlineExtensions: prepared.assembly.inlineExtensions,
-      disabledExtensions: prepared.assembly.disabledExtensions,
-      externalExtensions: prepared.assembly.externalExtensions,
-    };
-    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+    writeDryRunReport(prepared);
     return;
   }
 
@@ -357,6 +393,13 @@ export async function runEpi(argv: readonly string[]): Promise<void> {
     // as a compaction request that ignored its abort (dogfood D35, D41).
     process.exit(code);
   }
+  await runNonTuiMode(prepared, extensionFactories);
+}
+
+async function runNonTuiMode(
+  prepared: PreparedEpiRun,
+  extensionFactories: ReturnType<typeof buildInlineExtensions>,
+): Promise<void> {
   // `--list-models` is Epi's own (dogfood D48): piMain's drops the extension diagnostics `-p` stops
   // on and prints Pi's empty-list text (src/list-models.ts).
   if (isListModelsRun(prepared.piArgs)) {
