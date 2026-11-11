@@ -96,10 +96,13 @@ test("analyzeBashCommand blocks unbounded stream-follow commands and smart-allow
     "journalctl -u nginx -f",
     "dmesg -w",
     "docker logs -f my-container",
+    "docker compose -f docker-compose.test.yml logs -f web",
     "kubectl logs pod/web --follow",
     "watch -n 1 date",
     "fswatch src/",
     "ping 127.0.0.1",
+    "caffeinate -i tail -f app.log",
+    "stdbuf -oL tail -f app.log",
     "FOO=1 sudo -u root env BAR=2 bash -lc 'tail -f /var/log/system.log'",
   ]) {
     const res = analyzeBashCommand(cmd, defaultedOpts);
@@ -125,7 +128,11 @@ test("analyzeBashCommand blocks unbounded stream-follow commands and smart-allow
     { blocked: false },
   );
   assert.deepEqual(analyzeBashCommand("ping -c 3 127.0.0.1", defaultedOpts), { blocked: false });
+  assert.deepEqual(analyzeBashCommand("ping -qc 4 127.0.0.1", defaultedOpts), { blocked: false });
   assert.deepEqual(analyzeBashCommand("docker logs --tail 100 my-container", defaultedOpts), { blocked: false });
+  assert.deepEqual(analyzeBashCommand("docker compose -f docker-compose.test.yml logs --tail 200", defaultedOpts), { blocked: false });
+  assert.deepEqual(analyzeBashCommand("dmesg -f kern", defaultedOpts), { blocked: false });
+  assert.deepEqual(analyzeBashCommand("journalctl -F _SYSTEMD_UNIT", defaultedOpts), { blocked: false });
 });
 
 test("analyzeBashCommand blocks headless interactive TUIs without false-blocking pagers or batch modes", () => {
@@ -135,7 +142,7 @@ test("analyzeBashCommand blocks headless interactive TUIs without false-blocking
     assert.equal(res.blocked, true, `expected ${cmd} to be blocked`);
     assert.equal(res.kind, "interactive-tui");
   }
-  for (const safe of ["top -l 1", "top -b -n 1", "less README.md", "git rebase -i HEAD~2", "command -v vim", "command -V fswatch", "command -pv nohup"]) {
+  for (const safe of ["top -l 1", "top -b -n 1", "top -bn1", "less README.md", "git rebase -i HEAD~2", "command -v vim", "command -V fswatch", "command -pv nohup", "caffeinate -i echo vim", "caffeinate -t 30 echo watch"]) {
     assert.deepEqual(analyzeBashCommand(safe, opts), { blocked: false }, `expected ${safe} to be allowed`);
   }
 });
@@ -144,6 +151,7 @@ test("analyzeBashCommand blocks detached daemons and unwaited background jobs wh
   const opts = { effectiveTimeoutSec: 120, timeoutDefaulted: true, hasMonitorTool: true };
   for (const cmd of [
     "nohup node server.js >/tmp/out 2>&1 &",
+    "caffeinate -i nohup node server.js",
     "setsid python3 worker.py",
     "tmux new-session -d -s dev 'npm run dev'",
     "tmux new -d 'sleep 30'",

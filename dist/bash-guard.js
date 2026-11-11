@@ -7,12 +7,16 @@ const MAX_SHELL_UNWRAP_DEPTH = 3;
 const DETACHED_BINS = new Set(["nohup", "setsid", "disown", "daemonize"]);
 const INTERACTIVE_BINS = new Set(["vim", "vi", "nvim", "nano", "pico", "htop", "btop", "script", "expect", "unbuffer"]);
 const SHELL_BINS = new Set(["sh", "bash", "zsh", "dash"]);
-const SIMPLE_WRAPPERS = new Set(["nice", "stdbuf", "caffeinate", "time"]);
 const ENV_VALUE_FLAGS = new Set(["-u"]);
 const SUDO_VALUE_FLAGS = new Set(["-u", "-g", "-C"]);
 const EMPTY_FLAGS = new Set();
 const TIMEOUT_VALUE_FLAGS = new Set(["-k", "-s", "--kill-after", "--signal"]);
-const WRAPPER_VALUE_FLAGS = new Set(["-n", "-o", "-e", "-i", "-t", "-w"]);
+const WRAPPER_FLAGS_BY_BIN = new Map([
+    ["nice", new Set(["-n"])],
+    ["stdbuf", new Set(["-i", "-o", "-e"])],
+    ["caffeinate", new Set(["-t", "-w"])],
+    ["time", EMPTY_FLAGS],
+]);
 function longRunningGuidance(hasMonitorTool, snapshotHint) {
     return hasMonitorTool
         ? `Use ${snapshotHint} for a bounded check, \`timeout 15 ...\` for a short probe (<=60s), or \`monitor\` / \`task({ background: true })\` for managed background streams and daemons.`
@@ -243,6 +247,7 @@ function unwrapUtilityWrappers(argv) {
     let wrapperTimeoutSec;
     while (cur.length > 0) {
         const bin = basename(cur[0]);
+        const wrapperFlags = WRAPPER_FLAGS_BY_BIN.get(bin);
         if (bin === "timeout" || bin === "gtimeout") {
             const durIdx = advanceFlaggedPrefix(cur, 0, TIMEOUT_VALUE_FLAGS, false);
             const dur = parseDurationTokenSec(cur[durIdx]);
@@ -250,8 +255,8 @@ function unwrapUtilityWrappers(argv) {
                 wrapperTimeoutSec = wrapperTimeoutSec === undefined ? dur : Math.min(wrapperTimeoutSec, dur);
             cur = stripEnvAndCommandPrefixes(cur.slice(durIdx + 1));
         }
-        else if (SIMPLE_WRAPPERS.has(bin)) {
-            cur = stripEnvAndCommandPrefixes(cur.slice(advanceFlaggedPrefix(cur, 0, WRAPPER_VALUE_FLAGS, false)));
+        else if (wrapperFlags !== undefined) {
+            cur = stripEnvAndCommandPrefixes(cur.slice(advanceFlaggedPrefix(cur, 0, wrapperFlags, false)));
         }
         else
             break;
@@ -282,14 +287,22 @@ function checkDetachedDaemon(rawBin, bin, args, segText, hasMonitorTool) {
         ? { blocked: true, kind: "detached-daemon", reason: `Blocked detached multiplexer daemon (\`${bin}\`) in one-shot bash: \`${segText}\`.\n${longRunningGuidance(hasMonitorTool, "a bounded foreground command")}` }
         : undefined;
 }
+function hasShortOrLongFollow(tokens, shortChars) {
+    const shortRe = new RegExp(`^-[A-Za-z0-9]*[${shortChars}]`);
+    return tokens.some((a) => a === "--follow" || a.startsWith("--follow=") || (!a.startsWith("--") && shortRe.test(a)));
+}
 function streamFollowSnapshotAlt(bin, args) {
-    const follow = args.some((a) => a === "--follow" || a.startsWith("--follow=") || (!a.startsWith("--") && /^-[A-Za-z0-9]*[fF]/.test(a)));
-    if (bin === "tail" && follow)
+    if (bin === "tail" && hasShortOrLongFollow(args, "fF"))
         return "`tail -n 200 <file>`";
-    if ((bin === "journalctl" || bin === "dmesg") && (follow || args.includes("-w")))
-        return "`-n 200 --no-pager`";
-    if ((bin === "docker" || bin === "kubectl" || bin === "podman") && args.includes("logs") && follow)
-        return "`logs --tail 200` (without `-f`)";
+    if (bin === "journalctl" && hasShortOrLongFollow(args, "f"))
+        return "`journalctl -n 200 --no-pager`";
+    if (bin === "dmesg" && hasShortOrLongFollow(args, "w"))
+        return "`dmesg | tail -n 200`";
+    if (bin === "docker" || bin === "kubectl" || bin === "podman") {
+        const logsIdx = args.indexOf("logs");
+        if (logsIdx >= 0 && hasShortOrLongFollow(args.slice(logsIdx + 1), "f"))
+            return "`logs --tail 200` (without `-f`)";
+    }
     if (bin === "watch" || bin === "fswatch")
         return "a single snapshot command";
     return undefined;
@@ -301,7 +314,7 @@ function checkStreamFollow(bin, args, segText, probeBoundSec, hasMonitorTool) {
     if (alt !== undefined) {
         return { blocked: true, kind: "stream-follow", reason: `Blocked unbounded streaming command: \`${segText}\`.\n${longRunningGuidance(hasMonitorTool, alt)}` };
     }
-    return bin === "ping" && !args.some((a) => /^-(?:c|w|t|o)\d*$/.test(a) || /^--(?:count|deadline|timeout)(?:=|$)/.test(a))
+    return bin === "ping" && !args.some((a) => (!a.startsWith("--") && /^-[A-Za-z]*(?:c|w|t|o)\d*$/.test(a)) || /^--(?:count|deadline|timeout)(?:=|$)/.test(a))
         ? { blocked: true, kind: "stream-follow", reason: `Blocked unbounded \`ping\` without packet/time limit: \`${segText}\`. Pass \`ping -c 4 ...\` so it terminates.` }
         : undefined;
 }
@@ -313,7 +326,7 @@ function checkInteractiveTui(bin, args, segText) {
             reason: `Blocked interactive terminal/PTY program \`${bin}\`: \`${segText}\`.\n\`bash\` runs headless without an interactive TTY; use \`read\` / \`edit\` / \`write\` or non-interactive CLI flags instead.`,
         };
     }
-    return bin === "top" && !args.some((a) => a === "-l" || a === "-b" || a === "-n" || /^-[lbn]\d+/.test(a))
+    return bin === "top" && !args.some((a) => !a.startsWith("--") && /^-[A-Za-z]*[lbn]\d*$/.test(a))
         ? { blocked: true, kind: "interactive-tui", reason: `Blocked interactive \`top\`: \`${segText}\`. Pass \`top -l 1\` (macOS) or \`top -b -n 1\` (Linux) for a single snapshot.` }
         : undefined;
 }
