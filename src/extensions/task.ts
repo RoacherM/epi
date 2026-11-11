@@ -681,19 +681,14 @@ type TaskCore = ReturnType<typeof createTaskCore>;
 function buildTaskNotifyPayload(runtime: TaskRuntime, entries: Array<LedgerEntry<TaskMailData>>) {
   const notifyText = (entry: LedgerEntry<TaskMailData>): string => {
     const id = shortJobId(entry.data.job.id);
-    const body = entry.data.milestone !== undefined
-      ? `progress: ${entry.data.milestone}`
+    const body = entry.data.milestone !== undefined ? `progress: ${entry.data.milestone}`
       : `${entry.data.job.status}: ${singleLine(entry.data.job.result ?? entry.data.job.error ?? "", NOTIFY_SUMMARY_LIMIT)}`;
     return `Job ${id} ${body}\ntask_status({ jobId: "${id}" }) for details`;
   };
   const inFlight = runtime.list().filter((job) => job.status === "queued" || job.status === "running");
   const footer = inFlight.length === 0 ? "" : `\n\nIn flight: ${inFlight.map((job) => `${shortJobId(job.id)} (${job.agent ?? "task"} ${job.status})`).join(", ")}`;
-  return {
-    customType: "epi:task-notify",
-    content: withSystemNotificationFraming(`${entries.map(notifyText).join("\n\n")}${footer}`),
-    display: true,
-    details: { jobIds: entries.map((entry) => entry.key), receipts: entries.map((entry) => `${entry.key}:${entry.run}`) },
-  };
+  const receipts = entries.map((entry) => `${entry.key}:${entry.run}`);
+  return { customType: "epi:task-notify", content: withSystemNotificationFraming(`${entries.map(notifyText).join("\n\n")}${footer}`), display: true, details: { jobIds: entries.map((e) => e.key), receipts } };
 }
 
 function createTaskNotifications(core: TaskCore) {
@@ -703,12 +698,9 @@ function createTaskNotifications(core: TaskCore) {
   const STATUS_KEY = "tasks";
   let lastStatusText: string | undefined;
   const ledger = new NotificationLedger<TaskMailData>({
-    customType: "epi:task-notify",
-    coalesceMs: NOTIFY_COALESCE_MS,
-    gate,
+    customType: "epi:task-notify", coalesceMs: NOTIFY_COALESCE_MS, gate,
     buildPayload: (entries) => buildTaskNotifyPayload(runtime, entries),
-    onChange: () => refreshStatus(),
-    onSendError: (error) => reportCompletionError("notifying a settled task", error),
+    onChange: () => refreshStatus(), onSendError: (error) => reportCompletionError("notifying a settled task", error),
   });
   milestoneHook.fn = (job: TaskJobSnapshot, summary: string): void => {
     ledger.put(`${job.id}:milestone:${++milestoneSeq}`, { job, milestone: summary }, job.run ?? 0, true, jobOrigins.get(job.id) ?? gate.sessionId());
@@ -963,18 +955,16 @@ function createDetailPages(core: TaskCore) {
   const monitorPage = (theme: Theme, monitorId: string): InspectTarget | undefined => {
     const mon = bridge.getMonitor(monitorId);
     if (mon === undefined) return undefined;
-    return {
-      ...monitorViewTarget(theme, mon),
-      live: { follow: true, subscribe: (update) => {
-        let timer: NodeJS.Timeout | undefined;
-        const unsub = bridge.onMonitorChange(() => {
-          if (timer !== undefined) return;
-          timer = setTimeout(() => { timer = undefined; const m = bridge.getMonitor(monitorId); if (m !== undefined) update(monitorViewTarget(theme, m)); }, UPDATE_THROTTLE_MS);
-          timer.unref();
-        });
-        return () => { unsub(); if (timer !== undefined) clearTimeout(timer); };
-      } },
+    const subscribe = (update: (next: InspectTarget) => void): (() => void) => {
+      let timer: NodeJS.Timeout | undefined;
+      const unsub = bridge.onMonitorChange(() => {
+        if (timer !== undefined) return;
+        timer = setTimeout(() => { timer = undefined; const m = bridge.getMonitor(monitorId); if (m !== undefined) update(monitorViewTarget(theme, m)); }, UPDATE_THROTTLE_MS);
+        timer.unref();
+      });
+      return () => { unsub(); if (timer !== undefined) clearTimeout(timer); };
     };
+    return { ...monitorViewTarget(theme, mon), live: { follow: true, subscribe } };
   };
   return { jobPage, monitorPage };
 }
@@ -990,7 +980,7 @@ function createTaskOverlay(core: TaskCore, detail: ReturnType<typeof createDetai
         ...jobs.map((job) => ({ kind: "job" as const, id: job.id, row: jobRow(theme, job) })),
         ...monitors.map((mon) => ({ kind: "monitor" as const, id: mon.id, row: monitorRow(theme, mon) })),
       ];
-      const lines = items.length === 0 ? [theme.fg("muted", "No task jobs.")] : items.map((item) => item.row);
+      const lines = items.length === 0 ? [theme.fg("muted", "No task jobs or monitors.")] : items.map((item) => item.row);
       const jobCount = `${jobs.length} ${jobs.length === 1 ? "job" : "jobs"}`;
       return {
         title: "tasks",
@@ -1044,7 +1034,7 @@ function createTaskOverlay(core: TaskCore, detail: ReturnType<typeof createDetai
 }
 
 interface TaskEnv { core: TaskCore; notify: TaskNotifications; runner: ReturnType<typeof createTaskRunner>; watchJob: ReturnType<typeof createJobWatcher>; pages: ReturnType<typeof createTaskOverlay> }
-interface TaskGateHelpers { gateTaskStart: (hookCtx: ExtensionContext, agent: string | undefined, task: string, cwd: string) => Promise<void>; isBackgroundFor: (explicit: boolean | undefined, agentName: string | undefined) => boolean }
+interface TaskGateHelpers { gateTaskStart: (hookCtx: ExtensionContext, agent: string | undefined, task: string, cwd: string) => Promise<void>; isBackgroundFor: (explicit: boolean | undefined, agentName: string | undefined) => boolean; needsFork: (explicit: "fresh" | "fork" | undefined, agentName: string | undefined) => boolean }
 
 export function createTaskInlineExtension(options: TaskExtensionOptions): InlineExtension {
   const core = createTaskCore(options);
@@ -1161,11 +1151,11 @@ const taskGuiBindings = {
         }
       };
 
-      const isBackgroundFor = (explicit: boolean | undefined, agentName: string | undefined): boolean => {
-        if (explicit !== undefined) return explicit;
-        return agentName !== undefined && agentsByName.get(agentName)?.background === true;
-      };
-      return { gateTaskStart, isBackgroundFor };
+      const isBackgroundFor = (explicit: boolean | undefined, agentName: string | undefined): boolean =>
+        explicit ?? (agentName !== undefined && agentsByName.get(agentName)?.background === true);
+      const needsFork = (explicit: "fresh" | "fork" | undefined, agentName: string | undefined): boolean =>
+        (explicit ?? (agentName === undefined ? undefined : agentsByName.get(agentName)?.context)) === "fork";
+      return { gateTaskStart, isBackgroundFor, needsFork };
     },
   },
 };
@@ -1183,6 +1173,7 @@ const batchBindings = {
       const { runtime, recordOrigin } = env.core;
       const items = params.tasks ?? [];
       const startedJobs: Array<{ job: TaskJobSnapshot; background: boolean }> = [];
+      let forkEntries: ReturnType<typeof forkableBranch> | undefined;
       try {
         for (const item of items) {
           const agentName = item.agent ?? params.agent;
@@ -1194,6 +1185,7 @@ const batchBindings = {
             ...(agentName === undefined ? {} : { agent: agentName }),
             ...(item.isolation === undefined ? {} : { isolation: item.isolation }),
             ...(item.model === undefined ? {} : { model: item.model }),
+            ...(gates.needsFork(params.context, agentName) ? { forkEntries: (forkEntries ??= forkableBranch(ctx.sessionManager.getBranch())) } : {}),
             task: item.task,
             cwd,
             inheritedModel: inheritedModelReference(ctx.model, ctx.thinkingLevel),
@@ -1285,7 +1277,7 @@ const taskBindings = {
     },
     bindTaskTool(pi: ExtensionAPI, env: TaskEnv, gates: TaskGateHelpers, executeTaskBatch: ReturnType<typeof batchBindings.ui.makeBatchExecutor>, executeTaskJobId: (params: TaskToolParams, signal: AbortSignal | undefined, onUpdate: ((partial: AgentToolResult<unknown>) => void) | undefined, ctx: ExtensionContext) => Promise<AgentToolResult<unknown>>): void {
       const { core: { runtime, gate, recordOrigin, availableAgents, foregroundBudgetMs }, runner: { runJob }, pages: { jobPage } } = env;
-      const { gateTaskStart, isBackgroundFor } = gates;
+      const { gateTaskStart, isBackgroundFor, needsFork } = gates;
       pi.registerTool({
         name: "task",
         label: "Task",
@@ -1328,7 +1320,7 @@ const taskBindings = {
               task: params.task,
               cwd,
               inheritedModel: inheritedModelReference(ctx.model, ctx.thinkingLevel),
-              ...(params.context === "fork"
+              ...(needsFork(params.context, params.agent)
                 ? { forkEntries: forkableBranch(ctx.sessionManager.getBranch()) }
                 : {}),
             });

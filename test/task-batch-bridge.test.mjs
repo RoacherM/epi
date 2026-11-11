@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,7 +8,9 @@ import test from "node:test";
 
 import { createMonitorInlineExtension } from "../dist/extensions/monitor.js";
 import { createTaskMonitorBridge, withSystemNotificationFraming } from "../dist/extensions/task-notify.js";
+import { monitorRow, monitorViewTarget } from "../dist/extensions/task-view.js";
 import { createTaskInlineExtension } from "../dist/extensions/task.js";
+import { BlockInspectorOverlay } from "../dist/tui/buffer/inspector.js";
 
 const fakeWorker = fileURLToPath(
   new URL("./fixtures/fake-task-worker.mjs", import.meta.url),
@@ -447,4 +449,160 @@ test("TaskMonitorBridge unifies footer count, /tasks overlay, bidirectional canc
 
   await rec.tools.get("monitor_stop").execute("c-stop-mon", { id: monId }, undefined, undefined, ctx);
   await rec.tools.get("task_cancel").execute("c-stop-task", { jobId: taskId }, undefined, undefined, ctx);
+});
+
+test("monitorViewTarget and monitorRow sanitize OSC 52, CSI, CR, TAB, and multi-line descriptions", (t) => {
+  const root = createTempRoot(t);
+  const outPath = join(root, "mon.stdout.log");
+  const errPath = join(root, "mon.stderr.log");
+  writeFileSync(
+    outPath,
+    [
+      "osc52:\x1b]52;c;SGVsbG8=\x07tail",
+      "csi:\x1b[2J\x1b[1;1Hclear",
+      "step 10%\rstep 100%",
+      "cols:\ta\tb\tc",
+    ].join("\n") + "\n",
+  );
+  writeFileSync(errPath, "stderr-osc:\x1b]52;c;ERR=\x07\r\n");
+
+  const ansiTheme = {
+    fg: (_tone, s) => `\x1b[38;5;245m${s}\x1b[39m`,
+    bg: (_tone, s) => String(s),
+    bold: (s) => `\x1b[1m${s}\x1b[22m`,
+  };
+  const summary = {
+    id: "mon12345",
+    kind: "ws",
+    description: "ws stream\ninjected-second-row\x1b]52;c;BAD=\x07",
+    target: "ws://127.0.0.1:9000/feed\t\x1b[2J",
+    status: "running",
+    persistent: false,
+    timeoutMs: 30_000,
+    eventCount: 4,
+    suppressedCount: 0,
+    outputPath: outPath,
+    stderrPath: errPath,
+  };
+
+  const row = monitorRow(ansiTheme, summary);
+  assert.equal(row.includes("\x1b]52"), false);
+  assert.equal(row.includes("\n"), false);
+
+  const target = monitorViewTarget(ansiTheme, summary);
+  assert.equal(target.lines.some((line) => line.includes("\n")), false);
+  assert.equal(target.text.includes("\x1b"), false);
+  assert.equal(target.text.includes("\r"), false);
+  assert.equal(target.text.includes("\t"), false);
+
+  const overlay = new BlockInspectorOverlay(ansiTheme, target, {
+    close: () => {},
+    copy: () => true,
+    requestRender: () => {},
+    terminalRows: () => 28,
+  });
+  const rendered = overlay.render(80).join("\n");
+  overlay.dispose();
+
+  assert.equal(rendered.includes("\x1b]52;c;SGVsbG8=\x07"), false);
+  assert.equal(rendered.includes("\x1b]52;c;ERR=\x07"), false);
+  assert.equal(rendered.includes("\x1b[2J"), false);
+  assert.equal(rendered.includes("\r"), false);
+  assert.equal(rendered.includes("\t"), false);
+  assert.match(rendered, /osc52:tail/);
+  assert.match(rendered, /step 100%/);
+});
+
+test("executeTaskBatch and preset context:fork propagate parent forkEntries", async (t) => {
+  const root = createTempRoot(t);
+  const workerPath = join(root, "echo-fork-worker.mjs");
+  writeFileSync(
+    workerPath,
+    [
+      "#!/usr/bin/env node",
+      'import { appendFileSync, readFileSync, unlinkSync } from "node:fs";',
+      "const capsulePath = process.argv[2];",
+      'const capsule = JSON.parse(readFileSync(capsulePath, "utf8"));',
+      "unlinkSync(capsulePath);",
+      'appendFileSync(capsule.sessionPath, JSON.stringify({ type: "message", message: { role: "user", content: capsule.task } }) + "\\n");',
+      "const count = Array.isArray(capsule.forkEntries) ? capsule.forkEntries.length : -1;",
+      'process.stdout.write(JSON.stringify({ type: "result", ok: true, output: `forkEntries=${count}` }) + "\\n");',
+    ].join("\n"),
+    "utf8",
+  );
+  chmodSync(workerPath, 0o755);
+
+  const agentsDir = join(root, "agents");
+  mkdirSync(agentsDir, { recursive: true });
+  writeFileSync(
+    join(agentsDir, "forker.md"),
+    [
+      "---",
+      "name: forker",
+      "description: Inherits parent branch history",
+      "context: fork",
+      "---",
+      "You inherit the parent conversation.",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const ext = createTaskInlineExtension({
+    epiHome: root,
+    agentDir: join(root, "pi"),
+    projectAgentsDir: undefined,
+    workerPath,
+    killGraceMs: 100,
+  });
+  const rec = makePiRecorder();
+  await ext.factory(rec.pi);
+  t.after(() => rec.pi.emitEvent("session_shutdown", { type: "session_shutdown", reason: "quit" }, {}));
+
+  const parentBranch = [
+    {
+      type: "message",
+      id: "m1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "Parent context turn 1" },
+    },
+    {
+      type: "message",
+      id: "m2",
+      parentId: "m1",
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: [{ type: "text", text: "Parent reply turn 1" }] },
+    },
+  ];
+  const state = { busy: false, sessionId: "s-fork", branch: parentBranch, notices: [], statuses: new Map() };
+  const ctx = makeContext(root, state);
+  await rec.pi.emitEvent("session_start", { type: "session_start" }, ctx);
+
+  const taskTool = rec.tools.get("task");
+  const batchExplicit = await taskTool.execute(
+    "c-batch-fork",
+    { context: "fork", tasks: [{ task: "batch-a" }, { task: "batch-b" }] },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.match(batchExplicit.content[0].text, /forkEntries=2[\s\S]*forkEntries=2/);
+
+  const singlePreset = await taskTool.execute(
+    "c-single-preset",
+    { agent: "forker", task: "preset-single" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.equal(singlePreset.content[0].text.trim(), "forkEntries=2");
+
+  const batchPreset = await taskTool.execute(
+    "c-batch-preset",
+    { tasks: [{ agent: "forker", task: "preset-batch-1" }, { task: "fresh-batch-2" }] },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.match(batchPreset.content[0].text, /forkEntries=2[\s\S]*forkEntries=-1/);
 });
