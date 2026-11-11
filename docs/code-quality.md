@@ -23,12 +23,12 @@
 
 | 检查项 | 通过标准 |
 |---|---|
-| `src/` 规模门禁 | `src/**/*.ts` 新增+删除 ≤ 800 行（超限且无 `EPI_ALLOW_LARGE_DIFF=1` 时在建副本前直接退出 2） |
+| `src/` 规模门禁 | `src/**/*.ts` 新增+删除 ≤ 800 行（超限在建副本前直接退出 2，无环境变量绕过） |
 | 隔离副本导出 | `head` 与 `base` 分别导出到 `.dev/reviews/<id>/{repo,before}`，含最小 `.git` 索引与 `node_modules` 软链（严禁 `git stash`） |
 | 构建与 `dist/` 同步 | `npm run build` 成功且 `git diff --exit-code -- dist` 无差异 |
 | 未使用变量与参数 | `tsc --noEmit --noUnusedLocals --noUnusedParameters` 零报错 |
 | 模型可见快照 | `model-snapshot.mjs --diff` 无非预期变化（有变化须在报告说明） |
-| 改动文件复杂度 | 改动 `src/**/*.ts` 过 ESLint + `sonarjs`（符合第 1 节上限；依赖装在 `EPI_ESLINT_DIR`，默认 `/tmp/epi-eslint`，配置由 `scripts/dev/eslint.config.mjs` 自动复制） |
+| 改动文件复杂度 | 改动 `src/**/*.ts` 过 ESLint + `sonarjs`（规则级别为 `error`，符合第 1 节上限；依赖装在 `EPI_ESLINT_DIR`，默认 `~/.cache/epi-eslint`，每次自动同步 `scripts/dev/eslint.config.mjs`） |
 | 禁网全量测试与耗时告警 | 副本禁网沙箱跑全套测试全过，写入 `precheck.sha` 与 `=== precheck passed ===`；总耗时 > 240s 打 `WARNING` |
 | 修复前失败与实测（主控/审查） | 新增回归测试在 `before/` 下失败、在 `repo/` 下通过；重构命令前后输出一致；TUI 改动在 Orca 实测通过 |
 

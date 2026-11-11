@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>agy 双模型审查门禁 · Monitor/Task 收口 · 现存 Bug 修复 —— Epi 交互原型</title>
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#1c1c1c;--text:#e1e1e1;--out:#c8c8c8;--muted:#6c6c6c;--dim:#585858;
+  --rail:#323237;--amber:#e0af68;--accent:#bb9af7;--ok:#9ece6a;--err:#f7768e;--blue:#7aa2f7;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:32px 24px 80px;background:#0e0f11;color:#d4d4d8;font:15px/1.68 -apple-system,"SF Pro Text","PingFang SC",sans-serif}
+main{max-width:1460px;margin:0 auto}
+h1{font-size:24px;font-weight:650;color:#ececee;margin:0 0 4px}
+h2{font-size:18px;font-weight:650;color:#ececee;margin:30px 0 8px}
+h3{font-size:14.5px;font-weight:650;color:#d8d8de;margin:14px 0 6px}
+p,li{color:#a5a5ad;max-width:88ch}
+p{margin:6px 0}
+.sub{color:#8b8b95;font-size:14px;margin-bottom:16px}
+code,kbd{font:12.5px ui-monospace,"SF Mono",Menlo,monospace;color:#9db8c4}
+kbd{background:#1f2125;border:1px solid #34363c;border-radius:4px;padding:1px 5px;color:#d0d0d6}
+table{border-collapse:collapse;margin:8px 0 16px;font-size:13.5px;width:100%}
+td,th{border:1px solid #26282d;padding:6px 10px;text-align:left;vertical-align:top;color:#a5a5ad}
+th{color:#c9c9cf;font-weight:600;background:#16171a;white-space:nowrap}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:22px;align-items:start}
+@media (max-width:1120px){.layout{grid-template-columns:1fr}}
+.panel{background:#141518;border:1px solid #26282d;border-radius:10px;padding:13px 15px;margin-bottom:14px}
+.panel h3{margin-top:0}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+.tabs button{font:13px/1.4 -apple-system,"PingFang SC",sans-serif;font-weight:600;padding:7px 13px;border-radius:8px;background:#18191d;border:1px solid #2d3037;color:#b8b8c2;cursor:pointer}
+.tabs button.on{background:#2c2540;border-color:#bb9af7;color:#f2eefc}
+.ctl{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px;align-items:center}
+.ctl .sep{width:1px;height:18px;background:#2c2e34;margin:0 4px}
+button.act{font:12px ui-monospace,"SF Mono",Menlo,"PingFang SC",monospace;background:#202228;color:#d0d0d6;border:1px solid #34363c;border-radius:6px;padding:4px 9px;cursor:pointer}
+button.act:hover{border-color:#5a5d66}
+button.act.on{background:#3a2f55;border-color:#bb9af7;color:#f3effb}
+button.act.primary{background:#243528;border-color:#5f8d4e;color:#d8f0c8}
+.term{position:relative;border:1px solid #26282d;border-radius:10px;overflow:hidden;background:var(--bg);box-shadow:0 12px 32px rgba(0,0,0,.42)}
+.cap{padding:7px 13px;font-size:12.5px;color:#8e8e96;background:#1c1d20;border-bottom:1px solid #26282d;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}
+.cap b{color:#d4d4dc;font-weight:600}
+pre.screen{margin:0;padding:13px 15px 15px;overflow-x:auto;color:var(--text);font:12.5px/1.58 ui-monospace,"SF Mono",Menlo,"PingFang SC",monospace;white-space:pre;min-height:360px}
+.legend{font-size:13px;color:#8e8e96;margin:8px 2px 4px;max-width:92ch}
+.opt{margin:9px 0 13px;padding-bottom:10px;border-bottom:1px solid #202227}
+.opt:last-child{border-bottom:0;padding-bottom:0;margin-bottom:2px}
+.opt b{color:#dcdce2;font-weight:600;font-size:13px;display:block;margin-bottom:3px}
+.opt label{display:block;font-size:12.5px;color:#a5a5ad;cursor:pointer;padding:2px 0;line-height:1.45}
+.opt input{vertical-align:middle;margin-right:5px}
+.rec{color:#9ece6a;font-size:11.5px;margin-left:4px}
+.check label{display:block;font-size:12.5px;color:#a5a5ad;padding:3px 0;cursor:pointer;line-height:1.45}
+textarea.notes{width:100%;min-height:74px;background:#0e0f11;color:#d4d4d8;border:1px solid #34363c;border-radius:6px;font:12.5px/1.5 -apple-system,"PingFang SC",sans-serif;padding:7px;margin-top:6px}
+.tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:4px;background:#2a2433;color:#c9b6f5;margin-left:6px;font-weight:500}
+.badge-ok{color:var(--ok)}.badge-err{color:var(--err)}.badge-warn{color:var(--amber)}
+.t{color:var(--text)}.o{color:var(--out)}.m{color:var(--muted)}.d{color:var(--dim)}
+.a{color:var(--amber)}.r{color:var(--rail)}.c{color:var(--accent)}.g{color:var(--ok)}.e{color:var(--err)}.bl{color:var(--blue)}
+.click{cursor:pointer;border-radius:3px}.click:hover{background:#272930}
+#selftest{font:12px ui-monospace,Menlo,monospace;color:#9ece6a;margin-top:8px}
+#copyMsg{font-size:12px;color:#9ece6a;margin-left:8px}
+</style></head><body><main>
+
+<h1>agy (Carbon + Argon) 审查门禁 · Monitor/Task 收口 · 现存 Bug 修复</h1>
+<p class="sub">Epi 交互与流程原型（决策 WF6）。先在下面点按试过、右边拍板选项，你明确同意后我们再动代码（<code>src/</code> 当前零改动）。</p>
+
+<div class="layout">
+<div>
+  <div class="tabs" id="mainTabs">
+    <button data-tab="review" class="on">1 · agy (Carbon + Argon) 审查与 Git 门禁</button>
+    <button data-tab="monitor">2 · monitor + task 统一投递与 /tasks 面板</button>
+    <button data-tab="bugfix">3 · 粘贴图片 / 前置参数 / Claude 缓存修复</button>
+  </div>
+
+  <div class="ctl" id="subControls"></div>
+
+  <div class="term">
+    <div class="cap">
+      <b id="capTitle">加载中…</b>
+      <span id="capRight"></span>
+    </div>
+    <pre class="screen" id="screen"></pre>
+  </div>
+  <p class="legend" id="legendText"></p>
+  <div id="selftest"></div>
+
+  <h2>一、审查工作流改动（切到 <code>agy</code> Carbon + Argon）</h2>
+  <table>
+    <tr><th>环节</th><th>现状漏洞（0.2.4–HEAD 事故根因）</th><th>新设计（机器门禁）</th></tr>
+    <tr>
+      <td><b>审查 Harness</b></td>
+      <td><code>epi -p --provider magpie</code> 单模型审；作者在 <code>agy</code> 里用 Argon 写完又调 Argon 审，同模型盲区叠加。</td>
+      <td>改用 <code>agy --model &lt;id&gt; --dangerously-skip-permissions --disable-slash-commands --print-timeout 1200s -p "$prompt"</code>（已实测参数顺序），固定跑 <b><code>gemini-4-carbon-high</code> + <code>gemini-4-argon-high</code></b> 独立盲审。</td>
+    </tr>
+    <tr>
+      <td><b>结论判读</b></td>
+      <td>人工肉眼看 <code>review.md</code>；<code>paste-image-eperm</code> 首行写「可接受」但正文列了 <code>[P2-1]</code> 仍被放行合并。</td>
+      <td>新增 <code>run-review.sh verify &lt;id&gt;</code>：校验两份报告首行均为 <code>可接受</code>，且正文正则零匹配未消解的 <code>P0/P1/P2</code>，通过才写 <code>verified.sha</code>。</td>
+    </tr>
+    <tr>
+      <td><b>分支与行数门禁</b></td>
+      <td><code>dff2603</code> 直接绑在 <code>main</code> 裸提交；<code>7db3dd0</code> 单包 1,130 行靠环境变量绕过；<code>eslint.config.mjs</code> 全是 <code>warn</code>。</td>
+      <td><code>.githooks/pre-commit</code> 拦截 <code>main</code> 分支直接提交 <code>src/**</code> 并检查 <code>dist/</code> 同步；移除 <code>EPI_ALLOW_LARGE_DIFF</code> 后门；ESLint 复杂度规则升为 <code>error</code>。</td>
+    </tr>
+  </table>
+
+  <h2>二、三包拆分执行计划（你同意本原型后依次推进）</h2>
+  <table>
+    <tr><th>顺序</th><th>分支名</th><th>改动范围与预估行数</th><th>解决的问题</th></tr>
+    <tr>
+      <td><b>第 1 包</b></td>
+      <td><code>dev/agy-dual-review-gates</code></td>
+      <td><code>scripts/dev/run-review.sh</code>、<code>eslint.config.mjs</code>、<code>.githooks/pre-commit</code>、<code>AGENTS.md</code>、<code>docs/dev-workflow.md</code>、<code>docs/decisions.md</code>（<b><code>src/</code> 0 行</b>）</td>
+      <td>先把 <code>agy</code> Carbon + Argon 双审流水线和本地门禁立起来，后面两包代码修复直接走新流水线实战验收。</td>
+    </tr>
+    <tr>
+      <td><b>第 2 包</b></td>
+      <td><code>dev/fix-cli-magpie-paste</code></td>
+      <td><code>src/providers/magpie.ts</code>、<code>src/host.ts</code>、<code>src/commands/mcp-cli.ts</code>、<code>src/update.ts</code>、<code>src/tui/paste-chips.ts</code> + <code>docs/pi-internals.md</code>（<b><code>src/</code> 约 170 行</b>）</td>
+      <td>① 修 Claude Turn-2 Prompt Cache 100% 失效；② 修 <code>epi --approve mcp list</code> 报错、<code>--no-project list/update</code> 误进聊天、<code>--approve --no-approve</code> 冲突放行；③ 修粘贴受限非图片路径偷发旧剪贴板截图；④ 补登记 <code>provider-startup.ts</code> 内部钩子（硬规则 ⑥）。</td>
+    </tr>
+    <tr>
+      <td><b>第 3 包</b></td>
+      <td><code>dev/unify-task-monitor-notify</code></td>
+      <td>新增 <code>src/extensions/task-notify.ts</code>，收敛 <code>src/extensions/task.ts</code> 与 <code>src/extensions/monitor.ts</code>、<code>src/tui/tasks-overlay.ts</code>（<b><code>src/</code> 约 420 行</b>）</td>
+      <td>① 抽离共享投递门禁（<code>isIdle</code> / <code>Esc</code> 停 <code>autoWake</code> / 确认弹窗暂停 / 超额合并），把 <code>task.ts</code>（CC=231）瘦身；② 修 <code>executeTaskBatch</code> 300s 超时丢结果与半途异常孤儿任务；③ 修 <code>/reload</code> 误杀 <code>monitor</code>；④ 对齐 11-06 原型：工具名小写 <code>monitor</code> + <code>/tasks</code> 与底栏统一展示。</td>
+    </tr>
+  </table>
+</div>
+
+<div>
+  <div class="panel">
+    <h3>待你拍板的选项 <span class="tag">切换实时改变左侧演示</span></h3>
+
+    <div class="opt">
+      <b>D1 · agy 里 Carbon + Argon 怎么配合？</b>
+      <label><input type="radio" name="d1" value="parallel" checked> 双模型并行盲审：每包同时跑 Carbon + Argon，两边都 0 个 P0–P2 才发 <code>verified.sha</code><span class="rec">推荐</span></label>
+      <label><input type="radio" name="d1" value="tiered"> 按改动量分级：&gt;120 行跑 Carbon + Argon 并行，≤120 行只跑与作者不同的那一个</label>
+    </div>
+
+    <div class="opt">
+      <b>D2 · Monitor 工具命名怎么收口？</b>
+      <label><input type="radio" name="d2" value="alias" checked> 正名回小写 <code>monitor</code>（对齐 <code>task</code> 与 11-06 原型），同时兼容旧会话里的 <code>Monitor</code> 别名<span class="rec">推荐</span></label>
+      <label><input type="radio" name="d2" value="strict"> 只保留小写 <code>monitor</code>，彻底移除大写 <code>Monitor</code></label>
+    </div>
+
+    <div class="opt">
+      <b>D3 · monitor 突发日志超过限流（10 条）时？</b>
+      <label><input type="radio" name="d3" value="coalesce" checked> 折叠合并：攒成一条 <code>… suppressed N matching lines (last: …)</code> 下一窗口补发<span class="rec">推荐</span></label>
+      <label><input type="radio" name="d3" value="drop"> 超额直接静默丢弃（现状）</label>
+    </div>
+
+    <div class="opt">
+      <b>D4 · 本地 Git pre-commit 门禁范围？</b>
+      <label><input type="radio" name="d4" value="hard" checked> 阻断在 <code>main</code> 直接提交 <code>src/**</code>，并强制校验 <code>dist/</code> 已同步构建<span class="rec">推荐</span></label>
+      <label><input type="radio" name="d4" value="warn"> 只打印醒目警告，不阻断本地 commit</label>
+    </div>
+
+    <div class="opt">
+      <b>D5 · 粘贴受限图片路径回退到剪贴板时？</b>
+      <label><input type="radio" name="d5" value="notice" checked> 仅限图片后缀（png/jpg/webp/gif）才回退，并在输入框下方轻提示 <code>Used clipboard image…</code><span class="rec">推荐</span></label>
+      <label><input type="radio" name="d5" value="silent"> 仅限图片后缀回退，不弹提示</label>
+    </div>
+
+    <div class="opt">
+      <b>D6 · 工作树里遗留的未提交 0.2.6 版本号？</b>
+      <label><input type="radio" name="d6" value="revert" checked> 先还原回 <code>0.2.5</code>，等三包修复合入并准备发版时再升 <code>0.2.6</code><span class="rec">推荐</span></label>
+      <label><input type="radio" name="d6" value="keep"> 保留工作树现状不动</label>
+    </div>
+  </div>
+
+  <div class="panel check">
+    <h3>快速试玩清单</h3>
+    <label><input type="checkbox"> 切到 Tab 1，点「违规 ① main 直提」和「违规 ③ 藏 P2 写可接受」，看门禁拦截</label>
+    <label><input type="checkbox"> 切到 Tab 2，点「④ 按 Esc 打断」和「⑥ 执行 /reload」，验证不乱插话、不断监控</label>
+    <label><input type="checkbox"> 切到 Tab 2，点终端里的 <code>monitor</code> 行或顶栏「⑦ 点开 /tasks」，看统一面板</label>
+    <label><input type="checkbox"> 切到 Tab 3，对比 3A 粘贴 <code>notes.txt</code>、3B <code>--approve mcp list</code>、3C Turn-2 缓存命中</label>
+    <textarea class="notes" id="notes" placeholder="补充意见（没有可直接留空，点下面按钮复制或直接回复「同意」）…"></textarea>
+    <div style="margin-top:8px;display:flex;align-items:center">
+      <button class="act primary" id="copyBtn">复制拍板结果</button>
+      <span id="copyMsg"></span>
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+"use strict";
+
+const state = {
+  tab: "review",
+  reviewCase: "ok",        // ok | main_commit | large_diff | fake_accept
+  monCase: "idle",         // idle | busy | dialog | esc | burst | reload | tasks | detail_m1 | detail_t1
+  cols: 92,
+  bugCase: "paste",        // paste | cli | cache
+  bugMode: "after",        // before | after
+  opts: {
+    d1: "parallel",
+    d2: "alias",
+    d3: "coalesce",
+    d4: "hard",
+    d5: "notice",
+    d6: "revert",
+  },
+};
+
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const wlen = (s) => [...String(s)].reduce((n, ch) => n + (ch.charCodeAt(0) > 255 ? 2 : 1), 0);
+function cut(s, w) {
+  let out = "", cur = 0;
+  for (const ch of String(s)) {
+    const cw = ch.charCodeAt(0) > 255 ? 2 : 1;
+    if (cur + cw > w - 1) return out + "…";
+    out += ch;
+    cur += cw;
+  }
+  return out;
+}
+function padLine(leftHtml, rightPlain, cols, clickAttr = "") {
+  const plainLeft = leftHtml.replace(/<[^>]+>/g, "");
+  const gap = Math.max(1, cols - wlen(plainLeft) - wlen(rightPlain || ""));
+  const cls = clickAttr ? ` class="click" ${clickAttr}` : "";
+  return `<span${cls}>${leftHtml}${" ".repeat(gap)}<span class="d">${esc(rightPlain || "")}</span></span>`;
+}
+
+function renderSubControls() {
+  const box = document.getElementById("subControls");
+  if (state.tab === "review") {
+    const items = [
+      ["ok", "✓ 正常双审闭环（推荐路径）"],
+      ["main_commit", "违规 ①：在 main 直接改 src/"],
+      ["large_diff", "违规 ②：1,130 行大包绕过"],
+      ["fake_accept", "违规 ③：写「可接受」但藏 P2"],
+    ];
+    box.innerHTML = items.map(([k, label]) =>
+      `<button class="act${state.reviewCase === k ? " on" : ""}" data-rc="${k}">${esc(label)}</button>`
+    ).join("");
+  } else if (state.tab === "monitor") {
+    const cases = [
+      ["idle", "① 空闲唤醒"],
+      ["busy", "② 忙时排队"],
+      ["dialog", "③ 弹窗暂停"],
+      ["esc", "④ 按 Esc 打断"],
+      ["burst", "⑤ 连喷 18 条限流"],
+      ["reload", "⑥ 执行 /reload"],
+      ["tasks", "⑦ 点开 /tasks"],
+    ];
+    const widths = [68, 92, 116];
+    box.innerHTML =
+      cases.map(([k, label]) =>
+        `<button class="act${state.monCase === k || (k === "tasks" && state.monCase.startsWith("detail_")) ? " on" : ""}" data-mc="${k}">${esc(label)}</button>`
+      ).join("") +
+      `<span class="sep"></span>` +
+      widths.map((w) =>
+        `<button class="act${state.cols === w ? " on" : ""}" data-w="${w}">${w} 列</button>`
+      ).join("");
+  } else {
+    const subs = [
+      ["paste", "3A · 粘贴受限路径 (EPERM)"],
+      ["cli", "3B · 前置全局参数 (--approve / --no-project)"],
+      ["cache", "3C · Magpie Claude Turn-2 缓存"],
+    ];
+    box.innerHTML =
+      subs.map(([k, label]) =>
+        `<button class="act${state.bugCase === k ? " on" : ""}" data-bc="${k}">${esc(label)}</button>`
+      ).join("") +
+      `<span class="sep"></span>` +
+      `<button class="act${state.bugMode === "before" ? " on" : ""}" data-bm="before">修复前 (main @ dff2603)</button>` +
+      `<button class="act${state.bugMode === "after" ? " on" : ""}" data-bm="after">修复后 (本方案)</button>`;
+  }
+}
+
+function renderReviewScreen() {
+  const title = document.getElementById("capTitle");
+  const right = document.getElementById("capRight");
+  const legend = document.getElementById("legendText");
+  const dual = state.opts.d1 === "parallel";
+  const hardHook = state.opts.d4 === "hard";
+
+  title.textContent = "scripts/dev/run-review.sh · agy 审查流水线模拟";
+  right.innerHTML = dual
+    ? `<span class="badge-ok">模式：Carbon + Argon 并行盲审</span>`
+    : `<span class="badge-warn">模式：按行数分级审</span>`;
+
+  if (state.reviewCase === "main_commit") {
+    legend.textContent = "复现 11-10 dff2603 事故：在 main 分支直接修改 src/ 并 git commit。pre-commit 门禁在本地秒级拦截，引导切到 dev/* 分支。";
+    if (hardHook) {
+      return [
+        `<span class="m">$ git branch --show-current</span>`,
+        `<span class="t">main</span>`,
+        `<span class="m">$ git commit -m "fix: tweak magpie payload"</span>`,
+        `<span class="e">✗ [pre-commit] 禁止在 main 分支直接提交 src/** 改动（违反 WF3 / N2）。</span>`,
+        `<span class="o">  请切到功能分支后再提交并送审：</span>`,
+        `<span class="bl">    git switch -c dev/fix-magpie-payload</span>`,
+        `<span class="d">exit code: 1（main 分支保持干净）</span>`,
+      ].join("\n");
+    }
+    return [
+      `<span class="m">$ git branch --show-current</span>`,
+      `<span class="t">main</span>`,
+      `<span class="m">$ git commit -m "fix: tweak magpie payload"</span>`,
+      `<span class="a">⚠ [pre-commit] 警告：正在 main 分支直接提交 src/**（当前 D4 选了仅警告，未阻断）。</span>`,
+      `<span class="o">[main 9f12c0a] fix: tweak magpie payload</span>`,
+    ].join("\n");
+  }
+
+  if (state.reviewCase === "large_diff") {
+    legend.textContent = "复现 11-06 7db3dd0 事故：单包改动 1,130 行试图用 EPI_ALLOW_LARGE_DIFF=1 绕过。新 precheck 移除该环境变量后门，硬卡 ≤800 行，且 ESLint 复杂度升为 error。";
+    return [
+      `<span class="m">$ EPI_ALLOW_LARGE_DIFF=1 scripts/dev/run-review.sh precheck subagents-core main HEAD</span>`,
+      `<span class="e">✗ run-review.sh: src/**/*.ts 改动 1130 行，超过单次送审上限 800 行（硬规则 ③）。</span>`,
+      `<span class="o">  已移除 EPI_ALLOW_LARGE_DIFF 绕过开关；请按职责拆成 ≤800 行的独立提交包后再跑 precheck。</span>`,
+      ``,
+      `<span class="m"># 同时在 ≤800 行包里，若新增/修改函数圈复杂度 &gt; 15 或单函数 &gt; 80 行：</span>`,
+      `<span class="e">  src/extensions/task.ts:696:1  error  Function 'createTaskInlineExtension' has complexity 231 (max 15)</span>`,
+      `<span class="d">exit code: 2（未生成 precheck.sha，start 拒绝启动）</span>`,
+    ].join("\n");
+  }
+
+  if (state.reviewCase === "fake_accept") {
+    legend.textContent = "复现 11-06 paste-image-eperm 事故：审查员首行写了「可接受」，但正文列出了 [P2-1] 未修缺陷。新 verify 子命令做机器结构校验，拒绝签发 verified.sha。";
+    return [
+      `<span class="m">$ scripts/dev/run-review.sh verify paste-image-eperm</span>`,
+      `<span class="g">✓ review-carbon.md: 首行「可接受」，P0=0 P1=0 P2=0</span>`,
+      `<span class="e">✗ review-argon.md : 首行写了「可接受」，但检测到未消解的 P0–P2 条目：</span>`,
+      `<span class="a">    line 11: - **[P2-1] Unreadable non-image path paste silently attaches stale clipboard image**</span>`,
+      ``,
+      `<span class="e">✗ verify failed: 存在 P0–P2 时不得判定通过（未生成 .dev/reviews/paste-image-eperm/verified.sha）。</span>`,
+      `<span class="d">exit code: 4（合并门禁阻断，须修复并补回归测试后复审）</span>`,
+    ].join("\n");
+  }
+
+  legend.textContent = "标准闭环：precheck 全绿签发 precheck.sha → start 用实测通过的 agy 参数并行拉起 Carbon + Argon 盲审 → verify 双报告零 P0–P2 后签发 verified.sha。";
+  const startLines = dual
+    ? [
+        `<span class="m">$ scripts/dev/run-review.sh start fix-cli-magpie-paste</span>`,
+        `<span class="o">  reviewer[carbon] → agy --model gemini-4-carbon-high --dangerously-skip-permissions --disable-slash-commands --print-timeout 1200s -p "…"</span>`,
+        `<span class="o">  reviewer[argon]  → agy --model gemini-4-argon-high  --dangerously-skip-permissions --disable-slash-commands --print-timeout 1200s -p "…"</span>`,
+        `<span class="d">  (两进程独立盲审：各自只写 notes-{carbon,argon}.md 与 review-{carbon,argon}.md，互不可见)</span>`,
+        ``,
+        `<span class="m">$ scripts/dev/run-review.sh wait fix-cli-magpie-paste &amp;&amp; scripts/dev/run-review.sh verify fix-cli-magpie-paste</span>`,
+        `<span class="g">✓ [carbon] gemini-4-carbon-high : 可接受 (P0=0, P1=0, P2=0, 耗时 78s)</span>`,
+        `<span class="g">✓ [argon]  gemini-4-argon-high  : 可接受 (P0=0, P1=0, P2=0, 耗时 64s)</span>`,
+        `<span class="g">✓ stamped .dev/reviews/fix-cli-magpie-paste/verified.sha (== HEAD 4b91e2c) — 允许合并 main</span>`,
+      ]
+    : [
+        `<span class="m">$ scripts/dev/run-review.sh start fix-cli-magpie-paste --author-model carbon</span>`,
+        `<span class="o">  src/ diff = 168 lines (&gt;120 lines) → 自动升级为 Carbon + Argon 双审</span>`,
+        `<span class="g">✓ [carbon] gemini-4-carbon-high : 可接受 (P0=0, P1=0, P2=0)</span>`,
+        `<span class="g">✓ [argon]  gemini-4-argon-high  : 可接受 (P0=0, P1=0, P2=0)</span>`,
+        `<span class="g">✓ stamped .dev/reviews/fix-cli-magpie-paste/verified.sha — 允许合并 main</span>`,
+      ];
+
+  return [
+    `<span class="m">$ git switch -c dev/fix-cli-magpie-paste &amp;&amp; npm run build</span>`,
+    `<span class="m">$ scripts/dev/run-review.sh precheck fix-cli-magpie-paste main HEAD</span>`,
+    `<span class="g">✓ src/**/*.ts diff: 168 lines (≤ 800)</span>`,
+    `<span class="g">✓ build + dist/ clean + tsc --noUnusedLocals + model-snapshot clean</span>`,
+    `<span class="g">✓ eslint complexity/sonarjs (severity=error): 0 errors</span>`,
+    `<span class="g">✓ offline sandbox test suite: passed in 41s → stamped precheck.sha</span>`,
+    ``,
+    ...startLines,
+  ].join("\n");
+}
+
+function renderMonitorScreen() {
+  const title = document.getElementById("capTitle");
+  const right = document.getElementById("capRight");
+  const legend = document.getElementById("legendText");
+  const cols = state.cols;
+  const toolName = "monitor";
+  const aliasNote = state.opts.d2 === "alias" ? "（兼容旧会话 Monitor 别名）" : "（仅小写 monitor）";
+
+  title.textContent = `epi · TUI 原型（${cols} 列）${aliasNote}`;
+  right.innerHTML = `<span class="click bl" data-mc="tasks">[点此打开 /tasks]</span>`;
+
+  if (state.monCase === "tasks") {
+    legend.textContent = "对齐 11-06 原型契约：/tasks 弹窗与右下角计数同时纳入后台子代理（t1）和后台监控（m1），单击任意一行查看实时详情。";
+    const w = cols - 4;
+    return [
+      `<span class="r">╭─</span> <span class="t">后台任务与监控 (/tasks)</span> <span class="d">· 单击行查看详情 · Esc 关闭</span>`,
+      `<span class="r">│</span>`,
+      padLine(`<span class="r">│</span>  <span class="c">◐</span> <span class="t">t1</span>  <span class="o">subagent · coder</span>   <span class="d">worktree · turn 3 · 跑测试</span>`, "回车/单击 →", cols, 'data-mc="detail_t1"'),
+      `<span class="r">│</span>     <span class="m">${esc(cut("任务：抽离 src/extensions/task-notify.ts 并补齐 executeTaskBatch 超时回归测试", w - 6))}</span>`,
+      `<span class="r">│</span>`,
+      padLine(`<span class="r">│</span>  <span class="c">◐</span> <span class="t">m1</span>  <span class="o">${toolName} · persistent</span> <span class="d">pid 48210 · 已捕获 2 条</span>`, "回车/单击 →", cols, 'data-mc="detail_m1"'),
+      `<span class="r">│</span>     <span class="m">${esc(cut("命令：npm run dev 2>&1 | grep --line-buffered -E 'ERROR|EADDRINUSE'", w - 6))}</span>`,
+      `<span class="r">│</span>`,
+      `<span class="r">╰${"─".repeat(Math.max(10, cols - 2))}</span>`,
+      padLine(`<span class="d">  ~/Projects/sides/epi (dev/unify-task-monitor-notify)</span>`, "◐ 2 tasks", cols, 'data-mc="idle"'),
+    ].join("\n");
+  }
+
+  if (state.monCase === "detail_m1" || state.monCase === "detail_t1") {
+    const isMon = state.monCase === "detail_m1";
+    legend.textContent = isMon
+      ? "monitor 详情页：实时查看子进程状态、命令、限流计数和最近匹配输出行；按返回回到 /tasks 列表。"
+      : "subagent 详情页：实时查看子代理独立会话的轮次、worktree 改动与最近工具步骤。";
+    return isMon
+      ? [
+          padLine(`<span class="r">╭─</span> <span class="t">m1 · ${toolName} "盯 dev server 报错"</span> <span class="g">● running</span>`, "[← 返回 /tasks]", cols, 'data-mc="tasks"'),
+          `<span class="r">│</span>  <span class="m">PID: 48210 · persistent: true · 存活跨过 /reload · 投递策略: 统一 task-notify 门禁</span>`,
+          `<span class="r">│</span>  <span class="m">Cmd: npm run dev 2&gt;&amp;1 | grep --line-buffered -E 'ERROR|EADDRINUSE'</span>`,
+          `<span class="r">│</span>`,
+          `<span class="r">│</span>  <span class="d">13:42:08</span>  <span class="a">ERROR [gateway] upstream timeout after 5000ms (retry 1/3)</span>`,
+          `<span class="r">│</span>  <span class="d">13:42:19</span>  <span class="e">ERROR [auth] token refresh failed: ECONNRESET</span>`,
+          `<span class="r">╰${"─".repeat(Math.max(10, cols - 2))}</span>`,
+        ].join("\n")
+      : [
+          padLine(`<span class="r">╭─</span> <span class="t">t1 · task (coder)</span> <span class="c">◐ turn 3 · running</span>`, "[← 返回 /tasks]", cols, 'data-mc="tasks"'),
+          `<span class="r">│</span>  <span class="m">Worktree: .epi/worktrees/t1 (+96 -114) · 300s 前台转后台已挂接 wakeOnSettle ✓</span>`,
+          `<span class="r">│</span>  <span class="o">├─✓ read src/extensions/task.ts</span>`,
+          `<span class="r">│</span>  <span class="o">├─✓ write src/extensions/task-notify.ts</span>`,
+          `<span class="r">│</span>  <span class="c">╰─◐ bash node --test test/task-inline.test.mjs</span>`,
+          `<span class="r">╰${"─".repeat(Math.max(10, cols - 2))}</span>`,
+        ].join("\n");
+  }
+
+  const rows = [
+    `<span class="c">❯</span> <span class="t">${esc(cut("后台重构 task-notify，同时起个 monitor 盯 dev server 报错；我们继续查网关配置。", cols - 3))}</span>`,
+    `<span class="r">│</span>`,
+    padLine(
+      `<span class="r">├─</span><span class="c">+</span> <span class="o">${esc(cut('task coder "抽离 task-notify 并补测试"', Math.max(24, cols - 34)))}</span> <span class="d">· bg · t1</span>`,
+      "██··",
+      cols,
+      'data-mc="detail_t1"'
+    ),
+    padLine(
+      `<span class="r">├─</span><span class="c">◆</span> <span class="o">${esc(cut(`${toolName} "盯 dev server 报错"`, Math.max(24, cols - 36)))}</span> <span class="d">· persistent · m1</span>`,
+      "live",
+      cols,
+      'data-mc="detail_m1"'
+    ),
+  ];
+
+  if (state.monCase === "idle") {
+    legend.textContent = "场景 ① 空闲唤醒：主对话处于 isIdle() === true、无弹窗、未按 Esc 打断时，m1 抓到报错立刻走 task-notify 唤醒新一轮。";
+    rows.push(
+      `<span class="r">╰─</span><span class="t">好，t1 和 m1 都在后台跑着了。你随时发下一句。</span>`,
+      ``,
+      `<span class="r">  ◆</span> <span class="a">notify (m1 · ${toolName})</span> <span class="d">· 刚捕获 1 条匹配输出（空闲自动唤醒）</span>`,
+      `<span class="r">  │</span> <span class="o">ERROR [auth] token refresh failed: ECONNRESET</span>`,
+      `<span class="r">  ╰─</span><span class="t">dev server 刚报了 auth ECONNRESET，我顺手看眼重连逻辑…</span>`
+    );
+  } else if (state.monCase === "busy") {
+    legend.textContent = "场景 ② 忙时排队：修复前 monitor 直接发 deliverAs:\"steer\" + triggerTurn:true 打断流式推理；修复后入队等待当前工具步结束再顺滑注入。";
+    rows.push(
+      `<span class="r">├─</span><span class="c">◐</span> <span class="o">read src/providers/magpie.ts</span> <span class="d">· 主对话正忙，m1 新事件已入队 (queued: 1)</span>`,
+      `<span class="r">├─</span><span class="g">✓</span> <span class="o">read src/providers/magpie.ts</span> <span class="d">· 工具步结束 → 顺滑注入队列消息</span>`,
+      `<span class="r">├─</span><span class="a">◆</span> <span class="o">notify (m1 · ${toolName}): ERROR [gateway] upstream timeout</span>`,
+      `<span class="r">╰─</span><span class="t">读完 magpie.ts 了；顺便看到 m1 刚报了一次网关超时。</span>`
+    );
+  } else if (state.monCase === "dialog") {
+    legend.textContent = "场景 ③ 确认弹窗暂停：当权限/选择弹窗打开（uiPromptDepth > 0）时，task-notify 冻结自动投递，绝不在弹窗背后偷跑新回合。";
+    rows.push(
+      `<span class="r">╰─</span><span class="o">准备执行外部命令，等待你的确认…</span>`,
+      `<span class="r">╭─</span> <span class="a">Allow bash command?</span> <span class="d">(uiPromptDepth = 1 · 后台投递已暂停，m1 缓存 2 条待弹窗关闭后投递)</span>`,
+      `<span class="r">╰─</span> <span class="g">[y] Allow</span>   <span class="m">[n] Deny</span>`
+    );
+  } else if (state.monCase === "esc") {
+    legend.textContent = "场景 ④ 按 Esc 打断：你按 Esc 叫停当前回合后，autoWake 置为 false；后台 m1 / t1 的消息安静留在队列和 /tasks 里，绝不顶着你的 Esc 强行重开回合！";
+    rows.push(
+      `<span class="r">╰─</span><span class="e">■ Interrupted by user (Esc)</span> <span class="d">· autoWake = false</span>`,
+      `<span class="m">  [静默入队] m1 捕获 1 条新日志、t1 已完成（未触发新回合；你发下一句话时一并带上，或点 /tasks 查看）</span>`
+    );
+  } else if (state.monCase === "burst") {
+    const coalesce = state.opts.d3 === "coalesce";
+    legend.textContent = coalesce
+      ? "场景 ⑤ 突发限流（推荐折叠合并）：2 秒内连喷 18 条报错时，先合并进单次唤醒，超额的 8 条折叠成 1 行摘要在下个窗口补齐，既不连开 18 轮也不丢尾部关键行。"
+      : "场景 ⑤ 突发限流（直接丢弃）：超过 10 条令牌桶上限的后 8 条直接丢弃。";
+    rows.push(
+      `<span class="r">╰─</span><span class="a">◆ notify (m1 · ${toolName})</span> <span class="d">· 批量合并投递（仅触发 1 轮 LLM，而非 10 轮）</span>`,
+      `<span class="r">  │</span> <span class="o">1..10: ERROR worker crash loop...</span>`,
+      coalesce
+        ? `<span class="r">  │</span> <span class="a">… suppressed 8 matching lines in 2s (last: FATAL port 3000 EADDRINUSE)</span>`
+        : `<span class="r">  │</span> <span class="d">(8 lines dropped silently by rate limiter)</span>`
+    );
+  } else if (state.monCase === "reload") {
+    legend.textContent = "场景 ⑥ 执行 /reload：修复前 session_shutdown 不看 reason 一刀切 kill 所有监控；修复后 reason===\"reload\" 保留运行中的监控，只有退出进程（quit）或切新会话（非 persistent）才清理。";
+    rows.push(
+      `<span class="c">❯</span> <span class="t">/reload</span>`,
+      `<span class="g">✓ Reloaded extensions &amp; skills</span> <span class="d">· session_shutdown(reason="reload") → m1 (PID 48210) 保持存活 ✓</span>`
+    );
+  }
+
+  rows.push(
+    ``,
+    `<span class="r">─${"─".repeat(Math.max(10, cols - 2))}</span>`,
+    padLine(`<span class="c">❯</span> <span class="d">输入消息，或点任意 task / monitor 行、右下角 ◐ 2 tasks…</span>`, "◐ 2 tasks", cols, 'data-mc="tasks"')
+  );
+  return rows.join("\n");
+}
+
+function renderBugfixScreen() {
+  const title = document.getElementById("capTitle");
+  const right = document.getElementById("capRight");
+  const legend = document.getElementById("legendText");
+  const after = state.bugMode === "after";
+
+  right.innerHTML = after
+    ? `<span class="badge-ok">当前视图：修复后</span>`
+    : `<span class="badge-err">当前视图：修复前 (main @ dff2603)</span>`;
+
+  if (state.bugCase === "paste") {
+    title.textContent = "3A · src/tui/paste-chips.ts · 粘贴不可读路径 (EPERM / EACCES)";
+    legend.textContent = "复现 paste-image-eperm 遗留的 P2：剪贴板里还留着半小时前截的一张图，此时粘贴一个权限受限的普通文本路径或受限图片路径。";
+    if (!after) {
+      return [
+        `<span class="m"># 前提：系统剪贴板里残留着半小时前的一张截图（可能含敏感信息）</span>`,
+        `<span class="c">❯</span> <span class="t">帮我看下这个报错文件 </span><span class="e">[Image #1]</span>`,
+        ``,
+        `<span class="e">✗ 事故：用户粘贴的是 /private/var/root/notes.txt（非图片！），因 EACCES 不可读，</span>`,
+        `<span class="e">  readPastedImageFile 一律返回 kind:"unreadable"，悄悄把剪贴板里的旧截图当成附件发出去了！</span>`,
+      ].join("\n");
+    }
+    const showNotice = state.opts.d5 === "notice";
+    return [
+      `<span class="m"># 情况 1：粘贴不可读的非图片路径（/private/var/root/notes.txt）</span>`,
+      `<span class="c">❯</span> <span class="t">帮我看下这个报错文件 /private/var/root/notes.txt</span>`,
+      `<span class="g">✓ 非图片后缀（无 .png/.jpg/.jpeg/.gif/.webp）绝不碰剪贴板，原样保留路径文本。</span>`,
+      ``,
+      `<span class="m"># 情况 2：粘贴不可读的图片路径（/var/folders/.../CleanShot-01.png）且剪贴板有图</span>`,
+      `<span class="c">❯</span> <span class="t">看下这张截图 </span><span class="c">[Image #1]</span>`,
+      showNotice
+        ? `<span class="a">  ℹ Used clipboard image; /var/folders/.../CleanShot-01.png is not readable</span>`
+        : `<span class="d">  (D5 已选静默回退，不显示提示行)</span>`,
+    ].join("\n");
+  }
+
+  if (state.bugCase === "cli") {
+    title.textContent = "3B · src/host.ts · 全局前置参数归一化分发";
+    legend.textContent = "复现 dff2603 只修了一半的前置 flag：alias epi='epi --approve' 下跑 epi mcp list 直接报错退出，--no-project list 误进 TUI 聊天。";
+    if (!after) {
+      return [
+        `<span class="m">$ epi --approve mcp list</span>`,
+        `<span class="e">epi: Unknown mcp command "--approve".</span>   <span class="d"># exit 2！matchSubcommand 把 --approve 原样塞给了 argv[0]</span>`,
+        ``,
+        `<span class="m">$ epi --no-project list</span>`,
+        `<span class="e">→ 未命中子命令，直接启动聊天把 "list" 当成 prompt 发给大模型！</span>`,
+        ``,
+        `<span class="m">$ epi --approve --no-approve update</span>`,
+        `<span class="e">→ parseUpdateArgs 静默放行互斥参数，未报冲突错误。</span>`,
+      ].join("\n");
+    }
+    return [
+      `<span class="m"># host.ts 在分发前统一提取并校验前置全局环境 flag（-a/--approve/-na/--no-approve/--no-project）：</span>`,
+      `<span class="m">$ epi --approve mcp list</span>`,
+      `<span class="g">✓ 正常列出已配置的 MCP servers（exit 0）</span>`,
+      ``,
+      `<span class="m">$ epi --no-project list</span>`,
+      `<span class="g">✓ 正常列出全局 extensions / skills / themes（忽略当前目录 .epi，exit 0）</span>`,
+      ``,
+      `<span class="m">$ epi --approve --no-approve update</span>`,
+      `<span class="a">epi: --approve and --no-approve cannot be used together</span>   <span class="d"># exit 2，与主 CLI 行为完全一致</span>`,
+    ].join("\n");
+  }
+
+  title.textContent = "3C · src/providers/magpie.ts · Claude Prompt Cache 命中保护";
+  legend.textContent = "复现 dff2603 引起的隐蔽性能退化：Turn 1 没 tool_use 不改 system，Turn 2 出现 tool_use 突然往 system 追加文本，导致第 2 轮 System + Tools 缓存 100% 失效重算。";
+  if (!after) {
+    return [
+      `<span class="m">Turn 1 Request (factory/claude-opus-5-5, tools=[bash, read, edit, ...]):</span>`,
+      `  system: [{ type: "text", text: "You are Epi...", cache_control: { type: "ephemeral" } }]`,
+      `  usage : cache_creation_input_tokens = <span class="o">18,420</span>`,
+      ``,
+      `<span class="m">Turn 2 Request (messages 里首次出现 assistant tool_use):</span>`,
+      `  system: [{ type: "text", text: "You are Epi...", cache_control: { type: "ephemeral" } },`,
+      `           <span class="e">{ type: "text", text: "Values written like {{NAME_ab23cd45}}..." }</span>]  <span class="e">← Turn 2 突变！</span>`,
+      `  usage : cache_read_input_tokens = <span class="e">0 (CACHE MISS! 整段 System + 全部 Tools 定义重新计费与首包延迟)</span>`,
+    ].join("\n");
+  }
+  return [
+    `<span class="m">Turn 1 Request (只要 payload.tools 非空或历史含 tool_use，第 1 轮起即稳定合入最后一个 text 块):</span>`,
+    `  system: [{ type: "text", text: "You are Epi...\\n\\nValues written like {{NAME_ab23cd45}}...",`,
+    `             cache_control: { type: "ephemeral" } }]`,
+    `  usage : cache_creation_input_tokens = <span class="o">18,442</span>`,
+    ``,
+    `<span class="m">Turn 2..N Request (system 字节级 100% 恒定，且不额外占用 Anthropic 4 个 cache_control 槽位):</span>`,
+    `  system: <span class="g">(与 Turn 1 完全一致)</span>`,
+    `  usage : cache_read_input_tokens = <span class="g">18,442 (100% CACHE HIT ✓，同时继续防住 Factory 400 prefill 报错)</span>`,
+  ].join("\n");
+}
+
+function render() {
+  renderSubControls();
+  const screen = document.getElementById("screen");
+  if (state.tab === "review") screen.innerHTML = renderReviewScreen();
+  else if (state.tab === "monitor") screen.innerHTML = renderMonitorScreen();
+  else screen.innerHTML = renderBugfixScreen();
+}
+
+document.getElementById("mainTabs").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-tab]");
+  if (!btn) return;
+  state.tab = btn.dataset.tab;
+  for (const b of document.querySelectorAll("#mainTabs button")) b.classList.toggle("on", b === btn);
+  render();
+});
+
+document.addEventListener("click", (e) => {
+  const rc = e.target.closest("[data-rc]");
+  if (rc) { state.reviewCase = rc.dataset.rc; render(); return; }
+  const mc = e.target.closest("[data-mc]");
+  if (mc) { state.tab = "monitor"; state.monCase = mc.dataset.mc; render(); return; }
+  const w = e.target.closest("[data-w]");
+  if (w) { state.cols = Number(w.dataset.w); render(); return; }
+  const bc = e.target.closest("[data-bc]");
+  if (bc) { state.bugCase = bc.dataset.bc; render(); return; }
+  const bm = e.target.closest("[data-bm]");
+  if (bm) { state.bugMode = bm.dataset.bm; render(); return; }
+});
+
+for (const input of document.querySelectorAll('input[type="radio"]')) {
+  input.addEventListener("change", () => {
+    state.opts[input.name] = input.value;
+    render();
+  });
+}
+
+document.getElementById("copyBtn").addEventListener("click", async () => {
+  const notes = document.getElementById("notes").value.trim();
+  const summary = [
+    "原型验收通过，按以下选项执行：",
+    `- D1 (agy 审查模式): ${state.opts.d1}`,
+    `- D2 (monitor 命名): ${state.opts.d2}`,
+    `- D3 (monitor 超额限流): ${state.opts.d3}`,
+    `- D4 (pre-commit 门禁): ${state.opts.d4}`,
+    `- D5 (粘贴图片回退提示): ${state.opts.d5}`,
+    `- D6 (遗留 0.2.6 版本号): ${state.opts.d6}`,
+    ...(notes ? [`- 补充说明: ${notes}`] : []),
+  ].join("\n");
+  try {
+    await navigator.clipboard.writeText(summary);
+    document.getElementById("copyMsg").textContent = "✓ 已复制到剪贴板，可直接粘贴回复";
+  } catch {
+    document.getElementById("notes").value = summary;
+    document.getElementById("copyMsg").textContent = "已生成到上方文本框，可全选复制";
+  }
+});
+
+// Self-test all states render cleanly without throwing or leaking undefined
+(function runSelfTest() {
+  const saved = JSON.parse(JSON.stringify(state));
+  let count = 0;
+  for (const rc of ["ok", "main_commit", "large_diff", "fake_accept"]) {
+    state.tab = "review"; state.reviewCase = rc; render();
+    if (document.getElementById("screen").textContent.includes("undefined")) throw new Error("review " + rc);
+    count++;
+  }
+  for (const mc of ["idle", "busy", "dialog", "esc", "burst", "reload", "tasks", "detail_m1", "detail_t1"]) {
+    state.tab = "monitor"; state.monCase = mc; render();
+    if (document.getElementById("screen").textContent.includes("undefined")) throw new Error("monitor " + mc);
+    count++;
+  }
+  for (const bc of ["paste", "cli", "cache"]) {
+    for (const bm of ["before", "after"]) {
+      state.tab = "bugfix"; state.bugCase = bc; state.bugMode = bm; render();
+      if (document.getElementById("screen").textContent.includes("undefined")) throw new Error("bugfix " + bc + bm);
+      count++;
+    }
+  }
+  Object.assign(state, saved);
+  render();
+  document.getElementById("selftest").textContent = `✓ 原型自检通过（${count} 个交互状态全部渲染正常）`;
+})();
+</script>
+</main></body></html>

@@ -1,22 +1,23 @@
 # Epi 开发流程
 
-状态：2026-09-30 起执行，2026-10-06 全 epi 化（WF1），2026-10-21 起用 Orca 验收，2026-10-22 按历史审查简化并硬拦门禁（[decisions.md](decisions.md) WF2–WF4）。代码规范与预检见 [code-quality.md](code-quality.md)，冒烟清单见 [e2e-acceptance.md](e2e-acceptance.md)，实现与契约见 [development.md](development.md)。
+状态：2026-09-30 起执行，2026-10-06 全 epi 化（WF1），2026-10-21 起用 Orca 验收，2026-10-22 按历史审查简化并硬拦门禁（WF2–WF4），2026-11-11 审查切换为 `agy` Carbon + Argon 双模型盲审并收紧本地 Git 门禁（[decisions.md](decisions.md) WF7）。代码规范与预检见 [code-quality.md](code-quality.md)，冒烟清单见 [e2e-acceptance.md](e2e-acceptance.md)，实现与契约见 [development.md](development.md)。
 
-**三条原则**：**小包**（单次送审 `src/` ≤ 800 行，互不相关特性拆开审）、**作者不自审**（主控或 worker 写的代码都经独立审查，G3 超限不得自修自合）、**失败可见**（不吞错、不静默兜底、门禁脚本硬拦）。
+**三条原则**：**小包**（单次送审 `src/` ≤ 800 行，无环境变量绕过，互不相关特性拆开审）、**作者不自审**（任何 `src/` 改动均须经 `agy` Carbon + Argon 双模型独立盲审通过并签发 `verified.sha`）、**失败可见**（不吞错、不静默兜底、门禁脚本硬拦）。
 
 ## 1. 角色与模型
 
 | 角色 | 用什么 | 职责 |
 |---|---|---|
-| 主控 | epi 主会话 | 计划、N3 审查验证、合并、Orca 实测、汇报 |
+| 主控 | epi / agy 主会话 | 计划、N3 审查验证、合并、Orca 实测、汇报 |
 | worker | epi + magpie `claude-opus-5-5`（`devin/`、`auto/`、`factory/`），thinking `high`；独立 git worktree（`dev/<id>`），每任务每轮新开会话 | 实现（N2），写测试、提交、交 `report.md` |
 | 阅读子代理 | 内置 `task` 工具 + 预设 `reader`（`~/.epi/agents/reader.md`，`factory/deepseek-v4.1-flash`，只读工具） | 大范围读代码/查资料，结论须带 `文件:行号`，主控核对原文后才用 |
 | 执行子代理 | 内置 `task` 工具 + 预设 `runner`（`~/.epi/agents/runner.md`，flash，可跑 `bash`、不改文件） | 跑全套测试、构建、基准，只回报结果与失败项 |
-| 审查子代理 | `epi -p` 只读会话，provider `magpie`，模型按 WF3 三级回退由 `scripts/dev/run-review.sh` 解析写入 `pack.md`，复查沿用同模型 | 阶段终审（大节点，N6）、审主控自己写的代码（G5） |
-| 顾问 | `epi -p` 独立只读会话（主控把背景材料写成文件交给它） | 仅在**同一个问题第二次出现 / 方案迟迟收不拢**时调用 |
+| 审查子代理 | `agy` 非交互会话（`gemini-4-carbon-high` + `gemini-4-argon-high` 双模型并行独立盲审），由 `scripts/dev/run-review.sh` 启动、等待与 `verify` 校验（WF7） | 每个 `dev/<id>` 包合入前审查（N3/G5）及阶段终审（N6） |
+| 顾问 | `epi -p` 或 `agy -p` 独立只读会话（主控把背景材料写成文件交给它） | 仅在**同一个问题第二次出现 / 方案迟迟收不拢**时调用 |
 | 用户 | — | 需求歧义拍板；推送/PR/发布人工闸门（G2） |
 
-- **审查模型三级回退（WF3）**：① `gemini-4-argon`（`auto/` 优先，`devin/`、`factory/`、`antigravity/` 次之，排除 `-disabled`，thinking `high`）；② `devin/swe-2`（thinking `high`）；③ `deepseek-v4.1-flash`（`factory/deepseek-v4.1-flash`、`devin/deepseek-v4-1-flash-1017`）。一律通过 `scripts/dev/run-review.sh` 启动与等待，禁止手写 `nohup epi -p` 或固定长 `sleep`。
+- **双模型并行盲审（WF7，取代 WF2/WF3 的单模型审查）**：`scripts/dev/run-review.sh start <id>` 同时启动两个互不可见的 `agy` 审查进程：`gemini-4-carbon-high`（写 `notes-carbon.md` / `review-carbon.md`）与 `gemini-4-argon-high`（写 `notes-argon.md` / `review-argon.md`）。注意 `agy` 的 `-p` 直接接收紧跟其后的字符串作为 prompt，固定顺序为 `agy --model <id> --dangerously-skip-permissions --disable-slash-commands --print-timeout 1200s -p "$prompt"`，禁止手写后台命令或固定长 `sleep`。
+- **本地 Git 钩子门禁（`.githooks/pre-commit`，`core.hooksPath=.githooks`）**：① 禁止在 `main` 分支直接提交 `src/**` 改动；② 在 `main` 合并含 `src/**` 改动的分支时，强制校验被合入提交已存在对应的 `.dev/reviews/*/verified.sha`；③ 提交 `src/**` 时强制校验工作树无半暂存 `src/` 且 `npm run build` 后 `dist/` 完全同步。
 - **子代理（WF5，2026-10-25）**：主控与 worker 都用内置 `task` 工具委派，不再装 `npm:pi-subagents`。硬规则：
   - 要读**不打算改的**文件（Pi 的 `node_modules` 源码、长文档、别的模块）时，`task(agent="reader", task="…问题…，用 文件:行号 回答")`；只在要改的文件、或 <150 行的文件才自己读。
   - 跑全套测试（`node --test test/*.test.mjs`）、`precheck` 之外的长命令，用 `task(agent="runner", task="在 <目录> 跑 <命令>，报失败")`。
@@ -50,8 +51,8 @@ N1 计划 ─brief.md─▶ N2 实现 ─report.md─▶ N3 审查验证 ─G1�
 
 所有复现均在 `.dev/reviews/<id>/` 隔离副本和禁网沙箱（`sandbox-exec -p '(version 1)(allow default)(deny network-outbound (remote ip))' …`，需本地服务加 `(allow network-outbound (remote ip "localhost:*"))`）里执行，**严禁 `git stash`**。
 
-1. **800 行硬拦与冻结 head**：`run-review.sh precheck` 开头检查 `src/**/*.ts` 新增+删除行数，> 800 行（且未设 `EPI_ALLOW_LARGE_DIFF=1`）直接打印 `need split (>800 lines in src/)` 退出 **2**（不建副本）。审查期间不得修改被审分支引用。
-2. **复用 `precheck` 与 `precheck.sha` 门禁**：`precheck` 成功后写入 `precheck.sha`（`git rev-parse <head>`）和 `=== precheck passed ===`。`run-review.sh start` 强制校验 `precheck.sha` 等于被审 head 且 `precheck.log` 含通过标记，否则退出 **1**。审查方直接复用副本与日志，**禁止重跑全量测试、禁止重装 ESLint/knip**。
+1. **800 行硬拦与冻结 head**：`run-review.sh precheck` 开头检查 `src/**/*.ts` 新增+删除行数，> 800 行直接打印 `need split (>800 lines in src/)` 退出 **2**（不设任何环境变量绕过开关，不建副本）。审查期间不得修改被审分支引用。
+2. **复用 `precheck`、`precheck.sha` 与 `verified.sha` 门禁**：`precheck` 成功后写入 `precheck.sha`（`git rev-parse <head>`）和 `=== precheck passed ===`。`run-review.sh start` 强制校验 `precheck.sha` 等于被审 head 且 `precheck.log` 含通过标记，否则退出 **1**。`run-review.sh verify <id>` 强制校验 `review-carbon.md` 与 `review-argon.md` 首行均为「可接受」且正文零开放 `P0/P1/P2` 条目，通过后才签发 `verified.sha`。审查方直接复用副本与日志，**禁止重跑全量测试、禁止重装 ESLint/knip**。
 3. **审查 6 项短清单**：① 对照 `brief.md` 无越界改动；② 新测试在 `before/` 下修复前失败 + 至少 2 个故意改坏（变异）检查；③ 硬规则零违约（第 6 节）；④ 状态在启动、切会话、`/new`、`/resume`、`/reload`、中止、退出时均正确；⑤ 认知复杂度 ≤15、≤80 行、嵌套 ≤4、参数 ≤5（看 `precheck.log`）、无死导出、测试隔离；⑥ 模型可见快照差异已说明。
 4. **P0–P2 与 P3 规则（WF4）**：
    - **P0–P2**（阻塞合并）：必须标 `CONFIRMED` 并附可执行 `.mjs` 复现探针。
