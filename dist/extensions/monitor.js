@@ -164,8 +164,8 @@ function renderMonitorMessage(message, expanded, outputPad, theme) {
     const details = (message.details ?? {});
     const cause = details.cause ?? "output";
     const rawContent = typeof message.content === "string" ? stripSystemNotificationFraming(message.content) : "";
-    const body = rawContent
-        .replace(/^monitor \S+ ·[^\n]*\n?/, "")
+    const stripped = details.monitorId ? rawContent.replace(/^monitor \S+ ·[^\n]*\n?/gm, "") : rawContent;
+    const body = stripped
         .split("\n")
         .map((line) => line.replace(/\r$/, ""))
         .filter((line) => line.trim().length > 0);
@@ -185,6 +185,23 @@ function renderMonitorMessage(message, expanded, outputPad, theme) {
     if (expanded)
         appendMonitorMeta(container, details, indent, theme);
     return container;
+}
+function buildMonitorPayload(entries) {
+    const latest = entries[entries.length - 1].data.details;
+    const ids = new Set(entries.map((e) => e.data.details.monitorId));
+    const mergedLines = entries.flatMap((e) => e.data.details.lines ?? []);
+    const baseDetails = ids.size === 1
+        ? { ...latest, lines: mergedLines }
+        : { cause: latest.cause, lines: mergedLines };
+    return {
+        customType: EVENT_MESSAGE_TYPE,
+        content: withSystemNotificationFraming(entries.map((e) => e.data.body).join("\n\n")),
+        display: true,
+        details: {
+            ...baseDetails,
+            receipts: entries.map((e) => `${e.key}:${e.run}`),
+        },
+    };
 }
 class MonitorController {
     options;
@@ -219,15 +236,7 @@ class MonitorController {
             customType: EVENT_MESSAGE_TYPE,
             coalesceMs: 0,
             gate: this.gate,
-            buildPayload: (entries) => ({
-                customType: EVENT_MESSAGE_TYPE,
-                content: withSystemNotificationFraming(entries.map((e) => e.data.body).join("\n\n")),
-                display: true,
-                details: {
-                    ...entries[0].data.details,
-                    receipts: entries.map((e) => `${e.key}:${e.run}`),
-                },
-            }),
+            buildPayload: buildMonitorPayload,
         });
     }
     bindSession(pi) {
@@ -404,28 +413,20 @@ class MonitorController {
         if (this.disposed)
             return;
         const key = `${record.id}:${++this.noticeSeq}`;
-        this.ledger.entries.set(key, {
-            key,
-            run: 0,
-            originSessionId: record.originSessionId,
-            state: "unsent",
-            autoWake: this.gate.defaultAutoWake(),
-            data: {
-                body: `monitor ${record.id} · ${record.description}\n${lines.join("\n")}`,
-                details: {
-                    monitorId: record.id,
-                    description: record.description,
-                    cause,
-                    lines: cause === "output" ? lines : [],
-                    eventCount: record.eventCount,
-                    exitCode: record.exitCode,
-                    outputPath: record.outputPath,
-                    stderrPath: record.stderrPath,
-                    ...(record.loopPrompt ? { loopPrompt: record.loopPrompt } : {}),
-                },
+        this.ledger.put(key, {
+            body: `monitor ${record.id} · ${record.description}\n${lines.join("\n")}`,
+            details: {
+                monitorId: record.id,
+                description: record.description,
+                cause,
+                lines: cause === "output" ? lines : [],
+                eventCount: record.eventCount,
+                exitCode: record.exitCode,
+                outputPath: record.outputPath,
+                stderrPath: record.stderrPath,
+                ...(record.loopPrompt ? { loopPrompt: record.loopPrompt } : {}),
             },
-        });
-        this.ledger.scheduleFlush();
+        }, 0, true, record.originSessionId);
     }
     clearSuppressionTimer(record) {
         if (!record.suppressionTimer)

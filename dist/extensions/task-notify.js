@@ -76,7 +76,7 @@ export class NotificationGate {
     onUserPromptStart() {
         this.userAborted = false;
     }
-    bindGateEvents(pi, onUnlock) {
+    bindGateEvents(pi, onUnlock, onTreeNavigate) {
         pi.on("session_before_compact", (event) => {
             if (event.reason === "manual")
                 this.compacting = true;
@@ -89,11 +89,12 @@ export class NotificationGate {
             this.compacting = false;
             onUnlock();
         });
-        pi.on("session_before_tree", () => {
-            this.compacting = true;
-        });
+        // Do NOT set `compacting = true` in `session_before_tree`: Pi's `navigateTree()` already
+        // sets `_branchSummaryAbortController` (`ctx.isIdle() === false`) and forbids streaming,
+        // while cancelled/aborted/failed tree navigation never emits `session_tree`.
         pi.on("session_tree", () => {
             this.compacting = false;
+            onTreeNavigate?.();
             onUnlock();
         });
         pi.on("ui_prompt_start", () => {
@@ -117,12 +118,12 @@ export class NotificationLedger {
     constructor(options) {
         this.options = options;
     }
-    put(key, data, run, autoWake) {
+    put(key, data, run, autoWake, originSessionId = this.options.gate.sessionId()) {
         const { gate } = this.options;
         this.entries.set(key, {
             key,
             run,
-            originSessionId: gate.sessionId(),
+            originSessionId,
             state: "unsent",
             autoWake: autoWake && gate.defaultAutoWake(),
             data,
@@ -175,6 +176,16 @@ export class NotificationLedger {
             return;
         this.flushTimer = setTimeout(this.flush, this.options.coalesceMs);
         this.flushTimer.unref?.();
+    }
+    unlockFlush() {
+        this.scheduleFlush();
+        // Pi emits `session_compact(_failed)` and `session_tree` before its `finally` block clears
+        // `isCompacting`, so when `coalesceMs <= 0` retry on the next macrotask once `isIdle()` flips.
+        const pending = [...this.entries.values()].some((e) => e.state === "unsent" && e.autoWake);
+        if (this.options.coalesceMs <= 0 && this.flushTimer === undefined && pending) {
+            this.flushTimer = setTimeout(this.flush, 0);
+            this.flushTimer.unref?.();
+        }
     }
     deleteByReceiptSet(rawReceipts) {
         const receipts = new Set(rawReceipts.filter((r) => typeof r === "string"));
@@ -248,7 +259,13 @@ export class NotificationLedger {
     }
     bindEvents(pi, onSessionStartExtra) {
         const { gate, customType } = this.options;
-        gate.bindGateEvents(pi, () => this.scheduleFlush());
+        gate.bindGateEvents(pi, () => this.unlockFlush(), () => {
+            for (const entry of this.entries.values()) {
+                if (entry.state === "sent")
+                    entry.state = "unsent";
+            }
+            this.reconcileFromBranch();
+        });
         pi.on("session_start", (event, ctx) => {
             onSessionStartExtra?.(ctx);
             this.onSessionStart(ctx, event?.reason);

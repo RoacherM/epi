@@ -89,7 +89,7 @@ export class NotificationGate {
     this.userAborted = false;
   }
 
-  bindGateEvents(pi: ExtensionAPI, onUnlock: () => void): void {
+  bindGateEvents(pi: ExtensionAPI, onUnlock: () => void, onTreeNavigate?: () => void): void {
     pi.on("session_before_compact", (event) => {
       if (event.reason === "manual") this.compacting = true;
     });
@@ -101,11 +101,12 @@ export class NotificationGate {
       this.compacting = false;
       onUnlock();
     });
-    pi.on("session_before_tree", () => {
-      this.compacting = true;
-    });
+    // Do NOT set `compacting = true` in `session_before_tree`: Pi's `navigateTree()` already
+    // sets `_branchSummaryAbortController` (`ctx.isIdle() === false`) and forbids streaming,
+    // while cancelled/aborted/failed tree navigation never emits `session_tree`.
     pi.on("session_tree", () => {
       this.compacting = false;
+      onTreeNavigate?.();
       onUnlock();
     });
     pi.on("ui_prompt_start", () => {
@@ -153,12 +154,18 @@ export class NotificationLedger<T> {
 
   constructor(private readonly options: NotificationLedgerOptions<T>) {}
 
-  put(key: string, data: T, run: number, autoWake: boolean): void {
+  put(
+    key: string,
+    data: T,
+    run: number,
+    autoWake: boolean,
+    originSessionId = this.options.gate.sessionId(),
+  ): void {
     const { gate } = this.options;
     this.entries.set(key, {
       key,
       run,
-      originSessionId: gate.sessionId(),
+      originSessionId,
       state: "unsent",
       autoWake: autoWake && gate.defaultAutoWake(),
       data,
@@ -212,6 +219,17 @@ export class NotificationLedger<T> {
     if (this.flushTimer !== undefined) return;
     this.flushTimer = setTimeout(this.flush, this.options.coalesceMs);
     this.flushTimer.unref?.();
+  }
+
+  private unlockFlush(): void {
+    this.scheduleFlush();
+    // Pi emits `session_compact(_failed)` and `session_tree` before its `finally` block clears
+    // `isCompacting`, so when `coalesceMs <= 0` retry on the next macrotask once `isIdle()` flips.
+    const pending = [...this.entries.values()].some((e) => e.state === "unsent" && e.autoWake);
+    if (this.options.coalesceMs <= 0 && this.flushTimer === undefined && pending) {
+      this.flushTimer = setTimeout(this.flush, 0);
+      this.flushTimer.unref?.();
+    }
   }
 
   private deleteByReceiptSet(rawReceipts: unknown[]): boolean {
@@ -288,7 +306,16 @@ export class NotificationLedger<T> {
 
   bindEvents(pi: ExtensionAPI, onSessionStartExtra?: (ctx: ExtensionContext) => void): void {
     const { gate, customType } = this.options;
-    gate.bindGateEvents(pi, () => this.scheduleFlush());
+    gate.bindGateEvents(
+      pi,
+      () => this.unlockFlush(),
+      () => {
+        for (const entry of this.entries.values()) {
+          if (entry.state === "sent") entry.state = "unsent";
+        }
+        this.reconcileFromBranch();
+      },
+    );
     pi.on("session_start", (event, ctx) => {
       onSessionStartExtra?.(ctx);
       this.onSessionStart(ctx, (event as { reason?: string } | undefined)?.reason);

@@ -486,6 +486,30 @@ test("delivery gating: busy queuing, ui_prompt_start dialog pause, compaction pa
     message: { role: "custom", customType: EVENT_MESSAGE_TYPE, details: h.sentMessages[0].message.details },
   });
 
+  // 2b. Cancelled session_before_tree (no session_tree) never wedges compacting, and
+  // session_compact flushes on next macrotask even if isIdle() flips after session_compact returns
+  await h.emit("session_before_tree", { type: "session_before_tree" });
+  h.setIdle(false);
+  await h.emit("session_before_compact", { type: "session_before_compact", reason: "manual" });
+  await monitorTool.execute(
+    "m-cmp",
+    { command: 'printf "during-compact\\n"', description: "compact watch" },
+    undefined,
+    undefined,
+    h.ctx,
+  );
+  await delay(300);
+  assert.equal(h.sentMessages.length, 1, "must not wake during manual compaction");
+  await h.emit("session_compact", { type: "session_compact" });
+  h.setIdle(true); // AgentSession clears _compactionAbortController after session_compact returns
+  await delay(20);
+  assert.equal(h.sentMessages.length, 2, "must wake right after compaction clears isIdle()");
+  assert.match(h.sentMessages[1].message.content, /during-compact/);
+  await h.emit("message_end", {
+    type: "message_end",
+    message: { role: "custom", customType: EVENT_MESSAGE_TYPE, details: h.sentMessages[1].message.details },
+  });
+
   // 3. User Esc (agent_settled with aborted: true) suppresses autoWake until next user prompt
   await h.emit("agent_settled", { type: "agent_settled", aborted: true });
   await monitorTool.execute(
@@ -496,7 +520,7 @@ test("delivery gating: busy queuing, ui_prompt_start dialog pause, compaction pa
     h.ctx,
   );
   await delay(300);
-  assert.equal(h.sentMessages.length, 1, "post-Esc monitor event must stay silent until user speaks");
+  assert.equal(h.sentMessages.length, 2, "post-Esc monitor event must stay silent until user speaks");
 
   const attached = await h.emit("before_agent_start", {
     type: "before_agent_start",

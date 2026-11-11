@@ -27,7 +27,7 @@ export declare class NotificationGate {
     }): boolean;
     onAgentSettled(aborted: boolean | undefined): void;
     onUserPromptStart(): void;
-    bindGateEvents(pi: ExtensionAPI, onUnlock: () => void): void;
+    bindGateEvents(pi: ExtensionAPI, onUnlock: () => void, onTreeNavigate?: () => void): void;
 }
 export interface NotificationPayload {
     customType: string;
@@ -60,12 +60,13 @@ export declare class NotificationLedger<T> {
     readonly entries: Map<string, LedgerEntry<T>>;
     private flushTimer;
     constructor(options: NotificationLedgerOptions<T>);
-    put(key: string, data: T, run: number, autoWake: boolean): void;
+    put(key: string, data: T, run: number, autoWake: boolean, originSessionId?: string | undefined): void;
     delete(key: string): boolean;
     deleteByPrefix(prefix: string): void;
     clear(): void;
     flush: () => void;
     scheduleFlush(): void;
+    private unlockFlush;
     private deleteByReceiptSet;
     deleteReceiptEntries(details: {
         jobIds?: unknown;
