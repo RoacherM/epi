@@ -1,17 +1,19 @@
 /**
- * Built-in `Monitor`, `monitor_stop`, and `monitor_list` tools for `epi:task`.
+ * Built-in `monitor` (plus hidden legacy `Monitor` alias), `monitor_stop`, and
+ * `monitor_list` tools for `epi:task`.
  *
  * Ports Claude Code's Monitor tool (`pi-cc-monitor`) into Epi's built-in task
  * extension, storing monitor logs under `<epiHome>/runtime/monitors` and using
  * `<agentDir>/bin` in PATH so no ambient Pi directories are touched.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { getShellConfig, } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
-import { BATCH_WINDOW_MS, DEFAULT_TIMEOUT_MS, formatDuration, killTree, LineBatcher, MAX_TIMEOUT_MS, MIN_TIMEOUT_MS, RateLimiter, spawnMonitor, validateMonitorParams, } from "../monitor-stream.js";
+import { BATCH_WINDOW_MS, DEFAULT_TIMEOUT_MS, formatDuration, killTree, LineBatcher, MAX_TIMEOUT_MS, MIN_TIMEOUT_MS, RateLimiter, spawnMonitor, TOKEN_REFILL_MS, validateMonitorParams, } from "../monitor-stream.js";
+import { resolveHomeDir } from "../paths.js";
+import { createTaskMonitorBridge, NotificationGate, NotificationLedger, stripSystemNotificationFraming, withSystemNotificationFraming, } from "./task-notify.js";
 export const EVENT_MESSAGE_TYPE = "Monitor";
 export const LOOP_STOPPED_CHANNEL = "loop:stopped";
 export const STOPPED_NOTICE = "[Monitor stopped]";
@@ -62,8 +64,9 @@ function exitNotice(record, signal) {
 function floodNotice(record, suppressedForMs) {
     return `[Monitor stopped — too much output (${eventsText(record.suppressedCount)} suppressed over ${formatDuration(suppressedForMs)}). Restart it with a more selective filter.]`;
 }
-function suppressionNotice(count) {
-    return `[${eventsText(count)} suppressed — output rate too high. Consider using monitor_stop to restart this monitor with a more selective filter.]`;
+function suppressionNotice(count, lastLine) {
+    const tail = lastLine ? ` (last: ${lastLine})` : "";
+    return `[${eventsText(count)} suppressed${tail} — output rate too high. Consider using monitor_stop to restart this monitor with a more selective filter.]`;
 }
 function snapshotMonitor(record) {
     return {
@@ -86,6 +89,23 @@ function snapshotMonitor(record) {
         stderrPath: record.stderrPath,
     };
 }
+function bridgeSummaryOf(record) {
+    return {
+        id: record.id,
+        kind: record.kind,
+        description: record.description,
+        target: record.kind === "ws" ? (record.wsUrl ?? "") : (record.command ?? ""),
+        status: record.status,
+        persistent: record.persistent,
+        timeoutMs: record.timeoutMs,
+        ...(record.child?.pid !== undefined ? { pid: record.child.pid } : {}),
+        eventCount: record.eventCount,
+        suppressedCount: record.suppressedCount,
+        ...(record.exitCode !== undefined ? { exitCode: record.exitCode } : {}),
+        outputPath: record.outputPath,
+        stderrPath: record.stderrPath,
+    };
+}
 function monitorEnv(agentDir) {
     const binDir = path.join(agentDir, "bin");
     const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
@@ -95,10 +115,11 @@ function monitorEnv(agentDir) {
     return { ...process.env, [pathKey]: updated };
 }
 function expandHome(file) {
+    const home = resolveHomeDir(process.env);
     if (file === "~")
-        return os.homedir();
+        return home;
     if (file.startsWith("~/") || (process.platform === "win32" && file.startsWith("~\\"))) {
-        return path.join(os.homedir(), file.slice(2));
+        return path.join(home, file.slice(2));
     }
     return file;
 }
@@ -142,9 +163,9 @@ function appendMonitorMeta(container, details, indent, theme) {
 function renderMonitorMessage(message, expanded, outputPad, theme) {
     const details = (message.details ?? {});
     const cause = details.cause ?? "output";
-    const rawContent = typeof message.content === "string" ? message.content : "";
-    const body = rawContent
-        .replace(/^monitor \S+ ·[^\n]*\n?/, "")
+    const rawContent = typeof message.content === "string" ? stripSystemNotificationFraming(message.content) : "";
+    const stripped = details.monitorId ? rawContent.replace(/^monitor \S+ ·[^\n]*\n?/gm, "") : rawContent;
+    const body = stripped
         .split("\n")
         .map((line) => line.replace(/\r$/, ""))
         .filter((line) => line.trim().length > 0);
@@ -165,12 +186,31 @@ function renderMonitorMessage(message, expanded, outputPad, theme) {
         appendMonitorMeta(container, details, indent, theme);
     return container;
 }
+function buildMonitorPayload(entries) {
+    const latest = entries[entries.length - 1].data.details;
+    const ids = new Set(entries.map((e) => e.data.details.monitorId));
+    const mergedLines = entries.flatMap((e) => e.data.details.lines ?? []);
+    const baseDetails = ids.size === 1
+        ? { ...latest, lines: mergedLines }
+        : { cause: latest.cause, lines: mergedLines };
+    return {
+        customType: EVENT_MESSAGE_TYPE,
+        content: withSystemNotificationFraming(entries.map((e) => e.data.body).join("\n\n")),
+        display: true,
+        details: {
+            ...baseDetails,
+            receipts: entries.map((e) => `${e.key}:${e.run}`),
+        },
+    };
+}
 class MonitorController {
-    pi;
     options;
     monitors = new Map();
+    gate = new NotificationGate();
+    bridge;
+    ledger;
     logDir;
-    lastCtx;
+    noticeSeq = 0;
     disposed = false;
     lastStatusText;
     statusSet = false;
@@ -181,20 +221,40 @@ class MonitorController {
                 killTree(record.child, "SIGKILL");
         }
     };
-    constructor(pi, options) {
-        this.pi = pi;
+    constructor(options) {
         this.options = options;
         this.logDir = path.join(options.epiHome, "runtime", "monitors");
-        this.pi.events.on(LOOP_STOPPED_CHANNEL, (data) => this.onLoopStopped(data));
+        this.bridge = options.bridge ?? createTaskMonitorBridge();
+        this.bridge.registerMonitorProvider({
+            list: () => [...this.monitors.values()].map(bridgeSummaryOf),
+            get: (id) => {
+                const rec = this.monitors.get(id);
+                return rec ? bridgeSummaryOf(rec) : undefined;
+            },
+        });
+        this.ledger = new NotificationLedger({
+            customType: EVENT_MESSAGE_TYPE,
+            coalesceMs: 0,
+            gate: this.gate,
+            buildPayload: buildMonitorPayload,
+        });
+    }
+    bindSession(pi) {
+        this.disposed = false;
+        this.gate.bindPi(pi);
+        return pi.events.on(LOOP_STOPPED_CHANNEL, (data) => this.onLoopStopped(data));
     }
     setLastCtx(ctx) {
-        this.lastCtx = ctx;
+        this.gate.ctx = ctx;
     }
     cleanLogs() {
         cleanOldLogs(this.logDir);
+        this.lastStatusText = undefined;
+        this.refreshStatus();
     }
     arm(input, ctx) {
-        this.lastCtx = ctx;
+        this.disposed = false;
+        this.gate.ctx = ctx;
         fs.mkdirSync(this.logDir, { recursive: true });
         const record = this.createRecord(input);
         if (input.target.kind === "command") {
@@ -220,23 +280,40 @@ class MonitorController {
         });
         return { stopped: true, record };
     }
-    shutdown() {
+    onSessionShutdown(reason) {
+        const prevCtx = this.gate.ctx;
+        this.gate.onSessionShutdown();
+        if (reason === "reload")
+            return;
+        if (reason === "new" || reason === "resume" || reason === "fork") {
+            for (const record of [...this.monitors.values()]) {
+                if (!record.persistent && record.status === "running") {
+                    this.endMonitor(record, { status: "stopped", cause: "stopped", kill: true });
+                }
+            }
+            return;
+        }
+        this.shutdown(prevCtx);
+    }
+    shutdown(statusCtx = this.gate.ctx) {
         this.disposed = true;
-        for (const record of this.monitors.values()) {
+        for (const record of [...this.monitors.values()]) {
             this.endMonitor(record, { status: "stopped", cause: "stopped", kill: true });
         }
         this.removeExitHook();
         this.monitors.clear();
+        this.ledger.clear();
         if (this.statusSet) {
             this.statusSet = false;
             this.lastStatusText = undefined;
             try {
-                this.lastCtx?.ui?.setStatus?.(STATUS_KEY, undefined);
+                statusCtx?.ui?.setStatus?.(STATUS_KEY, undefined);
             }
             catch {
                 // ignore stale UI context
             }
         }
+        this.bridge.notifyMonitorChanged();
     }
     createRecord(input) {
         const id = generateId();
@@ -249,6 +326,7 @@ class MonitorController {
             timeoutMs: input.persistent ? 0 : input.timeoutMs,
             persistent: input.persistent,
             createdAt: Date.now(),
+            originSessionId: this.gate.sessionId(),
             eventCount: 0,
             suppressedCount: 0,
             status: "running",
@@ -261,6 +339,8 @@ class MonitorController {
             socket: undefined,
             closeLog: undefined,
             timeoutTimer: undefined,
+            suppressionTimer: undefined,
+            lastSuppressedLine: undefined,
             batcher: undefined,
             limiter: new RateLimiter(),
         };
@@ -310,7 +390,11 @@ class MonitorController {
         this.exitHookInstalled = false;
     }
     refreshStatus() {
-        if (this.disposed || !this.lastCtx?.hasUI || typeof this.lastCtx.ui?.setStatus !== "function")
+        this.bridge.notifyMonitorChanged();
+        if (this.bridge.hasTaskProvider())
+            return;
+        const ctx = this.gate.ctx;
+        if (this.disposed || !ctx?.hasUI || typeof ctx.ui?.setStatus !== "function")
             return;
         const running = [...this.monitors.values()].filter((r) => r.status === "running").length;
         const text = running > 0 ? `monitor ${running}` : undefined;
@@ -319,7 +403,7 @@ class MonitorController {
         this.lastStatusText = text;
         this.statusSet = text !== undefined;
         try {
-            this.lastCtx.ui.setStatus(STATUS_KEY, text);
+            ctx.ui.setStatus(STATUS_KEY, text);
         }
         catch {
             // ignore stale UI context
@@ -328,27 +412,48 @@ class MonitorController {
     deliver(record, cause, lines) {
         if (this.disposed)
             return;
-        try {
-            this.pi.sendMessage({
-                customType: EVENT_MESSAGE_TYPE,
-                content: `monitor ${record.id} · ${record.description}\n${lines.join("\n")}`,
-                display: true,
-                details: {
-                    monitorId: record.id,
-                    description: record.description,
-                    cause,
-                    lines: cause === "output" ? lines : [],
-                    eventCount: record.eventCount,
-                    exitCode: record.exitCode,
-                    outputPath: record.outputPath,
-                    stderrPath: record.stderrPath,
-                    ...(record.loopPrompt ? { loopPrompt: record.loopPrompt } : {}),
-                },
-            }, { deliverAs: "steer", triggerTurn: true });
-        }
-        catch {
-            // session gone
-        }
+        const key = `${record.id}:${++this.noticeSeq}`;
+        this.ledger.put(key, {
+            body: `monitor ${record.id} · ${record.description}\n${lines.join("\n")}`,
+            details: {
+                monitorId: record.id,
+                description: record.description,
+                cause,
+                lines: cause === "output" ? lines : [],
+                eventCount: record.eventCount,
+                exitCode: record.exitCode,
+                outputPath: record.outputPath,
+                stderrPath: record.stderrPath,
+                ...(record.loopPrompt ? { loopPrompt: record.loopPrompt } : {}),
+            },
+        }, 0, true, record.originSessionId);
+    }
+    clearSuppressionTimer(record) {
+        if (!record.suppressionTimer)
+            return;
+        clearTimeout(record.suppressionTimer);
+        record.suppressionTimer = undefined;
+    }
+    scheduleSuppressedTailFlush(record) {
+        if (record.status !== "running")
+            return;
+        this.clearSuppressionTimer(record);
+        const delayMs = Math.max(TOKEN_REFILL_MS + BATCH_WINDOW_MS + 20, record.limiter.nextRefillDelayMs());
+        record.suppressionTimer = setTimeout(() => {
+            record.suppressionTimer = undefined;
+            if (record.status !== "running")
+                return;
+            const flushed = record.limiter.flushPendingIfReady();
+            if (flushed > 0) {
+                const lastLine = record.lastSuppressedLine;
+                record.lastSuppressedLine = undefined;
+                this.deliver(record, "output", [suppressionNotice(flushed, lastLine)]);
+            }
+            else if (record.limiter.hasPending()) {
+                this.scheduleSuppressedTailFlush(record);
+            }
+        }, delayMs);
+        record.suppressionTimer.unref?.();
     }
     endMonitor(record, ending) {
         if (record.status !== "running")
@@ -358,6 +463,7 @@ class MonitorController {
         if (record.status !== "running")
             return;
         record.batcher?.close();
+        this.clearSuppressionTimer(record);
         record.status = ending.status;
         record.endedAt = Date.now();
         if (record.timeoutTimer) {
@@ -385,11 +491,16 @@ class MonitorController {
             return;
         const verdict = record.limiter.take(count);
         if (verdict.deliver) {
+            this.clearSuppressionTimer(record);
+            const lastLine = record.lastSuppressedLine;
+            record.lastSuppressedLine = undefined;
             record.eventCount += count;
-            this.deliver(record, "output", verdict.suppressed ? [suppressionNotice(verdict.suppressed), ...lines] : lines);
+            this.deliver(record, "output", verdict.suppressed ? [suppressionNotice(verdict.suppressed, lastLine), ...lines] : lines);
+            this.bridge.notifyMonitorChanged();
             return;
         }
         record.suppressedCount += count;
+        record.lastSuppressedLine = lines.at(-1) ?? record.lastSuppressedLine;
         if (verdict.flood) {
             this.endMonitor(record, {
                 status: "flooded",
@@ -397,11 +508,15 @@ class MonitorController {
                 kill: true,
                 notice: () => floodNotice(record, verdict.suppressedForMs),
             });
+            return;
         }
+        this.scheduleSuppressedTailFlush(record);
+        this.bridge.notifyMonitorChanged();
     }
     startCommandMonitor(record, command, ctx) {
         try {
-            const settings = typeof this.pi.getSettings === "function" ? this.pi.getSettings() : undefined;
+            const pi = this.gate.pi;
+            const settings = pi && typeof pi.getSettings === "function" ? pi.getSettings() : undefined;
             const shellCfg = getShellConfig(settings?.shellPath ? expandHome(settings.shellPath) : undefined);
             const fullCmd = settings?.shellCommandPrefix ? `${settings.shellCommandPrefix}\n${command}` : command;
             record.child = spawnMonitor({
@@ -497,41 +612,50 @@ const MONITOR_PARAMETERS = Type.Object({
     persistent: Type.Optional(Type.Boolean({ description: "Run until stopped or session ends" })),
     loopPrompt: Type.Optional(Type.String({ description: "Optional /loop prompt to bind lifetime to" })),
 });
+async function executeMonitorArm(controller, params, ctx) {
+    controller.setLastCtx(ctx);
+    const validated = validateMonitorParams(params);
+    const record = controller.arm(validated, ctx);
+    const lifetime = record.persistent
+        ? "runs until you stop it or the session ends"
+        : `expires in ${lifetimeText(record.timeoutMs)} unless the source ends first; you get one notice at expiry — re-arm if you still need the watch`;
+    const value = {
+        taskId: record.id,
+        timeoutMs: record.timeoutMs,
+        persistent: record.persistent,
+        kind: record.kind,
+        outputPath: record.outputPath,
+        stderrPath: record.stderrPath,
+    };
+    return {
+        content: [
+            {
+                type: "text",
+                text: `Monitor started (task ${record.id}, ${lifetime}). You will be notified on each event. ` +
+                    "Keep working — do not poll or sleep. " +
+                    "Events may arrive while you are waiting for the user — an event is not their reply.",
+            },
+        ],
+        details: value,
+        structuredContent: value,
+    };
+}
 function registerMonitorTool(pi, controller) {
     pi.registerTool({
-        name: "Monitor",
+        name: "monitor",
         label: "Monitor",
         description: MONITOR_DESCRIPTION,
         promptSnippet: MONITOR_SNIPPET,
         parameters: MONITOR_PARAMETERS,
-        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-            controller.setLastCtx(ctx);
-            const validated = validateMonitorParams(params);
-            const record = controller.arm(validated, ctx);
-            const lifetime = record.persistent
-                ? "runs until you stop it or the session ends"
-                : `expires in ${lifetimeText(record.timeoutMs)} unless the source ends first; you get one notice at expiry — re-arm if you still need the watch`;
-            const value = {
-                taskId: record.id,
-                timeoutMs: record.timeoutMs,
-                persistent: record.persistent,
-                kind: record.kind,
-                outputPath: record.outputPath,
-                stderrPath: record.stderrPath,
-            };
-            return {
-                content: [
-                    {
-                        type: "text",
-                        text: `Monitor started (task ${record.id}, ${lifetime}). You will be notified on each event. ` +
-                            "Keep working — do not poll or sleep. " +
-                            "Events may arrive while you are waiting for the user — an event is not their reply.",
-                    },
-                ],
-                details: value,
-                structuredContent: value,
-            };
-        },
+        execute: (_toolCallId, params, _signal, _onUpdate, ctx) => executeMonitorArm(controller, params, ctx),
+    });
+    pi.registerTool({
+        name: "Monitor",
+        label: "Monitor",
+        description: MONITOR_DESCRIPTION,
+        parameters: MONITOR_PARAMETERS,
+        prepareLoadout: () => ({ hiddenDeclarations: ["Monitor"] }),
+        execute: (_toolCallId, params, _signal, _onUpdate, ctx) => executeMonitorArm(controller, params, ctx),
     });
 }
 function registerMonitorStopTool(pi, controller) {
@@ -540,15 +664,18 @@ function registerMonitorStopTool(pi, controller) {
         label: "Stop Monitor",
         description: "Stop a running monitor by id and kill its process tree.",
         parameters: Type.Object({
-            id: Type.String({ description: "Monitor id returned by Monitor" }),
+            id: Type.String({ description: "Monitor id returned by monitor" }),
         }),
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
             controller.setLastCtx(ctx);
             const { stopped, record } = controller.stopById(params.id);
             if (!record) {
+                const hint = controller.bridge.hasTaskJob(params.id)
+                    ? ` (that ID belongs to a subagent task — use task_cancel({ jobId: "${params.id}" }) instead)`
+                    : "";
                 const value = { stopped: false, id: params.id };
                 return {
-                    content: [{ type: "text", text: `No monitor found with ID: ${params.id}` }],
+                    content: [{ type: "text", text: `No monitor found with ID: ${params.id}${hint}` }],
                     details: value,
                     structuredContent: value,
                 };
@@ -598,20 +725,19 @@ function registerMonitorListTool(pi, controller) {
     });
 }
 export function createMonitorInlineExtension(options) {
+    const controller = new MonitorController(options);
     return {
         name: "epi:monitor",
         factory(pi) {
-            const controller = new MonitorController(pi, options);
+            const unbindLoop = controller.bindSession(pi);
             pi.registerMessageRenderer?.(EVENT_MESSAGE_TYPE, (message, renderOpts, theme) => renderMonitorMessage(message, renderOpts.expanded, renderOpts.outputPad, theme));
             registerMonitorTool(pi, controller);
             registerMonitorStopTool(pi, controller);
             registerMonitorListTool(pi, controller);
-            pi.on("session_start", (_event, ctx) => {
-                controller.setLastCtx(ctx);
-                controller.cleanLogs();
-            });
-            pi.on("session_shutdown", () => {
-                controller.shutdown();
+            controller.ledger.bindEvents(pi, () => controller.cleanLogs());
+            pi.on("session_shutdown", (event) => {
+                unbindLoop();
+                controller.onSessionShutdown(event?.reason);
             });
         },
     };

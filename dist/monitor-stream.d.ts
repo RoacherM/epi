@@ -72,6 +72,9 @@ export declare class RateLimiter {
     private lastSuppressedAt;
     constructor(options?: RateLimiterOptions);
     take(count: number): RateVerdict;
+    flushPendingIfReady(): number;
+    hasPending(): boolean;
+    nextRefillDelayMs(): number;
     private refill;
 }
 export declare function isValidWsUrl(value: string): boolean;

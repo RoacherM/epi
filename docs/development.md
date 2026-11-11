@@ -90,7 +90,7 @@ epi <参数>
 | 扩展 | 什么时候加载 | 提供什么 | 配置 | 设计文档 |
 |---|---|---|---|---|
 | `epi:runtime` | 总是 | 运行时身份、把 Rules 和 Skills 注入 system prompt、`/epi` 命令、启动信息 | Manifest | 本文 §10 |
-| `epi:task` | 默认开，Manifest `"disable"` 可关 | 工具 `task`、`task_status`、`task_wait`、`task_cancel`、`todo`；子任务在独立进程 `src/worker.ts` 里跑 | `agents/` 目录 | 本文 §12，[guide/task.md](guide/task.md) |
+| `epi:task`（含 `epi:monitor`） | 默认开，Manifest `"disable"` 可关 | 工具 `task`、`task_status`、`task_wait`、`task_cancel`、`todo`（子任务在独立进程 `src/worker.ts` 里跑），以及流式监控工具 `monitor`（兼容旧会话隐藏别名 `Monitor`）、`monitor_stop`、`monitor_list` | `agents/` 目录 | 本文 §12，[guide/task.md](guide/task.md) |
 | `epi:mcp` | 默认开，可关 | 把 Epi 的 `mcp.json` 交给 Pi 的原生 MCP；`/mcp` 面板；随它加载 `codemode` 和 `tool-search` 两个内联扩展 | `mcp.json` | [mcp-design.md](mcp-design.md) |
 | `epi:hooks` | 默认开，可关 | 在会话事件上运行用户配置的 handler（命令、提示词、agent），可以拦截或改写 | `hooks.json` | 本文 §14，[guide/hooks.md](guide/hooks.md) |
 | `epi:web` | 默认开，可关 | 工具 `web_search`、`web_fetch`（只在至少一个检索源可用时注册）；`/web` 面板；交互模式下没有检索源时第一次发消息前问一次。有自己的版本号 | `web.json`、`web-auth.json` | [web-search-design.md](web-search-design.md)，[guide/web.md](guide/web.md) |
