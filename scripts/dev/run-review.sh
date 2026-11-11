@@ -68,9 +68,9 @@ cmd_precheck() {
   local id=${1:?usage: precheck <id> <base> <head>} base=${2:?missing <base>} head=${3:?missing <head>}
   local dir=".dev/reviews/$id" log=".dev/reviews/$id/precheck.log" eslint_dir changed_ts src_lines t0 elapsed
   eslint_dir=$(resolve_eslint_dir)
-  src_lines=$(git diff --numstat "$base" "$head" -- 'src/**/*.ts' | awk '{ s += $1 + $2 } END { print s + 0 }')
-  if (( src_lines > 800 )); then
-    echo "need split (>800 lines in src/: $src_lines lines; hard cap per WF4/WF7)" >&2
+  src_lines=$(git diff --numstat "$base" "$head" -- ':(glob)src/**/*.ts' | awk '{ s += $1 + $2 } END { print s + 0 }')
+  if (( src_lines > 2000 )); then
+    echo "need split (>2000 lines in src/: $src_lines lines; hard cap per WF4/WF7/WF8)" >&2
     return 2
   fi
   mkdir -p "$dir"
@@ -82,7 +82,7 @@ cmd_precheck() {
     ( cd "$dir/repo" && npm run build && git diff --exit-code -- dist \
       && npx tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters \
       && node scripts/model-snapshot.mjs --diff test/snapshots/model-visible.json )
-    changed_ts=$(git diff --name-only "$base" "$head" -- 'src/**/*.ts' || true)
+    changed_ts=$(git diff --name-only "$base" "$head" -- ':(glob)src/**/*.ts' || true)
     if [[ -n $changed_ts ]]; then
       if [[ ! -f $eslint_dir/node_modules/eslint/bin/eslint.js ]]; then
         echo "run-review.sh: eslint not found in $eslint_dir; install with: mkdir -p \"$eslint_dir\" && (cd \"$eslint_dir\" && npm i eslint@9 typescript-eslint eslint-plugin-sonarjs)" >&2

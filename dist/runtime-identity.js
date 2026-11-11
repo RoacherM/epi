@@ -85,6 +85,7 @@ export function renderEpiRuntimePrompt(identity, loadedSkills) {
         "Manifest-relative resource paths resolve from the directory containing the declaring epi.json. The Epi agentDir stores Pi auth, settings, sessions, and model catalog state; it is not an ambient skills root.",
         "The Manifest input schema is exactly `{ \"version\": 1, \"rules\": [], \"skills\": [], \"extensions\": [], \"disable\": [] }`; the built-ins epi:task, epi:mcp, epi:hooks and epi:web are on unless listed in `disable`. Inventory fields such as `skillRoots` and `declaredResources` are report-only and must not be written to epi.json.",
         "After Manifest edits, `/reload` re-resolves Rules and Skills. Extension selection or configuration changes require restarting Epi.",
+        "In `bash`, `timeout` is measured in seconds (default 120s when omitted, maximum 600s; never pass milliseconds). Unbounded streaming commands (`tail -f`, `watch`), interactive terminal programs, and unmanaged detached daemons are blocked—use `monitor` or `task(..., background: true)` when available, or bounded snapshots.",
         "<epi_runtime_inventory>",
         JSON.stringify(report, null, 2),
         "</epi_runtime_inventory>",

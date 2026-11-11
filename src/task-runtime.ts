@@ -29,6 +29,12 @@ import {
   inspectTaskWorktree,
   type TaskWorktreeState,
 } from "./task-worktree.js";
+import {
+  prepareWorkerExecutionGuard,
+  reapWorkerOrphans,
+  snapshotDescendantPgids,
+  type WorkerExecutionGuard,
+} from "./worker-reaper.js";
 
 /** Used when neither the call nor an `agents/*.md` preset sets one. */
 export const DEFAULT_TASK_TIMEOUT_SECONDS = 600;
@@ -450,6 +456,7 @@ interface InternalTaskJob {
   artifactError: string | undefined;
   process: WorkerProcess | undefined;
   capsuleDir: string | undefined;
+  guard: WorkerExecutionGuard | undefined;
   terminationCause: TerminationCause | undefined;
   timeoutTimer: NodeJS.Timeout | undefined;
   killTimer: NodeJS.Timeout | undefined;
@@ -647,97 +654,50 @@ export class TaskRuntime {
     }));
   }
 
-  start(request: StartTaskRequest): TaskJobSnapshot {
-    if (this.shuttingDown) {
-      throw new Error("task runtime is shutting down");
-    }
-    // A preset is optional now (design §1.1): `task({ task })` runs a nameless subagent. A named
-    // one that does not exist is still an error, never a silent fallback to the default.
+  private validateStartRequest(request: StartTaskRequest): {
+    agent: TaskAgentDefinition | undefined;
+    cwd: string;
+    timeoutSeconds: number;
+  } {
+    if (this.shuttingDown) throw new Error("task runtime is shutting down");
     const agent = request.agent === undefined ? undefined : this.agentsByName.get(request.agent);
     if (request.agent !== undefined && agent === undefined) {
       const available = [...this.agentsByName.keys()].join(", ") || "none";
       throw new Error(`unknown task agent ${JSON.stringify(request.agent)}; available: ${available}`);
     }
-    if (request.task.trim().length === 0) {
-      throw new Error("task must be a non-empty string");
-    }
-
+    if (request.task.trim().length === 0) throw new Error("task must be a non-empty string");
     let cwd: string;
     try {
       cwd = realpathSync(request.cwd);
     } catch {
       throw new Error(`task cwd does not exist: ${request.cwd}`);
     }
-    if (!statSync(cwd).isDirectory()) {
-      throw new Error(`task cwd is not a directory: ${request.cwd}`);
+    if (!statSync(cwd).isDirectory()) throw new Error(`task cwd is not a directory: ${request.cwd}`);
+    const timeoutSeconds = request.timeoutSeconds ?? agent?.timeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS;
+    if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > MAX_TASK_TIMEOUT_SECONDS) {
+      throw new EpiConfigError(`task timeoutSeconds must be an integer between 1 and ${MAX_TASK_TIMEOUT_SECONDS}`);
     }
+    return { agent, cwd, timeoutSeconds };
+  }
 
-    const {
-      promise: completion,
-      resolve: resolveCompletion,
-    } = Promise.withResolvers<void>();
-    const timeoutSeconds =
-      request.timeoutSeconds ?? agent?.timeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS;
-    // Above 2^31-1 ms Node clamps the timer to 1 ms, so an absurd timeout would kill the job at
-    // once. Fail loudly instead (review pack A P3).
-    if (
-      !Number.isInteger(timeoutSeconds) ||
-      timeoutSeconds < 1 ||
-      timeoutSeconds > MAX_TASK_TIMEOUT_SECONDS
-    ) {
-      throw new EpiConfigError(
-        `task timeoutSeconds must be an integer between 1 and ${MAX_TASK_TIMEOUT_SECONDS}`,
-      );
-    }
+  start(request: StartTaskRequest): TaskJobSnapshot {
+    const { agent, cwd, timeoutSeconds } = this.validateStartRequest(request);
+    const { promise: completion, resolve: resolveCompletion } = Promise.withResolvers<void>();
     const id = randomUUID();
     const isolation = request.isolation ?? agent?.isolation ?? "none";
-    const worktree =
-      isolation === "worktree"
-        ? createTaskWorktree(this.options.epiHome, id, cwd)
-        : undefined;
+    const worktree = isolation === "worktree" ? createTaskWorktree(this.options.epiHome, id, cwd) : undefined;
     const job: InternalTaskJob = {
-      id,
-      agent,
-      request,
-      timeoutSeconds,
+      id, agent, request, timeoutSeconds,
       sessionPath: join(this.options.sessionRoot, `${id}.jsonl`),
-      task: request.task,
-      cwd: worktree?.workerCwd ?? cwd,
-      worktree,
-      diffStat: undefined,
-      status: "queued",
-      createdAt: Date.now(),
-      startedAt: undefined,
-      finishedAt: undefined,
-      result: undefined,
-      error: undefined,
-      stdoutArtifact: undefined,
-      stderrArtifact: undefined,
-      artifactError: undefined,
-      process: undefined,
-      capsuleDir: undefined,
-      terminationCause: undefined,
-      timeoutTimer: undefined,
-      killTimer: undefined,
-      workerResult: undefined,
-      usage: undefined,
-      runUsage: undefined,
-      run: 0,
-      turns: undefined,
-      progressTurns: 0,
-      stepsBase: 0,
-      steps: 0,
-      droppedSteers: [],
-      isResume: false,
-      currentActivity: undefined,
-      lastSummary: undefined,
-      recentEvents: [],
-      compactions: 0,
-      stoppedBy: undefined,
-      protocolError: undefined,
-      completion,
-      resolveCompletion,
-      settled: false,
+      task: request.task, cwd: worktree?.workerCwd ?? cwd, worktree, diffStat: undefined,
+      status: "queued", createdAt: Date.now(), startedAt: undefined, finishedAt: undefined,
+      result: undefined, error: undefined, stdoutArtifact: undefined, stderrArtifact: undefined,
+      artifactError: undefined, process: undefined, capsuleDir: undefined, guard: undefined,
+      terminationCause: undefined, timeoutTimer: undefined, killTimer: undefined,
+      workerResult: undefined, usage: undefined, runUsage: undefined, run: 0, turns: undefined,
+      progressTurns: 0, stepsBase: 0, steps: 0, droppedSteers: [], isResume: false,
+      currentActivity: undefined, lastSummary: undefined, recentEvents: [], compactions: 0,
+      stoppedBy: undefined, protocolError: undefined, completion, resolveCompletion, settled: false,
     };
     this.jobs.set(job.id, job);
     this.queue.push(job.id);
@@ -811,7 +771,7 @@ export class TaskRuntime {
       finishedAt: undefined, stoppedBy: undefined, workerResult: undefined, protocolError: undefined,
       terminationCause: undefined, currentActivity: undefined, progressTurns: 0, stepsBase: job.steps,
       runUsage: undefined, stdoutArtifact: undefined, stderrArtifact: undefined,
-      artifactError: undefined, diffStat: undefined, settled: false,
+      artifactError: undefined, diffStat: undefined, guard: undefined, settled: false,
     });
     const { promise: completion, resolve: resolveCompletion } = Promise.withResolvers<void>();
     job.completion = completion;
@@ -971,122 +931,135 @@ export class TaskRuntime {
     }
   }
 
-  private async run(job: InternalTaskJob): Promise<void> {
-    job.status = "running";
-    job.startedAt = Date.now();
-    this.notifyChange(job.id);
-    // Per-run artifact names: a resumed job reuses its id, so `wx` would throw EEXIST (review P0-1).
-    job.run += 1;
-    const stdout = new BoundedOutput(
-      this.maxOutputBytes,
-      this.options.artifactRoot,
-      `${job.id}.run${job.run}.stdout.jsonl`,
-    );
-    const stderr = new BoundedOutput(
-      this.maxOutputBytes,
-      this.options.artifactRoot,
-      `${job.id}.run${job.run}.stderr.txt`,
-    );
-
-    try {
-      const capsulePath = this.writeCapsule(job);
-      // stdin is a pipe now, not `ignore`: it is the steer/abort channel, and its EOF is what stops
-      // an orphaned worker when this process dies (docs/development.md §12.4).
-      const worker = spawn(process.execPath, [this.options.workerPath, capsulePath], {
-        cwd: job.cwd,
-        detached: process.platform !== "win32",
-        env: {
-          ...process.env,
-          PI_CODING_AGENT_DIR: this.options.agentDir,
-        },
-        shell: false,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      job.process = worker;
-      // A write after the child exited would otherwise be an unhandled 'error' event on the pipe.
-      worker.stdin.on("error", () => {});
-      const decoder = new StringDecoder("utf8");
-      let lineBuffer = "";
-
-      worker.stdout.on("data", (chunk: Buffer) => {
-        stdout.append(chunk);
-        if (job.protocolError !== undefined) {
-          return;
-        }
-        lineBuffer += decoder.write(chunk);
-        if (Buffer.byteLength(lineBuffer) > MAX_PROTOCOL_LINE_BYTES) {
-          job.protocolError = "worker event exceeded protocol limit";
-          return;
-        }
-        let newline = lineBuffer.indexOf("\n");
-        while (newline >= 0) {
-          this.parseWorkerLine(job, lineBuffer.slice(0, newline));
-          lineBuffer = lineBuffer.slice(newline + 1);
-          newline = lineBuffer.indexOf("\n");
-        }
-      });
-      worker.stderr.on("data", (chunk: Buffer) => stderr.append(chunk));
-      job.timeoutTimer = setTimeout(
-        () => this.terminateWorker(job, "timeout"),
-        job.timeoutSeconds * 1_000,
-      );
-
-      const exitWaiter = Promise.withResolvers<{
-        code: number | null;
-        error?: Error;
-      }>();
-      let spawnError: Error | undefined;
-      worker.once("error", (error) => {
-        // A spawn failure (ENOENT, EACCES) emits `error` and never `exit`; settle here too so the
-        // job cannot hang until its timeout.
-        spawnError = error;
-        exitWaiter.resolve({ code: null, error });
-      });
-      // Settle on `exit`, not `close` (review pack A P2): `close` waits for every holder of the
-      // stdout/stderr pipes, so a grandchild that inherited one (a hook command, an MCP stdio
-      // server) could turn a finished run into "timed out" or hang the job forever. The pipes are
-      // drained briefly below, then destroyed.
-      worker.once("exit", (code) => {
-        exitWaiter.resolve({
-          code,
-          ...(spawnError === undefined ? {} : { error: spawnError }),
-        });
-      });
-      const exit = await exitWaiter.promise;
-      // The job is over the moment the worker exits; a leftover holder must not arm the timeout.
-      clearTimeout(job.timeoutTimer);
-      await Promise.all([drainOutput(worker.stdout), drainOutput(worker.stderr)]);
-      worker.stdout.destroy();
-      worker.stderr.destroy();
+  private attachWorkerStreams(
+    job: InternalTaskJob,
+    worker: WorkerProcess,
+    stdout: BoundedOutput,
+    stderr: BoundedOutput,
+  ): () => void {
+    worker.stdin.on("error", () => {});
+    const decoder = new StringDecoder("utf8");
+    let lineBuffer = "";
+    worker.stdout.on("data", (chunk: Buffer) => {
+      stdout.append(chunk);
+      if (job.protocolError !== undefined) return;
+      lineBuffer += decoder.write(chunk);
+      if (Buffer.byteLength(lineBuffer) > MAX_PROTOCOL_LINE_BYTES) {
+        job.protocolError = "worker event exceeded protocol limit";
+        return;
+      }
+      let newline = lineBuffer.indexOf("\n");
+      while (newline >= 0) {
+        this.parseWorkerLine(job, lineBuffer.slice(0, newline));
+        lineBuffer = lineBuffer.slice(newline + 1);
+        newline = lineBuffer.indexOf("\n");
+      }
+    });
+    worker.stderr.on("data", (chunk: Buffer) => stderr.append(chunk));
+    return () => {
       lineBuffer += decoder.end();
       if (lineBuffer.trim().length > 0 && job.protocolError === undefined) {
         this.parseWorkerLine(job, lineBuffer);
       }
+    };
+  }
+
+  private async run(job: InternalTaskJob): Promise<void> {
+    job.status = "running";
+    job.startedAt = Date.now();
+    this.notifyChange(job.id);
+    job.run += 1;
+    const stdout = new BoundedOutput(this.maxOutputBytes, this.options.artifactRoot, `${job.id}.run${job.run}.stdout.jsonl`);
+    const stderr = new BoundedOutput(this.maxOutputBytes, this.options.artifactRoot, `${job.id}.run${job.run}.stderr.txt`);
+
+    let outcomeExit: { code: number | null; error?: Error } | undefined;
+    let outcomeStderr = "";
+    let caughtError: unknown;
+    try {
+      const capsulePath = this.writeCapsule(job);
+      const guard = prepareWorkerExecutionGuard(job.capsuleDir!, job.id, {
+        ...process.env,
+        PI_CODING_AGENT_DIR: this.options.agentDir,
+      });
+      job.guard = guard;
+      const worker = spawn(process.execPath, [this.options.workerPath, capsulePath], {
+        cwd: job.cwd,
+        detached: process.platform !== "win32",
+        env: guard.env,
+        shell: false,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      job.process = worker;
+      const flushStdoutLines = this.attachWorkerStreams(job, worker, stdout, stderr);
+      job.timeoutTimer = setTimeout(() => this.terminateWorker(job, "timeout"), job.timeoutSeconds * 1_000);
+
+      const exitWaiter = Promise.withResolvers<{ code: number | null; error?: Error }>();
+      let spawnError: Error | undefined;
+      worker.once("error", (error) => {
+        spawnError = error;
+        exitWaiter.resolve({ code: null, error });
+      });
+      worker.once("exit", (code) => {
+        exitWaiter.resolve({ code, ...(spawnError === undefined ? {} : { error: spawnError }) });
+      });
+      outcomeExit = await exitWaiter.promise;
+      clearTimeout(job.timeoutTimer);
+      await Promise.all([drainOutput(worker.stdout), drainOutput(worker.stderr)]);
+      worker.stdout.destroy();
+      worker.stderr.destroy();
+      flushStdoutLines();
       job.stdoutArtifact = stdout.path();
       job.stderrArtifact = stderr.path();
       job.artifactError = stdout.artifactError ?? stderr.artifactError;
-
-      this.settleOutcome(job, exit, stderr.text().trim());
+      outcomeStderr = stderr.text().trim();
     } catch (error) {
-      job.status = job.terminationCause === "cancelled" ? "cancelled" : "failed";
-      job.error = error instanceof Error ? error.message : String(error);
+      caughtError = error;
     } finally {
       clearTimeout(job.timeoutTimer);
       clearTimeout(job.killTimer);
-      // Release the write end: an open pipe held by a finished job is a handle nobody reads.
       try {
         job.process?.stdin?.end();
       } catch {
         // The worker already exited and the pipe is gone.
       }
       job.process = undefined;
+      const activeGuard = job.guard;
+      job.guard = undefined;
+      await reapWorkerOrphans(activeGuard);
       if (job.capsuleDir !== undefined) {
         rmSync(job.capsuleDir, { recursive: true, force: true });
         job.capsuleDir = undefined;
       }
+      if (caughtError !== undefined) {
+        job.status = job.terminationCause === "cancelled" ? "cancelled" : "failed";
+        job.error = caughtError instanceof Error ? caughtError.message : String(caughtError);
+      } else if (outcomeExit !== undefined) {
+        this.settleOutcome(job, outcomeExit, outcomeStderr);
+      }
       job.finishedAt = Date.now();
       this.finish(job);
     }
+  }
+
+  private resolveFailureError(
+    job: InternalTaskJob,
+    exit: { code: number | null; error?: Error },
+    stderrText: string,
+  ): string | undefined {
+    if (job.terminationCause === "timeout") return `task timed out after ${job.timeoutSeconds}s`;
+    if (exit.error !== undefined) return `failed to start task worker: ${exit.error.message}`;
+    if (job.protocolError !== undefined && exit.code === 0) return job.protocolError;
+    if (exit.code !== 0) {
+      // A worker that died mid-line also leaves a broken last line; its exit and stderr are the
+      // cause, the broken line only a symptom, so they win over the protocol error.
+      // Pi's errors in the worker ("No API key found ...") end with Pi's login guidance, a path
+      // into Pi's docs; the model gets Epi's (D84).
+      return rewritePiText(job.workerResult?.error ?? stderrText) || `task worker exited with code ${exit.code}`;
+    }
+    if (job.workerResult?.ok !== true) {
+      return rewritePiText(job.workerResult?.error ?? "task worker returned no successful result");
+    }
+    return undefined;
   }
 
   /**
@@ -1104,36 +1077,21 @@ export class TaskRuntime {
     // A worker's own count wins, but a worker that reported none must not erase the turns its
     // progress lines already established. The count is this run's, so it adds to the job's total.
     const runTurns = job.workerResult?.turns ?? (job.progressTurns > 0 ? job.progressTurns : undefined);
-    if (runTurns !== undefined) {
-      job.turns = (job.turns ?? 0) + runTurns;
-    }
+    if (runTurns !== undefined) job.turns = (job.turns ?? 0) + runTurns;
     job.stoppedBy = job.workerResult?.stopped;
     if (job.terminationCause === "cancelled") {
       job.status = "cancelled";
       this.noteDroppedSteers(job);
       return;
     }
-    job.status = "failed";
-    if (job.terminationCause === "timeout") {
-      job.error = `task timed out after ${job.timeoutSeconds}s`;
-    } else if (exit.error !== undefined) {
-      job.error = `failed to start task worker: ${exit.error.message}`;
-    } else if (job.protocolError !== undefined && exit.code === 0) {
-      job.error = job.protocolError;
-    } else if (exit.code !== 0) {
-      // A worker that died mid-line also leaves a broken last line; its exit and stderr are the
-      // cause, the broken line only a symptom, so they win over the protocol error.
-      // Pi's errors in the worker ("No API key found ...") end with Pi's login guidance, a path
-      // into Pi's docs; the model gets Epi's (D84).
-      job.error =
-        rewritePiText(job.workerResult?.error ?? stderrText) ||
-        `task worker exited with code ${exit.code}`;
-    } else if (job.workerResult?.ok !== true) {
-      job.error = rewritePiText(job.workerResult?.error ?? "task worker returned no successful result");
+    const failureError = this.resolveFailureError(job, exit, stderrText);
+    if (failureError !== undefined) {
+      job.status = "failed";
+      job.error = failureError;
     } else {
-      job.status = job.workerResult.partial === true ? "partial" : "completed";
+      job.status = job.workerResult?.partial === true ? "partial" : "completed";
       job.error = undefined;
-      job.result = this.boundedResult(job, job.workerResult.output ?? "");
+      job.result = this.boundedResult(job, job.workerResult?.output ?? "");
     }
     this.noteDroppedSteers(job);
   }
@@ -1224,40 +1182,19 @@ export class TaskRuntime {
   }
 
   private parseWorkerLine(job: InternalTaskJob, line: string): void {
-    if (line.trim().length === 0) {
-      return;
-    }
-    let event: unknown;
+    if (line.trim().length === 0) return;
+    let parsed: unknown;
     try {
-      event = JSON.parse(line);
+      parsed = JSON.parse(line);
     } catch {
       job.protocolError = "task worker emitted invalid JSONL";
       return;
     }
-    if (
-      typeof event === "object" &&
-      event !== null &&
-      "type" in event &&
-      event.type === "progress"
-    ) {
-      this.applyProgress(job, event as WorkerProgressEvent);
-      return;
-    }
-    if (
-      typeof event === "object" &&
-      event !== null &&
-      "type" in event &&
-      event.type === "result" &&
-      "ok" in event &&
-      typeof event.ok === "boolean"
-    ) {
-      job.workerResult = event as WorkerResultEvent;
-      return;
-    }
-    if (typeof event === "object" && event !== null && "type" in event &&
-      event.type === "steer_dropped" && "message" in event && typeof event.message === "string") {
-      job.droppedSteers.push((event as { message: string }).message);
-    }
+    if (typeof parsed !== "object" || parsed === null) return;
+    const record = parsed as Record<string, unknown>;
+    if (record.type === "progress") this.applyProgress(job, parsed as WorkerProgressEvent);
+    else if (record.type === "result" && typeof record.ok === "boolean") job.workerResult = parsed as WorkerResultEvent;
+    else if (record.type === "steer_dropped" && typeof record.message === "string") job.droppedSteers.push(record.message);
   }
 
   /**
@@ -1279,14 +1216,31 @@ export class TaskRuntime {
     this.notifyChange(job.id);
   }
 
+  private applyToolPhase(job: InternalTaskJob, event: WorkerProgressEvent): void {
+    const tool = typeof event.tool === "string" ? singleLine(event.tool, PROGRESS_TOOL_LIMIT) : "";
+    const target = typeof event.target === "string" ? singleLine(event.target, PROGRESS_TARGET_LIMIT) : "";
+    const parts = [tool, target].filter((part) => part.length > 0);
+    const label = parts.join(" ");
+    if (event.phase === "tool_start") {
+      job.currentActivity = parts.join(": ");
+      if (label.length > 0) this.pushRecentEvent(job, `▸ ${label}`);
+      return;
+    }
+    if (event.phase !== "tool_end") return;
+    job.currentActivity = undefined;
+    if (label.length === 0) return;
+    if (job.recentEvents[job.recentEvents.length - 1] === `▸ ${label}`) {
+      job.recentEvents[job.recentEvents.length - 1] = `✓ ${label}`;
+    } else {
+      this.pushRecentEvent(job, `✓ ${label}`);
+    }
+  }
+
   private applyProgressPhase(job: InternalTaskJob, event: WorkerProgressEvent): void {
     if (event.phase === "report") {
-      if (job.lastSummary !== undefined && job.lastSummary.length > 0) {
-        this.pushRecentEvent(job, `◆ ${job.lastSummary}`);
-        if (event.notifyParent === true) {
-          this.notifyMilestone(job, job.lastSummary);
-        }
-      }
+      if (!job.lastSummary) return;
+      this.pushRecentEvent(job, `◆ ${job.lastSummary}`);
+      if (event.notifyParent === true) this.notifyMilestone(job, job.lastSummary);
       return;
     }
     if (event.phase === "compaction") {
@@ -1297,24 +1251,7 @@ export class TaskRuntime {
       this.pushRecentEvent(job, compacted ? `⟲ compacted ${before}→${after}` : "⟲ compaction failed");
       return;
     }
-    const tool = typeof event.tool === "string" ? singleLine(event.tool, PROGRESS_TOOL_LIMIT) : "";
-    const target = typeof event.target === "string" ? singleLine(event.target, PROGRESS_TARGET_LIMIT) : "";
-    const label = [tool, target].filter((part) => part.length > 0).join(" ");
-    if (event.phase === "tool_start") {
-      job.currentActivity = [tool, target].filter((part) => part.length > 0).join(": ");
-      if (label.length > 0) this.pushRecentEvent(job, `▸ ${label}`);
-      return;
-    }
-    if (event.phase === "tool_end") {
-      job.currentActivity = undefined;
-      if (label.length === 0) return;
-      const last = job.recentEvents[job.recentEvents.length - 1];
-      if (last === `▸ ${label}`) {
-        job.recentEvents[job.recentEvents.length - 1] = `✓ ${label}`;
-      } else {
-        this.pushRecentEvent(job, `✓ ${label}`);
-      }
-    }
+    this.applyToolPhase(job, event);
   }
 
   private notifyMilestone(job: InternalTaskJob, summary: string): void {
@@ -1337,9 +1274,11 @@ export class TaskRuntime {
       return;
     }
     job.terminationCause ??= cause;
+    if (job.guard !== undefined) snapshotDescendantPgids(job.process.pid, job.guard);
     this.signalWorker(job.process, "SIGTERM");
     job.killTimer = setTimeout(() => {
       if (!job.settled && job.process !== undefined) {
+        if (job.guard !== undefined) snapshotDescendantPgids(job.process.pid, job.guard);
         this.signalWorker(job.process, "SIGKILL");
       }
     }, this.killGraceMs);
@@ -1373,6 +1312,23 @@ export class TaskRuntime {
     }
   }
 
+  private optionalSnapshotFields(job: InternalTaskJob, turns: number | undefined): Partial<TaskJobSnapshot> {
+    const out: Partial<TaskJobSnapshot> = {};
+    if (job.startedAt !== undefined) out.startedAt = job.startedAt;
+    if (job.finishedAt !== undefined) out.finishedAt = job.finishedAt;
+    if (job.result !== undefined) out.result = job.result;
+    if (job.error !== undefined) out.error = job.error;
+    if (job.usage !== undefined) out.usage = job.usage;
+    if (turns !== undefined) out.turns = turns;
+    if (job.currentActivity !== undefined) out.currentActivity = job.currentActivity;
+    if (job.lastSummary !== undefined) out.lastSummary = job.lastSummary;
+    if (job.compactions > 0) out.compactions = job.compactions;
+    if (job.stoppedBy !== undefined) out.stoppedBy = job.stoppedBy;
+    if (job.stdoutArtifact !== undefined) out.stdoutArtifact = job.stdoutArtifact;
+    if (job.stderrArtifact !== undefined) out.stderrArtifact = job.stderrArtifact;
+    return out;
+  }
+
   private snapshot(job: InternalTaskJob): TaskJobSnapshot {
     // While a run is live its progress turns count on top of earlier runs' finished turns.
     const running = job.status === "queued" || job.status === "running";
@@ -1385,22 +1341,11 @@ export class TaskRuntime {
       task: job.task,
       sessionPath: job.sessionPath,
       createdAt: job.createdAt,
-      ...(job.startedAt === undefined ? {} : { startedAt: job.startedAt }),
-      ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
-      ...(job.result === undefined ? {} : { result: job.result }),
-      ...(job.error === undefined ? {} : { error: job.error }),
-      ...(job.usage === undefined ? {} : { usage: job.usage }),
       ...runFields(job),
-      ...(turns === undefined ? {} : { turns }),
+      ...this.optionalSnapshotFields(job, turns),
       steps: job.steps,
-      ...(job.currentActivity === undefined ? {} : { currentActivity: job.currentActivity }),
-      ...(job.lastSummary === undefined ? {} : { lastSummary: job.lastSummary }),
       recentEvents: [...job.recentEvents],
-      ...(job.compactions > 0 ? { compactions: job.compactions } : {}),
-      ...(job.stoppedBy === undefined ? {} : { stoppedBy: job.stoppedBy }),
       run: job.run,
-      ...(job.stdoutArtifact === undefined ? {} : { stdoutArtifact: job.stdoutArtifact }),
-      ...(job.stderrArtifact === undefined ? {} : { stderrArtifact: job.stderrArtifact }),
     };
   }
 }

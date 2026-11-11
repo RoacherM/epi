@@ -228,6 +228,7 @@ export declare class TaskRuntime {
     private shuttingDown;
     constructor(options: TaskRuntimeOptions);
     availableAgents(): Array<Pick<TaskAgentDefinition, "name" | "description" | "source">>;
+    private validateStartRequest;
     start(request: StartTaskRequest): TaskJobSnapshot;
     status(jobId: string): TaskJobSnapshot;
     /** Every job this runtime knows, oldest first (insertion order), including jobs started before a
@@ -262,7 +263,9 @@ export declare class TaskRuntime {
     /** The job a `jobId` names: the 8-character id `task_status` prints works everywhere a jobId does. */
     private findJob;
     private pump;
+    private attachWorkerStreams;
     private run;
+    private resolveFailureError;
     /**
      * How the run ended, from the worker's exit and its last protocol event. Checked in order of
      * certainty: how Epi stopped it, then how the process died, then what it reported.
@@ -287,12 +290,14 @@ export declare class TaskRuntime {
      * Unknown phases still update the counters they carry: the protocol is additive.
      */
     private applyProgress;
+    private applyToolPhase;
     private applyProgressPhase;
     private notifyMilestone;
     private pushRecentEvent;
     private terminateWorker;
     private signalWorker;
     private finish;
+    private optionalSnapshotFields;
     private snapshot;
 }
 //# sourceMappingURL=task-runtime.d.ts.map

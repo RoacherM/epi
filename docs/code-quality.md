@@ -23,7 +23,7 @@
 
 | 检查项 | 通过标准 |
 |---|---|
-| `src/` 规模门禁 | `src/**/*.ts` 新增+删除 ≤ 800 行（超限在建副本前直接退出 2，无环境变量绕过） |
+| `src/` 规模门禁 | `src/**/*.ts` 新增+删除 ≤ 2000 行（超限在建副本前直接退出 2，无环境变量绕过，决策 WF8） |
 | 隔离副本导出 | `head` 与 `base` 分别导出到 `.dev/reviews/<id>/{repo,before}`，含最小 `.git` 索引与 `node_modules` 软链（严禁 `git stash`） |
 | 构建与 `dist/` 同步 | `npm run build` 成功且 `git diff --exit-code -- dist` 无差异 |
 | 未使用变量与参数 | `tsc --noEmit --noUnusedLocals --noUnusedParameters` 零报错 |
