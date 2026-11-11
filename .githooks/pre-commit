@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Local commit & merge gate (docs/dev-workflow.md, decision WF7).
+# Installed via: git config core.hooksPath .githooks
+set -euo pipefail
+
+ROOT=$(cd "$(git rev-parse --show-toplevel)" && pwd -P)
+cd "$ROOT"
+
+GIT_DIR=$(git rev-parse --git-dir)
+branch=$(git symbolic-ref --short -q HEAD || true)
+staged_src=$(git diff --cached --name-only -- 'src/**' || true)
+
+if [[ -z $staged_src ]]; then
+  exit 0
+fi
+
+if [[ $branch == "main" ]]; then
+  if [[ -f "$GIT_DIR/MERGE_HEAD" ]]; then
+    merge_sha=$(git rev-parse MERGE_HEAD)
+    if ! grep -Fxq "$merge_sha" .dev/reviews/*/verified.sha 2>/dev/null; then
+      echo "[pre-commit] refusing to merge unverified src/ commit ${merge_sha:0:7} into main." >&2
+      echo "  Run 'scripts/dev/run-review.sh precheck/start/wait/verify <id>' on the dev/* branch first." >&2
+      exit 1
+    fi
+  else
+    echo "[pre-commit] refusing direct src/ commit on 'main' (decision WF7)." >&2
+    echo "  Switch to a feature branch first: git switch -c dev/<topic>" >&2
+    exit 1
+  fi
+fi
+
+if ! git diff --quiet -- src; then
+  echo "[pre-commit] unstaged changes in src/ detected while committing src/." >&2
+  echo "  Stage all src/ edits, run 'npm run build', and stage dist/ together." >&2
+  exit 1
+fi
+
+npm run build --silent
+if ! git diff --quiet -- dist || [[ -n $(git ls-files --others --exclude-standard -- dist) ]]; then
+  echo "[pre-commit] dist/ does not match staged src/ after 'npm run build'." >&2
+  echo "  Stage updated build artifacts with: git add dist" >&2
+  exit 1
+fi
