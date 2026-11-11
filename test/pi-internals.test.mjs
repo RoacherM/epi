@@ -1003,6 +1003,44 @@ const registry = [
       );
     },
   },
+  {
+    id: "bash-tool-call-guard",
+    check() {
+      const sessionPath = join(piDist, "core", "agent-session.js");
+      const sessionText = readFileSync(sessionPath, "utf8");
+      assert.match(
+        sessionText,
+        /async _beforeToolCall\(\{ toolCall, args \}, parentToolCallId\)[\s\S]{0,400}?emitToolCall\(\{[\s\S]{0,220}?input:\s*args\b/,
+        `${sessionPath}'s _beforeToolCall no longer passes args by reference as event.input to emitToolCall -- default bash timeout injection in src/extensions/runtime.ts would stop reaching bash.execute`,
+      );
+      const runnerPath = join(piDist, "core", "extensions", "runner.js");
+      const runnerText = readFileSync(runnerPath, "utf8");
+      assert.match(
+        runnerText,
+        /if \(handlerResult\.content !== undefined\)[\s\S]{0,240}?if \(handlerResult\.structuredContent === undefined\)\s*delete currentEvent\.structuredContent;/,
+        `${runnerPath}'s emitToolResult changed structuredContent preservation rules -- re-verify src/extensions/runtime.ts's tool_result return object`,
+      );
+      const bashPath = join(piDist, "core", "tools", "bash.js");
+      const bashText = readFileSync(bashPath, "utf8");
+      assert.match(
+        bashText,
+        /Command timed out after \$\{timeoutSecs\} seconds/,
+        `${bashPath} reworded its timeout error -- src/bash-guard.ts's augmentBashTimeoutResult would stop matching`,
+      );
+      const shellPath = join(piDist, "utils", "shell.js");
+      const shellText = readFileSync(shellPath, "utf8");
+      assert.match(
+        shellText,
+        /getBashShellConfig\("\/bin\/bash"\)/,
+        `${shellPath}'s getShellConfig no longer prefers /bin/bash on Unix -- subagent BASH_ENV PGID ledger in src/worker-reaper.ts would stop running`,
+      );
+      assert.match(
+        shellText,
+        /export function getShellEnv\(\)[\s\S]{0,800}?\.\.\.process\.env\b/,
+        `${shellPath}'s getShellEnv no longer spreads process.env -- subagent BASH_ENV and EPI_WORKER_COOKIE would not reach bash tool children`,
+      );
+    },
+  },
 ];
 
 /** The directory of the package `name` as Pi's own modules resolve it: Node's node_modules lookup,

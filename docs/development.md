@@ -484,6 +484,15 @@ PI_CODING_AGENT_DIR=~/.epi/pi
 - 等待当前模式的 runtime 清理完成；非交互模式在 `runPrintMode` 返回后刷新输出再退出；
 - Pi SDK 初始化失败直接以非零状态失败，禁止 fallback 到全局 Pi。
 
+### 9.5 `bash` 与子代理进程执行守卫
+
+`epi:runtime`（`src/extensions/runtime.ts`、`src/bash-guard.ts`）与 `TaskRuntime`（`src/task-runtime.ts`、`src/worker-reaper.ts`）提供四层零侵入守卫（不替换内置 `bash` 定义）：
+
+- **超时边界**：`timeout` 缺省时注入默认 `120` 秒；非有限数、`<= 0` 或 `> 600` 秒在 `0ms` 直接阻断并说明 `bash.timeout` 单位为秒（`>= 1000` 时额外给出毫秒换算提示）；命令超时后在 `tool_result` 追加恢复建议与 `.git/index.lock` 检查提示，并保留 `structuredContent`。
+- **0ms 命令预检**：支持引号、转义、`#` 注释、`<<EOF` heredoc、`env`/`sudo`/`command`/`timeout` 包装（跳过 `command -v/-V` 探测）与最多 3 层 `sh|bash|zsh|dash -c` 展开（未闭合引号/替换做 fail-open，交给 shell 自身报错）。阻断无上界流式跟随（`tail -f`、`docker/podman/kubectl logs -f`、`journalctl -f`、`dmesg -w`、`watch`、`fswatch`、无 `-c/-w/-t/-o` 的 `ping`，但放行显式 `timeout <= 60s` 的短探测）、纯交互式 TUI/编辑器（`vim`/`nvim`/`nano`/`htop`/`top` 无快照参数等）以及脱离管控的后台守护命令（`nohup`/`setsid`/`disown`/`tmux new -d`/`screen -dm` 及同命令内无 `wait`/`kill`/`trap` 回收的顶层 `&`）。引导文案按当前宿主是否启用 `monitor` 区分主会话与子 Agent。
+- **子代理孤儿进程组收割（仅 `TaskRuntime`）**：每次子任务在 `capsuleDir` 生成兼容 Bash 3.2 的 `epi-pgid.sh`（通过 `BASH_ENV` 将顶层 `bash` 进程组写入 `pgids.log`，随即 `unset EPI_PGID_LEDGER` 并链式恢复用户原 `BASH_ENV`）与唯一 `EPI_WORKER_COOKIE`；并发 `bash` 全部落定后若 `pgids.log` 中有存活后台 PGID 则在 `tool_result` 追加回收预告；`terminateWorker` 发信号前快照子孙 PGID，任务结束 `finally` 块合并账本、子孙快照与 `EPI_WORKER_COOKIE` 环境扫描，经同 UID、非自身/父进程组、`lstart` 时间窗口与共享守护白名单过滤后执行 `SIGTERM -> 1.5s -> SIGKILL` 收割。退出主会话（`session_shutdown` `reason: "quit"` 且非空闲）立即调用 `context.abort()`。
+- **子代理非交互环境加固**：默认注入 `GIT_TERMINAL_PROMPT=0`、`GCM_INTERACTIVE=never`、`GIT_PAGER=cat` 与快速失败 `GIT_EDITOR` / `GIT_SEQUENCE_EDITOR` 脚本（尊重调用方显式环境变量，不设 `CI=1`）。
+
 ## 10. Effective Assembly
 
 Epi 在内存中构造本次运行的有效装配：

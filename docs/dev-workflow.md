@@ -1,8 +1,8 @@
 # Epi 开发流程
 
-状态：2026-09-30 起执行，2026-10-06 全 epi 化（WF1），2026-10-21 起用 Orca 验收，2026-10-22 按历史审查简化并硬拦门禁（WF2–WF4），2026-11-11 审查切换为 `agy` Carbon + Argon 双模型盲审并收紧本地 Git 门禁（[decisions.md](decisions.md) WF7）。代码规范与预检见 [code-quality.md](code-quality.md)，冒烟清单见 [e2e-acceptance.md](e2e-acceptance.md)，实现与契约见 [development.md](development.md)。
+状态：2026-09-30 起执行，2026-10-06 全 epi 化（WF1），2026-10-21 起用 Orca 验收，2026-10-22 按历史审查简化并硬拦门禁（WF2–WF4），2026-11-11 审查切换为 `agy` Carbon + Argon 双模型盲审、收紧本地 Git 门禁并将单次送审上限调优为 2000 行（[decisions.md](decisions.md) WF7、WF8）。代码规范与预检见 [code-quality.md](code-quality.md)，冒烟清单见 [e2e-acceptance.md](e2e-acceptance.md)，实现与契约见 [development.md](development.md)。
 
-**三条原则**：**小包**（单次送审 `src/` ≤ 800 行，无环境变量绕过，互不相关特性拆开审）、**作者不自审**（任何 `src/` 改动均须经 `agy` Carbon + Argon 双模型独立盲审通过并签发 `verified.sha`）、**失败可见**（不吞错、不静默兜底、门禁脚本硬拦）。
+**三条原则**：**适度分包**（单次送审 `src/` ≤ 2000 行，无环境变量绕过，互不相关特性拆开审）、**作者不自审**（任何 `src/` 改动均须经 `agy` Carbon + Argon 双模型独立盲审通过并签发 `verified.sha`）、**失败可见**（不吞错、不静默兜底、门禁脚本硬拦）。
 
 ## 1. 角色与模型
 
@@ -32,12 +32,12 @@
 
 | 节点 | 执行者 | 触发 | 动作 | 检查（通过才交下一节点） | 停止与移交 |
 |---|---|---|---|---|---|
-| N1 计划 | 主控 | 用户需求 / dogfood / 终审发现 | 读材料 → 写设计和可交互 HTML 原型 → 交用户试用 → 拆不重叠小任务 → 写 `.dev/tasks/<id>/brief.md` | 用户试过原型并明确同意（WF6）；brief 含七项（第 5 节），写明基准 SHA 和原型路径，`src/` 预计 ≤ 800 行 | 需求有歧义或原型被否 → 改原型再交用户 |
+| N1 计划 | 主控 | 用户需求 / dogfood / 终审发现 | 读材料 → 写设计和可交互 HTML 原型 → 交用户试用 → 拆不重叠小任务 → 写 `.dev/tasks/<id>/brief.md` | 用户试过原型并明确同意（WF6）；brief 含七项（第 5 节），写明基准 SHA 和原型路径，`src/` 预计 ≤ 2000 行 | 需求有歧义或原型被否 → 改原型再交用户 |
 | N2 实现 | worker | 收到 `brief.md` 指令 | 实现、写测试、worktree 提交、写 `report.md` | `report.md` 末行 `STATUS: done` | 需拍板 → 写 `question.md` 停等；卡住 → `STATUS: blocked` 交主控 |
 | N3 审查验证 | 主控 | `STATUS: done` | 跑 `run-review.sh precheck <id> <base> <head>` → 过第 3 节清单 → 验修复前失败与 ≥2 个变异 | 闸门 G1 满足，`precheck.sha` 匹配被审 head | 有 P0–P2 → 写 `review.md` 退回 N2；同一问题第 2 次出现 → 问顾问；满 2 轮仍不过 → G3 |
 | N4 合并 | 主控 | G1 通过 | `git merge --no-ff` 确认无冲突 → `main` 上跑完整测试 | `main` 完整测试全过 | 合并时主控改了代码 → 过 G5 再合；测试挂 → 回 N3 |
 | N5 Orca 实测 | 主控 | N4 完成 | 在 Orca 真实终端、真实模型跑 [e2e-acceptance.md](e2e-acceptance.md) ★ 条目 | ★ 条目全过 | 发现问题 → 记 `docs/dogfood-issues.md` 分级处理 |
-| N6 阶段终审（大节点） | 审查子代理 | 阶段合入完成（单特性已过 N3/G5，N6 只审跨特性交互） | 分配独立 `<id>`，主控跑 `precheck`、写 `pack.md`，用 `run-review.sh start/wait` 跑审查，出 `review-notes.md` 与 `review.md` | 首行「可接受」（无 P0–P2），符合第 3 节预算 | `src/` >800 行 → `precheck` 退 2 拒审；有 P0–P2 → 修完换新 `<id>` 跑增量复查；满 2 轮 → G3 |
+| N6 阶段终审（大节点） | 审查子代理 | 阶段合入完成（单特性已过 N3/G5，N6 只审跨特性交互） | 分配独立 `<id>`，主控跑 `precheck`、写 `pack.md`，用 `run-review.sh start/wait` 跑审查，出 `review-notes.md` 与 `review.md` | 首行「可接受」（无 P0–P2），符合第 3 节预算 | `src/` >2000 行 → `precheck` 退 2 拒审；有 P0–P2 → 修完换新 `<id>` 跑增量复查；满 2 轮 → G3 |
 | N7 汇报 | 主控 | 任务或阶段完成 | 汇报做了什么、验证方式、文件位置、未做项，附漏网问题/退回轮数/周期三指标 | — | 推送 / PR / 发布 → 闸门 G2 |
 
 ```
@@ -51,7 +51,7 @@ N1 计划 ─brief.md─▶ N2 实现 ─report.md─▶ N3 审查验证 ─G1�
 
 所有复现均在 `.dev/reviews/<id>/` 隔离副本和禁网沙箱（`sandbox-exec -p '(version 1)(allow default)(deny network-outbound (remote ip))' …`，需本地服务加 `(allow network-outbound (remote ip "localhost:*"))`）里执行，**严禁 `git stash`**。
 
-1. **800 行硬拦与冻结 head**：`run-review.sh precheck` 开头检查 `src/**/*.ts` 新增+删除行数，> 800 行直接打印 `need split (>800 lines in src/)` 退出 **2**（不设任何环境变量绕过开关，不建副本）。审查期间不得修改被审分支引用。
+1. **2000 行硬拦与冻结 head**：`run-review.sh precheck` 开头检查 `src/**/*.ts` 新增+删除行数，> 2000 行直接打印 `need split (>2000 lines in src/)` 退出 **2**（不设任何环境变量绕过开关，不建副本，决策 WF8）。审查期间不得修改被审分支引用。
 2. **复用 `precheck`、`precheck.sha` 与 `verified.sha` 门禁**：`precheck` 成功后写入 `precheck.sha`（`git rev-parse <head>`）和 `=== precheck passed ===`。`run-review.sh start` 强制校验 `precheck.sha` 等于被审 head 且 `precheck.log` 含通过标记，否则退出 **1**。`run-review.sh verify <id>` 强制校验 `review-carbon.md` 与 `review-argon.md` 首行均为「可接受」且正文零开放 `P0/P1/P2` 条目，通过后才签发 `verified.sha`。审查方直接复用副本与日志，**禁止重跑全量测试、禁止重装 ESLint/knip**。
 3. **审查 6 项短清单**：① 对照 `brief.md` 无越界改动；② 新测试在 `before/` 下修复前失败 + 至少 2 个故意改坏（变异）检查；③ 硬规则零违约（第 6 节）；④ 状态在启动、切会话、`/new`、`/resume`、`/reload`、中止、退出时均正确；⑤ 认知复杂度 ≤15、≤80 行、嵌套 ≤4、参数 ≤5（看 `precheck.log`）、无死导出、测试隔离；⑥ 模型可见快照差异已说明。
 4. **P0–P2 与 P3 规则（WF4）**：
@@ -68,7 +68,7 @@ N1 计划 ─brief.md─▶ N2 实现 ─report.md─▶ N3 审查验证 ─G1�
 | G1 合并 | N3 → N4 | `precheck` 全过（含 P3 改 `src/` 后的复跑）、新测试修复前失败已验、TUI 改动已 Orca 实测、无 P0–P2。偶发失败必须查因修掉 | 主控 |
 | G2 对外 | N7 之后 | 推送、开 PR、发布每次均需用户明确同意 | 用户 |
 | G3 退回上限 | N3/N6 退回或复查的返回路径 | 退回或复查上限 **2 轮**。满 2 轮仍不过立即停止循环：① 若原代码作者是 worker，由主控拆小、接手（按 G5 审）或问顾问；② **若原代码作者就是主控，严禁自修自合，必须拆成 `src/` ≤ 300 行的小包重走 G5，或回退重做**（WF4） | 主控 |
-| G5 作者不自审 | 主控写代码合入前 | 主控自己写的代码（含接手任务、合并修改）一律由审查子代理按第 3 节审过，无 P0–P2，`src/` ≤ 800 行且 `precheck.sha` 匹配 | 审查子代理 |
+| G5 作者不自审 | 主控写代码合入前 | 主控自己写的代码（含接手任务、合并修改）一律由审查子代理按第 3 节审过，无 P0–P2，`src/` ≤ 2000 行且 `precheck.sha` 匹配 | 审查子代理 |
 
 ## 5. 交接物与目录
 
