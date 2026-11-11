@@ -11,7 +11,7 @@ import path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { getShellConfig, } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
-import { BATCH_WINDOW_MS, DEFAULT_TIMEOUT_MS, formatDuration, killTree, LineBatcher, MAX_TIMEOUT_MS, MIN_TIMEOUT_MS, RateLimiter, spawnMonitor, validateMonitorParams, } from "../monitor-stream.js";
+import { BATCH_WINDOW_MS, DEFAULT_TIMEOUT_MS, formatDuration, killTree, LineBatcher, MAX_TIMEOUT_MS, MIN_TIMEOUT_MS, RateLimiter, spawnMonitor, TOKEN_REFILL_MS, validateMonitorParams, } from "../monitor-stream.js";
 import { resolveHomeDir } from "../paths.js";
 import { createTaskMonitorBridge, NotificationGate, NotificationLedger, stripSystemNotificationFraming, withSystemNotificationFraming, } from "./task-notify.js";
 export const EVENT_MESSAGE_TYPE = "Monitor";
@@ -435,8 +435,10 @@ class MonitorController {
         record.suppressionTimer = undefined;
     }
     scheduleSuppressedTailFlush(record) {
-        if (record.suppressionTimer || record.status !== "running")
+        if (record.status !== "running")
             return;
+        this.clearSuppressionTimer(record);
+        const delayMs = Math.max(TOKEN_REFILL_MS + BATCH_WINDOW_MS + 20, record.limiter.nextRefillDelayMs());
         record.suppressionTimer = setTimeout(() => {
             record.suppressionTimer = undefined;
             if (record.status !== "running")
@@ -447,7 +449,10 @@ class MonitorController {
                 record.lastSuppressedLine = undefined;
                 this.deliver(record, "output", [suppressionNotice(flushed, lastLine)]);
             }
-        }, record.limiter.nextRefillDelayMs());
+            else if (record.limiter.hasPending()) {
+                this.scheduleSuppressedTailFlush(record);
+            }
+        }, delayMs);
         record.suppressionTimer.unref?.();
     }
     endMonitor(record, ending) {

@@ -24,7 +24,8 @@ export class NotificationGate {
     ctx;
     compacting = false;
     uiPromptDepth = 0;
-    userAborted = false;
+    abortedSessions = new Set();
+    fallbackAborted = false;
     bindPi(pi) {
         this.pi = pi;
         this.ctx = undefined;
@@ -36,7 +37,11 @@ export class NotificationGate {
         this.compacting = false;
         this.uiPromptDepth = 0;
         if (reason !== "reload") {
-            this.userAborted = false;
+            const id = this.sessionId();
+            if (id === undefined)
+                this.fallbackAborted = false;
+            else if (reason === "new" || reason === "startup")
+                this.abortedSessions.delete(id);
         }
     }
     onSessionShutdown() {
@@ -52,8 +57,8 @@ export class NotificationGate {
             return undefined;
         }
     }
-    defaultAutoWake() {
-        return !this.userAborted;
+    defaultAutoWake(originSessionId = this.sessionId()) {
+        return originSessionId !== undefined ? !this.abortedSessions.has(originSessionId) : !this.fallbackAborted;
     }
     canWake(originSessionId) {
         const ctx = this.ctx;
@@ -69,12 +74,20 @@ export class NotificationGate {
         return event.outcome !== "aborted" && !this.compacting && this.uiPromptDepth === 0;
     }
     onAgentSettled(aborted) {
-        if (aborted === true && !this.compacting) {
-            this.userAborted = true;
-        }
+        if (aborted !== true || this.compacting)
+            return;
+        const id = this.sessionId();
+        if (id !== undefined)
+            this.abortedSessions.add(id);
+        else
+            this.fallbackAborted = true;
     }
     onUserPromptStart() {
-        this.userAborted = false;
+        const id = this.sessionId();
+        if (id !== undefined)
+            this.abortedSessions.delete(id);
+        else
+            this.fallbackAborted = false;
     }
     bindGateEvents(pi, onUnlock, onTreeNavigate) {
         pi.on("session_before_compact", (event) => {
@@ -125,7 +138,7 @@ export class NotificationLedger {
             run,
             originSessionId,
             state: "unsent",
-            autoWake: autoWake && gate.defaultAutoWake(),
+            autoWake: autoWake && gate.defaultAutoWake(originSessionId),
             data,
         });
         this.options.onChange?.();
@@ -138,10 +151,13 @@ export class NotificationLedger {
         return removed;
     }
     deleteByPrefix(prefix) {
+        let deleted = false;
         for (const key of this.entries.keys()) {
-            if (key.startsWith(prefix))
-                this.entries.delete(key);
+            if (key.startsWith(prefix) && this.entries.delete(key))
+                deleted = true;
         }
+        if (deleted)
+            this.options.onChange?.();
     }
     clear() {
         if (this.flushTimer !== undefined) {
@@ -235,6 +251,7 @@ export class NotificationLedger {
     }
     onSessionStart(ctx, reason) {
         this.options.gate.onSessionStart(ctx, reason);
+        this.reconcileFromBranch();
         for (const entry of this.entries.values()) {
             if (entry.state === "sent")
                 entry.state = "unsent";
@@ -260,15 +277,15 @@ export class NotificationLedger {
     bindEvents(pi, onSessionStartExtra) {
         const { gate, customType } = this.options;
         gate.bindGateEvents(pi, () => this.unlockFlush(), () => {
+            this.reconcileFromBranch();
             for (const entry of this.entries.values()) {
                 if (entry.state === "sent")
                     entry.state = "unsent";
             }
-            this.reconcileFromBranch();
         });
         pi.on("session_start", (event, ctx) => {
-            onSessionStartExtra?.(ctx);
             this.onSessionStart(ctx, event?.reason);
+            onSessionStartExtra?.(ctx);
         });
         pi.on("message_end", (event) => {
             const msg = event.message;

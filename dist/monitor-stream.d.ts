@@ -73,6 +73,7 @@ export declare class RateLimiter {
     constructor(options?: RateLimiterOptions);
     take(count: number): RateVerdict;
     flushPendingIfReady(): number;
+    hasPending(): boolean;
     nextRefillDelayMs(): number;
     private refill;
 }

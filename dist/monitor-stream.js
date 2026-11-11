@@ -149,11 +149,14 @@ export class RateLimiter {
         }
         return suppressed;
     }
+    hasPending() {
+        return this.pending > 0;
+    }
     nextRefillDelayMs() {
         const refillMs = this.options.refillMs ?? TOKEN_REFILL_MS;
         const now = (this.options.now ?? Date.now)();
         const elapsed = Math.max(0, now - this.refilledAt);
-        return Math.max(10, refillMs - (elapsed % refillMs));
+        return Math.max(15, refillMs - (elapsed % refillMs) + 5);
     }
     refill(now) {
         const refillMs = this.options.refillMs ?? TOKEN_REFILL_MS;

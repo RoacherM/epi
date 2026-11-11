@@ -13,6 +13,8 @@ import {
 } from "../dist/extensions/monitor.js";
 import {
   createTaskMonitorBridge,
+  NotificationGate,
+  NotificationLedger,
   stripSystemNotificationFraming,
   SYSTEM_NOTIFICATION_TAG,
   withSystemNotificationFraming,
@@ -409,6 +411,7 @@ test("monitors survive /reload, while session switch stops non-persistent monito
   // 1. /reload tears down old session runtime with reason="reload" and re-runs factory(newPi)
   await s1.emit("session_shutdown", { type: "session_shutdown", reason: "reload" }, s1.ctx);
   const s2 = bindPiToExtension(ext, root, { sessionId: "session-A", startReason: "reload" });
+  assert.equal(s2.statuses.get("monitor"), "monitor 2", "status bar must restore running count on /reload");
   const afterReload = await s2.tools.get("monitor_list").execute("l-reload", {}, undefined, undefined, s2.ctx);
   assert.equal(afterReload.details.monitors.find((m) => m.id === pMon.details.taskId)?.status, "running");
   assert.equal(afterReload.details.monitors.find((m) => m.id === tempMon.details.taskId)?.status, "running");
@@ -416,6 +419,7 @@ test("monitors survive /reload, while session switch stops non-persistent monito
   // 2. /new switches to session-B: non-persistent stops, persistent survives
   await s2.emit("session_shutdown", { type: "session_shutdown", reason: "new" }, s2.ctx);
   const s3 = bindPiToExtension(ext, root, { sessionId: "session-B", startReason: "new" });
+  assert.equal(s3.statuses.get("monitor"), "monitor 1", "status bar must reflect surviving persistent count");
   const afterSwitch = await s3.tools.get("monitor_list").execute("l-new", {}, undefined, undefined, s3.ctx);
   assert.equal(afterSwitch.details.monitors.find((m) => m.id === pMon.details.taskId)?.status, "running");
   assert.equal(afterSwitch.details.monitors.find((m) => m.id === tempMon.details.taskId)?.status, "stopped");
@@ -576,4 +580,79 @@ test("trailing rate-limit coalescing flushes suppressed summary when burst goes 
 
   await h.tools.get("monitor_stop").execute("s-burst", { id: started.details.taskId }, undefined, undefined, h.ctx);
   await h.emit("session_shutdown", { reason: "quit" }, h.ctx);
+});
+
+test("steady post-burst stream delivers real 1/2s lines without tail-flush starvation, and ledger isolates per-session abort & branch receipts", async (t) => {
+  const root = createTempDir(t);
+  const h = createHarness(root);
+
+  // 1. Steady 300ms stream (20 lines = 6s) must deliver real stdout lines on 1/2s refills after initial 10-token burst
+  await h.tools.get("monitor").execute(
+    "m-steady",
+    {
+      command: 'i=1; while [ "$i" -le 20 ]; do printf "steady-%d\\n" "$i"; i=$((i+1)); sleep 0.3; done',
+      description: "steady stream",
+    },
+    undefined,
+    undefined,
+    h.ctx,
+  );
+  for (let i = 0; i < 90; i += 1) {
+    const listed = await h.tools.get("monitor_list").execute("l", {}, undefined, undefined, h.ctx);
+    if (listed.details.monitors[0]?.status === "exited") break;
+    await delay(100);
+  }
+  const postBurstRealBatches = h.sentMessages.filter(
+    (m) => m.message.details.cause === "output" && m.message.content.includes("suppressed") && /\nsteady-\d+/.test(m.message.content),
+  );
+  assert.ok(postBurstRealBatches.length >= 1, "post-burst 1/2s refills must deliver real stdout lines");
+  await h.emit("session_shutdown", { reason: "quit" }, h.ctx);
+
+  // 2. NotificationLedger: Esc in session-B does not suppress autoWake for session-A;
+  //    onSessionStart reconciles already-persisted boundary receipts; deleteByPrefix triggers onChange.
+  const sent = [];
+  const branchA = [];
+  let idle = true;
+  let changeCount = 0;
+  const gate = new NotificationGate();
+  const ledger = new NotificationLedger({
+    customType: EVENT_MESSAGE_TYPE,
+    coalesceMs: 0,
+    gate,
+    onChange: () => { changeCount += 1; },
+    buildPayload: (entries) => ({
+      customType: EVENT_MESSAGE_TYPE,
+      content: entries.map((e) => e.data).join("\n"),
+      display: true,
+      details: { receipts: entries.map((e) => `${e.key}:${e.run}`) },
+    }),
+  });
+  const mkCtx = (id, branch = []) => ({
+    isIdle: () => idle,
+    sessionManager: { getSessionId: () => id, getBranch: () => branch },
+  });
+  gate.bindPi({ on() {}, sendMessage(m) { sent.push(m); } });
+
+  ledger.onSessionStart(mkCtx("session-B"), "new");
+  ledger.onAgentSettled(true); // Esc in session-B only
+  ledger.put("m1:1", "event-for-A", 0, true, "session-A");
+  ledger.onSessionStart(mkCtx("session-A", branchA), "resume");
+  assert.equal(sent.length, 1, "resuming un-aborted session-A must auto-wake its pending notification");
+  ledger.deleteReceiptEntries(sent[0].details);
+
+  // Boundary draft persisted in branchA before /reload must NOT re-send on onSessionStart
+  idle = false;
+  ledger.put("m1:2", "once-only", 0, true, "session-A");
+  const draft = ledger.takeUnsentPayload(false);
+  branchA.push({ type: "custom_message", customType: EVENT_MESSAGE_TYPE, content: draft.content, details: draft.details });
+  idle = true;
+  ledger.onSessionStart(mkCtx("session-A", branchA), "reload");
+  assert.equal(sent.length, 1, "persisted boundary draft in branch must be reconciled on session_start");
+
+  // deleteByPrefix notifies onChange
+  idle = false;
+  ledger.put("job1:milestone:1", "step", 1, false, "session-A");
+  const beforeChanges = changeCount;
+  ledger.deleteByPrefix("job1:milestone:");
+  assert.equal(changeCount, beforeChanges + 1);
 });

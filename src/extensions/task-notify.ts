@@ -31,7 +31,8 @@ export class NotificationGate {
   ctx: ExtensionContext | undefined;
   compacting = false;
   uiPromptDepth = 0;
-  userAborted = false;
+  private readonly abortedSessions = new Set<string>();
+  private fallbackAborted = false;
 
   bindPi(pi: ExtensionAPI): void {
     this.pi = pi;
@@ -45,7 +46,9 @@ export class NotificationGate {
     this.compacting = false;
     this.uiPromptDepth = 0;
     if (reason !== "reload") {
-      this.userAborted = false;
+      const id = this.sessionId();
+      if (id === undefined) this.fallbackAborted = false;
+      else if (reason === "new" || reason === "startup") this.abortedSessions.delete(id);
     }
   }
 
@@ -63,8 +66,8 @@ export class NotificationGate {
     }
   }
 
-  defaultAutoWake(): boolean {
-    return !this.userAborted;
+  defaultAutoWake(originSessionId = this.sessionId()): boolean {
+    return originSessionId !== undefined ? !this.abortedSessions.has(originSessionId) : !this.fallbackAborted;
   }
 
   canWake(originSessionId: string | undefined): boolean {
@@ -80,13 +83,16 @@ export class NotificationGate {
   }
 
   onAgentSettled(aborted: boolean | undefined): void {
-    if (aborted === true && !this.compacting) {
-      this.userAborted = true;
-    }
+    if (aborted !== true || this.compacting) return;
+    const id = this.sessionId();
+    if (id !== undefined) this.abortedSessions.add(id);
+    else this.fallbackAborted = true;
   }
 
   onUserPromptStart(): void {
-    this.userAborted = false;
+    const id = this.sessionId();
+    if (id !== undefined) this.abortedSessions.delete(id);
+    else this.fallbackAborted = false;
   }
 
   bindGateEvents(pi: ExtensionAPI, onUnlock: () => void, onTreeNavigate?: () => void): void {
@@ -167,7 +173,7 @@ export class NotificationLedger<T> {
       run,
       originSessionId,
       state: "unsent",
-      autoWake: autoWake && gate.defaultAutoWake(),
+      autoWake: autoWake && gate.defaultAutoWake(originSessionId),
       data,
     });
     this.options.onChange?.();
@@ -181,9 +187,11 @@ export class NotificationLedger<T> {
   }
 
   deleteByPrefix(prefix: string): void {
+    let deleted = false;
     for (const key of this.entries.keys()) {
-      if (key.startsWith(prefix)) this.entries.delete(key);
+      if (key.startsWith(prefix) && this.entries.delete(key)) deleted = true;
     }
+    if (deleted) this.options.onChange?.();
   }
 
   clear(): void {
@@ -283,6 +291,7 @@ export class NotificationLedger<T> {
 
   onSessionStart(ctx: ExtensionContext, reason?: string): void {
     this.options.gate.onSessionStart(ctx, reason);
+    this.reconcileFromBranch();
     for (const entry of this.entries.values()) {
       if (entry.state === "sent") entry.state = "unsent";
     }
@@ -310,15 +319,15 @@ export class NotificationLedger<T> {
       pi,
       () => this.unlockFlush(),
       () => {
+        this.reconcileFromBranch();
         for (const entry of this.entries.values()) {
           if (entry.state === "sent") entry.state = "unsent";
         }
-        this.reconcileFromBranch();
       },
     );
     pi.on("session_start", (event, ctx) => {
-      onSessionStartExtra?.(ctx);
       this.onSessionStart(ctx, (event as { reason?: string } | undefined)?.reason);
+      onSessionStartExtra?.(ctx);
     });
     pi.on("message_end", (event) => {
       const msg = event.message as { role?: unknown; customType?: unknown; details?: { jobIds?: unknown; receipts?: unknown } };

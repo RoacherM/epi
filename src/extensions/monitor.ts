@@ -31,6 +31,7 @@ import {
   MIN_TIMEOUT_MS,
   RateLimiter,
   spawnMonitor,
+  TOKEN_REFILL_MS,
   validateMonitorParams,
   type ValidatedMonitorInput,
 } from "../monitor-stream.js";
@@ -540,7 +541,9 @@ class MonitorController {
   }
 
   private scheduleSuppressedTailFlush(record: MonitorRecord): void {
-    if (record.suppressionTimer || record.status !== "running") return;
+    if (record.status !== "running") return;
+    this.clearSuppressionTimer(record);
+    const delayMs = Math.max(TOKEN_REFILL_MS + BATCH_WINDOW_MS + 20, record.limiter.nextRefillDelayMs());
     record.suppressionTimer = setTimeout(() => {
       record.suppressionTimer = undefined;
       if (record.status !== "running") return;
@@ -549,8 +552,10 @@ class MonitorController {
         const lastLine = record.lastSuppressedLine;
         record.lastSuppressedLine = undefined;
         this.deliver(record, "output", [suppressionNotice(flushed, lastLine)]);
+      } else if (record.limiter.hasPending()) {
+        this.scheduleSuppressedTailFlush(record);
       }
-    }, record.limiter.nextRefillDelayMs());
+    }, delayMs);
     record.suppressionTimer.unref?.();
   }
 

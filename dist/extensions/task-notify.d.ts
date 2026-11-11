@@ -15,12 +15,13 @@ export declare class NotificationGate {
     ctx: ExtensionContext | undefined;
     compacting: boolean;
     uiPromptDepth: number;
-    userAborted: boolean;
+    private readonly abortedSessions;
+    private fallbackAborted;
     bindPi(pi: ExtensionAPI): void;
     onSessionStart(ctx: ExtensionContext, reason?: string): void;
     onSessionShutdown(): void;
     sessionId(): string | undefined;
-    defaultAutoWake(): boolean;
+    defaultAutoWake(originSessionId?: string | undefined): boolean;
     canWake(originSessionId: string | undefined): boolean;
     canInjectMidRun(event: {
         outcome?: string;
