@@ -323,6 +323,7 @@ export class NotificationLedger<T> {
         for (const entry of this.entries.values()) {
           if (entry.state === "sent") entry.state = "unsent";
         }
+        this.options.onChange?.();
       },
     );
     pi.on("session_start", (event, ctx) => {

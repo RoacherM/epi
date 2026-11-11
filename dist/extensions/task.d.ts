@@ -1,4 +1,5 @@
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import { type TaskMonitorBridge } from "./task-notify.js";
 export interface TaskExtensionOptions {
     epiHome: string;
     agentDir: string;
@@ -17,6 +18,9 @@ export interface TaskExtensionOptions {
      * a receipt (§13). 0 disables the hand-back. Internal on purpose: a model cannot judge
      * seconds, and "put it in the background now" is what `background: true` already does. */
     backgroundAfterSeconds?: number;
+    /** Shared process-local bridge linking `epi:task` and `epi:monitor` for `/tasks`, footer status,
+     * and cross-tool cancel/stop hints. */
+    bridge?: TaskMonitorBridge;
 }
 export declare function createTaskInlineExtension(options: TaskExtensionOptions): InlineExtension;
 //# sourceMappingURL=task.d.ts.map

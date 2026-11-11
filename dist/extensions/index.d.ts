@@ -8,10 +8,15 @@ export interface SubagentBuildOptions {
     mcpServerFilter?: readonly string[];
     child?: boolean;
 }
-export declare function buildInlineExtensions(assembly: ResolvedAssembly, epiHome: string, runtimeIdentity: EpiRuntimeIdentity, resolveAssembly?: () => ResolvedAssembly, updateCheck?: UpdateCheckOptions, verbose?: boolean, 
+export declare function buildInlineExtensions(assembly: ResolvedAssembly, epiHome: string, runtimeIdentity: EpiRuntimeIdentity, 
 /** A subagent's own process (src/worker.ts): `{ mcpServerFilter: ["name"] }` narrows the MCP
  * servers it connects to (docs/subagents-design.md §3), `{ child: true }` drops the hook handlers
  * a child may not run (docs/subagents-design.md §9.4). A bare array is the pre-`child` shorthand
  * for `{ mcpServerFilter: array }`. Undefined in a normal run. */
-subagent?: readonly string[] | SubagentBuildOptions): InlineExtension[];
+...optional: [
+    resolveAssembly?: () => ResolvedAssembly,
+    updateCheck?: UpdateCheckOptions,
+    verbose?: boolean,
+    subagent?: readonly string[] | SubagentBuildOptions
+]): InlineExtension[];
 //# sourceMappingURL=index.d.ts.map

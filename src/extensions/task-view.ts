@@ -8,6 +8,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { InspectTarget } from "../tui/buffer/inspector.js";
 import { singleLine } from "../task-result.js";
 import type { TaskJobSnapshot } from "../task-runtime.js";
+import type { MonitorBridgeSummary } from "./task-notify.js";
 
 /** Characters of one tool result the view keeps; the whole result is in the session file. */
 const RESULT_PREVIEW_CHARS = 600;
@@ -125,4 +126,30 @@ export function jobRow(theme: Theme, job: TaskJobSnapshot): string {
     : theme.fg("muted", "·");
   const where = job.status === "running" ? `turn ${job.turns ?? 0}${job.currentActivity === undefined ? "" : ` · ${job.currentActivity}`}` : `${job.turns ?? 0} turns`;
   return `${glyph} ${theme.fg("muted", job.id.slice(0, 8))} ${job.status} ${theme.fg("accent", job.agent ?? "task")} · ${where} · ${singleLine(job.task ?? "", 60)}`;
+}
+
+function readTailLines(filePath: string, limit: number): string[] {
+  try { const raw = readFileSync(filePath, "utf8").trimEnd(); return raw === "" ? [] : raw.split("\n").slice(-limit); }
+  catch { return []; }
+}
+
+/** One row per monitor in `/tasks`: `◐ a1b2c3d4 running monitor · 4 events · dev server`. */
+export function monitorRow(theme: Theme, mon: MonitorBridgeSummary): string {
+  const glyph = mon.status === "running" ? theme.fg("accent", "◐") : mon.status === "exited" ? theme.fg("success", "✓")
+    : mon.status === "stopped" ? theme.fg("warning", "·") : theme.fg("error", "✗");
+  const sup = mon.suppressedCount > 0 ? ` (${mon.suppressedCount} suppressed)` : "";
+  return `${glyph} ${theme.fg("muted", mon.id)} ${mon.status} ${theme.fg("accent", "monitor")} · ${mon.eventCount} events${sup} · ${singleLine(mon.description, 60)}`;
+}
+
+/** Live inspector target for a monitor in `/tasks <id>`. */
+export function monitorViewTarget(theme: Theme, mon: MonitorBridgeSummary): InspectTarget {
+  const facts = [mon.kind, `${mon.eventCount} events`, ...(mon.suppressedCount > 0 ? [`${mon.suppressedCount} suppressed`] : []), ...(mon.exitCode != null ? [`exit ${mon.exitCode}`] : [])];
+  const out = readTailLines(mon.outputPath, 80), err = readTailLines(mon.stderrPath, 20);
+  const lines = [
+    `${theme.fg("accent", "monitor")} ${theme.bold(mon.status)} ${theme.fg("muted", facts.join(" · "))}`,
+    theme.fg("muted", `${mon.description} — ${singleLine(mon.target, ARGS_PREVIEW_CHARS)}`),
+    theme.fg("dim", `stdout: ${mon.outputPath}`), "", ...(out.length === 0 ? [theme.fg("muted", "(no stdout lines yet)")] : out),
+    ...(err.length === 0 ? [] : ["", theme.fg("warning", "stderr:"), ...err.map((l) => theme.fg("dim", l))]),
+  ];
+  return { title: `monitor ${mon.id}`, subtitle: mon.status, lines, text: lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "")).join("\n"), wrap: true };
 }

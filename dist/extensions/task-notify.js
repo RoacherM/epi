@@ -282,6 +282,7 @@ export class NotificationLedger {
                 if (entry.state === "sent")
                     entry.state = "unsent";
             }
+            this.options.onChange?.();
         });
         pi.on("session_start", (event, ctx) => {
             this.onSessionStart(ctx, event?.reason);

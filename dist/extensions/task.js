@@ -8,7 +8,8 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { BlockInspectorOverlay } from "../tui/buffer/inspector.js";
 import { writeClipboardText } from "../tui/clipboard.js";
 import { CallLine, LinesComponent, setCallSummary } from "../tui/tools/common.js";
-import { jobRow, taskViewTarget } from "./task-view.js";
+import { createTaskMonitorBridge, NotificationGate, NotificationLedger, stripSystemNotificationFraming, withSystemNotificationFraming } from "./task-notify.js";
+import { jobRow, monitorRow, monitorViewTarget, taskViewTarget } from "./task-view.js";
 import { Type } from "typebox";
 import { emitTaskHook } from "../hook-events.js";
 import { loadTaskAgents } from "../task-agents.js";
@@ -360,6 +361,16 @@ const renderCancelCall = (args, theme, context) => {
             : shortJobId(args.jobId ?? "");
     return new CallLine("◆", theme, `${theme.fg("toolOutput", "cancel")} ${theme.fg("muted", target)}`, context);
 };
+function renderExpandedJobResult(theme, job, context) {
+    setCallSummary(context, settledSummary(theme, job));
+    const detail = job.status === "completed" || job.status === "partial" ? (job.result ?? "(no output)").split("\n")
+        : job.status === "failed" ? [job.error ?? "Task failed."] : [];
+    const lines = capLines(theme, [jobSummaryLine(theme, job), ...detail]);
+    const inspectable = detail.length > MAX_DETAIL_LINES
+        ? { rows: [lines.length - 1], target: { title: `task ${shortJobId(job.id)}`, subtitle: job.status, lines: detail, text: detail.join("\n") } }
+        : undefined;
+    return new LinesComponent(lines, inspectable);
+}
 /**
  * Shared by task/task_status/task_wait/task_cancel: all resolve to a TaskJobSnapshot via
  * jobResult(), or to `{ error }` via errorResult() when the call itself was invalid (bad jobId).
@@ -405,25 +416,7 @@ function renderTaskResult(result, options, theme, context) {
             ? new LinesComponent([failureLine(theme, job.error ?? "Task failed.")])
             : new LinesComponent([]);
     }
-    setCallSummary(context, settledSummary(theme, job));
-    const rows = [jobSummaryLine(theme, job)];
-    const detail = job.status === "completed" || job.status === "partial"
-        ? (job.result ?? "(no output)").split("\n")
-        : job.status === "failed" ? [job.error ?? "Task failed."]
-            : [];
-    const lines = capLines(theme, [...rows, ...detail]);
-    const inspectable = detail.length > MAX_DETAIL_LINES
-        ? {
-            rows: [lines.length - 1],
-            target: {
-                title: `task ${shortJobId(job.id)}`,
-                subtitle: job.status,
-                lines: detail,
-                text: detail.join("\n"),
-            },
-        }
-        : undefined;
-    return new LinesComponent(lines, inspectable);
+    return renderExpandedJobResult(theme, job, context);
 }
 function todoStatusGlyph(status) {
     return status === "completed" ? "✓" : status === "in_progress" ? "◐" : "☐";
@@ -445,13 +438,27 @@ function renderTodoResult(result, options, theme) {
     }
     return toolLines(items.map((item) => `${theme.fg(todoStatusTone(item.status), todoStatusGlyph(item.status))} ${item.text}`));
 }
-export function createTaskInlineExtension(options) {
+function hasRuntimeJob(runtime, idOrPrefix) {
+    try {
+        runtime.status(idOrPrefix);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function createTaskCore(options) {
     const agents = loadTaskAgents({
         globalAgentsDir: join(options.epiHome, "agents"),
         projectAgentsDir: options.projectAgentsDir,
     });
     const agentsByName = new Map(agents.map((agent) => [agent.name, agent]));
     const workerPath = options.workerPath ?? fileURLToPath(new URL("../worker.js", import.meta.url));
+    const bridge = options.bridge ?? createTaskMonitorBridge();
+    const gate = new NotificationGate();
+    const jobOrigins = new Map();
+    const recordOrigin = (jobId) => { jobOrigins.set(jobId, gate.sessionId()); };
+    const milestoneHook = { fn: (_job, _summary) => { } };
     // One TaskRuntime per extension object, which in a real run is one per process. Pi re-runs every
     // extension's factory on `/new`, `/resume`, `/fork` and `/reload` (right after `session_shutdown`)
     // and invalidates the old `pi`/`ctx`, but the jobs this runtime started are detached Epi
@@ -492,9 +499,10 @@ export function createTaskInlineExtension(options) {
                 fn(jobId);
         },
         onMilestone: (job, summary) => {
-            enqueueMilestone(job, summary);
+            milestoneHook.fn(job, summary);
         },
     });
+    bridge.registerTaskProvider({ hasJob: (idOrPrefix) => hasRuntimeJob(runtime, idOrPrefix) });
     const availableAgents = runtime.availableAgents();
     const completionHooks = new Map();
     /** The configured budget, in whole milliseconds; 0 means a foreground call waits without one. */
@@ -506,17 +514,17 @@ export function createTaskInlineExtension(options) {
      * soon as the turn ends and kill their jobs with it, and an rpc caller owns the process lifetime,
      * so neither can promise a wake. Subagent workers run in `print` mode and get no budget either. */
     const foregroundBudgetMs = (ctx) => ctx.mode === "tui" ? backgroundAfterMs : 0;
-    /**
-     * The live `pi` and `ctx` for this process, refreshed by every `factory(pi)` call, by
-     * `session_start`, and by every tool call. Completion bookkeeping reads them *at completion
-     * time*, never the pair captured when the job started: after a session switch the old pair is
-     * stale and every call on it throws Pi's "ctx is stale" error.
-     */
-    const current = {};
     const reportCompletionError = (what, error) => {
         const message = error instanceof Error ? error.message : String(error);
         process.stderr.write(`epi:task: ${what} failed: ${message}\n`);
     };
+    const recordChildUsage = createUsageRecorder(gate, reportCompletionError);
+    return {
+        agentsByName, changeListeners, bridge, gate, jobOrigins, recordOrigin, milestoneHook,
+        runtime, availableAgents, completionHooks, foregroundBudgetMs, reportCompletionError, recordChildUsage,
+    };
+}
+function createUsageRecorder(gate, reportCompletionError) {
     /**
      * A subagent's tokens are billed to the same account but spent in another process, so they never
      * reach the parent's own event stream. Recording them as a session entry puts them in the
@@ -530,7 +538,7 @@ export function createTaskInlineExtension(options) {
         // writing it here would make anyone summing the entries count every earlier run again.
         if (job.runUsage === undefined)
             return;
-        const pi = current.pi;
+        const pi = gate.pi;
         if (pi === undefined)
             return;
         try {
@@ -550,188 +558,63 @@ export function createTaskInlineExtension(options) {
             reportCompletionError("recording a child's usage", error);
         }
     };
-    const mailbox = new Map();
-    let notifyTimer;
-    /** True while Pi runs a manual `/compact` or `/tree` branch summary: `sendCustomMessage` has no
-     * compaction guard (agent-session.js:1844), so a wake sent then races `_startRun` (§11.1 #3). */
-    let compacting = false;
-    const sessionId = () => {
-        try {
-            return current.ctx?.sessionManager.getSessionId();
-        }
-        catch {
-            return undefined;
-        }
-    };
-    /** §11.2 #2: a wake may go out only to the session that started the job, outside a compaction. */
-    const canWake = (entry) => {
-        const ctx = current.ctx;
-        if (current.pi === undefined || ctx === undefined)
-            return false;
-        if (compacting)
-            return false;
-        // Only into an idle session: sent mid-run, the notice queues behind the current turn, and a
-        // `task_wait` that collects the same result cannot retract a message Pi already queued -- the
-        // answer would enter the context twice. Mid-run pickup happens at `turn_end` / `agent_before_settle`.
-        if (typeof ctx.isIdle === "function" && !ctx.isIdle())
-            return false;
-        return sessionId() === entry.originSessionId;
-    };
-    /** One line of a push wake: `Job <id8> <status>: <first 400 chars>`, plus the pull hint. */
+    return recordChildUsage;
+}
+function buildTaskNotifyPayload(runtime, entries) {
     const notifyText = (entry) => {
-        const id = shortJobId(entry.job.id);
-        if (entry.milestone !== undefined) {
-            return `Job ${id} progress: ${entry.milestone}\ntask_status({ jobId: "${id}" }) for details`;
-        }
-        const summary = singleLine(entry.job.result ?? entry.job.error ?? "", NOTIFY_SUMMARY_LIMIT);
-        return `Job ${id} ${entry.job.status}: ${summary}\ntask_status({ jobId: "${id}" }) for details`;
+        const id = shortJobId(entry.data.job.id);
+        const body = entry.data.milestone !== undefined
+            ? `progress: ${entry.data.milestone}`
+            : `${entry.data.job.status}: ${singleLine(entry.data.job.result ?? entry.data.job.error ?? "", NOTIFY_SUMMARY_LIMIT)}`;
+        return `Job ${id} ${body}\ntask_status({ jobId: "${id}" }) for details`;
     };
-    const notifyPayload = (entries) => {
-        const inFlight = runtime.list().filter((job) => job.status === "queued" || job.status === "running");
-        const footer = inFlight.length === 0
-            ? ""
-            : `\n\nIn flight: ${inFlight.map((job) => `${shortJobId(job.id)} (${job.agent ?? "task"} ${job.status})`).join(", ")}`;
-        return {
-            customType: "epi:task-notify",
-            content: `${entries.map(notifyText).join("\n\n")}${footer}`,
-            display: true,
-            // `message_end`'s and boundary receipts match the persisted message back to its entries by these keys.
-            details: {
-                jobIds: entries.map((entry) => entry.key),
-                receipts: entries.map((entry) => `${entry.key}:${entry.run}`),
-            },
-        };
+    const inFlight = runtime.list().filter((job) => job.status === "queued" || job.status === "running");
+    const footer = inFlight.length === 0 ? "" : `\n\nIn flight: ${inFlight.map((job) => `${shortJobId(job.id)} (${job.agent ?? "task"} ${job.status})`).join(", ")}`;
+    return {
+        customType: "epi:task-notify",
+        content: withSystemNotificationFraming(`${entries.map(notifyText).join("\n\n")}${footer}`),
+        display: true,
+        details: { jobIds: entries.map((entry) => entry.key), receipts: entries.map((entry) => `${entry.key}:${entry.run}`) },
     };
-    const buildMidRunDraft = (entries) => {
-        const payload = notifyPayload(entries);
-        return {
-            type: "custom_message",
-            customType: payload.customType,
-            content: payload.content,
-            display: payload.display,
-            details: payload.details,
-        };
-    };
-    const deleteReceiptEntries = (details) => {
-        let deleted = false;
-        if (Array.isArray(details?.receipts)) {
-            const receipts = new Set(details.receipts.filter((r) => typeof r === "string"));
-            for (const entry of mailbox.values()) {
-                if (receipts.has(`${entry.key}:${entry.run}`) && mailbox.delete(entry.key))
-                    deleted = true;
-            }
-            return deleted;
-        }
-        if (Array.isArray(details?.jobIds)) {
-            for (const id of details.jobIds) {
-                if (typeof id === "string" && mailbox.delete(id))
-                    deleted = true;
-            }
-        }
-        return deleted;
-    };
-    const reconcileDeliveredFromBranch = () => {
-        let deleted = false;
-        const branch = current.ctx?.sessionManager.getBranch() ?? [];
-        for (const raw of branch) {
-            const entry = raw;
-            if (entry.type !== "custom_message" || entry.customType !== "epi:task-notify")
-                continue;
-            if (deleteReceiptEntries(entry.details))
-                deleted = true;
-        }
-        if (deleted)
-            refreshStatus();
-    };
-    /** The micro-batch wake (design §2.2/§11.2 #3): everything deliverable in the window goes out as
-     * one `epi:task-notify` follow-up. Entries are marked `sent`, not deleted -- only a `message_end`
-     * receipt proves the message reached the session tree; `agent_settled` without one puts them back. */
-    const flushNotify = () => {
-        notifyTimer = undefined;
-        const pi = current.pi;
-        const ready = [...mailbox.values()].filter((entry) => entry.state === "unsent" && entry.autoWake && canWake(entry));
-        if (ready.length === 0 || pi === undefined)
-            return;
-        try {
-            pi.sendMessage(notifyPayload(ready), { deliverAs: "followUp", triggerTurn: true });
-            for (const entry of ready)
-                entry.state = "sent";
-        }
-        catch (error) {
-            reportCompletionError("notifying a settled task", error);
-        }
-        refreshStatus();
-    };
-    const scheduleFlush = () => {
-        if (notifyTimer !== undefined)
-            return;
-        // Unref'd: in `epi -p` a background job that has not settled by exit must not hold the process
-        // open (a documented limit -- there is no session left to notify).
-        notifyTimer = setTimeout(flushNotify, NOTIFY_COALESCE_MS);
-        notifyTimer.unref();
-    };
-    const clearJobMilestones = (jobId) => {
-        const prefix = `${jobId}:milestone:`;
-        for (const key of mailbox.keys()) {
-            if (key.startsWith(prefix))
-                mailbox.delete(key);
-        }
-    };
-    function enqueueMilestone(job, summary) {
-        const key = `${job.id}:milestone:${job.steps ?? 0}:${Date.now()}`;
-        mailbox.set(key, {
-            key,
-            job,
-            run: job.run ?? 0,
-            originSessionId: sessionId(),
-            state: "unsent",
-            autoWake: true,
-            milestone: summary,
-        });
-        refreshStatus();
-        scheduleFlush();
-    }
-    /** §11.2 #1: a settled job nobody collected enters the ledger and, when allowed, pushes a wake. */
-    const enqueueNotify = (job, autoWake) => {
-        // The pull that already handed this run's result to the model suppresses the wake.
-        if (collectedRuns.get(job.id) === (job.run ?? 0))
-            return;
-        clearJobMilestones(job.id);
-        mailbox.set(job.id, {
-            key: job.id,
-            job,
-            run: job.run ?? 0,
-            originSessionId: sessionId(),
-            state: "unsent",
-            autoWake,
-        });
-        refreshStatus();
-        scheduleFlush();
-    };
-    /** §11.2 #5: the model pulled the result itself, or the job restarted -- the notice is settled.
-     * The run is recorded too: `collect` can land while `trackCompletion`'s hook is still awaiting,
-     * so a plain delete would lose to the `enqueueNotify` that follows it. */
+}
+function createTaskNotifications(core) {
+    const { runtime, bridge, gate, jobOrigins, milestoneHook, reportCompletionError } = core;
+    let milestoneSeq = 0;
     const collectedRuns = new Map();
-    const collect = (job) => {
-        collectedRuns.set(job.id, job.run ?? 0);
-        clearJobMilestones(job.id);
-        if (mailbox.delete(job.id))
-            refreshStatus();
-    };
-    /** What the bottom bar shows (§11.3): compact counts only -- the shortcuts row leaves ~12-14
-     * columns, so no ids, no tool names, no timers. The key is the `/tasks` command's name: a click
-     * on a footer status runs the command of the same name (src/tui/app.ts). */
     const STATUS_KEY = "tasks";
     let lastStatusText;
+    const ledger = new NotificationLedger({
+        customType: "epi:task-notify",
+        coalesceMs: NOTIFY_COALESCE_MS,
+        gate,
+        buildPayload: (entries) => buildTaskNotifyPayload(runtime, entries),
+        onChange: () => refreshStatus(),
+        onSendError: (error) => reportCompletionError("notifying a settled task", error),
+    });
+    milestoneHook.fn = (job, summary) => {
+        ledger.put(`${job.id}:milestone:${++milestoneSeq}`, { job, milestone: summary }, job.run ?? 0, true, jobOrigins.get(job.id) ?? gate.sessionId());
+    };
+    const enqueueNotify = (job, autoWake) => {
+        if (collectedRuns.get(job.id) === (job.run ?? 0))
+            return;
+        ledger.deleteByPrefix(`${job.id}:milestone:`);
+        ledger.put(job.id, { job }, job.run ?? 0, autoWake, jobOrigins.get(job.id) ?? gate.sessionId());
+    };
+    const collect = (job) => {
+        collectedRuns.set(job.id, job.run ?? 0);
+        ledger.deleteByPrefix(`${job.id}:milestone:`);
+        ledger.delete(job.id);
+    };
     function refreshStatus() {
-        const ui = current.ctx?.ui;
+        const ui = gate.ctx?.ui;
         if (ui === undefined)
             return;
         const jobs = runtime.list();
-        const running = jobs.filter((job) => job.status === "running").length;
+        const running = jobs.filter((job) => job.status === "running").length + bridge.listMonitors().filter((mon) => mon.status === "running").length;
         const queued = jobs.filter((job) => job.status === "queued").length;
-        const settled = [...mailbox.values()].filter((entry) => entry.milestone === undefined && entry.originSessionId === sessionId());
-        const failed = settled.filter((entry) => entry.job.status !== "completed").length;
+        const activeSession = gate.sessionId();
+        const settled = [...ledger.entries.values()].filter((entry) => entry.data.milestone === undefined && entry.originSessionId === activeSession);
+        const failed = settled.filter((entry) => entry.data.job.status !== "completed").length;
         const done = settled.length - failed;
         const parts = [];
         if (running > 0 || queued > 0) {
@@ -753,16 +636,16 @@ export function createTaskInlineExtension(options) {
             // A stale ctx (mid session switch) must not turn a progress tick into an error.
         }
     }
-    /** Foreground waits that were interrupted (Esc, /compact): nobody is waiting any more, so the
-     * job gets the same wake as a background one -- but a user's Esc means the notice must not start
-     * a turn of its own (§11.2 #1). The map's boolean is that `autoWake` choice. */
-    const wakeOnSettle = new Map();
+    return { ledger, enqueueNotify, collect, refreshStatus, resetStatusCache: () => { lastStatusText = undefined; refreshStatus(); } };
+}
+function createCompletionTracker(core, enqueueNotify, wakeOnSettle) {
+    const { runtime, gate, completionHooks, recordChildUsage, reportCompletionError } = core;
     const trackCompletion = (jobId, notify) => {
         const completion = runtime.wait(jobId).then(async (job) => {
             recordChildUsage(job);
             // Read the live `pi`/`ctx` now, not the pair captured at start: a session switch leaves it stale.
-            const pi = current.pi;
-            const ctx = current.ctx;
+            const pi = gate.pi;
+            const ctx = gate.ctx;
             if (pi !== undefined && ctx !== undefined) {
                 const stopDecision = await emitTaskHook(pi.events, { type: "task_stop", job }, ctx);
                 if (stopDecision.action !== "continue") {
@@ -801,6 +684,13 @@ export function createTaskInlineExtension(options) {
         });
         return completion;
     };
+    return trackCompletion;
+}
+function createTaskRunner(core, notify, watchJob) {
+    const { runtime, gate } = core;
+    const { enqueueNotify, collect } = notify;
+    const wakeOnSettle = new Map();
+    const trackCompletion = createCompletionTracker(core, enqueueNotify, wakeOnSettle);
     /** Start (or resume) a job and hand the model its result: a background job gets the receipt, a
      * foreground one waits for the answer (and leaves the job running if its own turn is aborted). */
     const runJob = async (job, background, signal, onUpdate, 
@@ -821,7 +711,7 @@ export function createTaskInlineExtension(options) {
             progress.stop();
             // A user's own Esc keeps the notice from starting a turn on its own; a /compact abort is not
             // the user saying "stop" and keeps autoWake (§11.2 #1).
-            wakeOnSettle.set(job.id, compacting);
+            wakeOnSettle.set(job.id, gate.compacting);
             return {
                 content: [{ type: "text", text: handedBackText(waited, "the wait was interrupted") }],
                 details: waited,
@@ -846,6 +736,10 @@ export function createTaskInlineExtension(options) {
         collect(settled);
         return jobResult(settled);
     };
+    return { wakeOnSettle, trackCompletion, runJob };
+}
+function createJobWatcher(core) {
+    const { runtime, changeListeners } = core;
     /**
      * Subscribe to a job's progress and refresh the tool block through `onUpdate`, throttled to one
      * trailing call per UPDATE_THROTTLE_MS (§11.4): the block re-renders the CallLine's tail
@@ -898,6 +792,10 @@ export function createTaskInlineExtension(options) {
             },
         };
     };
+    return watchJob;
+}
+function createDetailPages(core) {
+    const { runtime, bridge, changeListeners } = core;
     /** A job's page in the inspector, refreshed on every change while open (the session file grows
      * with each message, so a change in turns, steps or status means new lines to show). */
     const jobPage = (theme, jobId) => {
@@ -940,28 +838,57 @@ export function createTaskInlineExtension(options) {
             },
         };
     };
-    /** Every job of this process, newest first; a row opens that job's page. */
+    const monitorPage = (theme, monitorId) => {
+        const mon = bridge.getMonitor(monitorId);
+        if (mon === undefined)
+            return undefined;
+        return {
+            ...monitorViewTarget(theme, mon),
+            live: { follow: true, subscribe: (update) => {
+                    let timer;
+                    const unsub = bridge.onMonitorChange(() => {
+                        if (timer !== undefined)
+                            return;
+                        timer = setTimeout(() => { timer = undefined; const m = bridge.getMonitor(monitorId); if (m !== undefined)
+                            update(monitorViewTarget(theme, m)); }, UPDATE_THROTTLE_MS);
+                        timer.unref();
+                    });
+                    return () => { unsub(); if (timer !== undefined)
+                        clearTimeout(timer); };
+                } },
+        };
+    };
+    return { jobPage, monitorPage };
+}
+function createTaskOverlay(core, detail) {
+    const { runtime, bridge, changeListeners } = core;
+    const { jobPage, monitorPage } = detail;
+    /** Every job and monitor of this process, newest first; a row opens that item's live page. */
     const jobsPage = (theme) => {
         const build = () => {
-            const jobs = runtime.list().reverse();
-            const lines = jobs.length === 0 ? [theme.fg("muted", "No task jobs.")] : jobs.map((job) => jobRow(theme, job));
+            const jobs = runtime.list().reverse(), monitors = bridge.listMonitors().reverse();
+            const items = [
+                ...jobs.map((job) => ({ kind: "job", id: job.id, row: jobRow(theme, job) })),
+                ...monitors.map((mon) => ({ kind: "monitor", id: mon.id, row: monitorRow(theme, mon) })),
+            ];
+            const lines = items.length === 0 ? [theme.fg("muted", "No task jobs.")] : items.map((item) => item.row);
+            const jobCount = `${jobs.length} ${jobs.length === 1 ? "job" : "jobs"}`;
             return {
                 title: "tasks",
-                subtitle: `${jobs.length} ${jobs.length === 1 ? "job" : "jobs"}`,
+                subtitle: monitors.length === 0 ? jobCount : `${jobCount} · ${monitors.length} ${monitors.length === 1 ? "monitor" : "monitors"}`,
                 lines,
                 text: lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "")).join("\n"),
-                openLine: (line) => (jobs[line] === undefined ? undefined : jobPage(theme, jobs[line].id)),
+                openLine: (line) => items[line] === undefined ? undefined : items[line].kind === "job" ? jobPage(theme, items[line].id) : monitorPage(theme, items[line].id),
             };
         };
         return {
             ...build(),
-            live: {
-                subscribe: (update) => {
-                    const listener = () => update({ ...build() });
+            live: { subscribe: (update) => {
+                    const listener = () => update(build());
                     changeListeners.add(listener);
-                    return () => changeListeners.delete(listener);
-                },
-            },
+                    const unsubMonitor = bridge.onMonitorChange(listener);
+                    return () => { changeListeners.delete(listener); unsubMonitor(); };
+                } },
         };
     };
     /** The `/tasks` overlay, at most one: opening it again (a second click on the footer) replaces
@@ -992,128 +919,31 @@ export function createTaskInlineExtension(options) {
         if (openPage === page)
             openPage = undefined;
     };
+    return { jobPage, monitorPage, jobsPage, closePage, showPage };
+}
+export function createTaskInlineExtension(options) {
+    const core = createTaskCore(options);
+    const notify = createTaskNotifications(core);
+    const watchJob = createJobWatcher(core);
+    const runner = createTaskRunner(core, notify, watchJob);
+    const pages = createTaskOverlay(core, createDetailPages(core));
+    const env = { core, notify, runner, watchJob, pages };
     return {
         name: "epi:task",
         factory(pi) {
             const todos = new SessionTodoStore();
-            current.pi = pi;
-            // Until this session starts, the previous session's ctx is stale (Pi invalidates it); an
-            // unset ctx makes a job that finishes in that window skip its task_stop hook instead of
-            // calling a dead ctx.
-            delete current.ctx;
-            const listener = () => refreshStatus();
-            changeListeners.add(listener);
-            pi.on("session_start", (_event, ctx) => {
-                current.ctx = ctx;
-                // Entries "sent" to a session that was switched away never persisted (the old pi is dead):
-                // back to unsent, and this session's own mail flushes at once (§11.2 #3).
-                for (const entry of mailbox.values()) {
-                    if (entry.state === "sent")
-                        entry.state = "unsent";
-                }
-                lastStatusText = undefined;
-                refreshStatus();
-                scheduleFlush();
-            });
-            // A manual /compact aborts the run, then summarises with its own _startRun-equivalent path;
-            // sendCustomMessage has no compaction guard, so a wake sent while it runs races _startRun
-            // (§11.1 #3). Only `reason === "manual"` gates: an auto-compaction inside a running turn
-            // queues follow-ups safely and must not stall the wake.
-            pi.on("session_before_compact", (event) => {
-                if (event.reason === "manual")
-                    compacting = true;
-            });
-            pi.on("session_compact", () => {
-                compacting = false;
-                scheduleFlush();
-            });
-            pi.on("session_compact_failed", () => {
-                compacting = false;
-                scheduleFlush();
-            });
-            pi.on("session_before_tree", () => {
-                compacting = true;
-            });
-            pi.on("session_tree", () => {
-                compacting = false;
-                scheduleFlush();
-            });
-            // The receipt (§11.2 #3): a persisted epi:task-notify message is real delivery; delete its
-            // entries. The notify message itself re-enters mailbox on settle only if never persisted.
-            pi.on("message_end", (event) => {
-                const message = event.message;
-                if (message.role !== "custom" || message.customType !== "epi:task-notify")
-                    return;
-                if (deleteReceiptEntries(message.details))
-                    refreshStatus();
-            });
-            pi.on("turn_start", () => {
-                reconcileDeliveredFromBranch();
-            });
-            // Busy mid-run notification pickup: when tool results finish and the agent loop continues to
-            // another model call, attach any unsent task notifications as a boundary draft so the model
-            // sees background completions and milestones immediately between turns.
-            pi.on("turn_end", (event) => {
-                if (event.toolResults.length === 0)
-                    return undefined;
-                const id = sessionId();
-                const ready = [...mailbox.values()].filter((entry) => entry.state === "unsent" && entry.originSessionId === id);
-                if (ready.length === 0)
-                    return undefined;
-                for (const entry of ready)
-                    entry.state = "sent";
-                refreshStatus();
-                return { entries: [...event.entries, buildMidRunDraft(ready)] };
-            });
-            // If a background task settles right as the parent turn is about to settle, keep the same run
-            // going instead of waiting for a separate followUp turn.
-            pi.on("agent_before_settle", (event) => {
-                if (event.outcome === "aborted" || compacting)
-                    return undefined;
-                const id = sessionId();
-                const ready = [...mailbox.values()].filter((entry) => entry.state === "unsent" && entry.autoWake && entry.originSessionId === id);
-                if (ready.length === 0)
-                    return undefined;
-                for (const entry of ready)
-                    entry.state = "sent";
-                refreshStatus();
-                return { entries: [...event.entries, buildMidRunDraft(ready)], continue: true };
-            });
-            // A run ended. Entries still "sent" got no receipt: the follow-up was cleared (Esc, Alt+Up)
-            // or the run died first -- back to unsent (§11.2 #3). An aborted run also drops autoWake: the
-            // user just said stop, so the notice rides the next prompt instead of starting a turn.
-            pi.on("agent_settled", (event) => {
-                reconcileDeliveredFromBranch();
-                for (const entry of mailbox.values()) {
-                    if (entry.state !== "sent")
-                        continue;
-                    entry.state = "unsent";
-                    if (event.aborted === true)
-                        entry.autoWake = false;
-                }
-                scheduleFlush();
-                refreshStatus();
-            });
-            // The next user prompt carries the mail itself (§11.2 #4): attached inside _prepareRun, it
-            // never touches the followUp queue that Esc/Alt+Up clear. Works even for autoWake: false.
-            pi.on("before_agent_start", (event) => {
-                if (event.messageType === "custom" && event.message.customType === "epi:task-notify") {
-                    return undefined;
-                }
-                const id = sessionId();
-                const ready = [...mailbox.values()].filter((entry) => entry.state === "unsent" && entry.originSessionId === id);
-                if (ready.length === 0)
-                    return undefined;
-                for (const entry of ready)
-                    entry.state = "sent";
-                refreshStatus();
-                return { message: notifyPayload(ready) };
-            });
+            core.gate.bindPi(pi);
+            const listener = () => notify.refreshStatus();
+            core.changeListeners.add(listener);
+            const unsubMonitor = core.bridge.onMonitorChange(listener);
+            notify.ledger.bindEvents(pi, () => notify.resetStatusCache());
             pi.on("session_shutdown", async (event) => {
                 // Each session's factory adds its own status listener; the old one goes with its session,
                 // and so does an open `/tasks` overlay (its live pages included).
-                changeListeners.delete(listener);
-                closePage();
+                core.changeListeners.delete(listener);
+                unsubMonitor();
+                pages.closePage();
+                core.gate.onSessionShutdown();
                 // Only a real quit ends the subagents. A session switch (`/new`, `/resume`, fork, reload)
                 // tears down this extension runtime but not the process, and the jobs are detached Epi
                 // runs: killing them would silently discard work the user never asked to stop. This
@@ -1121,18 +951,34 @@ export function createTaskInlineExtension(options) {
                 // share `runtime`, so whichever session quits shuts down every job in the process.
                 if (event.reason !== "quit")
                     return;
-                await runtime.shutdown();
-                await Promise.allSettled(completionHooks.values());
+                await core.runtime.shutdown();
+                await Promise.allSettled(core.completionHooks.values());
             });
+            const { ui } = taskBindings;
+            ui.bindUi(pi, pages);
+            const gates = ui.makeGateHelpers(pi, env);
+            ui.bindTaskTool(pi, env, gates, batchBindings.ui.makeBatchExecutor(env, gates), ui.makeJobIdExecutor(env, gates));
+            ui.bindStatusTool(pi, env);
+            ui.bindWaitTool(pi, env, ui.makeBatchWait(env));
+            ui.bindCancelTool(pi, env);
+            ui.bindTodoTool(pi, env, todos);
+        },
+    };
+}
+const taskGuiBindings = {
+    ui: {
+        bindUi(pi, pages) {
+            const { jobsPage, jobPage, monitorPage, showPage } = pages;
             // §11.4 #4: the wake message renders as one compact line per job, not a raw custom block.
             // `?.`: test doubles bind a partial `pi`, and a missing renderer is display-only.
             pi.registerMessageRenderer?.("epi:task-notify", (message, options, theme) => {
-                const text = typeof message.content === "string"
+                const rawText = typeof message.content === "string"
                     ? message.content
                     : message.content
                         .filter((part) => part.type === "text")
                         .map((part) => part.text)
                         .join("\n");
+                const text = stripSystemNotificationFraming(rawText);
                 const rows = text.split("\n").filter((line) => line.trim().length > 0);
                 const shown = options.expanded ? rows : rows.slice(0, 4);
                 const lines = shown.map((line) => {
@@ -1156,15 +1002,18 @@ export function createTaskInlineExtension(options) {
                         ctx.ui.notify("/tasks needs the interactive TUI", "error");
                         return;
                     }
-                    const id = args.trim();
-                    const page = id === "" ? jobsPage(ctx.ui.theme) : jobPage(ctx.ui.theme, id);
+                    const id = (args ?? "").trim();
+                    const page = id === "" ? jobsPage(ctx.ui.theme) : (jobPage(ctx.ui.theme, id) ?? monitorPage(ctx.ui.theme, id));
                     if (page === undefined) {
-                        ctx.ui.notify(`No task job ${id}.`, "error");
+                        ctx.ui.notify(`No task job or monitor ${id}.`, "error");
                         return;
                     }
                     await showPage(ctx, page);
                 },
             });
+        },
+        makeGateHelpers(pi, env) {
+            const { agentsByName } = env.core;
             /**
              * `task_start` gate, shared by the three ways text reaches a child (start, replace a queued
              * job's task, steer a running one): the text a hook sees must be the text the child acts on,
@@ -1181,14 +1030,35 @@ export function createTaskInlineExtension(options) {
                     return explicit;
                 return agentName !== undefined && agentsByName.get(agentName)?.background === true;
             };
-            const executeTaskBatch = async (params, signal, ctx) => {
-                const items = params.tasks ?? [];
-                const startedJobs = [];
+            return { gateTaskStart, isBackgroundFor };
+        },
+    },
+};
+async function rollbackBatch(ids, env) {
+    if (ids.length === 0)
+        return;
+    for (const snap of await env.core.runtime.cancelMany(ids).catch(() => []))
+        env.notify.collect(snap);
+    await Promise.allSettled(ids.map((id) => env.core.completionHooks.get(id)).filter((p) => p !== undefined));
+    for (const id of ids) {
+        try {
+            env.notify.collect(env.core.runtime.status(id));
+        }
+        catch { /* ignore */ }
+    }
+}
+const batchBindings = {
+    ui: {
+        async startBatchItems(params, ctx, env, gates) {
+            const { runtime, recordOrigin } = env.core;
+            const items = params.tasks ?? [];
+            const startedJobs = [];
+            try {
                 for (const item of items) {
                     const agentName = item.agent ?? params.agent;
                     const itemCwd = item.cwd ?? params.cwd;
                     const cwd = itemCwd === undefined ? ctx.cwd : resolve(ctx.cwd, itemCwd);
-                    await gateTaskStart(ctx, agentName, item.task, cwd);
+                    await gates.gateTaskStart(ctx, agentName, item.task, cwd);
                     const started = runtime.start({
                         ...taskSettings(params),
                         ...(agentName === undefined ? {} : { agent: agentName }),
@@ -1198,36 +1068,72 @@ export function createTaskInlineExtension(options) {
                         cwd,
                         inheritedModel: inheritedModelReference(ctx.model, ctx.thinkingLevel),
                     });
-                    const bg = isBackgroundFor(item.background ?? params.background, agentName);
-                    collect(started);
-                    void trackCompletion(started.id, bg);
+                    recordOrigin(started.id);
+                    const bg = gates.isBackgroundFor(item.background ?? params.background, agentName);
+                    env.notify.collect(started);
+                    void env.runner.trackCompletion(started.id, bg);
                     startedJobs.push({ job: started, background: bg });
                 }
+                return startedJobs;
+            }
+            catch (error) {
+                await rollbackBatch(startedJobs.map((e) => e.job.id), env);
+                throw error;
+            }
+        },
+        makeBatchExecutor(env, gates) {
+            const { runtime, gate, completionHooks, foregroundBudgetMs } = env.core;
+            return async (params, signal, ctx) => {
+                const startedJobs = await batchBindings.ui.startBatchItems(params, ctx, env, gates);
                 const fgIds = startedJobs.filter((entry) => !entry.background).map((entry) => entry.job.id);
-                if (fgIds.length > 0) {
-                    const budget = foregroundBudgetMs(ctx);
+                const budget = foregroundBudgetMs(ctx);
+                if (fgIds.length > 0)
                     await runtime.waitMany(fgIds, "all", budget > 0 ? budget : undefined, signal);
-                }
-                const snapshots = startedJobs.map((entry) => {
+                const aborted = signal?.aborted === true;
+                const why = aborted ? "the wait was interrupted" : `it did not finish within ${Number((budget / 1_000).toFixed(1))}s`;
+                const classified = startedJobs.map((entry) => {
                     const snap = runtime.status(entry.job.id);
-                    if (!entry.background && snap.status !== "queued" && snap.status !== "running") {
-                        collect(snap);
-                    }
-                    return snap;
+                    const active = snap.status === "queued" || snap.status === "running";
+                    if (!entry.background && active)
+                        env.runner.wakeOnSettle.set(snap.id, aborted ? gate.compacting : true);
+                    else if (!entry.background)
+                        env.notify.collect(snap);
+                    return { entry, snap, active };
                 });
-                return {
-                    content: [{ type: "text", text: snapshots.map(jobListLine).join("\n") }],
-                    details: { jobs: snapshots },
-                };
+                const snapshots = [], blocks = [];
+                for (const { entry, snap, active } of classified) {
+                    if (entry.background || active) {
+                        snapshots.push(snap);
+                        blocks.push(entry.background ? jobListLine(snap) : `${jobListLine(snap)}\n${handedBackText(snap, why)}`);
+                    }
+                    else {
+                        const settled = await (completionHooks.get(snap.id) ?? Promise.resolve(snap));
+                        env.notify.collect(settled);
+                        snapshots.push(settled);
+                        blocks.push(`${jobListLine(settled)}\n${jobResult(settled).content[0]?.text ?? ""}`);
+                    }
+                }
+                return { content: [{ type: "text", text: blocks.join("\n\n") }], details: { jobs: snapshots } };
             };
-            const executeTaskJobId = async (params, signal, onUpdate, ctx) => {
+        },
+    },
+};
+const taskBindings = {
+    ui: {
+        ...taskGuiBindings.ui,
+        makeJobIdExecutor(env, gates) {
+            const { runtime, recordOrigin, foregroundBudgetMs } = env.core;
+            return async (params, signal, onUpdate, ctx) => {
                 const taskText = params.task ?? "";
                 const known = runtime.status(params.jobId);
-                await gateTaskStart(ctx, known.agent, taskText, known.cwd);
+                await gates.gateTaskStart(ctx, known.agent, taskText, known.cwd);
                 if (known.status !== "queued" && known.status !== "running") {
-                    return runJob(runtime.resume(params.jobId, taskText), params.background === true, signal, onUpdate, foregroundBudgetMs(ctx));
+                    const resumed = runtime.resume(params.jobId, taskText);
+                    recordOrigin(resumed.id);
+                    return env.runner.runJob(resumed, params.background === true, signal, onUpdate, foregroundBudgetMs(ctx));
                 }
                 const steered = runtime.steer(params.jobId, taskText, params.strategy);
+                recordOrigin(steered.id);
                 const strategyLabel = params.strategy ?? "steer";
                 const suffix = strategyLabel === "interrupt"
                     ? "; it interrupts the current turn and starts immediately."
@@ -1244,6 +1150,10 @@ export function createTaskInlineExtension(options) {
                     details: steered,
                 };
             };
+        },
+        bindTaskTool(pi, env, gates, executeTaskBatch, executeTaskJobId) {
+            const { core: { runtime, gate, recordOrigin, availableAgents, foregroundBudgetMs }, runner: { runJob }, pages: { jobPage } } = env;
+            const { gateTaskStart, isBackgroundFor } = gates;
             pi.registerTool({
                 name: "task",
                 label: "Task",
@@ -1268,7 +1178,7 @@ export function createTaskInlineExtension(options) {
                 renderResult: renderTaskResult,
                 parameters: TaskToolParameters,
                 async execute(_toolCallId, params, signal, onUpdate, ctx) {
-                    current.ctx = ctx;
+                    gate.ctx = ctx;
                     try {
                         if (params.tasks !== undefined && params.tasks.length > 0) {
                             return await executeTaskBatch(params, signal, ctx);
@@ -1290,6 +1200,7 @@ export function createTaskInlineExtension(options) {
                                 ? { forkEntries: forkableBranch(ctx.sessionManager.getBranch()) }
                                 : {}),
                         });
+                        recordOrigin(started.id);
                         return runJob(started, isBackgroundFor(params.background, params.agent), signal, onUpdate, foregroundBudgetMs(ctx));
                     }
                     catch (error) {
@@ -1297,6 +1208,9 @@ export function createTaskInlineExtension(options) {
                     }
                 },
             });
+        },
+        bindStatusTool(pi, env) {
+            const { core: { runtime, gate }, notify: { collect }, pages: { jobPage } } = env;
             pi.registerTool({
                 name: "task_status",
                 label: "Task status",
@@ -1308,7 +1222,7 @@ export function createTaskInlineExtension(options) {
                     jobId: Type.Optional(Type.String({ description: "The job to inspect; omit to list every job of this runtime" })),
                 }),
                 async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-                    current.ctx = ctx;
+                    gate.ctx = ctx;
                     try {
                         if (params.jobId === undefined) {
                             const jobs = runtime.list();
@@ -1335,12 +1249,15 @@ export function createTaskInlineExtension(options) {
                     }
                 },
             });
-            const executeBatchWait = async (jobIds, mode, timeoutMs, signal) => {
+        },
+        makeBatchWait(env) {
+            const { runtime, completionHooks } = env.core;
+            return async (jobIds, mode, timeoutMs, signal) => {
                 const snapshots = await runtime.waitMany(jobIds, mode, timeoutMs, signal);
                 const resolved = [];
                 for (const snap of snapshots) {
                     if (snap.status !== "queued" && snap.status !== "running") {
-                        collect(snap);
+                        env.notify.collect(snap);
                         const completion = completionHooks.get(snap.id);
                         resolved.push(completion !== undefined ? await completion : snap);
                     }
@@ -1356,6 +1273,9 @@ export function createTaskInlineExtension(options) {
                     details: { jobs: resolved },
                 };
             };
+        },
+        bindWaitTool(pi, env, executeBatchWait) {
+            const { core: { runtime, gate, completionHooks, foregroundBudgetMs }, notify: { collect }, watchJob, pages: { jobPage } } = env;
             pi.registerTool({
                 name: "task_wait",
                 label: "Task wait",
@@ -1375,7 +1295,7 @@ export function createTaskInlineExtension(options) {
                     })),
                 }),
                 async execute(_toolCallId, params, signal, onUpdate, ctx) {
-                    current.ctx = ctx;
+                    gate.ctx = ctx;
                     const budget = foregroundBudgetMs(ctx);
                     const timeoutMs = params.timeoutSeconds === undefined
                         ? (budget > 0 ? budget : undefined)
@@ -1412,6 +1332,13 @@ export function createTaskInlineExtension(options) {
                     }
                 },
             });
+        },
+        bindCancelTool(pi, env) {
+            const { core: { runtime, bridge, gate, completionHooks }, notify: { collect }, pages: { jobPage } } = env;
+            const withMonitorHint = (error, params) => {
+                const match = [...(params.jobId === undefined ? [] : [params.jobId]), ...(params.jobIds ?? [])].find((id) => bridge.getMonitor(id) !== undefined);
+                return match === undefined ? error : new Error(`${error instanceof Error ? error.message : String(error)} (that ID belongs to a background monitor — use monitor_stop({ id: "${match}" }) instead)`);
+            };
             pi.registerTool({
                 name: "task_cancel",
                 label: "Task cancel",
@@ -1425,7 +1352,7 @@ export function createTaskInlineExtension(options) {
                     all: Type.Optional(Type.Boolean({ description: "Cancel all queued and running jobs" })),
                 }),
                 async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-                    current.ctx = ctx;
+                    gate.ctx = ctx;
                     try {
                         if (params.jobIds !== undefined || params.all === true) {
                             const cancelledList = await runtime.cancelMany(params.jobIds, params.all);
@@ -1457,10 +1384,13 @@ export function createTaskInlineExtension(options) {
                         return jobResult(cancelled);
                     }
                     catch (error) {
-                        return errorResult(error);
+                        return errorResult(withMonitorHint(error, params));
                     }
                 },
             });
+        },
+        bindTodoTool(pi, env, todos) {
+            const { gate } = env.core;
             pi.registerTool({
                 name: "todo",
                 label: "Todo",
@@ -1478,7 +1408,7 @@ export function createTaskInlineExtension(options) {
                     text: Type.Optional(Type.String()),
                 }),
                 async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-                    current.ctx = ctx;
+                    gate.ctx = ctx;
                     try {
                         const items = todos.apply(params.action, params.id, params.text);
                         return {
@@ -1492,6 +1422,6 @@ export function createTaskInlineExtension(options) {
                 },
             });
         },
-    };
-}
+    },
+};
 //# sourceMappingURL=task.js.map
