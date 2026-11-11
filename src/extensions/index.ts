@@ -12,6 +12,7 @@ import type { ResolvedInlineExtension } from "../manifest.js";
 import { resolveEffectiveHooks } from "../hooks-config.js";
 import { createHooksInlineExtension, hooksForChild } from "./hooks.js";
 import { createMonitorInlineExtension } from "./monitor.js";
+import { createTaskMonitorBridge } from "./task-notify.js";
 import { createTaskInlineExtension } from "./task.js";
 import { createEpiRuntimeExtensions } from "./runtime.js";
 import type { EpiRuntimeIdentity } from "../runtime-identity.js";
@@ -61,19 +62,32 @@ function subagentOptions(
   return isFilterArray(value) ? { mcpServerFilter: value } : value;
 }
 
+function buildTaskPair(assembly: ResolvedAssembly, epiHome: string): InlineExtension[] {
+  const bridge = createTaskMonitorBridge();
+  const projectTrusted = assembly.projectManifest?.loaded === true;
+  const projectAgentsDir = projectTrusted ? join(assembly.projectManifest!.root, ".epi", "agents") : undefined;
+  return [
+    createTaskInlineExtension({ epiHome, agentDir: assembly.agentDir, projectAgentsDir, projectTrusted, bridge }),
+    createMonitorInlineExtension({ epiHome, agentDir: assembly.agentDir, bridge }),
+  ];
+}
+
 export function buildInlineExtensions(
   assembly: ResolvedAssembly,
   epiHome: string,
   runtimeIdentity: EpiRuntimeIdentity,
-  resolveAssembly: () => ResolvedAssembly = () => assembly,
-  updateCheck?: UpdateCheckOptions,
-  verbose = false,
   /** A subagent's own process (src/worker.ts): `{ mcpServerFilter: ["name"] }` narrows the MCP
    * servers it connects to (docs/subagents-design.md §3), `{ child: true }` drops the hook handlers
    * a child may not run (docs/subagents-design.md §9.4). A bare array is the pre-`child` shorthand
    * for `{ mcpServerFilter: array }`. Undefined in a normal run. */
-  subagent?: readonly string[] | SubagentBuildOptions,
+  ...optional: [
+    resolveAssembly?: () => ResolvedAssembly,
+    updateCheck?: UpdateCheckOptions,
+    verbose?: boolean,
+    subagent?: readonly string[] | SubagentBuildOptions,
+  ]
 ): InlineExtension[] {
+  const [resolveAssembly = () => assembly, updateCheck, verbose = false, subagent] = optional;
   const { mcpServerFilter, child = false } = subagentOptions(subagent);
   const epiRuntime = createEpiRuntimeExtensions(runtimeIdentity, assembly, resolveAssembly, updateCheck, verbose);
   const extensions: InlineExtension[] = [epiRuntime.runtime];
@@ -81,21 +95,7 @@ export function buildInlineExtensions(
     withDisableHint(extension, assembly, () => {
       switch (extension.name) {
         case "epi:task":
-          extensions.push(
-            createTaskInlineExtension({
-              epiHome,
-              agentDir: assembly.agentDir,
-              projectAgentsDir:
-                assembly.projectManifest?.loaded === true
-                  ? join(assembly.projectManifest.root, ".epi", "agents")
-                  : undefined,
-              projectTrusted: assembly.projectManifest?.loaded === true,
-            }),
-            createMonitorInlineExtension({
-              epiHome,
-              agentDir: assembly.agentDir,
-            }),
-          );
+          extensions.push(...buildTaskPair(assembly, epiHome));
           break;
         case "epi:mcp": {
           // Eager, synchronous validation (mirrors epi:hooks below): a bad mcp.json must fail

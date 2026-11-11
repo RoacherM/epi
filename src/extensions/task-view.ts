@@ -6,8 +6,11 @@ import { readFileSync } from "node:fs";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 import type { InspectTarget } from "../tui/buffer/inspector.js";
+import { printable } from "../tui/buffer/search.js";
+import { piTui } from "../tui/pi-tui.js";
 import { singleLine } from "../task-result.js";
 import type { TaskJobSnapshot } from "../task-runtime.js";
+import type { MonitorBridgeSummary } from "./task-notify.js";
 
 /** Characters of one tool result the view keeps; the whole result is in the session file. */
 const RESULT_PREVIEW_CHARS = 600;
@@ -125,4 +128,24 @@ export function jobRow(theme: Theme, job: TaskJobSnapshot): string {
     : theme.fg("muted", "·");
   const where = job.status === "running" ? `turn ${job.turns ?? 0}${job.currentActivity === undefined ? "" : ` · ${job.currentActivity}`}` : `${job.turns ?? 0} turns`;
   return `${glyph} ${theme.fg("muted", job.id.slice(0, 8))} ${job.status} ${theme.fg("accent", job.agent ?? "task")} · ${where} · ${singleLine(job.task ?? "", 60)}`;
+}
+
+const sanitizeMonitorLine = (s: string): string => printable(piTui.stripTerminalSequences(s)).replace(/\t/g, "  ");
+function readTailLines(filePath: string, limit: number): string[] {
+  try { const clean = piTui.stripTerminalSequences(readFileSync(filePath, "utf8")).replace(/\r\n/g, "\n").replace(/\r/g, "\n").trimEnd(); return clean === "" ? [] : clean.split("\n").slice(-limit).map((l) => printable(l).replace(/\t/g, "  ")); }
+  catch { return []; }
+}
+/** One row per monitor in `/tasks`: `◐ a1b2c3d4 running monitor · 4 events · dev server`. */
+export function monitorRow(theme: Theme, mon: MonitorBridgeSummary): string {
+  const glyph = mon.status === "running" ? theme.fg("accent", "◐") : mon.status === "exited" ? theme.fg("success", "✓") : mon.status === "stopped" ? theme.fg("warning", "·") : theme.fg("error", "✗");
+  const sup = mon.suppressedCount > 0 ? ` (${mon.suppressedCount} suppressed)` : "";
+  return `${glyph} ${theme.fg("muted", mon.id)} ${mon.status} ${theme.fg("accent", "monitor")} · ${mon.eventCount} events${sup} · ${singleLine(sanitizeMonitorLine(mon.description), 60)}`;
+}
+/** Live inspector target for a monitor in `/tasks <id>`. */
+export function monitorViewTarget(theme: Theme, mon: MonitorBridgeSummary): InspectTarget {
+  const facts = [mon.kind, `${mon.eventCount} events`, ...(mon.suppressedCount > 0 ? [`${mon.suppressedCount} suppressed`] : []), ...(mon.exitCode != null ? [`exit ${mon.exitCode}`] : [])];
+  const out = readTailLines(mon.outputPath, 80), err = readTailLines(mon.stderrPath, 20);
+  const desc = singleLine(sanitizeMonitorLine(mon.description), ARGS_PREVIEW_CHARS), tgt = singleLine(sanitizeMonitorLine(mon.target), ARGS_PREVIEW_CHARS);
+  const lines = [`${theme.fg("accent", "monitor")} ${theme.bold(mon.status)} ${theme.fg("muted", facts.join(" · "))}`, theme.fg("muted", `${desc} — ${tgt}`), theme.fg("dim", `stdout: ${sanitizeMonitorLine(mon.outputPath)}`), "", ...(out.length === 0 ? [theme.fg("muted", "(no stdout lines yet)")] : out), ...(err.length === 0 ? [] : ["", theme.fg("warning", "stderr:"), ...err.map((l) => theme.fg("dim", l))])];
+  return { title: `monitor ${mon.id}`, subtitle: mon.status, lines, text: lines.map(sanitizeMonitorLine).join("\n"), wrap: true };
 }
