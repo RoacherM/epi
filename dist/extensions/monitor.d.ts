@@ -1,5 +1,6 @@
 /**
- * Built-in `Monitor`, `monitor_stop`, and `monitor_list` tools for `epi:task`.
+ * Built-in `monitor` (plus hidden legacy `Monitor` alias), `monitor_stop`, and
+ * `monitor_list` tools for `epi:task`.
  *
  * Ports Claude Code's Monitor tool (`pi-cc-monitor`) into Epi's built-in task
  * extension, storing monitor logs under `<epiHome>/runtime/monitors` and using
@@ -8,6 +9,7 @@
 import type { ChildProcess } from "node:child_process";
 import { type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { LineBatcher, RateLimiter } from "../monitor-stream.js";
+import { type TaskMonitorBridge } from "./task-notify.js";
 export declare const EVENT_MESSAGE_TYPE = "Monitor";
 export declare const LOOP_STOPPED_CHANNEL = "loop:stopped";
 export declare const STOPPED_NOTICE = "[Monitor stopped]";
@@ -22,6 +24,7 @@ export interface MonitorRecord {
     timeoutMs: number;
     persistent: boolean;
     createdAt: number;
+    originSessionId: string | undefined;
     eventCount: number;
     suppressedCount: number;
     status: MonitorStatus;
@@ -34,6 +37,8 @@ export interface MonitorRecord {
     socket: WebSocket | undefined;
     closeLog: (() => void) | undefined;
     timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    suppressionTimer: ReturnType<typeof setTimeout> | undefined;
+    lastSuppressedLine: string | undefined;
     batcher: LineBatcher | undefined;
     limiter: RateLimiter;
 }
@@ -59,6 +64,7 @@ export type MonitorSnapshot = {
 export interface MonitorExtensionOptions {
     epiHome: string;
     agentDir: string;
+    bridge?: TaskMonitorBridge;
 }
 export declare function createMonitorInlineExtension(options: MonitorExtensionOptions): InlineExtension;
 //# sourceMappingURL=monitor.d.ts.map

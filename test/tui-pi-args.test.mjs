@@ -62,6 +62,7 @@ test("--exclude-tools bash,edit,write leaves only the tools not named", (t) => {
     "task_wait",
     "task_cancel",
     "todo",
+    "monitor",
     "Monitor",
     "monitor_stop",
     "monitor_list",

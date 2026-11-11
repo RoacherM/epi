@@ -134,6 +134,27 @@ export class RateLimiter {
         const suppressedForMs = now - this.suppressionStart;
         return { deliver: false, flood: suppressedForMs > (this.options.killAfterMs ?? SUSTAINED_SUPPRESSION_KILL_MS), suppressedForMs };
     }
+    flushPendingIfReady() {
+        if (this.pending === 0)
+            return 0;
+        const now = (this.options.now ?? Date.now)();
+        this.refill(now);
+        if (this.tokens <= 0)
+            return 0;
+        this.tokens -= 1;
+        const suppressed = this.pending;
+        this.pending = 0;
+        if (this.lastSuppressedAt !== undefined && now - this.lastSuppressedAt > (this.options.quietGapMs ?? QUIET_GAP_MS)) {
+            this.suppressionStart = undefined;
+        }
+        return suppressed;
+    }
+    nextRefillDelayMs() {
+        const refillMs = this.options.refillMs ?? TOKEN_REFILL_MS;
+        const now = (this.options.now ?? Date.now)();
+        const elapsed = Math.max(0, now - this.refilledAt);
+        return Math.max(10, refillMs - (elapsed % refillMs));
+    }
     refill(now) {
         const refillMs = this.options.refillMs ?? TOKEN_REFILL_MS;
         const earned = Math.floor((now - this.refilledAt) / refillMs);
