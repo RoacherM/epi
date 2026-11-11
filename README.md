@@ -36,6 +36,14 @@ Epi 是基于 Pi SDK 的可定制终端编程助手。自有 grok 风格 TUI，�
 
 ## 最近更新
 
+**0.2.6：四层 `bash` 与子代理防挂死守卫、统一后台通知账本与 CLI/Magpie 加固**
+
+[→ 特性展示](docs/showcase/0.2.6/README.md)
+
+- **四层 `bash` 与子代理执行守卫（`#13`）**：缺省 `timeout` 自动注入 `120s`，`> 600s` 在 `0ms` 即时拦截并对毫秒误传（`>= 1000`）给出秒单位换算提示，超时报错附带 `.git/index.lock` 检查提示；引号/注释/heredoc 感知的 0ms Shell 预检拦截无界流式跟随（`tail -f`、`docker/kubectl logs -f` 等，放行 `<= 60s` 短探针）、无头交互式全屏程序（`vim`/`htop`/`top` 等）与脱管后台守护（`nohup`/`setsid`/`tmux new -d` 及无 `wait`/`kill`/`trap` 的顶层 `&`）；`TaskRuntime` 子代理通过 `BASH_ENV` 进程组账本与 `EPI_WORKER_COOKIE` 在收尾时收割残存孤儿进程组（兼容 macOS `sandbox-exec` 沙盒），默认注入非交互 Git/Editor 环境；主会话退出时立即触发 `context.abort()`。
+- **统一后台通知门禁与批量 `task` / `Monitor` 加固**：`epi:task` 与 `epi:monitor` 共用 `NotificationGate` 与 `NotificationLedger`，跨 `/compact`、`Esc` 与 `/tree` 可靠投递且不串会话；批量 `task({ tasks })` 部分失败自动原子回滚并透传 `context: "fork"`；`/tasks` 净化监控输出控制序列，`Monitor` 渐进切分无换行长流并保证 WebSocket 关闭幂等。
+- **CLI、Magpie 与剪贴板图片修复**：`epi mcp` 未知子命令明确报错退出；Magpie 清理跨渠道残留签名且不留空回合；macOS 剪贴板图片落盘隔离临时文件名消除并发粘贴竞态。
+
 **0.2.5：异步子代理即时消费与 Worktree 隔离、内置 Monitor 流式监控、微信图片粘贴修复与 Magpie Gemini 轨迹规范化**
 
 [→ 特性展示](docs/showcase/0.2.5/README.md)

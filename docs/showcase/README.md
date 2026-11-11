@@ -4,6 +4,7 @@
 
 | 版本 | 内容 |
 |---|---|
+| [0.2.6](0.2.6/README.md) | 四层 `bash` 与子代理执行守卫（默认 120s 超时与 600s 秒单位校验、0ms 流式/TUI/脱管守护预检、子代理 `BASH_ENV` PGID 账本与 `EPI_WORKER_COOKIE` 孤儿进程组收割、非交互 Git/Editor 环境与退出即时 `abort()`）；统一 `task`/`Monitor` 通知门禁与账本、批量 `task` 原子回滚；`epi mcp` 子命令校验、Magpie 跨渠道签名与剪贴板图片防竞态。无界面变化 |
 | [0.2.5](0.2.5/README.md) | 异步子代理即时消费、纠偏策略（`steer`/`enqueue`/`interrupt`）、`report_progress` 与 `worktree` 隔离；内置 `Monitor`/`monitor_stop`/`monitor_list` 流式后台监控；微信粘贴图片 `EPERM` 剪贴板位图回退；Magpie Gemini 轨迹规范化 |
 | [0.2.4](0.2.4/README.md) | Magpie 内置 provider：Antigravity / `auto/*` 跨渠道签名与 `__ts*__` 清理及提示词脱敏、Gemini `skip_thought_signature_validator` 兜底、忽略旧 `models.json` 静态覆盖。无界面变化 |
 | [0.2.3](0.2.3/README.md) | 前台子代理等待有 5 分钟预算：到期不杀作业，转后台并送回执，答案落定自己开一轮；`task_wait` 同一预算。无界面变化 |
