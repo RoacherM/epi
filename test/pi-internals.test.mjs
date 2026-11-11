@@ -13,7 +13,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
-import { createEventBus, getSelectListTheme } from "@earendil-works/pi-coding-agent";
+import { createEventBus, getSelectListTheme, ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import { contextFileCandidateNames, trustRequiringProjectConfigResources } from "./fixtures/pi-ambient-sources.mjs";
 
@@ -48,6 +48,72 @@ const registry = [
       // The places Epi relies on it.
       assert.match(readFileSync(join(root, "src", "hook-events.ts"), "utf8"), /events\.emit\(EPI_TASK_HOOK_CHANNEL, request\);\s*return request\.run/);
       assert.match(readFileSync(join(root, "src", "extensions", "preview.ts"), "utf8"), /pi\.events\.on\(PREVIEW_PLAYER_CHANNEL, \(request\) => \{/);
+    },
+  },
+  {
+    id: "native-provider-model-filter",
+    async check() {
+      const dir = mkdtempSync(join(tmpdir(), "epi-pi-internals-mr-"));
+      try {
+        const modelsPath = join(dir, "models.json");
+        writeFileSync(
+          modelsPath,
+          JSON.stringify({
+            providers: {
+              "epi-filter-probe": {
+                baseUrl: "http://127.0.0.1:9/legacy",
+                api: "openai-completions",
+                apiKey: "legacy",
+                models: [],
+              },
+            },
+          }),
+        );
+        const runtime = await ModelRuntime.create({
+          authPath: join(dir, "auth.json"),
+          modelsPath,
+          allowModelNetwork: false,
+        });
+        assertFunction(runtime.getRegisteredProviderIds, "ModelRuntime.getRegisteredProviderIds");
+        assertFunction(runtime.getRegisteredNativeProvider, "ModelRuntime.getRegisteredNativeProvider");
+        assertFunction(runtime.getProvider, "ModelRuntime.getProvider");
+        assertFunction(runtime.refresh, "ModelRuntime.refresh");
+
+        let filtered = 0;
+        const baseModel = {
+          id: "m1",
+          name: "Model 1",
+          api: "openai-completions",
+          provider: "epi-filter-probe",
+          baseUrl: "http://127.0.0.1:9/v1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 1024,
+        };
+        runtime.registerNativeProvider({
+          id: "epi-filter-probe",
+          name: "Filter Probe",
+          auth: {},
+          getModels: () => [baseModel],
+          filterModels: (models) => {
+            filtered += 1;
+            return models.map((m) => ({ ...m, name: "Filtered Model 1" }));
+          },
+          stream: () => { throw new Error("unused"); },
+          streamSimple: () => { throw new Error("unused"); },
+        });
+        const native = runtime.getRegisteredNativeProvider("epi-filter-probe");
+        const composed = runtime.getProvider("epi-filter-probe");
+        assert.ok(native && composed && composed !== native, "ModelRuntime no longer wraps registered native providers in a composed provider");
+        const { settleRegisteredProviders } = await import(pathToFileURL(join(root, "dist", "provider-startup.js")).href);
+        await settleRegisteredProviders(runtime);
+        assert.equal(runtime.getModel("epi-filter-probe", "m1")?.name, "Filtered Model 1");
+        assert.ok(filtered > 0, "native.filterModels did not run on getModel() after settleRegisteredProviders");
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      }
     },
   },
   {

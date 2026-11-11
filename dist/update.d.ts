@@ -48,7 +48,7 @@ export declare function renderUpdateHelp(): string;
  * `<source>` with no flag is the same as `--extensions <source>`: it does not scope the clear to
  * that one extension (there is no per-source cache to target -- see clearExtensionPackageCache's
  * doc comment), it just gets echoed in the printed message. */
-export declare function parseUpdateArgs(argv: readonly string[]): UpdateCommandArgs;
+export declare function parseUpdateArgs(rawArgv: readonly string[]): UpdateCommandArgs;
 /**
  * Epi never persists npm:/git: extension sources into Pi's own settings.json (that would create a
  * second, project-`.pi/`-writing source of truth alongside the Manifest -- see the report). Instead

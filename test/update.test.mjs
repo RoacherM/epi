@@ -145,8 +145,18 @@ test("update is an Epi subcommand only in first position", (t) => {
   }
   const aliasedList = run(["--approve", "list"]);
   assert.equal(aliasedList.status, 0, aliasedList.stderr);
+  const noProjectList = run(["--no-project", "list"]);
+  assert.equal(noProjectList.status, 0, noProjectList.stderr);
+  assert.match(noProjectList.stdout, /Project: \(none found\)/);
   const aliasedAuth = run(["--approve", "auth", "--help"]);
   assert.equal(aliasedAuth.status, 0, aliasedAuth.stderr);
+  const aliasedMcpList = run(["--approve", "mcp", "list"]);
+  assert.equal(aliasedMcpList.status, 0, aliasedMcpList.stderr);
+  const noProjectMcpList = run(["--no-project", "mcp", "list"]);
+  assert.equal(noProjectMcpList.status, 0, noProjectMcpList.stderr);
+  const conflictingPrefix = run(["--approve", "--no-approve", "update"]);
+  assert.equal(conflictingPrefix.status, 2, conflictingPrefix.stderr);
+  assert.match(conflictingPrefix.stderr, /--approve and --no-approve cannot be used together/);
 
   const prompt = run(["--no-project", "-p", "update"]);
   assert.equal(prompt.status, 0, prompt.stderr);
@@ -159,6 +169,7 @@ test("epi update's own argument parser accepts --self/--extensions/--models/--al
   assert.deepEqual(parseUpdateArgs(["--approve"]), { target: "self" });
   assert.deepEqual(parseUpdateArgs(["-a", "--models"]), { target: "models" });
   assert.deepEqual(parseUpdateArgs(["--no-approve", "-na", "--self"]), { target: "self" });
+  assert.throws(() => parseUpdateArgs(["--approve", "--no-approve"]), /cannot be used together/);
   assert.deepEqual(parseUpdateArgs(["--self"]), { target: "self" });
   assert.deepEqual(parseUpdateArgs(["--models"]), { target: "models" });
   assert.deepEqual(parseUpdateArgs(["--all"]), { target: "all" });

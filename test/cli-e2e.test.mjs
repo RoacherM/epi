@@ -575,6 +575,29 @@ test("epi update --help (and -h) prints usage instead of failing", (t) => {
   }
 });
 
+test("global prefix flags (--approve, --no-approve, --no-project, --offline) before Epi subcommands dispatch cleanly", (t) => {
+  const f = fixture(t);
+  const authApproved = run(f, ["--approve", "auth", "check", "--provider", "openai", "--json"]);
+  assert.equal(authApproved.status, 1, authApproved.stderr);
+  assert.deepEqual(JSON.parse(authApproved.stdout), {
+    status: "not_ready",
+    provider: "openai",
+    reason: "credentials_not_configured",
+  });
+
+  const installOffline = runNoOffline(f, ["--offline", "install", "npm:Not A Valid Name!!!"]);
+  assert.equal(installOffline.status, 0, installOffline.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(globalManifestPath(f), "utf8")).extensions, ["npm:Not A Valid Name!!!"]);
+
+  const conflictingInstall = run(f, ["--approve", "--no-approve", "install", "npm:a"]);
+  assert.notEqual(conflictingInstall.status, 0);
+  assert.match(conflictingInstall.stderr, /--approve and --no-approve cannot be used together/);
+
+  const conflictingAuth = run(f, ["auth", "--approve", "--no-approve", "check", "--provider", "openai"]);
+  assert.notEqual(conflictingAuth.status, 0);
+  assert.match(conflictingAuth.stderr, /--approve and --no-approve cannot be used together/);
+});
+
 test("nothing in the subcommand paths reads or writes ~/.pi/agent", (t) => {
   const f = fixture(t);
   mkdirSync(join(f.home, ".pi", "agent"), { recursive: true });

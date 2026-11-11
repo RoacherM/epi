@@ -814,9 +814,10 @@ test("fixGatewayPayload strips cross-channel signatures, __ts*__ tool IDs and cl
     api: "anthropic-messages",
   });
 
+  assert.equal(anthropicOut.system.length, 1);
   assert.equal(
     anthropicOut.system[0].text,
-    "You are an expert assistant o\u200bperating inside pi, a coding agent harness. Using C\u200blaude Agent SDK.",
+    "You are an expert assistant o\u200bperating inside pi, a coding agent harness. Using C\u200blaude Agent SDK.\n\nValues written like {{NAME_ab23cd45}} are placeholders for sensitive data handled by the gateway.",
   );
   assert.equal(
     anthropicOut.messages[0].content,
@@ -899,6 +900,31 @@ test("fixGatewayPayload strips cross-channel signatures, __ts*__ tool IDs and cl
     ),
     undefined,
   );
+  // Prompt cache invariant across Turn 1 -> Turn 2: when tools are present on Turn 1 (before any
+  // assistant tool_use exists in history), system gets the placeholder guard merged into the last
+  // text block (inside cache_control) on Turn 1, so Turn 2's system is byte-for-byte identical.
+  const cachedSystem = [{ type: "text", text: "You are Epi.", cache_control: { type: "ephemeral" } }];
+  const toolsList = [{ name: "bash", description: "run shell", input_schema: { type: "object" } }];
+  const turn1 = fixGatewayPayload({
+    model: "factory/claude-opus-5-5",
+    system: cachedSystem,
+    tools: toolsList,
+    messages: [{ role: "user", content: "check files" }],
+  }, { id: "factory/claude-opus-5-5", api: "anthropic-messages" });
+  assert.equal(turn1.system.length, 1, "must merge into existing last text block rather than adding an uncached block");
+  assert.deepEqual(turn1.system[0].cache_control, { type: "ephemeral" });
+  assert.match(turn1.system[0].text, /\{\{NAME_ab23cd45\}\}/);
+  const turn2 = fixGatewayPayload({
+    model: "factory/claude-opus-5-5",
+    system: cachedSystem,
+    tools: toolsList,
+    messages: [
+      { role: "user", content: "check files" },
+      { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "bash", input: { command: "ls" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "README.md" }] },
+    ],
+  }, { id: "factory/claude-opus-5-5", api: "anthropic-messages" });
+  assert.deepEqual(turn2.system, turn1.system, "Turn 1 and Turn 2 system prompts must be identical to preserve Claude prompt cache");
 
   // 2. OpenAI Chat Completions (antigravity/* and auto/*)
   const openaiOut = fixGatewayPayload({

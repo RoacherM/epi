@@ -213,28 +213,27 @@ function isOffline(): boolean {
  * character -- `git:github.com/user/repo@v1` would have checked the unreachable
  * ".../repo@v1" instead of ".../repo"). Only the repo part is used for the reachability check below;
  * the ref itself isn't checked (docs/cli-design.md §3 only promises the repo is reachable). */
+function splitPathAtRef(pathWithMaybeRef: string): { repoPath: string; ref: string } | undefined {
+  const refSeparator = pathWithMaybeRef.indexOf("@");
+  if (refSeparator < 0) return undefined;
+  const repoPath = pathWithMaybeRef.slice(0, refSeparator);
+  const ref = pathWithMaybeRef.slice(refSeparator + 1);
+  return repoPath && ref ? { repoPath, ref } : undefined;
+}
+
 function splitGitRef(url: string): { repo: string; ref?: string } {
   const scpLikeMatch = /^git@([^:]+):(.+)$/.exec(url);
   if (scpLikeMatch) {
-    const pathWithMaybeRef = scpLikeMatch[2] ?? "";
-    const refSeparator = pathWithMaybeRef.indexOf("@");
-    if (refSeparator < 0) return { repo: url };
-    const repoPath = pathWithMaybeRef.slice(0, refSeparator);
-    const ref = pathWithMaybeRef.slice(refSeparator + 1);
-    if (!repoPath || !ref) return { repo: url };
-    return { repo: `git@${scpLikeMatch[1] ?? ""}:${repoPath}`, ref };
+    const split = splitPathAtRef(scpLikeMatch[2] ?? "");
+    return split ? { repo: `git@${scpLikeMatch[1] ?? ""}:${split.repoPath}`, ref: split.ref } : { repo: url };
   }
   if (url.includes("://")) {
     try {
       const parsed = new URL(url);
-      const pathWithMaybeRef = parsed.pathname.replace(/^\/+/, "");
-      const refSeparator = pathWithMaybeRef.indexOf("@");
-      if (refSeparator < 0) return { repo: url };
-      const repoPath = pathWithMaybeRef.slice(0, refSeparator);
-      const ref = pathWithMaybeRef.slice(refSeparator + 1);
-      if (!repoPath || !ref) return { repo: url };
-      parsed.pathname = `/${repoPath}`;
-      return { repo: parsed.toString().replace(/\/$/, ""), ref };
+      const split = splitPathAtRef(parsed.pathname.replace(/^\/+/, ""));
+      if (!split) return { repo: url };
+      parsed.pathname = `/${split.repoPath}`;
+      return { repo: parsed.toString().replace(/\/$/, ""), ref: split.ref };
     } catch {
       return { repo: url };
     }
@@ -242,13 +241,8 @@ function splitGitRef(url: string): { repo: string; ref?: string } {
   const slashIndex = url.indexOf("/");
   if (slashIndex < 0) return { repo: url };
   const host = url.slice(0, slashIndex);
-  const pathWithMaybeRef = url.slice(slashIndex + 1);
-  const refSeparator = pathWithMaybeRef.indexOf("@");
-  if (refSeparator < 0) return { repo: url };
-  const repoPath = pathWithMaybeRef.slice(0, refSeparator);
-  const ref = pathWithMaybeRef.slice(refSeparator + 1);
-  if (!repoPath || !ref) return { repo: url };
-  return { repo: `${host}/${repoPath}`, ref };
+  const split = splitPathAtRef(url.slice(slashIndex + 1));
+  return split ? { repo: `${host}/${split.repoPath}`, ref: split.ref } : { repo: url };
 }
 
 const GIT_URL_SCHEMES = new Set(["https:", "http:", "ssh:", "git:"]);
@@ -436,17 +430,22 @@ Options:
  * Everything else is returned in order for the command to handle. */
 function parseScopeFlags(
   argv: readonly string[],
-): { local: boolean; approveOverride: boolean | undefined; rest: string[] } {
+): { local: boolean; noProject: boolean; approveOverride: boolean | undefined; rest: string[] } {
   let local = false;
+  let noProject = false;
   let approveOverride: boolean | undefined;
   const rest: string[] = [];
   for (const argument of argv) {
     if (argument === "-l" || argument === "--local") local = true;
+    else if (argument === "--no-project") noProject = true;
     else if (argument === "-a" || argument === "--approve") approveOverride = true;
     else if (argument === "-na" || argument === "--no-approve") approveOverride = false;
     else rest.push(argument);
   }
-  return { local, approveOverride, rest };
+  if (local && noProject) {
+    throw new EpiArgumentError("--local cannot be used with --no-project");
+  }
+  return { local, noProject, approveOverride, rest };
 }
 
 function parseSourceArgs(
@@ -552,7 +551,7 @@ export function runListCommand(argv: readonly string[]): number {
     process.stdout.write(renderListHelp());
     return 0;
   }
-  const { local, approveOverride, rest } = parseScopeFlags(argv);
+  const { local, noProject, approveOverride, rest } = parseScopeFlags(argv);
   if (local || rest.length > 0) {
     throw new EpiArgumentError("epi list takes no arguments");
   }
@@ -562,7 +561,7 @@ export function runListCommand(argv: readonly string[]): number {
   const globalManifest = resolveManifest(global.path, "global");
   const manifests: ResolvedManifest[] = [globalManifest];
   describeManifest("Global", globalManifest, lines);
-  const projectCandidate = findNearestProjectManifest(process.cwd(), global.path);
+  const projectCandidate = noProject ? undefined : findNearestProjectManifest(process.cwd(), global.path);
   let trustedProjectRoot: string | undefined;
   if (projectCandidate === undefined) {
     lines.push("Project: (none found)");

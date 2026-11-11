@@ -340,6 +340,9 @@ function hasGatewayPlaceholder(value) {
 function hasAssistantToolUse(messages) {
     return messages.some((message) => message.role === "assistant" && blocksOf(message).some((block) => block.type === "tool_use"));
 }
+function hasToolsEnabled(payload) {
+    return Array.isArray(payload.tools) && payload.tools.length > 0;
+}
 /** Factory /v1/messages rejects assistant turns that have a text block after tool_use with 400
  * ("This model does not support assistant message prefill. The conversation must end with a user message."). */
 function orderAssistantBlocks(blocks) {
@@ -355,12 +358,18 @@ function orderAssistantBlocks(blocks) {
 /** Magpie's withNoteAnthropic attaches its placeholder note to system when system or tools already
  * satisfies redact.HasPlaceholder ({{NAME_<base32>}}), and otherwise appends a text block to the
  * earliest redacted message—which puts text after tool_use when the first redacted token is in a
- * tool call's arguments. */
+ * tool call's arguments. Merging into the final text block from Turn 1 whenever tools are enabled
+ * keeps system byte-identical across Turn 1..N and inside the existing cache_control breakpoint. */
 function withSystemPlaceholderGuard(system) {
     if (typeof system === "string")
         return `${system}\n\n${MAGPIE_PLACEHOLDER_NOTE}`;
-    if (Array.isArray(system))
+    if (Array.isArray(system)) {
+        const last = system.at(-1);
+        if (last !== undefined && last.type === "text" && typeof last.text === "string") {
+            return [...system.slice(0, -1), { ...last, text: `${last.text}\n\n${MAGPIE_PLACEHOLDER_NOTE}` }];
+        }
         return [...system, { type: "text", text: MAGPIE_PLACEHOLDER_NOTE }];
+    }
     return [{ type: "text", text: MAGPIE_PLACEHOLDER_NOTE }];
 }
 function fixAnthropicMessage(message, antigravity) {
@@ -384,10 +393,8 @@ function resolveAnthropicSystem(payload, antigravity, fixedMessages) {
     const baseSystem = antigravity && payload.system !== undefined
         ? cloakContent(payload.system, SYSTEM_CLOAK_RE)
         : payload.system;
-    if (fixedMessages &&
-        hasAssistantToolUse(fixedMessages) &&
-        !hasGatewayPlaceholder(baseSystem) &&
-        !hasGatewayPlaceholder(payload.tools)) {
+    const needsGuard = hasToolsEnabled(payload) || (fixedMessages !== undefined && hasAssistantToolUse(fixedMessages));
+    if (needsGuard && !hasGatewayPlaceholder(baseSystem) && !hasGatewayPlaceholder(payload.tools)) {
         return { system: withSystemPlaceholderGuard(baseSystem), changed: true };
     }
     if (antigravity && baseSystem !== undefined) {
