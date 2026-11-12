@@ -1,118 +1,64 @@
 # Epi 开发流程
 
-状态：2026-09-30 起执行，2026-10-06 全 epi 化（WF1），2026-10-21 起用 Orca 验收，2026-10-22 按历史审查简化并硬拦门禁（WF2–WF4），2026-11-11 审查切换为 `agy` Carbon + Argon 双模型盲审、收紧本地 Git 门禁并将单次送审上限调优为 2000 行（[decisions.md](decisions.md) WF7、WF8）。代码规范与预检见 [code-quality.md](code-quality.md)，冒烟清单见 [e2e-acceptance.md](e2e-acceptance.md)，实现与契约见 [development.md](development.md)。
+代码规范与预检见 [code-quality.md](code-quality.md)，冒烟清单见 [e2e-acceptance.md](e2e-acceptance.md)，实现与契约见 [development.md](development.md)，拍板记录见 [decisions.md](decisions.md)。
 
-**三条原则**：**适度分包**（单次送审 `src/` ≤ 2000 行，无环境变量绕过，互不相关特性拆开审）、**作者不自审**（任何 `src/` 改动均须经 `agy` Carbon + Argon 双模型独立盲审通过并签发 `verified.sha`）、**失败可见**（不吞错、不静默兜底、门禁脚本硬拦）。
+**核心原则**：机器检查先行；同一段代码只按一个完整功能或重构在完成时盲审一次（中途开发包不单独审，也不设重复的阶段终审；原先逐包审加阶段终审让同一段代码被审两遍，对 2026 年 10 到 11 月评审日志的统计显示多轮复审占了 87% 的评审耗时，且近半数复审抓到的是上一轮修复引入的新问题）；失败可见（不吞错、不静默兜底）。
 
-## 1. 角色与模型
+## 1. 角色与分工
 
 | 角色 | 用什么 | 职责 |
 |---|---|---|
-| 主控 | epi / agy 主会话 | 计划、N3 审查验证、合并、Orca 实测、汇报 |
-| worker | epi + magpie `claude-opus-5-5`（`devin/`、`auto/`、`factory/`），thinking `high`；独立 git worktree（`dev/<id>`），每任务每轮新开会话 | 实现（N2），写测试、提交、交 `report.md` |
-| 阅读子代理 | 内置 `task` 工具 + 预设 `reader`（`~/.epi/agents/reader.md`，`factory/deepseek-v4.1-flash`，只读工具） | 大范围读代码/查资料，结论须带 `文件:行号`，主控核对原文后才用 |
-| 执行子代理 | 内置 `task` 工具 + 预设 `runner`（`~/.epi/agents/runner.md`，flash，可跑 `bash`、不改文件） | 跑全套测试、构建、基准，只回报结果与失败项 |
-| 审查子代理 | `agy` 非交互会话（`gemini-4-carbon-high` + `gemini-4-argon-high` 双模型并行独立盲审），由 `scripts/dev/run-review.sh` 启动、等待与 `verify` 校验（WF7） | 每个 `dev/<id>` 包合入前审查（N3/G5）及阶段终审（N6） |
-| 顾问 | `epi -p` 或 `agy -p` 独立只读会话（主控把背景材料写成文件交给它） | 仅在**同一个问题第二次出现 / 方案迟迟收不拢**时调用 |
-| 用户 | — | 需求歧义拍板；推送/PR/发布人工闸门（G2） |
+| 主控 | epi / agy 主会话 | 计划、预检、功能完成时启动一次全量评审、合并、Orca 实测、汇报 |
+| worker | epi + magpie `claude-opus-5-5`（thinking `high`），独立 `dev/<id>` worktree | 实现、写测试、提交、交 `report.md` |
+| 阅读子代理 | 内置 `task` 工具 + `reader`（`factory/deepseek-v4.1-flash`，只读） | 读不打算改的源码或长文档，结论带 `文件:行号` |
+| 执行子代理 | 内置 `task` 工具 + `runner`（flash，只跑 `bash` 不改文件） | 跑全套测试、构建、基准，只回报结果与失败项 |
+| 审查子代理 | `agy` 并行盲审（`gemini-4-carbon-high` + `gemini-4-argon-high`），由 `scripts/review.sh` 转调全局评审执行器驱动 | 功能或重构完成（或触及高风险路径）合入 `main` 前盲审一次冻结副本 |
 
-- **双模型并行盲审（WF7，取代 WF2/WF3 的单模型审查）**：`scripts/dev/run-review.sh start <id>` 同时启动两个互不可见的 `agy` 审查进程：`gemini-4-carbon-high`（写 `notes-carbon.md` / `review-carbon.md`）与 `gemini-4-argon-high`（写 `notes-argon.md` / `review-argon.md`）。注意 `agy` 的 `-p` 直接接收紧跟其后的字符串作为 prompt，固定顺序为 `agy --model <id> --dangerously-skip-permissions --disable-slash-commands --print-timeout 1200s -p "$prompt"`，禁止手写后台命令或固定长 `sleep`。
-- **本地 Git 钩子门禁（`.githooks/pre-commit`，`core.hooksPath=.githooks`）**：① 禁止在 `main` 分支直接提交 `src/**` 改动；② 在 `main` 合并含 `src/**` 改动的分支时，强制校验被合入提交已存在对应的 `.dev/reviews/*/verified.sha`；③ 提交 `src/**` 时强制校验工作树无半暂存 `src/` 且 `npm run build` 后 `dist/` 完全同步。
-- **子代理（WF5，2026-10-25）**：主控与 worker 都用内置 `task` 工具委派，不再装 `npm:pi-subagents`。硬规则：
-  - 要读**不打算改的**文件（Pi 的 `node_modules` 源码、长文档、别的模块）时，`task(agent="reader", task="…问题…，用 文件:行号 回答")`；只在要改的文件、或 <150 行的文件才自己读。
-  - 跑全套测试（`node --test test/*.test.mjs`）、`precheck` 之外的长命令，用 `task(agent="runner", task="在 <目录> 跑 <命令>，报失败")`。
-  - 互不依赖的问题**同一轮并发发出**多个 `task`；每个子代理给一块像样的工作量（几个文件），不要一个小文件一个。
-  - 子代理跑偏用 `task({jobId, task})` 纠偏；结束后追问用同一个 `jobId` 续跑；`task_status({})` 查全部。
-  - 子代理自己会压缩上下文；压不下时以 `partial` 结束并保留已做的工作。
-- **启动 worker**：`orca terminal create --worktree <path> --title <id>`，运行 `epi --provider magpie --model devin/claude-opus-5-5 --thinking high`，发送 `Read .dev/tasks/<id>/brief.md and do the task. Write your report to .dev/tasks/<id>/report.md.`。
+- **本地 Git 钩子（`.githooks/pre-commit` 与 `.githooks/pre-merge-commit`，`core.hooksPath=.githooks`）**：转调 `scripts/review.sh hook-pre-commit`（读取 `.review.json`）：① 不允许在 `main` 直接提交 `src/**`；② 在 `main` 执行 `git merge --no-ff`（无论有无冲突）时均运行 `check-gate`，只改文档或测试直接放行，触及高风险路径或属功能/重构分支凭 `verified.sha` 放行，带 `test/**` 改动且未碰高风险路径的修复分支凭 `fix.sha` 放行；③ 提交 `src/**` 时检查无半暂存且 `dist/` 与构建产物一致。
+- **子代理（WF5）**：用内置 `task` 工具并发派发互不依赖的阅读或长命令，不再装 `npm:pi-subagents`。子代理默认 `rules: false`、`skills: false`（`src/assembly.ts`）；派发执行代码修改的 `task` 子代理时传 `rules: true, skills: ["vibe-coding", "ub-mode"]`，让子代理直接继承仓内开发规范与预加载技能。
 
-## 2. 一个任务（N1–N7）
+## 2. 任务闭环（合并原 N3 逐包评审与 N6 阶段终审）
 
-设计先行（规格写进 `docs/` 并注明来源；每个设计配一个可交互 HTML 原型 `scripts/probes/<名字>-prototype.html`，用户试过并同意后才进入 N2，决策 WF6）；合并前强制审查；只提交本地分支，对外操作过 G2。
+1. **计划**：界面、交互、流程设计先写 `scripts/probes/<名字>-prototype.html`，等用户试用同意后再改 `src/`（决策 WF6）。派 worker 时写 `.dev/tasks/<id>/brief.md`。一个功能中途的提交或子开发包不单独送审。
+2. **实现与机器预检**：在 `dev/<id>` 分支完成代码与测试（修复前失败、修复后通过）。`scripts/dev/run-review.sh` 保留为指向 `scripts/review.sh` 的薄转发入口：
+   - 功能或重构：`scripts/review.sh precheck <id> main HEAD`。
+   - 带复现测试的 bug 修复：`scripts/review.sh precheck --fix <id> main HEAD`（脚本校验含 `test/**` 改动且未碰高风险路径后写 `fix.sha`；碰高风险路径或缺测试改动时拒绝 `--fix`）。
+3. **一次全量评审**：带 `fix.sha` 的非高风险修复、纯文档或测试改动直接进合并；功能、重构及高风险改动跑 `scripts/review.sh start <id> HEAD` → `scripts/review.sh wait <id>` → `scripts/review.sh verify <id> HEAD` 签发 `verified.sha`（可按需先写自定义 `.dev/reviews/<id>/pack.md`，未写时由统一脚本自动生成）。
+4. **合并与实测**：`git merge --no-ff dev/<id>` 合入 `main`；界面改动在 Orca 跑 [e2e-acceptance.md](e2e-acceptance.md) ★ 条目。
 
-| 节点 | 执行者 | 触发 | 动作 | 检查（通过才交下一节点） | 停止与移交 |
-|---|---|---|---|---|---|
-| N1 计划 | 主控 | 用户需求 / dogfood / 终审发现 | 读材料 → 写设计和可交互 HTML 原型 → 交用户试用 → 拆不重叠小任务 → 写 `.dev/tasks/<id>/brief.md` | 用户试过原型并明确同意（WF6）；brief 含七项（第 5 节），写明基准 SHA 和原型路径，`src/` 预计 ≤ 2000 行 | 需求有歧义或原型被否 → 改原型再交用户 |
-| N2 实现 | worker | 收到 `brief.md` 指令 | 实现、写测试、worktree 提交、写 `report.md` | `report.md` 末行 `STATUS: done` | 需拍板 → 写 `question.md` 停等；卡住 → `STATUS: blocked` 交主控 |
-| N3 审查验证 | 主控 | `STATUS: done` | 跑 `run-review.sh precheck <id> <base> <head>` → 过第 3 节清单 → 验修复前失败与 ≥2 个变异 | 闸门 G1 满足，`precheck.sha` 匹配被审 head | 有 P0–P2 → 写 `review.md` 退回 N2；同一问题第 2 次出现 → 问顾问；满 2 轮仍不过 → G3 |
-| N4 合并 | 主控 | G1 通过 | `git merge --no-ff` 确认无冲突 → `main` 上跑完整测试 | `main` 完整测试全过 | 合并时主控改了代码 → 过 G5 再合；测试挂 → 回 N3 |
-| N5 Orca 实测 | 主控 | N4 完成 | 在 Orca 真实终端、真实模型跑 [e2e-acceptance.md](e2e-acceptance.md) ★ 条目 | ★ 条目全过 | 发现问题 → 记 `docs/dogfood-issues.md` 分级处理 |
-| N6 阶段终审（大节点） | 审查子代理 | 阶段合入完成（单特性已过 N3/G5，N6 只审跨特性交互） | 分配独立 `<id>`，主控跑 `precheck`、写 `pack.md`，用 `run-review.sh start/wait` 跑审查，出 `review-notes.md` 与 `review.md` | 首行「可接受」（无 P0–P2），符合第 3 节预算 | `src/` >2000 行 → `precheck` 退 2 拒审；有 P0–P2 → 修完换新 `<id>` 跑增量复查；满 2 轮 → G3 |
-| N7 汇报 | 主控 | 任务或阶段完成 | 汇报做了什么、验证方式、文件位置、未做项，附漏网问题/退回轮数/周期三指标 | — | 推送 / PR / 发布 → 闸门 G2 |
+## 3. 本仓评审参数（遵循 `vibe-coding` 统一评审规则）
 
-```
-N1 计划 ─brief.md─▶ N2 实现 ─report.md─▶ N3 审查验证 ─G1─▶ N4 合并 ─▶ N5 Orca 实测 ─▶ N7 汇报 ─G2─▶ 推送/PR/发布
- ▲  ▲                │  ▲                   │                        │
- │  └──question.md───┘  └────review.md──────┘ (G3: ≤2 轮)            ▼ 阶段合入后
- └────────────────────── review.md ◀── N6 大节点终审 ◀──pack.md──────┘
-```
+评审流程由 `vibe-coding` Skill 的「统一评审规则」和全局执行器 `~/.agents/skills/vibe-coding/scripts/review.sh` 统一规定，本仓不另立流程，参数均配在 `.review.json`：
 
-## 3. 审查
+1. **预检命令（`precheck`）**：`scripts/dev/precheck.sh` 在冻结副本内依次执行 `npm run build`、`git diff --exit-code -- dist`、`tsc --noEmit --noUnusedLocals --noUnusedParameters`、`model-snapshot.mjs --diff`、改动 `src/**/*.ts` 的 ESLint + `sonarjs` 检查，以及禁网沙箱全套测试。
+2. **高风险路径（`highRisk`，触及任一路径时再小也审）**：
+   - **线协议 / IPC / MCP**：`src/noninteractive.ts`、`src/worker.ts`、`src/worker-reaper.ts`、`src/monitor-stream.ts`、`src/extensions/mcp.ts`、`src/commands/mcp-cli.ts`
+   - **凭证与环境隔离**：`src/commands/auth-cli.ts`、`src/providers/**`、`src/provider-startup.ts`、`src/provider-validation.ts`、`src/web/config.ts`、`src/isolate-pi-env.ts`、`src/pi-env.ts`
+   - **权限白名单、信任与门禁边界**：`src/bash-guard.ts`、`src/trust-prompt.ts`、`src/tui/project-guard.ts`、`src/manifest.ts`、`src/commands/manifest-cli.ts`、`src/skill-discovery.ts`、`src/hooks-config.ts`、`src/hooks-runtime.ts`、`src/extensions/hooks.ts`、`src/extensions/runtime.ts`、`.review.json`、`.githooks/**`、`scripts/review.sh`、`scripts/dev/{run-review.sh,precheck.sh,eslint.config.mjs}`
+   - **持久化、装配与自更新发版**：`src/task-runtime.ts`、`src/task-worktree.ts`、`src/paths.ts`、`src/project.ts`、`src/assembly.ts`、`src/host.ts`、`src/update.ts`、`scripts/release.mjs`、`install.sh`
+3. **分片、目录与修复确认**：非生成文件全量 diff 超过 2000 行时按 `.review.json` 的 `shards`（`tui`、`extensions`、`task`、`core`）自动切分并行双审；评审产物写 `.dev/reviews/<id>/`；非阻塞意见（P2/P3）记入 `docs/dogfood-issues.md`；阻塞修复跑过 `precheck <id>-r2 <fix-base> HEAD` 后，用 `scripts/review.sh confirm <id>-r2 <carbon|argon> <fix-base> HEAD` 由原阻塞模型单审修复 diff 与碰到的文件。
 
-所有复现均在 `.dev/reviews/<id>/` 隔离副本和禁网沙箱（`sandbox-exec -p '(version 1)(allow default)(deny network-outbound (remote ip))' …`，需本地服务加 `(allow network-outbound (remote ip "localhost:*"))`）里执行，**严禁 `git stash`**。
+## 4. 交接物与目录
 
-1. **2000 行硬拦与冻结 head**：`run-review.sh precheck` 开头检查 `src/**/*.ts` 新增+删除行数，> 2000 行直接打印 `need split (>2000 lines in src/)` 退出 **2**（不设任何环境变量绕过开关，不建副本，决策 WF8）。审查期间不得修改被审分支引用。
-2. **复用 `precheck`、`precheck.sha` 与 `verified.sha` 门禁**：`precheck` 成功后写入 `precheck.sha`（`git rev-parse <head>`）和 `=== precheck passed ===`。`run-review.sh start` 强制校验 `precheck.sha` 等于被审 head 且 `precheck.log` 含通过标记，否则退出 **1**。`run-review.sh verify <id>` 强制校验 `review-carbon.md` 与 `review-argon.md` 首行均为「可接受」且正文零开放 `P0/P1/P2` 条目，通过后才签发 `verified.sha`。审查方直接复用副本与日志，**禁止重跑全量测试、禁止重装 ESLint/knip**。
-3. **审查 6 项短清单**：① 对照 `brief.md` 无越界改动；② 新测试在 `before/` 下修复前失败 + 至少 2 个故意改坏（变异）检查；③ 硬规则零违约（第 6 节）；④ 状态在启动、切会话、`/new`、`/resume`、`/reload`、中止、退出时均正确；⑤ 认知复杂度 ≤15、≤80 行、嵌套 ≤4、参数 ≤5（看 `precheck.log`）、无死导出、测试隔离；⑥ 模型可见快照差异已说明。
-4. **P0–P2 与 P3 规则（WF4）**：
-   - **P0–P2**（阻塞合并）：必须标 `CONFIRMED` 并附可执行 `.mjs` 复现探针。
-   - **P3**（文案、小毛病、整洁项）：只写 `文件:行号` 与一行 `rg`（标 `PLAUSIBLE`），**不要求为 P3 写 `.mjs` 探针**；首轮只有 P3 则判「可接受」，不开第 2 轮。
-   - **P3 不能免检**：P3 修复只要改了 `src/**/*.ts`，合并前**必须跑 `precheck`**；与 P0–P2 同修时，其 `src/` diff **一并纳入增量复查**。
-5. **首轮与增量复查预算**：首轮墙钟 ≤ **20 分钟**、输出 ≤ **40k token**、轮次 ≤ **45**；第 2+ 轮增量复查（换新 id，如 `0.1.24-r2`）墙钟 ≤ **10 分钟**、输出 ≤ **20k token**、轮次 ≤ **25**，只做三步：① 新副本重跑上轮失败探针；② 新回归测试在 `before/` 失败；③ 只读 `git show <fix-commit>`（含同修 P3 的 `src/` diff），每条修复最多写 1 个 ≤3s 绕过探针。到预算立即收口写结论 +「未覆盖」。
-6. **工具纪律**：每条命令前分析 ≤ **10 行**；`grep`/`rg` 只定位，读源码必须并行调 `read`，**禁止用 `bash` 的 `cat/head/sed` 逐段读源码**。
+除合并提交外均在 `.dev/` 下（不入库）：任务放 `.dev/tasks/<id>/{brief,report,question}.md`，审查放 `.dev/reviews/<id>/{pack.md,diff.patch,shards/,precheck.log,precheck.sha,fix.sha,review-*.md,review.md,verified.sha}`。本地自开发按需复制 `(set -C; mkdir -p .epi && cat examples/development/epi.json > .epi/epi.json)`，只将 `["../AGENTS.md"]` 注入常驻规则，避免把整篇流程文档变回常驻预读。
 
-## 4. 闸门与停止条件
+## 5. 不可违反的约定
 
-| 闸门 | 位置 | 通过条件與停止条件 | 谁判断 |
-|---|---|---|---|
-| G1 合并 | N3 → N4 | `precheck` 全过（含 P3 改 `src/` 后的复跑）、新测试修复前失败已验、TUI 改动已 Orca 实测、无 P0–P2。偶发失败必须查因修掉 | 主控 |
-| G2 对外 | N7 之后 | 推送、开 PR、发布每次均需用户明确同意 | 用户 |
-| G3 退回上限 | N3/N6 退回或复查的返回路径 | 退回或复查上限 **2 轮**。满 2 轮仍不过立即停止循环：① 若原代码作者是 worker，由主控拆小、接手（按 G5 审）或问顾问；② **若原代码作者就是主控，严禁自修自合，必须拆成 `src/` ≤ 300 行的小包重走 G5，或回退重做**（WF4） | 主控 |
-| G5 作者不自审 | 主控写代码合入前 | 主控自己写的代码（含接手任务、合并修改）一律由审查子代理按第 3 节审过，无 P0–P2，`src/` ≤ 2000 行且 `precheck.sha` 匹配 | 审查子代理 |
+- **硬规则（一票否决）**：① **配置不与 Pi 共享**（状态只在 `~/.epi/pi`，不读写 `~/.pi/agent`、项目 `.pi/` 或用户 `PI_*`，固定传 `--no-approve`；skills 只走 `~/.agents/skills`、`~/.epi/skills`、受信 `.epi/skills` 和 Manifest；MCP 只走 Epi 的 `mcp.json`）；② **项目配置先信任后读取**；③ **不泄露密钥**；④ **失败可见**（不吞错、不静默兜底）；⑤ **对外只有 `epi`**（参数、子命令、帮助、报错全归 `epi`）；⑥ **Pi 内部接口**登记在 [pi-internals.md](pi-internals.md) 并配测试；⑦ **版本号唯一来源**是 `package.json`。
+- **扩展位置**：不做自动发现，只认 Manifest 声明（用户 `~/.epi/extensions/<名>/`、受信项目 `.epi/extensions/<名>/`）；不读取 Pi 自己的扩展目录（由 `test/ambient-isolation.test.mjs` 守卫）。
+- **Issue 账本（`docs/dogfood-issues.md`）**：编号 `D1…`，含级别、现象、复现、状态。P0 立刻修；P1 插到下一任务；P2 攒几条修；P3 空闲批量修。
 
-## 5. 交接物与目录
+## 6. Orca 实测
 
-除合并提交外均在 `.dev/` 下（不入库）：任务放 `.dev/tasks/<id>/`，审查放 `.dev/reviews/<id>/`（每轮独立 `<id>`），阶段材料放 `.dev/milestones/<名字>/`。
-
-- **`brief.md`**（`.dev/tasks/<id>/brief.md`）七项：① **起点**（`git merge --ff-only origin/main` 含基准 SHA，软链 `node_modules`，禁擅自 `npm install`）；② **规格来源**（设计文档章节与对照的 Pi 函数）；③ **状态清单**（列出状态及启动/切会话/`/new`/`/resume`/`/reload`/中止/退出重置路径）；④ **测试要求**（修复前失败、40/80/120 列边界、禁人为多渲染；开发中单跑相关测试，交付前跑全套）；⑤ **测试卫生**（临时 `HOME`/`EPI_HOME`、禁网、不碰真实剪贴板与 `~/.epi`、清理带重试）；⑥ **边界**（不碰并行任务文件）；⑦ **交付**（提交附 `Co-Authored-By`，写 `report.md`，末行 `STATUS: done/blocked`）。
-- **`report.md` / `question.md`**：重派前把旧 `report.md` 改名 `report-1.md`…；回答 `question.md` 后同一步改名 `question-1.md`…。
-- **`pack.md`**（`.dev/reviews/<id>/pack.md`）：写明基准与锁定 head SHA、WF3 模型 ID 与预算、`.dev/reviews/<id>/{repo,before,precheck.log,precheck.sha}`、目标与风险清单；复查轮附修复 SHA（含同修 P3 的 `src/` 改动）、上轮探针与新回归测试。
-- **`review.md`**（`.dev/reviews/<id>/review.md`）：边查边记 `review-notes.md`，汇总成 `review.md`。首行「可接受」或「不可接受」，P0–P2 标 `CONFIRMED` 附探针，P3 标 `PLAUSIBLE` 附 `文件:行号`。`run-review.sh wait` 退出码：`0` 有 `review.md`、`3` 无 `review.md`、`124` 超时。
-- **合并提交**：标题 `Merge dev/<id>: …`，正文写明作者、审查结论与主控改动。
-- **三个指标**：**漏网问题** = 合并后或大节点才查出的 P1/P2 数（注明是不是审查放过的）；**退回轮数** = 该任务退回 N2 + 复查的次数；**周期** = 从写好 `brief.md` 到合并进 `main` 的时长。
-
-## 6. 不可违反的约定
-
-- **硬规则（一票否决）**：① **配置不与 Pi 共享**（状态只在 `~/.epi/pi`，禁读写 `~/.pi/agent`、项目 `.pi/`、用户 `PI_*`，固定传 `--no-approve`；skills 只走 `~/.agents/skills`、`~/.epi/skills`、受信 `.epi/skills` 和 Manifest；MCP 只走 Epi 的 `mcp.json`）；② **项目配置先信任后读取**；③ **不泄露密钥**；④ **失败可见**（不吞错、不静默兜底）；⑤ **对外只有 `epi`**（参数、子命令、帮助、报错全归 `epi`，多入口共用同一套诊断装配）；⑥ **Pi 内部接口**必登记在 [pi-internals.md](pi-internals.md) 并配测试；⑦ **版本号唯一来源**是 `package.json`。
-- **扩展位置**：不做自动发现，只认 Manifest 声明（用户 `~/.epi/extensions/<名>/`、受信项目 `.epi/extensions/<名>/`）；Pi 扩展目录一律不读（`test/ambient-isolation.test.mjs` 守卫）。
-- **Dogfood 分级（`docs/dogfood-issues.md`）**：编号 `D1…`，含级别、现象、复现、状态。**P0**（卡住开发流程）立刻开任务修；**P1**（行为错/安全/隔离/丢数据）插到下一任务；**P2**（能用但别扭/显示错/性能差）攒几条修；**P3**（小毛病/文案/测试整洁）空闲批量修。
-- **仓库文件与本地 `.epi/epi.json`**：`AGENTS.md` 只做入口；`dist/` 同步提交；本地自开发按需复制模板 `(set -C; mkdir -p .epi && cat examples/development/epi.json > .epi/epi.json)`，内容为 `{ "version": 1, "rules": ["../AGENTS.md", "../docs/dev-workflow.md"], "skills": [], "extensions": [] }`（路径相对 `.epi/` 解析）。
-
-## 7. Orca 实测
-
-- 开/关终端：`orca terminal create --worktree active --title epi-smoke --json`（记下 `handle`，禁碰用户终端），测完 `orca terminal close --terminal <handle> --json`。
+- 开/关终端：`orca terminal create --worktree active --title epi-smoke --json`（记下 `handle`，不碰用户正在用的终端），测完 `orca terminal close --terminal <handle> --json`。
 - 启动与按键：确认前台是 shell 后发 `node dist/cli.js`（`--enter`）；按键不加 `--enter`（`$'\x0f'` Ctrl+O，`$'\x1b'` Esc，`$'\x04'` Ctrl+D 退出并等清理 >2s）；鼠标发 SGR 序列。
-- 读屏与剪贴板：`orca terminal read --terminal <handle> --json` 看 `result.terminal.tail`（算点击坐标时补回被省掉的空行）；测粘贴前 `pbpaste` 备份、测完恢复（非文本先告知用户）；重影先用 `script` 录原始输出在 pyte 回放。
+- 读屏与剪贴板：`orca terminal read --terminal <handle> --json` 看 `result.terminal.tail`；测粘贴前 `pbpaste` 备份、测完恢复。
 
-## 8. 发版清单
+## 7. 发版清单
 
 `release: <版本> …` 推送前完成（由 `test/showcase.test.mjs` 和 `test/naming.test.mjs` 守卫）：
 
-1. **`README.md`「最近更新」**：新版本写在最前，链接 `docs/showcase/<版本>/`。
-2. **特性展示**：生成 `docs/showcase/<版本>/`（含 `README.md`、录屏/截图或「本版本无界面变化」说明；场景脚本放 `scripts/docs/showcase/<版本>.mjs`，用 `node scripts/docs/capture-showcase.mjs <版本>` 生成；宣发文案放 `announce.md`），更新 `docs/showcase/README.md` 索引。
-3. **README 截图**：界面变化时跑 `node scripts/docs/capture-ui.mjs` 更新 `docs/assets/epi-ui.png` 与 `epi-welcome.png`。
-4. **先 `git add`/提交再跑全套测试**：确保新媒体文件已被 git 跟踪，再跑 `npm test`。
-5. **本地 CI**：`scripts/dev/local-ci.sh`，在干净 worktree 里按 `ci.yml` 的步骤（`npm ci --ignore-scripts` → build → `dist/` 一致 → `npm test`）跑一遍，约 4 分钟，不用等 GitHub。
-6. **过闸门 G2 推送并发布**：`scripts/dev/local-ci.sh --release` 在 CI 通过后推 `main` 并在本机跑 `scripts/release.mjs`（`gh` 已登录）；GitHub 上的 `release.yml` 随后发现 tag 已存在，直接跳过。产物含 `epi-<版本>.tgz` 和 `install.sh`。
-
-## 9. 已知质量风险与下一批任务
-
-**当前三大质量风险（历史审查证据）**：
-- TUI 渲染层（`app.ts` 31 次修复、`paste-chips.ts` 78.9% 提交在修 bug），tip 不变量连续三个版本破防；
-- 多入口装配重复；
-- 大包送审导致审查修复占最近三个 release 的 32.6%。
-
-**下一批任务**：
-- TUI：任意交互后只推时钟、`fullRedraws` 增量为 0 的参数化测试；图片行改显式元数据；
-- 把五个入口的诊断装配收口到一个模块；
-- 测试：慢测试（>25s）要在 report 说明；临时目录清理带重试。
+1. **核对评审记录（不重审已审功能）**：核对上一版本 tag 以来合入 `main` 的每个功能分支都有对应的 `.dev/reviews/*/verified.sha`（非高风险修复有 `fix.sha`）；只有缺少记录的部分才补审，已审过的功能不重审。
+2. **`README.md` 与展示**：更新「最近更新」，生成 `docs/showcase/<版本>/` 并更新索引；界面变化时跑 `node scripts/docs/capture-ui.mjs`。
+3. **全套测试与本地 CI**：先 `git add`/提交确保新媒体入库，再跑 `npm test` 和 `scripts/dev/local-ci.sh`。
+4. **先问用户确认后发布**：执行 `scripts/dev/local-ci.sh --release`（推 `main` 并跑 `scripts/release.mjs` 打 tag、发 `epi-<版本>.tgz` 和 `install.sh`）。

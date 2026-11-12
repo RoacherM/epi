@@ -177,7 +177,7 @@ Rules 与第三方 Extensions 未声明就不加载。固定 `epi:runtime` 与 �
 |---|---|
 | `README.md` | 项目是什么：定位、要点、快速开始、文档索引 |
 | `docs/guide/` | 用户文档：安装与升级、命令行、配置、Task、MCP、Hooks、benchmark adapter（索引 `docs/guide/README.md`） |
-| `AGENTS.md` | coding agent 的简短入口，详细规则在 `docs/dev-workflow.md` |
+| `AGENTS.md`（`CLAUDE.md` 指向它） | coding agent 的开发规范与按需文档索引入口 |
 | `docs/` | 架构、开发流程、决策、验收和问题记录；`docs/notes/` 放调研 |
 | `examples/development/epi.json` | 自开发配置模板，复制到本地 `.epi/epi.json` 后才启用 |
 | `src/host.ts`、`src/args.ts` | CLI 调度、参数和 SDK Host |
