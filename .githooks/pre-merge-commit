@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Conflict-free `git merge --no-ff` invokes pre-merge-commit before writing .git/MERGE_HEAD,
+# exporting GITHEAD_<40-hex-sha> in the environment instead.
+export VIBE_PRE_MERGE=1
+exec "$(dirname "$0")/pre-commit" "$@"

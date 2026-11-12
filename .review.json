@@ -1,0 +1,88 @@
+{
+  "precheck": "if [[ -f scripts/dev/precheck.sh ]]; then bash scripts/dev/precheck.sh; else bash ../../../../scripts/dev/precheck.sh; fi",
+  "commitCheck": "bash scripts/dev/precheck.sh --commit-check",
+  "forbidDirectMainCommit": false,
+  "reviewDir": ".dev/reviews",
+  "issueFile": "docs/dogfood-issues.md",
+  "redactFiles": [
+    ".env*",
+    "**/.env*"
+  ],
+  "models": {
+    "carbon": "gemini-4-carbon-high",
+    "argon": "gemini-4-argon-high"
+  },
+  "highRisk": [
+    "src/noninteractive.ts",
+    "src/worker.ts",
+    "src/worker-reaper.ts",
+    "src/monitor-stream.ts",
+    "src/extensions/mcp.ts",
+    "src/commands/mcp-cli.ts",
+    "src/commands/auth-cli.ts",
+    "src/providers/**",
+    "src/provider-startup.ts",
+    "src/provider-validation.ts",
+    "src/web/config.ts",
+    "src/isolate-pi-env.ts",
+    "src/pi-env.ts",
+    "src/bash-guard.ts",
+    "src/trust-prompt.ts",
+    "src/tui/project-guard.ts",
+    "src/manifest.ts",
+    "src/commands/manifest-cli.ts",
+    "src/skill-discovery.ts",
+    "src/hooks-config.ts",
+    "src/hooks-runtime.ts",
+    "src/extensions/hooks.ts",
+    "src/extensions/runtime.ts",
+    "src/task-runtime.ts",
+    "src/task-worktree.ts",
+    "src/paths.ts",
+    "src/project.ts",
+    "src/assembly.ts",
+    "src/host.ts",
+    "src/update.ts",
+    "scripts/dev/run-review.sh",
+    "scripts/dev/precheck.sh",
+    "scripts/dev/eslint.config.mjs",
+    "scripts/release.mjs",
+    "install.sh"
+  ],
+  "shards": {
+    "tui": [
+      "src/tui/**",
+      "test/tui-*"
+    ],
+    "extensions": [
+      "src/extensions/**",
+      "src/web/**",
+      "src/hooks-*",
+      "src/hook-events*",
+      "src/manifest*",
+      "src/commands/manifest-cli*",
+      "src/skill-discovery*",
+      "test/hooks*",
+      "test/manifest*",
+      "test/mcp*",
+      "test/preview*",
+      "test/review*",
+      "test/trace*",
+      "test/web*",
+      "test/skill-discovery*"
+    ],
+    "task": [
+      "src/task-*",
+      "src/worker*",
+      "src/bash-guard*",
+      "src/monitor-stream*",
+      "test/task*",
+      "test/worker*",
+      "test/bash-guard*",
+      "test/monitor*"
+    ],
+    "core": [
+      "**"
+    ]
+  }
+}
