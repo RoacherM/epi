@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "rules": ["../AGENTS.md", "../docs/dev-workflow.md"],
+  "rules": ["../AGENTS.md"],
   "skills": [],
   "extensions": []
 }

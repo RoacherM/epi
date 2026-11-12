@@ -54,7 +54,7 @@ npm test
 npm link
 ```
 
-需要让 Epi 加载本仓库开发规则时，可将 [开发配置模板](../../examples/development/epi.json) 复制到本地 `.epi/epi.json` 后显式信任项目；已有配置请手动合并，勿覆盖。模板路径以目标 `.epi/` 为基准，只引用 `AGENTS.md` 与当前开发流程；运行时 `.epi/` 不提交。
+需要让 Epi 加载本仓库开发规则时，可将 [开发配置模板](../../examples/development/epi.json) 复制到本地 `.epi/epi.json` 后显式信任项目；已有配置请手动合并，勿覆盖。模板路径以目标 `.epi/` 为基准，只引用 `AGENTS.md`（其余文档按需读取）；运行时 `.epi/` 不提交。
 
 本文档描述当前主分支；安装器和 `epi update` 获取最新 GitHub Release，发布版可能落后于主分支。合并到 `main` 与发布新版本是两件事：Release workflow 在推送到 `main` 时运行，只有 `package.json` 对应版本尚无标签时才发布。
 
