@@ -1,0 +1,265 @@
+// One dispatch runtime per host process (root) or per worker: the notification ledger, the item
+// registry and every primitive -- async bash, timers, the worker pool, the inbox -- wired together
+// and mounted onto whichever `pi` the current session hands the factory. The runtime outlives
+// `/reload` and session switches (its children keep running); only a real quit shuts it down.
+import { delimiter, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { loadAgents } from "./agents.js";
+import { BgProcessRuntime, createDispatchBashTool, exitNotice } from "./bg-bash.js";
+import { InboxSpool, inboxNotice } from "./inbox-spool.js";
+import { DrainBarrier, NotificationGate, NotificationLedger, PollGuard } from "./notify-ledger.js";
+import { createOutboxTool, installApprovalGuard } from "./outbox-guard.js";
+import { addSignalCleanup } from "./reaper.js";
+import { DispatchRegistry } from "./registry.js";
+import { singleLine } from "./result.js";
+import { createStatusTools } from "./status-tools.js";
+import { createTaskTool, jobNotice } from "./task-tool.js";
+import { createTimerTool, TimerRuntime, timerNotice } from "./timers.js";
+import { DISPATCH_DEPTH_ENV, DISPATCH_INBOX_ENV, DISPATCH_TIMER_ENTRY, DispatchConfigError } from "./types.js";
+import { jobLabel, WorkerPool } from "./worker-host.js";
+const DEFAULT_DRAIN_MAX_MS = 4 * 3_600_000 + 5_000;
+const DRAIN_GRACE_MS = 5_000;
+const MILESTONE_PREFIX = ":m:";
+export class DispatchRuntime {
+    host;
+    role;
+    worker;
+    gate = new NotificationGate();
+    ledger;
+    registry = new DispatchRegistry();
+    pollGuard = new PollGuard();
+    bg;
+    timers;
+    pool;
+    barrier;
+    /** Jobs whose settle must reach the model as a notification, and with which auto-wake. */
+    notifyOnSettle = new Map();
+    /** Root at depth 0: may spawn workers and talk to the user (`task`, `outbox`, board). */
+    canDelegate;
+    inbox;
+    agentsCache;
+    milestoneSeq = 0;
+    releaseSignalCleanup;
+    constructor(host, role, worker) {
+        this.host = host;
+        this.role = role;
+        this.worker = worker;
+        this.canDelegate = role === "root" && !(Number(process.env[DISPATCH_DEPTH_ENV]) >= 1);
+        this.ledger = new NotificationLedger({
+            gate: this.gate,
+            footer: () => this.inFlightFooter(),
+            activeSummary: () => this.registry.activeSummary(),
+            onAcked: (entries) => this.onAcked(entries),
+            onSendError: (error) => process.stderr.write(`dispatch: notification failed: ${error instanceof Error ? error.message : String(error)}\n`),
+        });
+        const sharedDaemonNames = host.sharedDaemonNames ?? [];
+        this.bg = new BgProcessRuntime({ stateDir: () => this.stateDir(), role, sharedDaemonNames, onExit: (job) => this.ledger.put(job.id, { text: exitNotice(this.bg.report(job.id)) }, { originSessionId: job.sessionId }) });
+        this.timers = new TimerRuntime({
+            role, stateDir: () => this.stateDir(), inboxTarget: () => this.inboxTarget(), deadlineAt: worker?.capsule.deadlineAt,
+            persist: role === "root" ? (data) => this.gate.pi?.appendEntry(DISPATCH_TIMER_ENTRY, data) : undefined,
+            onFire: (timer) => this.onTimerFired(timer),
+        });
+        this.pool = this.canDelegate ? this.createPool(sharedDaemonNames) : undefined;
+        this.registry.register(this.bg.provider());
+        this.registry.register(this.timers.provider());
+        if (this.pool !== undefined)
+            this.registry.register(this.pool.provider());
+        this.barrier = new DrainBarrier(this.ledger, {
+            hasFiniteWork: () => this.registry.hasFiniteWork(),
+            maxMs: () => this.drainMaxMs(),
+            stopWhen: () => worker?.steerPending() === true,
+        });
+        this.releaseSignalCleanup = addSignalCleanup(() => {
+            this.bg.killAllSync();
+            this.pool?.killAllSync();
+        });
+    }
+    stateDir() {
+        return this.host.stateDir ?? this.worker?.capsule.stateDir ?? join(this.agentDir(), "dispatch");
+    }
+    agentDir() {
+        return this.worker?.capsule.agentDir ?? getAgentDir();
+    }
+    inboxTarget() {
+        return this.role === "root" ? this.host.inboxTarget ?? process.env[DISPATCH_INBOX_ENV] : undefined;
+    }
+    agents() {
+        this.agentsCache ??= loadAgents(this.host.agentsDirs ?? { global: join(this.agentDir(), "agents") }, this.host.createConfigError ?? ((message) => new DispatchConfigError(message)));
+        return this.agentsCache;
+    }
+    sessionShort() {
+        return (this.gate.sessionId() ?? "nosession").replace(/[^A-Za-z0-9]/g, "").slice(0, 8) || "session";
+    }
+    drainMaxMs() {
+        const cap = this.host.drainMaxMs ?? DEFAULT_DRAIN_MAX_MS;
+        const remaining = this.registry.maxRemainingMs();
+        const workerLeft = this.worker === undefined ? Infinity : this.worker.capsule.deadlineAt - Date.now();
+        return Math.max(0, Math.min(cap, workerLeft, remaining === undefined ? cap : remaining + DRAIN_GRACE_MS));
+    }
+    createPool(sharedDaemonNames) {
+        const envPaths = process.env.PI_DISPATCH_WORKER_EXTENSIONS?.split(delimiter).filter((path) => path.length > 0);
+        return new WorkerPool({
+            stateDir: () => this.stateDir(),
+            agentDir: this.agentDir(),
+            nodeExecPath: this.host.nodeExecPath ?? process.execPath,
+            workerPath: fileURLToPath(new URL("./pi-worker.js", import.meta.url)),
+            sdkEntryUrl: import.meta.resolve("@earendil-works/pi-coding-agent"),
+            bootstrapModule: this.host.workerBootstrapModule,
+            bootstrapOptions: this.host.workerBootstrapOptions,
+            extensionPaths: [...(this.host.workerExtensionPaths ?? envPaths ?? [])],
+            agents: () => this.agents(),
+            sharedDaemonNames,
+            rewriteOutputText: this.host.rewriteOutputText ?? ((text) => text),
+            sessionShort: () => this.sessionShort(),
+            boardPath: () => undefined,
+            onSettled: (job) => this.onJobSettled(job),
+            onMilestone: (job, summary) => this.ledger.put(`${job.id}${MILESTONE_PREFIX}${++this.milestoneSeq}`, { text: `${jobLabel(job)} progress: ${summary}` }, { originSessionId: job.originSessionId }),
+        });
+    }
+    inFlightFooter() {
+        const active = this.registry.list().filter((item) => item.active);
+        if (active.length === 0)
+            return undefined;
+        return `In flight: ${active.slice(0, 8).map((item) => `${item.name ?? item.id} (${item.status})`).join(", ")}${active.length > 8 ? ", ..." : ""}`;
+    }
+    onAcked(entries) {
+        for (const entry of entries) {
+            if (entry.key.startsWith("bg_"))
+                this.bg.markNotified(entry.key);
+            else if (entry.key.startsWith("inbox:"))
+                this.inbox?.markDone(entry.key.slice("inbox:".length));
+        }
+    }
+    onTimerFired(timer) {
+        if (timer.kind === "follow_up") {
+            this.ledger.put(timer.id, { text: timerNotice(timer) }, { originSessionId: timer.originSessionId });
+            return;
+        }
+        if (timer.sessionMode === "fresh" && this.pool !== undefined) {
+            const job = this.pool.start({ task: timer.prompt, cwd: process.cwd(), originSessionId: this.gate.sessionId() });
+            this.notifyOnSettle.set(job.id, true);
+            return;
+        }
+        this.ledger.put(`${timer.id}:${timer.lastRunAt ?? Date.now()}`, { text: timerNotice(timer) });
+    }
+    onJobSettled(job) {
+        this.ledger.discard(`${job.id}${MILESTONE_PREFIX}`, true);
+        this.recordUsage(job);
+        const ctx = this.gate.ctx;
+        if (ctx !== undefined)
+            void Promise.resolve(this.host.onTaskLifecycleEvent?.({ type: "task_stop", job: { ...job } }, ctx)).catch(() => undefined);
+        const autoWake = this.notifyOnSettle.get(job.id);
+        if (autoWake === undefined)
+            return;
+        this.notifyOnSettle.delete(job.id);
+        this.ledger.put(job.id, { text: jobNotice(job) }, { run: job.run, autoWake, originSessionId: job.originSessionId });
+    }
+    /** A worker's tokens are billed to the same account but spent in another process: record them. */
+    recordUsage(job) {
+        if (job.runUsage === undefined)
+            return;
+        try {
+            this.gate.pi?.appendEntry("dispatch:task-usage", {
+                jobId: job.id, status: job.status, createdAt: job.createdAt, startedAt: job.startedAt, finishedAt: job.finishedAt, ...job.runUsage,
+            });
+        }
+        catch {
+            // A stale `pi` mid session switch: the usage is still on the job.
+        }
+    }
+    onSessionStart(ctx, reason) {
+        const sessionId = this.gate.sessionId();
+        for (const meta of this.bg.reconcile(sessionId)) {
+            if (!this.ledger.has(meta.id))
+                this.ledger.put(meta.id, { text: exitNotice(this.bg.report(meta.id)) }, { originSessionId: sessionId });
+        }
+        if (this.role !== "root")
+            return;
+        if (reason !== "reload")
+            this.timers.dropOtherSessions(sessionId);
+        this.timers.fold(ctx.sessionManager.getEntries(), sessionId);
+        this.timers.loadSchedules();
+        this.openInbox();
+    }
+    openInbox() {
+        const target = this.inboxTarget();
+        if (target === undefined || this.inbox !== undefined)
+            return;
+        const spool = new InboxSpool({
+            stateDir: this.stateDir(), target,
+            deliver: (key, event) => {
+                if (this.gate.ctx === undefined)
+                    return false;
+                if (!this.ledger.has(`inbox:${key}`))
+                    this.ledger.put(`inbox:${key}`, { text: inboxNotice(target, event) });
+                return true;
+            },
+        });
+        spool.open();
+        this.inbox = spool;
+    }
+    shouldDrain(ctx) {
+        return this.role !== "root" || ctx.mode === "print" || ctx.mode === "json";
+    }
+    reportProgressTool() {
+        const worker = this.worker;
+        return {
+            name: "report_progress",
+            label: "Report Progress",
+            description: "Report a one-line milestone to the parent without ending this run; notifyParent: true wakes the parent with it.",
+            parameters: Type.Object({
+                summary: Type.String({ description: "Single-line milestone or status" }),
+                notifyParent: Type.Optional(Type.Boolean()),
+            }),
+            async execute(_id, rawParams) {
+                const params = rawParams;
+                const summary = singleLine(params.summary, 200);
+                worker.emit({ type: "progress", turns: worker.turns(), steps: worker.nextStep(), phase: "report", summary, ...(params.notifyParent === true ? { notifyParent: true } : {}) });
+                return { content: [{ type: "text", text: summary.length > 0 ? `Progress reported: ${summary}` : "Progress reported." }], details: { summary } };
+            },
+        };
+    }
+    tools() {
+        const sessionId = () => this.gate.sessionId();
+        const tools = [
+            createDispatchBashTool(this.bg, sessionId),
+            ...createStatusTools({ registry: this.registry, ledger: this.ledger, pollGuard: this.pollGuard, bg: this.bg, scope: this.role === "root" ? "all" : "own" }),
+            createTimerTool(this.timers, this.role, sessionId),
+        ];
+        if (this.role === "task-worker")
+            tools.push(this.reportProgressTool());
+        if (this.pool !== undefined) {
+            tools.push(createTaskTool({ pool: this.pool, ledger: this.ledger, gate: this.gate, host: this.host, agents: () => this.agents(), notifyOnSettle: this.notifyOnSettle }));
+            tools.push(createOutboxTool(this.host, sessionId, (text) => this.gate.ctx?.ui.notify(text, "info")));
+        }
+        const renderers = this.host.ui?.toolRenderers ?? {};
+        return tools.map((tool) => ({ ...tool, ...renderers[tool.name] }));
+    }
+    /** Bind this runtime to the `pi` of the session now loading (startup, `/reload`, a switch). */
+    mount(pi) {
+        this.gate.bindPi(pi);
+        this.ledger.bindEvents(pi, (ctx, reason) => this.onSessionStart(ctx, reason));
+        pi.on("agent_settled", async (_event, ctx) => {
+            if (this.shouldDrain(ctx))
+                await this.barrier.drain();
+        });
+        pi.on("session_shutdown", async (event) => {
+            this.gate.onSessionShutdown();
+            if (event.reason === "quit")
+                await this.shutdown();
+        });
+        for (const tool of this.tools())
+            pi.registerTool(tool);
+        installApprovalGuard(pi, this.host, this.role);
+    }
+    async shutdown() {
+        this.timers.stop();
+        this.inbox?.close();
+        this.inbox = undefined;
+        await Promise.all([this.bg.shutdown(), this.pool?.shutdown()]);
+        this.releaseSignalCleanup();
+    }
+}
+//# sourceMappingURL=runtime.js.map

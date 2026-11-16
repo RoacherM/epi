@@ -30,4 +30,8 @@ export declare function finalAssistantTextFromEntries(entries: readonly unknown[
 /** `182000` -> `182k`; a missing count prints as the empty string. */
 export declare function formatTokenCount(tokens: number | undefined): string;
 export declare function errorText(error: unknown): string;
+/** `fields` without its undefined values, typed for `exactOptionalPropertyTypes` spreads. */
+export declare function definedFields<T extends Record<string, unknown>>(fields: T): {
+    [K in keyof T]?: Exclude<T[K], undefined>;
+};
 //# sourceMappingURL=result.d.ts.map

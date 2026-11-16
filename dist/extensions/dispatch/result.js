@@ -126,4 +126,8 @@ export function formatTokenCount(tokens) {
 export function errorText(error) {
     return error instanceof Error ? error.message : String(error);
 }
+/** `fields` without its undefined values, typed for `exactOptionalPropertyTypes` spreads. */
+export function definedFields(fields) {
+    return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
+}
 //# sourceMappingURL=result.js.map

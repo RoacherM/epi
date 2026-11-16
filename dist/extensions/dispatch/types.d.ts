@@ -88,6 +88,9 @@ export interface DispatchHostAdapter {
     /** A module URL exporting `createWorkerSession(capsule, slice, sdk)`; replaces the portable
      * worker's default Pi session assembly (Epi plugs its Manifest/Magpie pipeline in here). */
     workerBootstrapModule?: string;
+    /** Default bootstrap only: extension files every worker session loads (e.g. a model provider).
+     * Without a host, `PI_DISPATCH_WORKER_EXTENSIONS` (path-delimited) supplies them. */
+    workerExtensionPaths?: readonly string[];
     /** Opaque, JSON-serialisable options forwarded to the bootstrap module in every capsule. */
     workerBootstrapOptions?: (request: Record<string, unknown>) => Record<string, unknown>;
     /** `agents/*.md` preset directories; the project one wins on a name clash. */
