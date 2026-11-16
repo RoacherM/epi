@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dispatch TUI 原型 — 前台放手 (Alt+B) · /tasks · /board</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 24px 20px 56px;
+  background: #0e0f11;
+  color: #d4d4d8;
+  font: 14px/1.6 -apple-system, "SF Pro Text", "PingFang SC", sans-serif;
+}
+main { max-width: 1440px; margin: 0 auto; }
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+h1 { font-size: 18px; font-weight: 600; color: #ececee; margin: 0; }
+.ctl { display: flex; flex-wrap: wrap; gap: 6px; }
+button {
+  font: 12px ui-monospace, "SF Mono", Menlo, monospace;
+  background: #1a1b20;
+  color: #d0d0d6;
+  border: 1px solid #2e3038;
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+button:hover { border-color: #585b66; }
+button.on { background: #2c2440; border-color: #bb9af7; color: #ececee; }
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 310px;
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 1080px) { .grid { grid-template-columns: 1fr; } }
+#termwrap {
+  position: relative;
+  border: 1px solid #26282d;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #1c1c1c;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .48);
+  font: 13px/20px ui-monospace, "SF Mono", Menlo, "PingFang SC", monospace;
+}
+.titlebar {
+  height: 30px;
+  padding: 0 12px;
+  background: #16171a;
+  border-bottom: 1px solid #26282d;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #7c7d86;
+  font-size: 12px;
+}
+.dots { display: flex; gap: 6px; }
+.dots i { width: 10px; height: 10px; border-radius: 50%; display: block; background: #34363e; }
+.viewport {
+  position: relative;
+  min-height: 540px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 14px 16px 8px;
+}
+.transcript { display: flex; flex-direction: column; gap: 8px; }
+.u-row {
+  background: #242424;
+  padding: 4px 10px;
+  border-radius: 4px;
+  color: #e1e1e1;
+}
+.u-row .g { color: #bb9af7; margin-right: 8px; }
+.call-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.call-row:hover { background: #252529; }
+.call-left { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.call-right { color: #6c6c6c; flex: none; margin-left: 12px; }
+.g-sh { color: #e0af68; }
+.g-tool { color: #7aa2f7; }
+.g-ok { color: #9ece6a; }
+.g-spin { color: #bb9af7; display: inline-block; width: 1ch; text-align: center; }
+.g-dim { color: #6c6c6c; }
+.notify-row {
+  padding: 2px 4px 2px 18px;
+  border-left: 2px solid #3c3e47;
+  color: #a9b1d6;
+}
+.reply-row { padding: 2px 4px; color: #e1e1e1; }
+.spine-foot { padding: 0 4px; color: #585858; }
+
+.chrome { margin-top: 18px; }
+.editor-box {
+  border: 1px solid #34363e;
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: #18181b;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.editor-box input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: #e1e1e1;
+  font: inherit;
+}
+.model-tag { color: #6c6c6c; font-size: 12px; margin-left: 10px; }
+.bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 2px 0;
+  color: #6c6c6c;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.status-seg {
+  color: #bb9af7;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.status-seg:hover { background: #2a2436; }
+
+/* 88% BlockInspectorOverlay */
+.overlay-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 12, .62);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+}
+.overlay-mask.open { display: flex; }
+.overlay {
+  width: 88%;
+  max-height: 470px;
+  background: #16171a;
+  border: 1px solid #3b3d47;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .65);
+}
+.ov-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid #282a32;
+  background: #1b1c20;
+}
+.ov-tabs { display: flex; gap: 14px; }
+.ov-tab {
+  color: #787a84;
+  cursor: pointer;
+  padding: 2px 0;
+  border-bottom: 2px solid transparent;
+}
+.ov-tab.on { color: #e1e1e1; border-color: #bb9af7; }
+.ov-meta { color: #6c6c6c; font-size: 12px; }
+.ov-body {
+  padding: 8px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+.item-line {
+  display: grid;
+  grid-template-columns: 24px 104px 86px minmax(0, 1fr) 68px;
+  gap: 8px;
+  padding: 4px 12px;
+  cursor: pointer;
+  align-items: center;
+}
+.item-line:hover, .item-line.sel { background: #23242b; }
+.board-line {
+  display: grid;
+  grid-template-columns: 42px 88px minmax(0, 1fr) 54px;
+  gap: 8px;
+  padding: 4px 12px;
+  align-items: baseline;
+}
+.board-line:hover { background: #202127; }
+.detail-box { padding: 6px 14px 12px; white-space: pre-wrap; color: #c8c8d0; }
+.detail-meta { color: #787a84; padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid #262830; }
+.mention { color: #bb9af7; }
+.done-tag { color: #9ece6a; }
+
+.side {
+  background: #141518;
+  border: 1px solid #26282d;
+  border-radius: 10px;
+  padding: 14px;
+}
+.side h2 { font-size: 14px; margin: 0 0 10px; color: #ececee; }
+.kv { font-size: 12.5px; color: #9d9da6; margin-bottom: 12px; }
+.kv div { padding: 3px 0; display: flex; justify-content: space-between; border-bottom: 1px solid #1e2025; }
+kbd {
+  font: 11.5px ui-monospace, "SF Mono", Menlo, monospace;
+  background: #202228;
+  border: 1px solid #353842;
+  border-radius: 4px;
+  padding: 0 5px;
+  color: #dcdce2;
+}
+.opt-group { margin: 12px 0; font-size: 13px; }
+.opt-group label { display: block; padding: 3px 0; color: #b4b4bc; cursor: pointer; }
+textarea {
+  width: 100%;
+  min-height: 68px;
+  background: #0e0f11;
+  color: #d4d4d8;
+  border: 1px solid #2e3038;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: 12.5px/1.5 -apple-system, sans-serif;
+  margin-top: 8px;
+}
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <h1>epi · dispatch TUI 原型（WF6）</h1>
+    <div class="ctl">
+      <button id="btn-fg">模拟前台慢 bash</button>
+      <button id="btn-detach">Alt+B 放手转后台</button>
+      <button id="btn-tasks">/tasks 浮层</button>
+      <button id="btn-board">/board 浮层</button>
+      <button id="btn-finish">模拟同伴交接完成</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div id="termwrap" tabindex="0">
+      <div class="titlebar">
+        <div class="dots"><i></i><i></i><i></i></div>
+        <span>~/Projects/sides/epi · dev/dispatch</span>
+        <span id="clock-lbl">80×28</span>
+      </div>
+
+      <div class="viewport">
+        <div class="transcript" id="transcript"></div>
+
+        <div class="chrome">
+          <div class="editor-box">
+            <span class="g-dim" style="margin-right:8px">❯</span>
+            <input id="cmd-input" placeholder="/tasks · /board · /bg" autocomplete="off">
+            <span class="model-tag">claude-opus-5-5 · high</span>
+          </div>
+          <div class="bar">
+            <span id="bar-left">^P commands · ^O expand · Alt+B detach</span>
+            <span class="status-seg" id="status-seg" title="/tasks"></span>
+          </div>
+        </div>
+
+        <div class="overlay-mask" id="ov-mask">
+          <div class="overlay">
+            <div class="ov-head">
+              <div class="ov-tabs">
+                <span class="ov-tab on" data-tab="items" id="tab-items"></span>
+                <span class="ov-tab" data-tab="board" id="tab-board"></span>
+              </div>
+              <span class="ov-meta" id="ov-hint">↑↓ · Enter · Esc</span>
+            </div>
+            <div class="ov-body" id="ov-body"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="side">
+      <h2>交互与待定项</h2>
+      <div class="kv">
+        <div><span>放手热键</span><span><kbd>Alt+B</kbd> / <code>/bg</code></span></div>
+        <div><span>打开列表</span><span>点右下状态 / <code>/tasks</code></span></div>
+        <div><span>打开白板</span><span><code>/board</code> / <kbd>Tab</kbd></span></div>
+        <div><span>单条目详情</span><span>单击行 / <kbd>Enter</kbd></span></div>
+        <div><span>返回 / 关闭</span><span><kbd>Esc</kbd></span></div>
+      </div>
+
+      <div class="opt-group">
+        <div style="color:#ececee;font-weight:600;margin-bottom:4px">1. 底栏右侧 14 列计数样式</div>
+        <label><input type="radio" name="sfmt" value="compact" checked> <code>◐ 3 · #5</code>（运行数 + 最新白板序号）</label>
+        <label><input type="radio" name="sfmt" value="count"> <code>◐ 3 tasks</code>（与现版一致，不含序号）</label>
+      </div>
+
+      <div class="opt-group">
+        <div style="color:#ececee;font-weight:600;margin-bottom:4px">2. 浮层结构</div>
+        <label><input type="radio" name="vmode" value="tabs" checked> 同一浮层双页签（Items / Board，<kbd>Tab</kbd> 切换）</label>
+        <label><input type="radio" name="vmode" value="split"> 仅单列表（Board 消息折叠在具名 job 详情内）</label>
+      </div>
+
+      <textarea id="fb" placeholder="补充修改意见（可选）"></textarea>
+      <button id="copy-fb" style="margin-top:8px;width:100%">复制拍板结果</button>
+    </aside>
+  </div>
+</main>
+
+<script>
+const spinFrames = ["+", "×"];
+let tick = 0;
+
+const state = {
+  fgBash: { active: true, elapsed: 9.4, cmd: "npm run test:e2e -- --shard=2/4" },
+  overlay: null, // null | { tab: "items" | "board", detailId: string | null, sel: number }
+  statusFmt: "compact",
+  viewMode: "tabs",
+  items: [
+    {
+      id: "bg_8f31c2a0", kind: "bg", glyph: "$", label: "npm run dev:mock-api",
+      state: "running", meta: "daemon · 01:42", elapsed: "102s",
+      detail: "cwd: /Users/byronwayne/Projects/sides/epi\npid: 48210 (pgid 48210) · log: ~/.epi/runtime/dispatch/bg/bg_8f31c2a0.log\n\n[01:40:12] mock-api listening on 127.0.0.1:4319\n[01:41:03] GET /v1/health 200 2ms\n[01:41:50] POST /v1/jobs 201 6ms"
+    },
+    {
+      id: "job_4a9c11b2", name: "parser", kind: "peer", glyph: "◆", label: "parser · branch:dispatch/parser",
+      state: "running", meta: "turn 4 · bash", elapsed: "38s",
+      detail: "role: peer-worker · workspace: branch (dispatch/93ed5710/parser, +24 -6)\nnow: bash: node --test test/parser.test.mjs\n\n❯ Fix streaming JSONL boundary split in src/parser.ts\n◇ Edited src/parser.ts; running parser.test.mjs before handing off to @verifier."
+    },
+    {
+      id: "job_7e02d4f1", name: "verifier", kind: "peer", glyph: "◆", label: "verifier · inherit",
+      state: "waiting", meta: "board_wait #3", elapsed: "36s",
+      detail: "role: peer-worker · workspace: inherit (read-only)\nnow: board_wait({ since: 3, mentions_only: true }) · 0 tok/s\n\n❯ Wait for @parser [done], then run ub-mode & verify edge cases."
+    },
+    {
+      id: "tm_c30291aa", kind: "timer", glyph: "◷", label: "follow_up · check CI & notify",
+      state: "armed", meta: "in 12m 40s", elapsed: "760s",
+      detail: "kind: follow_up (appendEntry, session-bound)\ndue: +12m 40s\nprompt: Check CI run status; call outbox notify only if any check failed."
+    }
+  ],
+  board: [
+    { seq: 1, sender: "coordinator", text: "@parser Own src/parser.ts; post @verifier [done] when tests pass.", time: "01:41:10" },
+    { seq: 2, sender: "coordinator", text: "@verifier Wait for @parser, verify diff & CRAP score, then tag @coordinator [done].", time: "01:41:11" },
+    { seq: 3, sender: "parser", text: "@verifier FYI reproduced the UTF-8 chunk split on multibyte boundary; patching now.", time: "01:41:29" }
+  ],
+  notifiedDone: false
+};
+
+function esc(s) {
+  return s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+function fmtMentions(s) {
+  return esc(s)
+    .replace(/(@[a-z0-9_-]+)/gi, '<span class="mention">$1</span>')
+    .replace(/(\[done\])/g, '<span class="done-tag">$1</span>');
+}
+
+function activeCount() {
+  return state.items.filter(i => i.state === "running" || i.state === "waiting" || i.state === "armed").length + (state.fgBash.active ? 1 : 0);
+}
+
+function renderTranscript() {
+  const spin = spinFrames[tick % 2];
+  const rows = [];
+  rows.push(`<div class="u-row"><span class="g">❯</span>并行修一下 parser 的分块边界，配 verifier 核对，同时跑 e2e 分片</div>`);
+  rows.push(`
+    <div class="call-row" data-inspect="job_4a9c11b2">
+      <div class="call-left"><span class="g-tool">◆</span><span>task</span><span class="g-dim">parser · branch · bg</span></div>
+      <div class="call-right">job_4a9c11b2</div>
+    </div>
+    <div class="call-row" data-inspect="job_7e02d4f1">
+      <div class="call-left"><span class="g-tool">◆</span><span>task</span><span class="g-dim">verifier · bg</span></div>
+      <div class="call-right">job_7e02d4f1</div>
+    </div>
+  `);
+
+  if (state.fgBash.active) {
+    rows.push(`
+      <div class="call-row" id="fg-row">
+        <div class="call-left"><span class="g-spin">${spin}</span><span class="g-sh">$</span><span>${esc(state.fgBash.cmd)}</span></div>
+        <div class="call-right">${state.fgBash.elapsed.toFixed(1)}s · Alt+B</div>
+      </div>
+    `);
+  } else {
+    rows.push(`
+      <div class="call-row" data-inspect="bg_e2e99104">
+        <div class="call-left"><span class="g-sh">$</span><span>${esc(state.fgBash.cmd)}</span><span class="g-dim">detached → bg_e2e99104</span></div>
+        <div class="call-right">bg_e2e99104</div>
+      </div>
+    `);
+  }
+
+  if (state.notifiedDone) {
+    rows.push(`<div class="notify-row"><span class="g-ok">✓</span> #5 @verifier · [done] parser.test.mjs 18/18 pass, CC=6</div>`);
+    rows.push(`<div class="reply-row"><span class="g-dim">◇</span> <code>parser</code> 分支已通过 <code>verifier</code> 核验（<code>+24 -6</code>，CC=6），工作区干净待合入。</div>`);
+    rows.push(`<div class="spine-foot">  ╰─ Worked for 41.2s</div>`);
+  }
+
+  document.getElementById("transcript").innerHTML = rows.join("");
+  document.querySelectorAll("[data-inspect]").forEach(el => {
+    el.onclick = () => openOverlay("items", el.getAttribute("data-inspect"));
+  });
+
+  const n = activeCount();
+  const maxSeq = state.board[state.board.length - 1]?.seq ?? 0;
+  const seg = document.getElementById("status-seg");
+  if (n === 0) {
+    seg.textContent = `✓ #${maxSeq}`;
+  } else {
+    seg.textContent = state.statusFmt === "compact" ? `${spin} ${n} · #${maxSeq}` : `${spin} ${n} tasks`;
+  }
+}
+
+function renderOverlay() {
+  const mask = document.getElementById("ov-mask");
+  if (!state.overlay) {
+    mask.classList.remove("open");
+    return;
+  }
+  mask.classList.add("open");
+  const tabItems = document.getElementById("tab-items");
+  const tabBoard = document.getElementById("tab-board");
+  tabItems.textContent = `Items (${state.items.length})`;
+  tabBoard.textContent = `Board (#${state.board.length})`;
+  tabBoard.style.display = state.viewMode === "split" ? "none" : "";
+  tabItems.classList.toggle("on", state.overlay.tab === "items");
+  tabBoard.classList.toggle("on", state.overlay.tab === "board");
+
+  const body = document.getElementById("ov-body");
+  if (state.overlay.detailId) {
+    const it = state.items.find(x => x.id === state.overlay.detailId);
+    if (it) {
+      const peerPosts = it.name && state.viewMode === "split"
+        ? "\n\n--- Board ---\n" + state.board.filter(b => b.sender === it.name || b.text.includes("@" + it.name)).map(b => `#${b.seq} @${b.sender}: ${b.text}`).join("\n")
+        : "";
+      body.innerHTML = `<div class="detail-box"><div class="detail-meta">${it.glyph} ${esc(it.name ?? it.id)} (${it.id}) · ${it.state} · ${it.meta}</div>${esc(it.detail + peerPosts)}</div>`;
+      return;
+    }
+  }
+
+  if (state.overlay.tab === "board" && state.viewMode === "tabs") {
+    body.innerHTML = state.board.map(b => `
+      <div class="board-line">
+        <span class="g-dim">#${b.seq}</span>
+        <span class="g-tool">@${esc(b.sender)}</span>
+        <span>${fmtMentions(b.text)}</span>
+        <span class="g-dim">${b.time.slice(3)}</span>
+      </div>
+    `).join("");
+    return;
+  }
+
+  body.innerHTML = state.items.map((it, idx) => {
+    const stClass = it.state === "completed" ? "g-ok" : it.state === "running" ? "g-sh" : "g-dim";
+    return `
+      <div class="item-line ${idx === state.overlay.sel ? "sel" : ""}" data-idx="${idx}">
+        <span class="${it.kind === "bg" ? "g-sh" : "g-tool"}">${it.glyph}</span>
+        <span>${esc(it.name ?? it.id.slice(0, 11))}</span>
+        <span class="${stClass}">${it.state}</span>
+        <span class="g-dim" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.label)} · ${esc(it.meta)}</span>
+        <span class="g-dim" style="text-align:right">${it.elapsed}</span>
+      </div>
+    `;
+  }).join("");
+
+  body.querySelectorAll(".item-line").forEach(el => {
+    el.onclick = () => {
+      const idx = Number(el.getAttribute("data-idx"));
+      state.overlay.sel = idx;
+      state.overlay.detailId = state.items[idx].id;
+      renderOverlay();
+    };
+  });
+}
+
+function openOverlay(tab = "items", detailId = null) {
+  state.overlay = { tab: state.viewMode === "split" ? "items" : tab, detailId, sel: 0 };
+  renderOverlay();
+}
+
+function detachForeground() {
+  if (!state.fgBash.active) return;
+  state.fgBash.active = false;
+  if (!state.items.some(x => x.id === "bg_e2e99104")) {
+    state.items.unshift({
+      id: "bg_e2e99104", kind: "bg", glyph: "$", label: state.fgBash.cmd,
+      state: "running", meta: "detached · log 48KB", elapsed: `${Math.round(state.fgBash.elapsed)}s`,
+      detail: `cwd: /Users/byronwayne/Projects/sides/epi\nstatus: running (detached via Alt+B)\nlog: ~/.epi/runtime/dispatch/bg/bg_e2e99104.log\n\n✔ shard 2/4: 142/190 tests passed...`
+    });
+  }
+  renderTranscript();
+  renderOverlay();
+}
+
+function simulateHandoff() {
+  if (state.notifiedDone) return;
+  state.board.push(
+    { seq: 4, sender: "parser", text: "@verifier [done] Fixed multibyte split in src/parser.ts; 18/18 tests green.", time: "01:41:48" },
+    { seq: 5, sender: "verifier", text: "@coordinator [done] Verified diff (+24 -6), CRAP max CC=6, 0 survivors.", time: "01:41:56" }
+  );
+  const p = state.items.find(x => x.name === "parser");
+  const v = state.items.find(x => x.name === "verifier");
+  if (p) { p.state = "completed"; p.meta = "4 turns · +24 -6"; }
+  if (v) { v.state = "completed"; v.meta = "2 turns · verified"; }
+  state.notifiedDone = true;
+  renderTranscript();
+  renderOverlay();
+}
+
+document.getElementById("btn-fg").onclick = () => { state.fgBash.active = true; state.fgBash.elapsed = 3.2; renderTranscript(); };
+document.getElementById("btn-detach").onclick = detachForeground;
+document.getElementById("btn-tasks").onclick = () => openOverlay("items");
+document.getElementById("btn-board").onclick = () => openOverlay("board");
+document.getElementById("btn-finish").onclick = simulateHandoff;
+document.getElementById("status-seg").onclick = () => openOverlay("items");
+document.getElementById("tab-items").onclick = () => { state.overlay.tab = "items"; state.overlay.detailId = null; renderOverlay(); };
+document.getElementById("tab-board").onclick = () => { state.overlay.tab = "board"; state.overlay.detailId = null; renderOverlay(); };
+
+document.querySelectorAll('input[name="sfmt"]').forEach(r => {
+  r.onchange = () => { state.statusFmt = r.value; renderTranscript(); };
+});
+document.querySelectorAll('input[name="vmode"]').forEach(r => {
+  r.onchange = () => {
+    state.viewMode = r.value;
+    if (state.overlay && state.viewMode === "split") state.overlay.tab = "items";
+    renderOverlay();
+  };
+});
+
+document.getElementById("cmd-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    const v = e.target.value.trim();
+    if (v === "/tasks") openOverlay("items");
+    else if (v === "/board") openOverlay("board");
+    else if (v === "/bg") detachForeground();
+    e.target.value = "";
+  }
+});
+
+window.addEventListener("keydown", e => {
+  if ((e.altKey && (e.key === "b" || e.key === "B" || e.code === "KeyB"))) {
+    e.preventDefault();
+    detachForeground();
+    return;
+  }
+  if (!state.overlay) return;
+  if (e.key === "Escape") {
+    e.preventDefault();
+    if (state.overlay.detailId) { state.overlay.detailId = null; renderOverlay(); }
+    else { state.overlay = null; renderOverlay(); }
+  } else if (e.key === "Tab" && state.viewMode === "tabs") {
+    e.preventDefault();
+    state.overlay.detailId = null;
+    state.overlay.tab = state.overlay.tab === "items" ? "board" : "items";
+    renderOverlay();
+  } else if (e.key === "ArrowDown" && state.overlay.tab === "items" && !state.overlay.detailId) {
+    e.preventDefault();
+    state.overlay.sel = (state.overlay.sel + 1) % state.items.length;
+    renderOverlay();
+  } else if (e.key === "ArrowUp" && state.overlay.tab === "items" && !state.overlay.detailId) {
+    e.preventDefault();
+    state.overlay.sel = (state.overlay.sel - 1 + state.items.length) % state.items.length;
+    renderOverlay();
+  } else if (e.key === "Enter" && state.overlay.tab === "items" && !state.overlay.detailId) {
+    e.preventDefault();
+    state.overlay.detailId = state.items[state.overlay.sel].id;
+    renderOverlay();
+  }
+});
+
+document.getElementById("copy-fb").onclick = async () => {
+  const txt = `dispatch-tui-prototype 拍板:\n- 底栏计数: ${state.statusFmt}\n- 浮层结构: ${state.viewMode}\n- 备注: ${document.getElementById("fb").value.trim() || "无"}`;
+  await navigator.clipboard.writeText(txt);
+  document.getElementById("copy-fb").textContent = "已复制";
+  setTimeout(() => { document.getElementById("copy-fb").textContent = "复制拍板结果"; }, 1500);
+};
+
+setInterval(() => {
+  tick += 1;
+  if (state.fgBash.active) state.fgBash.elapsed += 0.32;
+  renderTranscript();
+}, 320);
+
+renderTranscript();
+</script>
+</body>
+</html>
