@@ -2,7 +2,7 @@
 // registry and every primitive -- async bash, timers, the worker pool, the inbox -- wired together
 // and mounted onto whichever `pi` the current session hands the factory. The runtime outlives
 // `/reload` and session switches (its children keep running); only a real quit shuts it down.
-import { delimiter, join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -28,6 +28,20 @@ const DEFAULT_DRAIN_MAX_MS = 4 * 3_600_000 + 5_000;
 const DRAIN_GRACE_MS = 5_000;
 const MILESTONE_PREFIX = ":m:";
 const STALL_DEBOUNCE_MS = 300;
+const SELF_INDEX_PATH = fileURLToPath(new URL("./index.js", import.meta.url));
+
+function cliExtensionPaths(argv: readonly string[]): string[] {
+  const paths: string[] = [];
+  for (let i = 2; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if ((arg === "-e" || arg === "--extension") && typeof argv[i + 1] === "string") {
+      paths.push(resolve(argv[++i]!));
+    } else if (arg?.startsWith("--extension=")) {
+      paths.push(resolve(arg.slice("--extension=".length)));
+    }
+  }
+  return paths.filter((path) => path !== SELF_INDEX_PATH && !path.endsWith("/extensions/dispatch/index.ts"));
+}
 
 /** What a worker process lends its own dispatch slice: the parent channel and its counters. */
 export interface WorkerBridge {
@@ -133,7 +147,9 @@ export class DispatchRuntime {
   }
 
   private createPool(sharedDaemonNames: readonly string[]): WorkerPool {
-    const envPaths = process.env.PI_DISPATCH_WORKER_EXTENSIONS?.split(delimiter).filter((path) => path.length > 0);
+    const envPaths = process.env.PI_DISPATCH_WORKER_EXTENSIONS?.split(delimiter).filter((path) => path.length > 0) ?? [];
+    const inheritedCliPaths = this.host.workerExtensionPaths === undefined && this.host.workerBootstrapModule === undefined ? cliExtensionPaths(process.argv) : [];
+    const extensionPaths = [...new Set([...(this.host.workerExtensionPaths ?? []), ...inheritedCliPaths, ...envPaths])];
     return new WorkerPool({
       stateDir: () => this.stateDir(),
       agentDir: this.agentDir(),
@@ -142,7 +158,7 @@ export class DispatchRuntime {
       sdkEntryUrl: import.meta.resolve("@earendil-works/pi-coding-agent"),
       bootstrapModule: this.host.workerBootstrapModule,
       bootstrapOptions: this.host.workerBootstrapOptions,
-      extensionPaths: [...(this.host.workerExtensionPaths ?? envPaths ?? [])],
+      extensionPaths,
       agents: () => this.agents(),
       sharedDaemonNames,
       rewriteOutputText: this.host.rewriteOutputText ?? ((text) => text),

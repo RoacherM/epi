@@ -27,7 +27,7 @@ function piPrint(t, prompt) {
     "-p", "--no-session", "-ne", "-e", faux, "-e", join(repoRoot, "dist", "extensions", "dispatch", "index.js"), "--model", "epi-faux/tools", prompt,
   ], {
     cwd: home, encoding: "utf8", timeout: 45_000,
-    env: { PATH: process.env.PATH, HOME: home, PI_CODING_AGENT_DIR: join(home, "agent"), PI_OFFLINE: "1", PI_DISPATCH_WORKER_EXTENSIONS: faux },
+    env: { PATH: process.env.PATH, HOME: home, PI_CODING_AGENT_DIR: join(home, "agent"), PI_OFFLINE: "1" },
   });
 }
 
