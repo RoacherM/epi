@@ -11,7 +11,10 @@ import { join } from "node:path";
 
 import { isPidAlive } from "./reaper.js";
 
-const FALLBACK_SCAN_MS = 30_000;
+// macOS FSEvents registers a newly created directory asynchronously and may coalesce hard-link
+// (`linkSync`) directory updates under heavy load, so an unref'd 1s `readdir` bounds worst-case
+// delivery latency (~8µs per tick) when `fs.watch` misses the registration window.
+const FALLBACK_SCAN_MS = 1_000;
 const DONE_RETENTION_MS = 7 * 24 * 3_600_000;
 
 export interface InboxEvent {

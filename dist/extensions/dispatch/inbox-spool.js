@@ -7,7 +7,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, watch, writeFileSync, writeSync, } from "node:fs";
 import { join } from "node:path";
 import { isPidAlive } from "./reaper.js";
-const FALLBACK_SCAN_MS = 30_000;
+// macOS FSEvents registers a newly created directory asynchronously and may coalesce hard-link
+// (`linkSync`) directory updates under heavy load, so an unref'd 1s `readdir` bounds worst-case
+// delivery latency (~8µs per tick) when `fs.watch` misses the registration window.
+const FALLBACK_SCAN_MS = 1_000;
 const DONE_RETENTION_MS = 7 * 24 * 3_600_000;
 function targetDir(stateDir, target) {
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(target))
