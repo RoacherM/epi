@@ -110,7 +110,7 @@ src/extensions/dispatch/
    - **拉取即销账 + `PollGuard` + 压缩后摘要**：主动调 `task_status({ id })`（已终态）、`task_wait` 或 `board_read` 读走对应消息时撤回待发通知；10s 内重复轮询同一未变快照返回缓存提示；`compaction_end` 后的首次唤醒消息头部自动附带一行宿主生成的在途 `bg_*` / `tm_*` / `job_*` 摘要。
 2. **按 `<target>` 隔离的外部目录队列 `<stateDir>/inbox/<target>/{tmp,pending,done}/`**：
    - **明确归属与锁冲突可见**：`<target>` 为具名守护通道（`host.inboxTarget` 或 `PI_DISPATCH_INBOX=<name>`）或精确 `sessionId`。普通交互 TUI 默认不挂载公共外部收件箱。绑定具名 `<target>` 的宿主启动时校验 `<target>/owner.lock`（`{ pid, startedAt }`）：若对应进程仍存活直接抛启动错误（`architecture.md` §3.8 失败可见）；接管死锁后每次扫描前重读锁文件确认 `pid === process.pid`。
-   - **原子无损写入与去重**：外部投递方先写 `tmp/<uuid>.tmp` 并 `fsync`，再调 **`fs.linkSync(tmpPath, pending/<sha256(dedupKey)>.json)`** 后 `unlinkSync(tmpPath)`（`link()` 遇同名原子报 `EEXIST`）。宿主消费前先查 `existsSync(done/<sha256>.json)` 防重放，收到落盘回执后 `rename` 进 `done/`（清理 `> 7` 天旧文件）。`fs.watch` 仅作提示，每次触发跑全量 `readdir`，辅以启动首扫与 `30s` `.unref()` 兜底扫描。
+   - **原子无损写入与去重**：外部投递方先写 `tmp/<uuid>.tmp` 并 `fsync`，再调 **`fs.linkSync(tmpPath, pending/<sha256(dedupKey)>.json)`** 后 `unlinkSync(tmpPath)`（`link()` 遇同名原子报 `EEXIST`）。宿主消费前先查 `existsSync(done/<sha256>.json)` 防重放，收到落盘回执后 `rename` 进 `done/`（清理 `> 7` 天旧文件）。`fs.watch` 仅作提示，每次触发跑全量 `readdir`，辅以启动首扫与 `1s` `.unref()` 兜底扫描（规避 macOS FSEvents 新建目录异步注册窗与硬链接合并漏报）。
 
 ### 3.2 `Timers`：会话内 `appendEntry` 闹钟与按 `<target>` 绑定的周期计划（`timers.ts`）
 
