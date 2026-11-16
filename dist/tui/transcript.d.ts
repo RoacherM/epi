@@ -85,6 +85,7 @@ export declare class Transcript {
     handle(event: AgentSessionEvent): void;
     private messageStarted;
     private messageEnded;
+    private entryAppended;
     private retryFailed;
     private toolEnded;
     private compactionEnded;

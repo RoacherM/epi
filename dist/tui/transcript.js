@@ -281,6 +281,9 @@ export class Transcript {
             case "auto_retry_start":
                 this.notice(`Retrying (${event.attempt}/${event.maxAttempts}) in ${Math.round(event.delayMs / 1000)}s: ${event.errorMessage}`, "warning");
                 break;
+            case "entry_appended":
+                this.entryAppended(event.entry);
+                break;
             default:
                 break;
         }
@@ -322,6 +325,21 @@ export class Transcript {
         else if (message.role === "custom") {
             this.addFinishedMessage(message);
         }
+    }
+    entryAppended(entry) {
+        // Boundary drafts committed at turn_end / agent_before_settle (task-notify.ts, dispatch
+        // notifications) emit entry_appended rather than message_start/message_end (agent-session.js
+        // _commitBoundaryDrafts). Mirror Pi's interactive-mode.js so mid-run wakeups render live.
+        if (entry.type !== "custom_message" || !entry.display)
+            return;
+        this.addFinishedMessage({
+            role: "custom",
+            customType: entry.customType,
+            content: entry.content,
+            display: entry.display,
+            details: entry.details,
+            timestamp: new Date(entry.timestamp).getTime(),
+        });
     }
     retryFailed(finalError) {
         this.notice(`Retry failed: ${finalError ?? "unknown error"}`, "error");
