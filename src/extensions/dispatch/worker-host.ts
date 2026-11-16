@@ -13,6 +13,7 @@ import { JsonlChannel, type BoardMessage, type ParentCommand, type WorkerCapsule
 import { prepareExecutionGuard, reapOrphans, snapshotDescendantPgids, type ExecutionGuard } from "./reaper.js";
 import { newItemId, resolvePrefix } from "./registry.js";
 import { addUsage, boundedText, definedFields, formatTokenCount, singleLine } from "./result.js";
+import { addressedTo, COORDINATOR } from "./board.js";
 import { DISPATCH_DEPTH_ENV, type DispatchItemProvider, type DispatchItemReport, type DispatchItemSummary, type JobStatus, type SteerStrategy, type TaskUsage, type WorkspaceMode } from "./types.js";
 import { cleanupCleanWorkspace, createWorkspace, inspectWorkspaceDirty, removeWorkspace, type WorkspaceState } from "./worktree.js";
 
@@ -62,7 +63,9 @@ export interface JobSnapshot {
   run: number;
   originSessionId?: string;
   workspace?: { mode: WorkspaceMode; path: string; diffStat?: string; removed?: boolean };
+  /** Peers: parked in `board_wait`, and how much finite work of its own it has in flight. */
   parked: boolean;
+  finite: number;
 }
 
 interface Job {
@@ -124,6 +127,8 @@ export interface WorkerPoolOptions {
   rewriteOutputText: (text: string) => string;
   sessionShort: () => string;
   boardPath: () => string | undefined;
+  boardSince: () => number;
+  boardIdleMs?: number | undefined;
   maxConcurrency?: number | undefined;
   maxOutputBytes?: number | undefined;
   killGraceMs?: number | undefined;
@@ -202,11 +207,18 @@ function compactionLabel(event: WorkerProgress): string {
   return event.ok === true && before !== "" && after !== "" ? `⟲ compacted ${before}→${after}` : "⟲ compaction failed";
 }
 
+function peerBrief(name: string, since: number): string {
+  return [
+    `You are @${name}, a named peer on this session's board; the coordinator is @${COORDINATOR}. Board seq at your start: ${since}.`,
+    "Hand work to another peer with board_post (\"@peer ...\"); wait for messages addressed to you with board_wait({ since: <the last seq you saw> }).",
+    "Finish with your final answer once your part is done.",
+  ].join("\n");
+}
+
 /** The call's settings over the preset's (an explicit argument always wins). */
-function presetSettings(job: Job): Pick<WorkerCapsule, "systemPrompt" | "model" | "tools" | "excludeTools" | "maxTurns" | "verifyCommand"> {
+function presetSettings(job: Job): Pick<WorkerCapsule, "model" | "tools" | "excludeTools" | "maxTurns" | "verifyCommand"> {
   const { request, agent } = job;
   return {
-    systemPrompt: agent?.systemPrompt ?? "",
     model: childModelReference(request.model, agent?.model, request.inheritedModel),
     tools: agent?.tools,
     excludeTools: agent?.excludeTools,
@@ -271,7 +283,7 @@ export class WorkerPool {
   }
 
   private validateName(name: string): void {
-    if (!NAME_PATTERN.test(name) || name === "all" || name === "coordinator") {
+    if (!NAME_PATTERN.test(name) || name === "all" || name === COORDINATOR) {
       throw new Error(`task name must match ${NAME_PATTERN.source} and not be "all" or "coordinator"`);
     }
     const clash = [...this.jobs.values()].find((job) => job.request.name === name && !job.settled);
@@ -408,10 +420,13 @@ export class WorkerPool {
     for (const job of this.jobs.values()) if (job.process?.pid !== undefined) signalGroup(job.process, "SIGTERM");
   }
 
-  /** Push a board message to every running peer except its sender. */
+  /** Push a board message to every running peer except its sender. A parked addressee is
+   * counted as awake at once, so the stall detector never sees the gap before it reports. */
   pushBoard(message: BoardMessage): void {
     for (const job of this.jobs.values()) {
-      if (job.status !== "running" || job.request.name === undefined || job.request.name === message.sender) continue;
+      const name = job.request.name;
+      if (job.status !== "running" || name === undefined || name === message.sender) continue;
+      if (job.parked && addressedTo(message, name)) job.parked = false;
       job.channel?.send({ type: "board", message });
     }
   }
@@ -444,11 +459,12 @@ export class WorkerPool {
       version: 1, role: peer ? "peer-worker" : "task-worker", jobId: job.id, name: job.request.name,
       task: job.task, cwd: job.cwd, agentDir: this.options.agentDir, stateDir: this.options.stateDir(), sessionPath: job.sessionPath,
       forkEntries: job.isResume ? undefined : forkEntriesOf(job.request), ...presetSettings(job),
+      systemPrompt: [job.agent?.systemPrompt ?? "", peer ? peerBrief(job.request.name!, this.options.boardSince()) : ""].filter((part) => part.trim().length > 0).join("\n\n"),
       deadlineAt: job.deadlineAt ?? Date.now() + job.timeoutSeconds * 1000,
       sdkEntryUrl: this.options.sdkEntryUrl, bootstrapModule: this.options.bootstrapModule,
       bootstrapOptions: this.options.bootstrapOptions?.({ ...job.agent?.scope, agent: job.agent?.name, cwd: job.cwd }),
       extensionPaths: this.options.extensionPaths, boardPath: peer ? this.options.boardPath() : undefined,
-      sharedDaemonNames: [...this.options.sharedDaemonNames],
+      boardIdleMs: this.options.boardIdleMs, sharedDaemonNames: [...this.options.sharedDaemonNames],
     };
   }
 
@@ -628,7 +644,7 @@ export class WorkerPool {
     const turns = live && job.progressTurns > 0 ? (job.turns ?? 0) + job.progressTurns : job.turns;
     return {
       id: job.id, status: job.status, task: job.task, cwd: job.cwd, sessionPath: job.sessionPath, createdAt: job.createdAt,
-      steps: job.steps, recentEvents: [...job.recentEvents], run: job.run, parked: job.parked,
+      steps: job.steps, recentEvents: [...job.recentEvents], run: job.run, parked: job.parked, finite: job.finite,
       ...definedFields({
         name: job.request.name, agent: job.agent?.name, startedAt: job.startedAt, finishedAt: job.finishedAt,
         deadlineAt: live ? job.deadlineAt : undefined, result: job.result, error: job.error, usage: job.usage, runUsage: job.runUsage,

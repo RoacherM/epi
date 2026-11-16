@@ -37,6 +37,8 @@ export interface WorkerCapsule {
     /** Default bootstrap only: extension files the worker session loads (e.g. a provider). */
     extensionPaths?: string[] | undefined;
     boardPath?: string | undefined;
+    /** Peers: how long `board_wait` may park before the run settles as partial. */
+    boardIdleMs?: number | undefined;
     sharedDaemonNames: string[];
 }
 export interface WorkerProgress {

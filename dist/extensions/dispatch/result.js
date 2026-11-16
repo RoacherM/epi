@@ -1,3 +1,5 @@
+// Bounded text and usage helpers shared by the host and the worker (ported from src/task-result.ts).
+import { readFileSync } from "node:fs";
 /**
  * One line, bounded. Control characters, C1 controls (including the single-character CSI U+009B)
  * and bidi overrides are folded into spaces, so a child's text can neither add a protocol line nor
@@ -122,6 +124,28 @@ export function formatTokenCount(tokens) {
     if (tokens === undefined || !Number.isFinite(tokens))
         return "";
     return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : `${Math.trunc(tokens)}`;
+}
+/** Every parseable JSON line of a file (a torn last line is skipped). */
+export function readJsonl(path) {
+    let raw;
+    try {
+        raw = readFileSync(path, "utf8");
+    }
+    catch {
+        return [];
+    }
+    const out = [];
+    for (const line of raw.split("\n")) {
+        if (line.trim().length === 0)
+            continue;
+        try {
+            out.push(JSON.parse(line));
+        }
+        catch {
+            // Torn write.
+        }
+    }
+    return out;
 }
 export function errorText(error) {
     return error instanceof Error ? error.message : String(error);

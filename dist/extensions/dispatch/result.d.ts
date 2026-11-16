@@ -29,6 +29,8 @@ export declare function finalAssistantText(messages: readonly unknown[], skipAbo
 export declare function finalAssistantTextFromEntries(entries: readonly unknown[], sinceIndex?: number, skipAborted?: boolean): string;
 /** `182000` -> `182k`; a missing count prints as the empty string. */
 export declare function formatTokenCount(tokens: number | undefined): string;
+/** Every parseable JSON line of a file (a torn last line is skipped). */
+export declare function readJsonl(path: string): unknown[];
 export declare function errorText(error: unknown): string;
 /** `fields` without its undefined values, typed for `exactOptionalPropertyTypes` spreads. */
 export declare function definedFields<T extends Record<string, unknown>>(fields: T): {

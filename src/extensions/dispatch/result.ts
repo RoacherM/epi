@@ -1,4 +1,6 @@
 // Bounded text and usage helpers shared by the host and the worker (ported from src/task-result.ts).
+import { readFileSync } from "node:fs";
+
 import type { TaskUsage } from "./types.js";
 
 /**
@@ -131,6 +133,26 @@ export function finalAssistantTextFromEntries(entries: readonly unknown[], since
 export function formatTokenCount(tokens: number | undefined): string {
   if (tokens === undefined || !Number.isFinite(tokens)) return "";
   return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : `${Math.trunc(tokens)}`;
+}
+
+/** Every parseable JSON line of a file (a torn last line is skipped). */
+export function readJsonl(path: string): unknown[] {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return [];
+  }
+  const out: unknown[] = [];
+  for (const line of raw.split("\n")) {
+    if (line.trim().length === 0) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {
+      // Torn write.
+    }
+  }
+  return out;
 }
 
 export function errorText(error: unknown): string {

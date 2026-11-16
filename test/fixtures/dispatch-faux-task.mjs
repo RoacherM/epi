@@ -7,6 +7,11 @@ const text = (m) => (typeof m.content === "string" ? m.content : Array.isArray(m
 const firstUser = (msgs) => text(msgs.find((m) => m.role === "user") ?? { content: "" });
 const results = (msgs) => msgs.filter((m) => m.role === "toolResult").map(text);
 const all = (msgs) => msgs.map(text).join("\n");
+const lastUser = (msgs) => text(msgs.filter((m) => m.role === "user").at(-1) ?? { content: "" });
+// Pi 1.4 sends the system prompt as a `system` message whose text lives in `sections`.
+const boardSince = (context) => Number(/Board seq at your start: (\d+)/.exec(JSON.stringify(context.messages))?.[1] ?? 0);
+const call = (name, args) => fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" });
+const say = (value) => fauxAssistantMessage(fauxText(value));
 
 const scenarios = {
   // Root: one foreground child, then report what it said.
@@ -33,15 +38,32 @@ const scenarios = {
   },
   // Child: answers without fixing; verifyCommand keeps failing the same way.
   "child-verify": () => fauxAssistantMessage(fauxText("CHILD-CLAIMS-DONE")),
+  // Peers: alpha hands work to beta over the board; the coordinator never relays it.
+  "peer-alpha": (msgs) => (results(msgs).length === 0 ? call("board_post", { text: "@beta HANDOFF-FROM-ALPHA payload" }) : say("ALPHA-DONE ALPHA-HISTORY-MARKER")),
+  "peer-beta": (msgs, _signal, context) => {
+    if (results(msgs).length === 0) return call("board_wait", { since: boardSince(context) });
+    const last = results(msgs).at(-1);
+    return say(last.includes("HANDOFF-FROM-ALPHA") ? "BETA-GOT-HANDOFF" : `BETA-UNEXPECTED: ${last}`);
+  },
+  // Peer: parks on the board until someone addresses it (or the idle cap ends the run).
+  "peer-idle": (msgs, _signal, context) => {
+    if (lastUser(msgs).startsWith("Board message #")) return say(`REVIVED: ${lastUser(msgs)}`);
+    if (results(msgs).length === 0) return call("board_wait", { since: boardSince(context) });
+    return say(`IDLE-PEER-WOKE: ${results(msgs).at(-1)}`);
+  },
+  // Peer forked from alpha: reports whether alpha's history came along.
+  "peer-fork": (msgs) => say(all(msgs).includes("ALPHA-HISTORY-MARKER") ? "FORK-SAW-ALPHA" : "FORK-BLIND"),
 };
 
 async function reply(context, options) {
   const msgs = context.messages;
   const first = firstUser(msgs);
-  const key = Object.keys(scenarios).find((name) => first.includes(name)) ?? (msgs.length > 0 ? first.split(/\s+/)[0] : "");
-  const scenario = scenarios[key];
+  // The newest prompt names the scenario when it carries one (a fork child's own task); steers and
+  // board revivals do not, so the original task decides.
+  const key = Object.keys(scenarios).find((name) => lastUser(msgs).includes(name)) ?? Object.keys(scenarios).find((name) => first.includes(name));
+  const scenario = key === undefined ? undefined : scenarios[key];
   if (scenario === undefined) return fauxAssistantMessage(fauxText(`NO-SCENARIO for ${first}`));
-  return scenario(msgs, options?.signal);
+  return scenario(msgs, options?.signal, context);
 }
 
 export default function (pi) {

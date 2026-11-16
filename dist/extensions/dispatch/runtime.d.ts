@@ -1,6 +1,7 @@
 import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type AgentDefinition } from "./agents.js";
 import { BgProcessRuntime } from "./bg-bash.js";
+import { BoardHub, PeerBoard } from "./board.js";
 import { DrainBarrier, NotificationGate, NotificationLedger, PollGuard } from "./notify-ledger.js";
 import type { WorkerCapsule, WorkerEvent } from "./protocol.js";
 import { DispatchRegistry } from "./registry.js";
@@ -15,6 +16,8 @@ export interface WorkerBridge {
     steerPending: () => boolean;
     turns: () => number;
     nextStep: () => number;
+    /** A peer's `board_wait` hit its idle cap: end the run as partial after this turn. */
+    idleStop?: () => void;
 }
 export declare class DispatchRuntime {
     readonly host: DispatchHostAdapter;
@@ -27,6 +30,9 @@ export declare class DispatchRuntime {
     readonly bg: BgProcessRuntime;
     readonly timers: TimerRuntime;
     readonly pool: WorkerPool | undefined;
+    /** Root: the session board's single writer. Peer worker: its fd 3 view of the board. */
+    readonly board: BoardHub | undefined;
+    readonly peerBoard: PeerBoard | undefined;
     readonly barrier: DrainBarrier;
     /** Jobs whose settle must reach the model as a notification, and with which auto-wake. */
     readonly notifyOnSettle: Map<string, boolean>;
@@ -36,7 +42,11 @@ export declare class DispatchRuntime {
     private agentsCache;
     private milestoneSeq;
     private readonly releaseSignalCleanup;
+    private readonly firedStalls;
+    private stallTimer;
     constructor(host: DispatchHostAdapter, role: DispatchRole, worker?: WorkerBridge | undefined);
+    private createLedger;
+    private createTimers;
     stateDir(): string;
     agentDir(): string;
     inboxTarget(): string | undefined;
@@ -44,6 +54,19 @@ export declare class DispatchRuntime {
     sessionShort(): string;
     private drainMaxMs;
     private createPool;
+    private createPeerBoard;
+    /** Root fan-out of one new board message: peers, the coordinator's ledger, revivals, stall. */
+    private onBoardPosted;
+    /** A settled peer that is @mentioned again is resumed in place from its session file. */
+    private revivePeers;
+    private scheduleStallCheck;
+    /** One `[board stall]` per `stall:<epoch>:<maxSeq>`: every live named peer is parked, none has
+     * finite work of its own, the root has none either, and nothing is waiting to be delivered. */
+    checkStall(): void;
+    /** `forkFrom: "<name>"`: the peer's closed history, ready to seed a sibling peer. */
+    private peerForkEntries;
+    private postBrief;
+    private boardTools;
     private inFlightFooter;
     private onAcked;
     private onTimerFired;

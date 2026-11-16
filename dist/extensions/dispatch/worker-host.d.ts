@@ -50,7 +50,9 @@ export interface JobSnapshot {
         diffStat?: string;
         removed?: boolean;
     };
+    /** Peers: parked in `board_wait`, and how much finite work of its own it has in flight. */
     parked: boolean;
+    finite: number;
 }
 interface Job {
     id: string;
@@ -110,6 +112,8 @@ export interface WorkerPoolOptions {
     rewriteOutputText: (text: string) => string;
     sessionShort: () => string;
     boardPath: () => string | undefined;
+    boardSince: () => number;
+    boardIdleMs?: number | undefined;
     maxConcurrency?: number | undefined;
     maxOutputBytes?: number | undefined;
     killGraceMs?: number | undefined;
@@ -163,7 +167,8 @@ export declare class WorkerPool {
     private releaseWorkspace;
     shutdown(): Promise<void>;
     killAllSync(): void;
-    /** Push a board message to every running peer except its sender. */
+    /** Push a board message to every running peer except its sender. A parked addressee is
+     * counted as awake at once, so the stall detector never sees the gap before it reports. */
     pushBoard(message: BoardMessage): void;
     private changed;
     private pump;

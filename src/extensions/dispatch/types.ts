@@ -120,6 +120,8 @@ export interface DispatchHostAdapter {
   inboxTarget?: string;
   /** Upper bound of the print-mode / worker settle drain. */
   drainMaxMs?: number;
+  /** How long a named peer may park in `board_wait` before it settles as partial (default 15m). */
+  boardIdleMs?: number;
   ui?: DispatchUiAdapter;
 }
 

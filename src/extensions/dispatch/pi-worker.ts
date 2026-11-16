@@ -104,7 +104,8 @@ class Worker {
   interrupted = false;
   interruptRequested = false;
   hadInterrupt = false;
-  stoppedAtMaxTurns = false;
+  /** Why this run stopped itself between turns: its `maxTurns` budget, or a peer's board idle cap. */
+  budgetStop: "maxTurns" | "idle" | undefined;
   inPrompt = false;
   turns = 0;
   steps = 0;
@@ -126,6 +127,9 @@ class Worker {
       steerPending: () => this.followUps.length > 0 || this.interruptRequested,
       turns: () => this.turns,
       nextStep: () => ++this.steps,
+      idleStop: () => {
+        this.budgetStop = "idle";
+      },
     });
   }
 
@@ -142,6 +146,7 @@ class Worker {
   private handle(command: ParentCommand): void {
     if (command.type === "abort") void this.interrupt();
     else if (command.type === "steer" && typeof command.message === "string" && command.message.length > 0) this.deliverSteer(command.message, command.strategy ?? "steer");
+    else if (command.type === "board") this.runtime.peerBoard?.onPush(command.message);
   }
 
   /** A steer is a parent instruction, delivered verbatim (never expanded as a command). */
@@ -155,19 +160,22 @@ class Worker {
       this.pendingSteers.push({ text, strategy });
       return;
     }
+    this.runtime.peerBoard?.wake("steer");
     if (strategy === "interrupt") {
       this.followUps.splice(0, this.followUps.length, text);
       if (this.inPrompt && !this.runtime.barrier.draining) {
         this.interruptRequested = true;
         this.hadInterrupt = true;
-        this.stoppedAtMaxTurns = false;
+        this.budgetStop = undefined;
+        this.stopping = false;
         void session.abort();
       }
       this.runtime.barrier.wake();
       return;
     }
-    if (!session.isStreaming || this.runtime.barrier.draining || this.stoppedAtMaxTurns) {
-      this.stoppedAtMaxTurns = false;
+    if (!session.isStreaming || this.runtime.barrier.draining || this.budgetStop !== undefined) {
+      this.budgetStop = undefined;
+      this.stopping = false;
       this.followUps.push(text);
       this.runtime.barrier.wake();
       return;
@@ -192,13 +200,16 @@ class Worker {
     this.emit({ type: "progress", turns: this.turns, steps: this.steps, phase: "tool_end", tool, target });
   }
 
+  private stopping = false;
+
   private onTurnEnd(session: AgentSession, event: { message: unknown; toolResults: unknown[] }): void {
-    if (this.stoppedAtMaxTurns || this.interruptRequested) return;
+    if (this.stopping || this.interruptRequested) return;
     this.turns += 1;
     this.emit({ type: "progress", turns: this.turns, steps: this.steps, phase: "turn_end", summary: singleLine(finalAssistantText([event.message]), 200) });
     const max = this.capsule.maxTurns;
-    if (max !== undefined && this.turns >= max && event.toolResults.length > 0) {
-      this.stoppedAtMaxTurns = true;
+    if (max !== undefined && this.turns >= max && event.toolResults.length > 0) this.budgetStop = "maxTurns";
+    if (this.budgetStop !== undefined && event.toolResults.length > 0) {
+      this.stopping = true;
       void session.abort();
     }
   }
@@ -242,7 +253,7 @@ class Worker {
   /** Re-prompt on a failing verifyCommand; the same failure twice exhausts the stall budget. */
   private async verifyGate(session: AgentSession): Promise<{ ok: boolean; attempts: number; output: string } | undefined> {
     const command = this.capsule.verifyCommand;
-    if (command === undefined || this.interrupted || this.stoppedAtMaxTurns) return undefined;
+    if (command === undefined || this.interrupted || this.budgetStop !== undefined) return undefined;
     const seen = new Set<string>();
     for (let attempts = 1; ; attempts += 1) {
       const result = await runVerify(command, this.capsule.cwd, Math.max(1_000, Math.min(VERIFY_TIMEOUT_MS, this.capsule.deadlineAt - Date.now())));
@@ -257,15 +268,16 @@ class Worker {
 
   private result(session: AgentSession, verify: { ok: boolean; attempts: number; output: string } | undefined): WorkerResult {
     const entries = session.sessionManager.getEntries();
-    const usage = collectEntryUsage(entries, this.usageBaseline);
-    const contextStop = !this.stoppedAtMaxTurns && this.overflowUnrecoverable && lastStopReason(session.messages) !== "stop";
-    const requestError = this.stoppedAtMaxTurns || contextStop ? undefined : lastRequestError(session.messages);
+    const budget = this.stopping ? this.budgetStop : undefined;
+    const contextStop = budget === undefined && this.overflowUnrecoverable && lastStopReason(session.messages) !== "stop";
+    const requestError = budget !== undefined || contextStop ? undefined : lastRequestError(session.messages);
     if (requestError !== undefined) throw new Error(requestError);
-    let output = finalAssistantTextFromEntries(entries, this.usageBaseline, this.stoppedAtMaxTurns || this.hadInterrupt);
-    const stopped = this.stoppedAtMaxTurns ? "maxTurns" : contextStop ? "context" : verify?.ok === false ? "verify" : undefined;
-    if (verify?.ok === false) output = `${output}\n[verifyCommand still failing after ${verify.attempts} attempt(s):\n${verify.output}]`;
+    const output = finalAssistantTextFromEntries(entries, this.usageBaseline, budget !== undefined || this.hadInterrupt);
+    const verifyFailed = verify !== undefined && !verify.ok;
+    const stopped = budget ?? (contextStop ? "context" : verifyFailed ? "verify" : undefined);
     return {
-      type: "result", ok: true, turns: this.turns, usage, output,
+      type: "result", ok: true, turns: this.turns, usage: collectEntryUsage(entries, this.usageBaseline),
+      output: verifyFailed ? `${output}\n[verifyCommand still failing after ${verify.attempts} attempt(s):\n${verify.output}]` : output,
       ...(stopped === undefined ? {} : { partial: true, stopped }),
       ...(verify === undefined ? {} : { verify: { ok: verify.ok, attempts: verify.attempts } }),
     };
