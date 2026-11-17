@@ -57,7 +57,8 @@ test("a running task job opens from its call row and from the footer, and its pa
     ["clickText", "child job please"], ["waitFor", "CHILD-STEP", { screen: true }], ["screen", "fromRow"],
     ["key", "esc"], ["waitGone", "(running)"],
     ["clickText", "◐ 1 task"], ["waitFor", "Items (1)", { screen: true }], ["screen", "list"],
-    ["key", "enter"], ["waitFor", "CHILD-FINAL-ANSWER", { screen: true, timeoutMs: 20_000 }], ["screen", "live"],
+    ["key", "enter"], ["waitFor", "CHILD-FINAL-ANSWER", { screen: true, timeoutMs: 20_000 }],
+    ["waitFor", { regex: "job_[0-9a-f]{8} · completed" }, { screen: true, timeoutMs: 20_000 }], ["screen", "live"],
     ["key", "esc"], ["waitFor", "Items (1)", { screen: true }], ["screen", "back"], ["detach"],
   ], { rows: 50 });
   assert.match(screen(screens, "fromRow"), /task [0-9a-f]{8} \(running\)/);

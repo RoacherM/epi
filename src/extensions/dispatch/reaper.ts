@@ -257,14 +257,19 @@ async function listDarwinSandboxProcessesAsync(cookieToken: string, hasLiveKnown
   return rows;
 }
 
+let psUnavailable = false;
+
 async function listUnixProcessesAsync(cookieToken: string, hasLiveKnownPgids: boolean): Promise<ProcessRow[]> {
   if (process.platform === "win32") return [];
-  const psBin = existsSync("/bin/ps") ? "/bin/ps" : "ps";
-  const args = process.platform === "darwin"
-    ? ["-axwwE", "-o", "pid=,ppid=,pgid=,uid=,lstart=,comm=,command="]
-    : ["-axww", "-o", "pid=,ppid=,pgid=,uid=,lstart=,comm=,args="];
-  const { ok, stdout } = await runCommandAsync(psBin, args);
-  if (ok) return stdout.split("\n").map(parsePsLine).filter((row): row is ProcessRow => row !== undefined);
+  if (!psUnavailable) {
+    const psBin = existsSync("/bin/ps") ? "/bin/ps" : "ps";
+    const args = process.platform === "darwin"
+      ? ["-axwwE", "-o", "pid=,ppid=,pgid=,uid=,lstart=,comm=,command="]
+      : ["-axww", "-o", "pid=,ppid=,pgid=,uid=,lstart=,comm=,args="];
+    const { ok, stdout } = await runCommandAsync(psBin, args);
+    if (ok) return stdout.split("\n").map(parsePsLine).filter((row): row is ProcessRow => row !== undefined);
+    if (process.platform === "darwin") psUnavailable = true;
+  }
   return process.platform === "darwin" ? listDarwinSandboxProcessesAsync(cookieToken, hasLiveKnownPgids) : [];
 }
 
