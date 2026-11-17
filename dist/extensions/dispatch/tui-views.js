@@ -220,7 +220,8 @@ class DispatchOverlay {
         }
         const detail = itemDetailView(this.theme, this.runtime, this.mode.id);
         const raw = detail ? detail.lines : [this.theme.fg("error", `Item ${this.mode.id} not found.`)];
-        return { title: detail ? `${detail.title} · ${detail.subtitle}` : this.mode.id, lines: raw.flatMap((l) => (l === "" ? [""] : wrapTextWithAnsi(l, innerWidth))) };
+        const title = detail ? (detail.subtitle ? `${detail.title} · ${detail.subtitle}` : detail.title) : this.mode.id;
+        return { title, lines: raw.flatMap((l) => (l === "" ? [""] : wrapTextWithAnsi(l, innerWidth))) };
     }
     handleInput(data) {
         if (isKeyRelease(data))
@@ -448,8 +449,10 @@ function createOverlayOpener(runtime) {
         }
         closeOverlay?.();
         let timer;
+        let poll;
         let unsubLive;
         let unsubLiveExtra;
+        let myClose;
         await ctx.ui.custom((tui, theme, _kb, done) => {
             const request = () => {
                 if (timer !== undefined)
@@ -459,13 +462,18 @@ function createOverlayOpener(runtime) {
             };
             unsubLive = runtime.onUiChange(request);
             unsubLiveExtra = runtime.host.ui?.onExtraChange?.(request);
-            closeOverlay = () => done(undefined);
-            return new DispatchOverlay(theme, runtime, initial, () => tui.terminal.rows, () => done(undefined));
+            poll = setInterval(() => tui.requestRender(), 250);
+            poll.unref();
+            myClose = () => done(undefined);
+            closeOverlay = myClose;
+            return new DispatchOverlay(theme, runtime, initial, () => tui.terminal.rows, myClose);
         }, { overlay: true, overlayOptions: { width: "88%", minWidth: 32, anchor: "center" } });
         clearTimeout(timer);
+        clearInterval(poll);
         unsubLive?.();
         unsubLiveExtra?.();
-        closeOverlay = undefined;
+        if (closeOverlay === myClose)
+            closeOverlay = undefined;
     };
     return { open, close: () => closeOverlay?.() };
 }

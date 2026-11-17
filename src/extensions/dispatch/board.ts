@@ -222,6 +222,7 @@ export class PeerBoard {
 
 export interface BoardBackend {
   self: string;
+  defaultActive?: boolean | undefined;
   post(text: string, channel: string | undefined): BoardMessage | undefined;
   read(options: ReadOptions): BoardMessage[];
   wait(since: number, mentionsOnly: boolean, signal: AbortSignal | undefined): Promise<WaitOutcome>;
@@ -262,9 +263,11 @@ function waitText(backend: BoardBackend, outcome: WaitOutcome): string {
 }
 
 export function createBoardTools(backend: BoardBackend): ToolDefinition[] {
+  const defaultActive = backend.defaultActive ?? true;
   const post: ToolDefinition<typeof PostParameters> = {
     name: "board_post",
     label: "Board Post",
+    defaultActive,
     description: `Post to the session board as @${backend.self}. Hand work to a peer with @name; it is woken directly, without the coordinator relaying.`,
     parameters: PostParameters,
     async execute(_id, params: Static<typeof PostParameters>) {
@@ -275,6 +278,7 @@ export function createBoardTools(backend: BoardBackend): ToolDefinition[] {
   const read: ToolDefinition<typeof ReadParameters> = {
     name: "board_read",
     label: "Board Read",
+    defaultActive,
     description: "Read board messages (by since, seqs, channel); returns the latest seq to pass to board_wait.",
     parameters: ReadParameters,
     async execute(_id, params: Static<typeof ReadParameters>) {
@@ -287,6 +291,7 @@ export function createBoardTools(backend: BoardBackend): ToolDefinition[] {
   const wait: ToolDefinition<typeof WaitParameters> = {
     name: "board_wait",
     label: "Board Wait",
+    defaultActive,
     description: "Wait for the next board message addressed to you after `since` (also ends on a parent steer, Esc, or the idle cap).",
     parameters: WaitParameters,
     async execute(_id, params: Static<typeof WaitParameters>, signal) {

@@ -1,1 +1,1 @@
-{"version":3,"file":"dispatch-epi-worker.d.ts","sourceRoot":"","sources":["../src/dispatch-epi-worker.ts"],"names":[],"mappings":"AASA,OAAO,KAAK,EAAE,mBAAmB,EAAiB,MAAM,mCAAmC,CAAC;AAoD5F,eAAO,MAAM,mBAAmB,EAAE,mBAwCjC,CAAC"}
+{"version":3,"file":"dispatch-epi-worker.d.ts","sourceRoot":"","sources":["../src/dispatch-epi-worker.ts"],"names":[],"mappings":"AASA,OAAO,KAAK,EAAE,mBAAmB,EAAiB,MAAM,mCAAmC,CAAC;AAyE5F,eAAO,MAAM,mBAAmB,EAAE,mBAsCjC,CAAC"}

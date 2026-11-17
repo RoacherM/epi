@@ -83,6 +83,8 @@ export declare class Transcript {
     /** A block from the host (command output, info panels), separated like any other message. */
     addBlock(component: Component): void;
     handle(event: AgentSessionEvent): void;
+    private handleMessageOrToolEvent;
+    private handleLifecycleEvent;
     private messageStarted;
     private messageEnded;
     private entryAppended;

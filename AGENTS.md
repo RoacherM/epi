@@ -18,7 +18,7 @@ Epi 是建在锁定版本 Pi SDK 之上的定制编码终端 Harness：拥有 CL
 - 改 TypeScript 规范、复杂度上限或测试隔离：读 [代码规范与质量检查](docs/code-quality.md)
 - 改 CLI 参数、Manifest、Hooks、MCP 或用到 Pi 内部接口：读 [实现与契约](docs/development.md) 与 [Pi 内部接口登记](docs/pi-internals.md)
 - 查历史拍板边界或登记非阻塞问题：读 [已定决策](docs/decisions.md) 或 [dogfood-issues.md](docs/dogfood-issues.md)
-- 改具体模块时读对应单篇设计（如 `docs/{tui,mcp,subagents,cli,magpie,web-search}-design.md`）；`docs/notes/` 只在追溯调研背景或用户要求时查阅，以免旧笔记干扰当前实现
+- 改具体模块时读对应单篇设计（如 `docs/{tui,mcp,dispatch,cli,magpie,web-search}-design.md`）；`docs/notes/` 只在追溯调研背景或用户要求时查阅，以免旧笔记干扰当前实现
 
 ## 3. 常用命令
 
@@ -38,7 +38,7 @@ scripts/review.sh precheck <id> main HEAD                          # 机器预�
 4. **设计先出可交互 HTML 原型**：界面、交互或流程设计先交 `scripts/probes/<名字>-prototype.html`，等用户亲自试过并同意后才改 `src/`、才合并（决策 WF6），避免方向未定造成返工。无界面和接口取舍的明确改动直接做完闭环。
 5. **分支、构建与原子提交**：不在 `main` 分支直接提交 `src/` 改动，切 `dev/<id>` 分支开发，保证合入前经过预检或评审门禁。`dist/` 与 `src/` 同步提交，并用 `git commit --only -- <本次改动路径>` 提交，防止把并行会话未完成的改动卷入提交。
 6. **活文档与决策同步**：改 CLI、Manifest、Hooks、MCP 或开发流程时，同步更新 `docs/{development,dev-workflow,code-quality,pi-internals}.md`（改协议或持久化格式前先写清兼容行为），避免旧文档误导后续会话。定下会约束后续工作的决定时，当轮写进 [docs/decisions.md](docs/decisions.md)，写明原因和被否掉的选项。写文档引用代码前重读源文件核实，探针结论标明依赖版本与日期。
-7. **单篇自包含设计文档**：每个子系统只维护一份当前自包含文档（如 `docs/{tui,mcp,subagents}-design.md`），让只读这一份文件的读者也能看懂完整流程与术语，避免多份残片说法打架。一次性调研放 `docs/notes/`，旧方案及时清理或归档。
+7. **单篇自包含设计文档**：每个子系统只维护一份当前自包含文档（如 `docs/{tui,mcp,dispatch}-design.md`），让只读这一份文件的读者也能看懂完整流程与术语，避免多份残片说法打架。一次性调研放 `docs/notes/`，旧方案及时清理或归档。
 8. **独立评审**：按 `vibe-coding` Skill 的「统一评审规则」对完整功能或重构做一次全量评审，避免拆小包和阶段终审把同一段代码审两遍；本仓不另立评审流程，发版前只核对 `main` 评审记录、不重审已审功能。本仓参数写在 `.review.json`（预检 `scripts/dev/precheck.sh`、高风险路径、超 2000 行按 `tui`/`extensions`/`task`/`core` 切分、评审目录 `.dev/reviews`、非阻塞意见记 `docs/dogfood-issues.md`），由薄入口 `scripts/review.sh`（兼容旧入口 `scripts/dev/run-review.sh`）和 `.githooks/{pre-commit,pre-merge-commit}` 转调全局评审脚本。
 
 ## 教训

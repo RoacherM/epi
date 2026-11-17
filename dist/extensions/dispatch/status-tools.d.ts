@@ -11,6 +11,7 @@ export interface StatusToolDeps {
     foregroundWaits?: Set<() => void>;
     /** Default TUI foreground wait budget in seconds (0 disables). */
     foregroundBudgetSeconds?: number | undefined;
+    unknownRefHint?: ((ref: string) => string | undefined) | undefined;
     /** Worker slices see only their own items; the description says so. */
     scope: "all" | "own";
 }

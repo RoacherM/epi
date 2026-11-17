@@ -89,7 +89,7 @@ export interface DispatchExtraItem {
   id: string;
   active: boolean;
   row: (theme: import("@earendil-works/pi-coding-agent").Theme) => string;
-  detail: (theme: import("@earendil-works/pi-coding-agent").Theme) => { title: string; subtitle: string; lines: string[] };
+  detail: (theme: import("@earendil-works/pi-coding-agent").Theme) => { title: string; subtitle?: string | undefined; lines: readonly string[] };
 }
 
 export interface DispatchUiAdapter {
@@ -101,6 +101,8 @@ export interface DispatchUiAdapter {
   /** Extra host-managed items (e.g. Epi's `monitor` streams) shown in `/tasks` and counted in the footer. */
   extraItems?: () => readonly DispatchExtraItem[];
   onExtraChange?: (listener: () => void) => () => void;
+  /** Optional hint appended when `task_cancel` / `task_status` fails to resolve an ID owned by another host tool. */
+  unknownRefHint?: (ref: string) => string | undefined;
 }
 
 /** Everything a host may inject. Every field is optional: `pi -e dist/extensions/dispatch/index.js`
@@ -111,6 +113,10 @@ export interface DispatchHostAdapter {
   stateDir?: string;
   /** The Node binary workers run on. Default: `process.execPath`. */
   nodeExecPath?: string;
+  /** Override the worker entry script path (used by offline test fixtures). */
+  workerPath?: string;
+  /** Grace window between SIGTERM and SIGKILL when stopping a worker (ms). */
+  killGraceMs?: number;
   /** A module URL exporting `createWorkerSession(capsule, slice, sdk)`; replaces the portable
    * worker's default Pi session assembly (Epi plugs its Manifest/Magpie pipeline in here). */
   workerBootstrapModule?: string;

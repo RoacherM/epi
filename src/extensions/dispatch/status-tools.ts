@@ -18,6 +18,7 @@ export interface StatusToolDeps {
   foregroundWaits?: Set<() => void>;
   /** Default TUI foreground wait budget in seconds (0 disables). */
   foregroundBudgetSeconds?: number | undefined;
+  unknownRefHint?: ((ref: string) => string | undefined) | undefined;
   /** Worker slices see only their own items; the description says so. */
   scope: "all" | "own";
 }
@@ -38,38 +39,48 @@ function collectIfSettled(ledger: NotificationLedger, report: DispatchItemReport
 }
 
 const StatusParameters = Type.Object({
-  id: Type.Optional(Type.String({ description: "bg_<id>, job_<id>, a task name, or tm_<id>; omit to list everything" })),
+  id: Type.Optional(Type.String({ description: "bg_*, job_*, task name, or tm_*; omit to list all" })),
 });
 
 const WaitParameters = Type.Object({
-  ids: Type.Array(Type.String(), { minItems: 1, description: "bg_* / job_* / task names to wait for" }),
+  ids: Type.Array(Type.String(), { minItems: 1 }),
   mode: Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("any")])),
-  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, description: "Stop waiting after this long (the items keep running)" })),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 
 const CancelParameters = Type.Object({
-  id: Type.String({ description: "bg_<id>, job_<id>, a task name, or tm_<id>" }),
-  forceDirty: Type.Optional(Type.Boolean({ description: "Also delete an isolated workspace that still holds uncommitted or unmerged work" })),
+  id: Type.String(),
+  forceDirty: Type.Optional(Type.Boolean({ description: "Delete dirty isolated workspace" })),
 });
 
 const InputParameters = Type.Object({
-  id: Type.String({ description: "bg_<id> started with stdin: true or isDaemon: true" }),
+  id: Type.String(),
   input: Type.Optional(Type.String()),
-  end: Type.Optional(Type.Boolean({ description: "Close stdin after writing" })),
+  end: Type.Optional(Type.Boolean({ description: "Close stdin" })),
 });
+
+function resolveWithHint(deps: StatusToolDeps, ref: string) {
+  try {
+    return deps.registry.resolve(ref);
+  } catch (error) {
+    const hint = deps.unknownRefHint?.(ref);
+    if (hint === undefined) throw error;
+    throw new Error(`${error instanceof Error ? error.message : String(error)} ${hint}`, { cause: error });
+  }
+}
 
 function statusTool(deps: StatusToolDeps): ToolDefinition<typeof StatusParameters> {
   return {
     name: "task_status",
     label: "Task Status",
-    description: `Show one dispatch item (output so far, result, workspace) or list all ${deps.scope === "own" ? "of your own " : ""}background items. Do not poll: settled items notify you.`,
+    description: `Inspect one item or list ${deps.scope === "own" ? "own " : ""}background items (do not poll).`,
     parameters: StatusParameters,
     async execute(_id, params: Static<typeof StatusParameters>) {
       if (params.id === undefined) {
         const items = deps.registry.list();
         return text(items.length === 0 ? "No background items." : items.map(listLine).join("\n"), { items });
       }
-      const { provider, id } = deps.registry.resolve(params.id);
+      const { provider, id } = resolveWithHint(deps, params.id);
       const report = provider.report(id);
       const hint = report.summary.active ? deps.pollGuard.check(id, `${report.summary.status}\0${report.text}`) : undefined;
       if (hint !== undefined) return text(`${id} ${report.summary.status}. ${hint}`, { unchanged: true });
@@ -89,7 +100,7 @@ function waitTool(deps: StatusToolDeps): ToolDefinition<typeof WaitParameters> {
   return {
     name: "task_wait",
     label: "Task Wait",
-    description: "Block until the given bg_* / job_* items settle (mode all, default) or the first one does (any). Waiting never stops them; Esc or timeoutSeconds just stops waiting.",
+    description: "Wait for bg_*/job_* items to settle (all or any); timeoutSeconds/Esc stops waiting without cancelling.",
     parameters: WaitParameters,
     async execute(_id, params: Static<typeof WaitParameters>, signal, _onUpdate, ctx) {
       const targets = params.ids.map((ref) => deps.registry.resolve(ref));
@@ -123,10 +134,10 @@ function cancelTool(deps: StatusToolDeps): ToolDefinition<typeof CancelParameter
   return {
     name: "task_cancel",
     label: "Task Cancel",
-    description: "Stop a bg_* command, a job_* / named task, or cancel a tm_* timer. An isolated workspace with unmerged changes is kept unless forceDirty: true.",
+    description: "Stop a bg_*, job_*/named task, or tm_* timer (keeps dirty workspace unless forceDirty).",
     parameters: CancelParameters,
     async execute(_id, params: Static<typeof CancelParameters>) {
-      const { provider, id } = deps.registry.resolve(params.id);
+      const { provider, id } = resolveWithHint(deps, params.id);
       const report = await provider.cancel(id, { forceDirty: params.forceDirty === true });
       deps.ledger.discard(id);
       deps.ledger.discard(`${id}:`, true);
@@ -143,7 +154,7 @@ function inputTool(deps: StatusToolDeps): ToolDefinition<typeof InputParameters>
   return {
     name: "task_input",
     label: "Task Input",
-    description: "Write to the stdin of a running bg_* command (started with stdin: true or isDaemon: true); end: true closes it.",
+    description: "Write to stdin of a running bg_* command.",
     parameters: InputParameters,
     async execute(_id, params: Static<typeof InputParameters>) {
       const { provider, id } = deps.registry.resolve(params.id);

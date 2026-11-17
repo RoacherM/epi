@@ -57,10 +57,12 @@ test("--exclude-tools bash,edit,write leaves only the tools not named", (t) => {
   // epi:task is on by default (decision H3/K4) and its tools are not named, so they stay.
   assert.deepEqual(JSON.parse(result.stdout), [
     "read",
-    "task",
     "task_status",
     "task_wait",
     "task_cancel",
+    "task_input",
+    "timer",
+    "task",
     "todo",
     "monitor",
     "Monitor",

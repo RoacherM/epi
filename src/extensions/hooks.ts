@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type {
+  ExtensionAPI,
   ExtensionContext,
   InlineExtension,
   InputEvent,
@@ -21,7 +22,7 @@ import {
 } from "../hook-events.js";
 import type { ResolvedHook } from "../hooks-config.js";
 import { HooksRuntime, type HookPayload } from "../hooks-runtime.js";
-import { loadTaskAgents } from "../task-agents.js";
+import { loadAgents } from "./dispatch/agents.js";
 
 export interface HooksExtensionOptions {
   hooks: readonly ResolvedHook[];
@@ -240,33 +241,90 @@ export function hooksForChild(hooks: readonly ResolvedHook[]): ResolvedHook[] {
     .filter((hook) => hook.handlers.length > 0);
 }
 
+function bindInputAndToolHooks(pi: ExtensionAPI, runtime: HooksRuntime): void {
+  pi.on("input", async (event, context) => {
+    let decision: HookDecision;
+    try {
+      decision = await runtime.run(inputPayload(event, context), context);
+    } catch (error) {
+      notifyPromptFailClosed(context, failureMessage(error), "error");
+      return { action: "handled" as const };
+    }
+    if (decision.action === "transform") return { action: "transform" as const, text: decision.text ?? "" };
+    if (decision.action === "block" || decision.action === "cancel") {
+      notifyPromptFailClosed(context, promptBlockedMessage(decision), "warning");
+      return { action: "handled" as const };
+    }
+    return { action: "continue" as const };
+  });
+
+  pi.on("tool_call", async (event, context) => {
+    try {
+      const decision = await runtime.run(toolCallPayload(event, context), context);
+      return decision.action === "block" || decision.action === "cancel" ? { block: true, reason: blockReason(decision) } : undefined;
+    } catch (error) {
+      return { block: true, reason: failureMessage(error) };
+    }
+  });
+
+  pi.on("tool_result", async (event, context) => {
+    try {
+      const decision = await runtime.run(toolResultPayload(event, context), context);
+      return decision.action === "replace" ? { content: [{ type: "text" as const, text: decision.text ?? "" }], isError: decision.isError ?? false } : undefined;
+    } catch (error) {
+      return { content: [{ type: "text" as const, text: failureMessage(error) }], isError: true };
+    }
+  });
+}
+
+function bindSessionHooks(pi: ExtensionAPI, runtime: HooksRuntime, unsubscribeTaskHooks: () => void): void {
+  pi.on("session_start", async (event, context) => {
+    try { await runtime.run(sessionStartPayload(event, context), context); } catch (error) { notifyFailure(context, error); }
+  });
+
+  pi.on("session_before_compact", async (event, context) => {
+    try {
+      const decision = await runtime.run(compactPayload(event, context), context);
+      return decision.action === "block" || decision.action === "cancel" ? { cancel: true } : undefined;
+    } catch (error) {
+      notifyFailure(context, error);
+      return { cancel: true };
+    }
+  });
+
+  pi.on("session_shutdown", async (event, context) => {
+    runtime.abortActive();
+    try {
+      await runtime.run(sessionShutdownPayload(event, context), context, { ignoreSessionAbort: true });
+    } catch (error) {
+      notifyFailure(context, error);
+    } finally {
+      unsubscribeTaskHooks();
+      await runtime.close();
+    }
+  });
+}
+
 export function createHooksInlineExtension(
   options: HooksExtensionOptions,
 ): InlineExtension {
-  // Agent files are only read for a hooks.json that has an agent handler: epi:hooks is on by default
-  // (decision H3/K4), and with no such hook it must not fail on, or even read, agents/ -- which
-  // also keeps a broken agent file from failing a run whose epi:task is disabled.
   const usesAgents = options.hooks.some((hook) =>
     hook.handlers.some((handler) => handler.type === "agent"));
   const agents = usesAgents
-    ? loadTaskAgents({
-        globalAgentsDir: join(options.epiHome, "agents"),
-        projectAgentsDir: options.projectAgentsDir,
-      })
+    ? loadAgents(
+        { global: join(options.epiHome, "agents"), project: options.projectAgentsDir },
+        (message) => new EpiConfigError(message),
+      )
     : [];
   const agentNames = new Set(agents.map((agent) => agent.name));
   for (const hook of options.hooks) {
     for (const handler of hook.handlers) {
       if (handler.type === "agent" && !agentNames.has(handler.agent)) {
-        throw new EpiConfigError(
-          `${hook.declaredIn}: hook references unknown agent ${JSON.stringify(handler.agent)}`,
-        );
+        throw new EpiConfigError(`${hook.declaredIn}: hook references unknown agent ${JSON.stringify(handler.agent)}`);
       }
     }
   }
-  const workerPath = options.workerPath ?? fileURLToPath(
-    new URL("../worker.js", import.meta.url),
-  );
+  const workerPath = options.workerPath ?? fileURLToPath(new URL("./dispatch/pi-worker.js", import.meta.url));
 
   return {
     name: "epi:hooks",
@@ -278,112 +336,14 @@ export function createHooksInlineExtension(
         agents,
         workerPath,
         capsuleRoot: join(options.epiHome, "runtime", "hooks-task"),
-        artifactRoot: join(options.epiHome, "artifacts", "hooks-task"),
-        sessionRoot: join(options.epiHome, "runtime", "hooks-task", "sessions"),
         projectTrusted: options.projectTrusted === true,
-        // The trust decision above was made for this project; a hook's agent child applies it only
-        // there (same rule as epi:task: the root is the parent of `.epi/agents`).
-        ...(options.projectAgentsDir === undefined
-          ? {}
-          : { projectRoot: dirname(dirname(options.projectAgentsDir)) }),
+        ...(options.projectAgentsDir === undefined ? {} : { projectRoot: dirname(dirname(options.projectAgentsDir)) }),
       });
-      const unsubscribeTaskHooks = pi.events.on(
-        EPI_TASK_HOOK_CHANNEL,
-        (value) => {
-          if (!isTaskHookBridgeRequest(value)) {
-            return;
-          }
-          value.run = () => runtime.run(
-            taskPayload(value.event),
-            value.context,
-          );
-        },
-      );
-
-      pi.on("session_start", async (event, context) => {
-        try {
-          await runtime.run(sessionStartPayload(event, context), context);
-        } catch (error) {
-          notifyFailure(context, error);
-        }
+      const unsubscribeTaskHooks = pi.events.on(EPI_TASK_HOOK_CHANNEL, (value) => {
+        if (isTaskHookBridgeRequest(value)) value.run = () => runtime.run(taskPayload(value.event), value.context);
       });
-
-      pi.on("input", async (event, context) => {
-        let decision: HookDecision;
-        try {
-          decision = await runtime.run(inputPayload(event, context), context);
-        } catch (error) {
-          notifyPromptFailClosed(context, failureMessage(error), "error");
-          return { action: "handled" as const };
-        }
-        if (decision.action === "transform") {
-          return { action: "transform" as const, text: decision.text ?? "" };
-        }
-        if (decision.action === "block" || decision.action === "cancel") {
-          // Outside the try: a notify that throws is not a hook failure, and must not be reported
-          // a second time as one.
-          notifyPromptFailClosed(context, promptBlockedMessage(decision), "warning");
-          return { action: "handled" as const };
-        }
-        return { action: "continue" as const };
-      });
-
-      pi.on("tool_call", async (event, context) => {
-        try {
-          const decision = await runtime.run(toolCallPayload(event, context), context);
-          return decision.action === "block" || decision.action === "cancel"
-            ? { block: true, reason: blockReason(decision) }
-            : undefined;
-        } catch (error) {
-          return { block: true, reason: failureMessage(error) };
-        }
-      });
-
-      pi.on("tool_result", async (event, context) => {
-        try {
-          const decision = await runtime.run(toolResultPayload(event, context), context);
-          if (decision.action !== "replace") {
-            return undefined;
-          }
-          return {
-            content: [{ type: "text" as const, text: decision.text ?? "" }],
-            isError: decision.isError ?? false,
-          };
-        } catch (error) {
-          return {
-            content: [{ type: "text" as const, text: failureMessage(error) }],
-            isError: true,
-          };
-        }
-      });
-
-      pi.on("session_before_compact", async (event, context) => {
-        try {
-          const decision = await runtime.run(compactPayload(event, context), context);
-          return decision.action === "block" || decision.action === "cancel"
-            ? { cancel: true }
-            : undefined;
-        } catch (error) {
-          notifyFailure(context, error);
-          return { cancel: true };
-        }
-      });
-
-      pi.on("session_shutdown", async (event, context) => {
-        runtime.abortActive();
-        try {
-          await runtime.run(
-            sessionShutdownPayload(event, context),
-            context,
-            { ignoreSessionAbort: true },
-          );
-        } catch (error) {
-          notifyFailure(context, error);
-        } finally {
-          unsubscribeTaskHooks();
-          await runtime.close();
-        }
-      });
+      bindSessionHooks(pi, runtime, unsubscribeTaskHooks);
+      bindInputAndToolHooks(pi, runtime);
     },
   };
 }

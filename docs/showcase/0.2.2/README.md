@@ -2,7 +2,7 @@
 
 [← 特性展示](../README.md)
 
-0.2.2 的主题是**长文和子代理都能点开看全**。交互先做成可交互 HTML 原型 [`fold-view-tasks-prototype.html`](../../../scripts/probes/fold-view-tasks-prototype.html)，用户试过同意后才实现（决策 WF6）。设计见 [tui-design.md](../../tui-design.md) §4.3、[subagents-design.md](../../subagents-design.md) §12，问题记录 D95。
+0.2.2 的主题是**长文和子代理都能点开看全**。交互先做成可交互 HTML 原型 [`fold-view-tasks-prototype.html`](../../../scripts/probes/fold-view-tasks-prototype.html)，用户试过同意后才实现（决策 WF6）。设计见 [tui-design.md](../../tui-design.md) §4.3、[archive-subagents-design.md](../../notes/archive-subagents-design.md) §12，问题记录 D95。
 
 ![长文折叠：粘贴三段长文 → 一个标签 → 单击浮窗看全文](paste.gif)
 

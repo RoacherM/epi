@@ -480,11 +480,11 @@ export function exitNotice(report: DispatchItemReport): string {
 }
 
 export const BashParameters = Type.Object({
-  command: Type.String({ description: "Shell command to execute" }),
-  timeout: Type.Optional(Type.Number({ description: "Kill the command after this many seconds (default 1800 once it runs in the background, max 14400; daemons: no limit)" })),
-  waitMsBeforeAsync: Type.Optional(Type.Integer({ minimum: 0, description: "How long to wait inline before handing the command to the background as bg_<id> (default 120000; daemons 0)" })),
-  isDaemon: Type.Optional(Type.Boolean({ description: "A long-lived service (dev server, watcher): returns at once, never holds the run open, stdin stays writable through task_input" })),
-  stdin: Type.Optional(Type.Boolean({ description: "Keep stdin open so task_input can write to it" })),
+  command: Type.String({ description: "Shell command" }),
+  timeout: Type.Optional(Type.Number({ description: "Lifetime in seconds (max 14400)" })),
+  waitMsBeforeAsync: Type.Optional(Type.Integer({ minimum: 0, description: "Ms before detaching as bg_<id> (default 120000)" })),
+  isDaemon: Type.Optional(Type.Boolean({ description: "Background service: detach at once, writable stdin" })),
+  stdin: Type.Optional(Type.Boolean({ description: "Keep stdin open for task_input" })),
 });
 export type BashParams = Static<typeof BashParameters>;
 
@@ -573,7 +573,7 @@ export function createDispatchBashTool(runtime: BgProcessRuntime, sessionId: () 
   return {
     ...(base as unknown as ToolDefinition<typeof BashParameters>),
     parameters: BashParameters,
-    description: `${base.description} Commands still running after waitMsBeforeAsync (default 120s) continue in the background as bg_<id> and report back once when they exit; isDaemon: true starts a service in the background at once. Never use nohup, setsid or a trailing & for this.`,
+    description: `${base.description} Slow commands detach as bg_<id> and notify on exit; never use nohup, setsid, or trailing &.`,
     async execute(toolCallId: string, params: BashParams, signal: AbortSignal | undefined, onUpdate: AgentToolUpdateCallback<unknown> | undefined, ctx: ExtensionContext) {
       const settings = bashSettings(params);
       const definition = createBashToolDefinition(ctx?.cwd ?? process.cwd(), { operations: { exec: foregroundExec(runtime, settings, sessionId()) } });

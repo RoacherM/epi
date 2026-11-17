@@ -130,7 +130,7 @@ function jobDetail(theme: Theme, job: JobSnapshot): { title: string; subtitle: s
   return { title: job.name ? `@${job.name}` : job.id.slice(0, 12), subtitle: job.status, lines: [...head, ...conversationLines(theme, job.sessionPath), ...tail] };
 }
 
-export function itemDetailView(theme: Theme, runtime: DispatchRuntime, ref: string): { title: string; subtitle: string; lines: string[] } | undefined {
+export function itemDetailView(theme: Theme, runtime: DispatchRuntime, ref: string): { title: string; subtitle?: string | undefined; lines: readonly string[] } | undefined {
   const extra = runtime.host.ui?.extraItems?.().find((candidate) => candidate.id === ref || candidate.id.startsWith(ref));
   if (extra !== undefined) return extra.detail(theme);
   let resolved: { kind: string; id: string };
@@ -224,7 +224,8 @@ class DispatchOverlay implements Component {
     }
     const detail = itemDetailView(this.theme, this.runtime, this.mode.id);
     const raw = detail ? detail.lines : [this.theme.fg("error", `Item ${this.mode.id} not found.`)];
-    return { title: detail ? `${detail.title} · ${detail.subtitle}` : this.mode.id, lines: raw.flatMap((l) => (l === "" ? [""] : wrapTextWithAnsi(l, innerWidth))) };
+    const title = detail ? (detail.subtitle ? `${detail.title} · ${detail.subtitle}` : detail.title) : this.mode.id;
+    return { title, lines: raw.flatMap((l) => (l === "" ? [""] : wrapTextWithAnsi(l, innerWidth))) };
   }
 
   handleInput(data: string): void {
@@ -445,8 +446,10 @@ function createOverlayOpener(runtime: DispatchRuntime): { open: (ctx: ExtensionC
     }
     closeOverlay?.();
     let timer: NodeJS.Timeout | undefined;
+    let poll: NodeJS.Timeout | undefined;
     let unsubLive: (() => void) | undefined;
     let unsubLiveExtra: (() => void) | undefined;
+    let myClose: (() => void) | undefined;
     await ctx.ui.custom<void>((tui, theme, _kb, done) => {
       const request = (): void => {
         if (timer !== undefined) return;
@@ -455,13 +458,17 @@ function createOverlayOpener(runtime: DispatchRuntime): { open: (ctx: ExtensionC
       };
       unsubLive = runtime.onUiChange(request);
       unsubLiveExtra = runtime.host.ui?.onExtraChange?.(request);
-      closeOverlay = () => done(undefined);
-      return new DispatchOverlay(theme, runtime, initial, () => tui.terminal.rows, () => done(undefined));
+      poll = setInterval(() => tui.requestRender(), 250);
+      poll.unref();
+      myClose = () => done(undefined);
+      closeOverlay = myClose;
+      return new DispatchOverlay(theme, runtime, initial, () => tui.terminal.rows, myClose);
     }, { overlay: true, overlayOptions: { width: "88%", minWidth: 32, anchor: "center" } });
     clearTimeout(timer);
+    clearInterval(poll);
     unsubLive?.();
     unsubLiveExtra?.();
-    closeOverlay = undefined;
+    if (closeOverlay === myClose) closeOverlay = undefined;
   };
   return { open, close: () => closeOverlay?.() };
 }

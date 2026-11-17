@@ -17,50 +17,66 @@ import {
   renameToolIdsAfterSteer,
   resolveMagpieModel,
 } from "../dist/providers/magpie.js";
+import { epiWorkerBootstrapUrl } from "../dist/extensions/dispatch-epi-host.js";
 import { magpieCatalog, startMagpieServer } from "./fixtures/magpie-server.mjs";
 
 function run(command, args, options) {
   return new Promise((resolve, reject) => {
     // There is no piped input in these tests; use /dev/null rather than a macOS socketpair. A
-    // caller that does need a stdin (the task worker, whose stdin is its steer/abort channel and
-    // whose EOF is its orphan net) passes `stdio` explicitly.
+    // caller that does need a stdin (the task worker, whose stdin is its orphan net and fd 3 is its
+    // JSONL event channel) passes `stdio` explicitly.
     const child = spawn(command, args, { ...options, stdio: options.stdio ?? ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let fd3 = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stdio[3]?.on("data", (chunk) => { fd3 += chunk; });
     const timer = setTimeout(() => child.kill("SIGKILL"), options.timeout);
     child.on("error", (error) => { clearTimeout(timer); reject(error); });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`Command failed (${code ?? signal}): ${args.join(" ")}\n${stdout}\n${stderr}`));
+      const combinedOut = fd3 ? `${fd3}${stdout}` : stdout;
+      if (code === 0) resolve({ stdout: combinedOut, stderr });
+      else reject(new Error(`Command failed (${code ?? signal}): ${args.join(" ")}\n${combinedOut}\n${stderr}`));
     });
   });
 }
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
-const worker = fileURLToPath(new URL("../dist/worker.js", import.meta.url));
+const worker = fileURLToPath(new URL("../dist/extensions/dispatch/pi-worker.js", import.meta.url));
 const signal = () => new AbortController().signal;
 
 /** A minimal task capsule for the worker: the isolated subagent defaults (no rules, skills, MCP,
  * hooks or Manifest extensions), so these tests exercise the provider path only. */
 function taskCapsule(fixture, overrides = {}) {
+  const { systemPrompt = "", model, tools = [], ...scopeOverrides } = overrides;
   return {
     version: 1,
+    role: "task-worker",
+    jobId: "job_magpie01",
     task: "hi",
     cwd: fixture.home,
+    stateDir: join(fixture.epiHome, "runtime", "dispatch"),
     agentDir: join(fixture.epiHome, "pi"),
-    epiHome: fixture.epiHome,
-    systemPrompt: "",
-    tools: [],
+    sdkEntryUrl: import.meta.resolve("@earendil-works/pi-coding-agent"),
+    bootstrapModule: epiWorkerBootstrapUrl(),
+    bootstrapOptions: {
+      epiHome: fixture.epiHome,
+      rules: false,
+      skills: false,
+      mcp: false,
+      hooks: false,
+      extensions: false,
+      projectTrusted: false,
+      ...scopeOverrides,
+    },
+    extensionPaths: [],
+    systemPrompt,
+    tools,
+    ...(model === undefined ? {} : { model }),
     sessionPath: join(fixture.home, `task-${Math.random().toString(36).slice(2)}.jsonl`),
-    rules: false,
-    skills: false,
-    mcp: false,
-    hooks: false,
-    extensions: false,
-    projectTrusted: false,
-    ...overrides,
+    deadlineAt: Date.now() + 60_000,
+    sharedDaemonNames: [],
   };
 }
 
@@ -675,7 +691,7 @@ test("a gateway that is not running is named when settings or a pattern select M
   writeFileSync(capsulePath, JSON.stringify(taskCapsule(fixture, { systemPrompt: "" })));
   // In the worker's reported error (what the task tool passes on), not only on stderr.
   await assert.rejects(
-    run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000, stdio: ["pipe", "pipe", "pipe"] }),
+    run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000, stdio: ["pipe", "pipe", "pipe", "pipe"] }),
     new RegExp(`"error":"No model available; Model list refresh failed for magpie: Magpie is not running at ${absent}`),
   );
 });
@@ -746,7 +762,7 @@ test("isolated Task worker calls Magpie, and refreshes the catalog like every ot
   const runWorker = async (model) => {
     const capsulePath = join(fixture.home, "capsule.json");
     writeFileSync(capsulePath, JSON.stringify(taskCapsule(fixture, { systemPrompt: "Be concise.", model })));
-    const output = await run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000, stdio: ["pipe", "pipe", "pipe"] });
+    const output = await run(process.execPath, [worker, capsulePath], { cwd: fixture.home, env: fixture.env, timeout: 25000, stdio: ["pipe", "pipe", "pipe", "pipe"] });
     const events = output.stdout.trim().split("\n").map((line) => JSON.parse(line));
     assert.equal(events.at(-1).ok, true, output.stdout + output.stderr);
     assert.equal(events.at(-1).output, "MAGPIE_OK 你好");

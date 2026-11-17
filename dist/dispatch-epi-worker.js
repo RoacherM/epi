@@ -42,19 +42,27 @@ function systemPromptParts(capsule, preloaded) {
         ...preloaded.map((skill) => `# Skill: ${skill.name}\n\n${skill.text}`),
     ];
 }
-export const createWorkerSession = async (capsule, extensions, sdk) => {
-    const options = workerOptions(capsule);
-    const assembly = workerAssembly(capsule, options);
-    const preloaded = Array.isArray(options.skills) ? readPreloadedSkills(assembly) : [];
-    const settingsManager = sdk.SettingsManager.create(capsule.cwd, capsule.agentDir, { projectTrusted: false });
+function assertWorkerModelAvailable(session, notRunning) {
+    if ((session.model === undefined || session.model.provider === "unknown") && notRunning !== "") {
+        throw new Error(`No model available${notRunning}`);
+    }
+}
+function buildWorkerFactories(assembly, options, extensions) {
     const identity = createEpiRuntimeIdentity({ epiVersion: EPI_VERSION, piVersion: "", epiHome: options.epiHome, assembly });
-    const factories = [
+    return [
         createMagpieInlineExtension(),
         ...extensions.map((factory, index) => ({ name: `dispatch:worker-${index}`, factory })),
         ...buildInlineExtensions(assembly, options.epiHome, identity, () => assembly, undefined, false, {
             child: true, ...(Array.isArray(options.mcp) ? { mcpServerFilter: options.mcp } : {}),
         }),
     ];
+}
+export const createWorkerSession = async (capsule, extensions, sdk) => {
+    const options = workerOptions(capsule);
+    const assembly = workerAssembly(capsule, options);
+    const preloaded = Array.isArray(options.skills) ? readPreloadedSkills(assembly) : [];
+    const settingsManager = sdk.SettingsManager.create(capsule.cwd, capsule.agentDir, { projectTrusted: false });
+    const factories = buildWorkerFactories(assembly, options, extensions);
     const { modelRuntime, resourceLoader, diagnostics } = await sdk.createAgentSessionServices({
         cwd: capsule.cwd, agentDir: capsule.agentDir, settingsManager,
         resourceLoaderOptions: {
@@ -69,8 +77,13 @@ export const createWorkerSession = async (capsule, extensions, sdk) => {
     if (errors.length > 0)
         throw new Error(errors.map((diagnostic) => diagnostic.message).join("; "));
     const providers = await settleRegisteredProviders(modelRuntime);
+    for (const warning of providers.warnings)
+        process.stderr.write(`Warning: ${warning.message}\n`);
     const resolved = capsule.model === undefined ? undefined : sdk.resolveCliModel({ cliModel: capsule.model, modelRuntime });
-    const notRunning = notRunningWarnings(providers, { defaultProvider: undefined, noModel: true }).map((warning) => `; ${warning.message}`).join("");
+    const notRunning = notRunningWarnings(providers, {
+        defaultProvider: resolved?.model === undefined ? settingsManager.getDefaultProvider() : undefined,
+        noModel: true,
+    }).map((warning) => `; ${warning.message}`).join("");
     if (resolved?.error !== undefined)
         throw new Error(`${resolved.error}${notRunning}`);
     const { session } = await sdk.createAgentSession({
@@ -82,6 +95,7 @@ export const createWorkerSession = async (capsule, extensions, sdk) => {
         ...(capsule.excludeTools === undefined ? {} : { excludeTools: capsule.excludeTools }),
     });
     await session.bindExtensions({ mode: "print" });
+    assertWorkerModelAvailable(session, notRunning);
     applyCompaction(settingsManager, session.model);
     return session;
 };

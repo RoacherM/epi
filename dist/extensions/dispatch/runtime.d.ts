@@ -75,6 +75,7 @@ export declare class DispatchRuntime {
     /** `forkFrom: "<name>"`: the peer's closed history, ready to seed a sibling peer. */
     private peerForkEntries;
     private postBrief;
+    activateTools(names: readonly string[]): void;
     private boardTools;
     private inFlightFooter;
     private onAcked;

@@ -61,6 +61,7 @@ export declare class PeerBoard {
 }
 export interface BoardBackend {
     self: string;
+    defaultActive?: boolean | undefined;
     post(text: string, channel: string | undefined): BoardMessage | undefined;
     read(options: ReadOptions): BoardMessage[];
     wait(since: number, mentionsOnly: boolean, signal: AbortSignal | undefined): Promise<WaitOutcome>;

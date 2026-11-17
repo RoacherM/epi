@@ -27,19 +27,19 @@ const BatchItem = Type.Object({
 });
 
 export const TaskParameters = Type.Object({
-  task: Type.Optional(Type.String({ description: "Instructions for the subagent; with jobId, the steer or resume prompt" })),
-  name: Type.Optional(Type.String({ description: "Named peer (lowercase slug): joins the session board as @name and runs in the background" })),
-  agent: Type.Optional(Type.String({ description: "Preset from agents/*.md" })),
-  cwd: Type.Optional(Type.String({ description: "Working directory (default: current)" })),
+  task: Type.Optional(Type.String({ description: "Prompt (or steer/resume message with jobId)" })),
+  name: Type.Optional(Type.String({ description: "Board peer slug (@name, background)" })),
+  agent: Type.Optional(Type.String({ description: "Preset name" })),
+  cwd: Type.Optional(Type.String()),
   tasks: Type.Optional(Type.Array(BatchItem, { minItems: 1, description: "Parallel batch" })),
-  jobId: Type.Optional(Type.String({ description: "job_<id> or task name: steer it while running, resume it once settled" })),
+  jobId: Type.Optional(Type.String({ description: "job_<id> or name to steer/resume" })),
   strategy: Type.Optional(Type.Union([Type.Literal("steer"), Type.Literal("enqueue"), Type.Literal("interrupt")])),
-  background: Type.Optional(Type.Boolean({ description: "Return a receipt now and report back when done" })),
+  background: Type.Optional(Type.Boolean()),
   context: Type.Optional(Type.Union([Type.Literal("fresh"), Type.Literal("fork")])),
-  forkFrom: Type.Optional(Type.String({ description: "Start from a named peer's conversation instead of this one" })),
+  forkFrom: Type.Optional(Type.String({ description: "Peer name to fork from" })),
   workspace: Type.Optional(Workspace),
   model: Type.Optional(Type.String({ description: "provider/id[:thinking] or :thinking" })),
-  verifyCommand: Type.Optional(Type.String({ description: "Shell command that must exit 0 before the subagent may finish" })),
+  verifyCommand: Type.Optional(Type.String({ description: "Shell command that must exit 0" })),
   maxTurns: Type.Optional(Type.Integer({ minimum: 1 })),
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TASK_TIMEOUT_SECONDS })),
 });

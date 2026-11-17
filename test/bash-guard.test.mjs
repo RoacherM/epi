@@ -276,3 +276,27 @@ test("epi:runtime injects default timeout, augments timeout errors with .git/ind
   );
   assert.equal(aborted, 1);
 });
+
+test("epi:runtime allows async bash (isDaemon / waitMsBeforeAsync) streams and <=4h timeouts while still blocking nohup/& and vim", async () => {
+  const handlers = runtimeFixture(["bash", "read", "task_input", "monitor"]);
+  const toolCall = handlers.get("tool_call");
+
+  // Daemon stream without timeout: allowed and timeout stays undefined so bg-bash keeps it unlimited
+  const daemonInput = { command: "tail -f app.log", isDaemon: true };
+  assert.equal(await toolCall({ type: "tool_call", toolName: "bash", toolCallId: "d1", input: daemonInput }), undefined);
+  assert.equal(daemonInput.timeout, undefined);
+
+  // Async build with 3600s timeout: allowed
+  const asyncInput = { command: "npm run bench", waitMsBeforeAsync: 5000, timeout: 3600 };
+  assert.equal(await toolCall({ type: "tool_call", toolName: "bash", toolCallId: "d2", input: asyncInput }), undefined);
+
+  // Over 4h (14400s) even in async mode: blocked
+  const over4h = await toolCall({ type: "tool_call", toolName: "bash", toolCallId: "d3", input: { command: "sleep 1", waitMsBeforeAsync: 1000, timeout: 14401 } });
+  assert.equal(over4h?.block, true);
+
+  // Unmanaged nohup / & or interactive vim STILL blocked even with isDaemon: true
+  const nohupHit = await toolCall({ type: "tool_call", toolName: "bash", toolCallId: "d4", input: { command: "nohup node app.js &", isDaemon: true } });
+  assert.equal(nohupHit?.block, true);
+  const vimHit = await toolCall({ type: "tool_call", toolName: "bash", toolCallId: "d5", input: { command: "vim foo.ts", isDaemon: true } });
+  assert.equal(vimHit?.block, true);
+});

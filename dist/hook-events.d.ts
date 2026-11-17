@@ -1,5 +1,6 @@
 import type { EventBus, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { TaskJobSnapshot } from "./task-runtime.js";
+import type { JobSnapshot } from "./extensions/dispatch/worker-host.js";
+export type TaskJobSnapshot = JobSnapshot;
 export declare const EPI_TASK_HOOK_CHANNEL = "epi/hooks/task/v1";
 export interface TaskStartHookEvent {
     type: "task_start";

@@ -2,7 +2,7 @@
 
 [← 特性展示](../README.md)
 
-0.2.1 的主题是**子代理的可靠交付**:`epi:task` 从"发出去就忘"变成"发出去有回执"。设计与实现见 [subagents-design.md](../../subagents-design.md) §11。
+0.2.1 的主题是**子代理的可靠交付**:`epi:task` 从"发出去就忘"变成"发出去有回执"。设计与实现见 [archive-subagents-design.md](../../notes/archive-subagents-design.md) §11。
 
 本版本主要界面变化:
 

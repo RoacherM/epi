@@ -112,7 +112,11 @@ export class DispatchRuntime {
         return new TimerRuntime({
             role: this.role, stateDir: () => this.stateDir(), inboxTarget: () => this.inboxTarget(), deadlineAt: this.worker?.capsule.deadlineAt,
             persist: this.role === "root" ? (data) => this.gate.pi?.appendEntry(DISPATCH_TIMER_ENTRY, data) : undefined,
-            onChange: () => this.emitUiChange(),
+            onChange: () => {
+                if (this.timers.hasActiveSchedules())
+                    this.activateTools(["outbox"]);
+                this.emitUiChange();
+            },
             onFire: (timer) => this.onTimerFired(timer),
         });
     }
@@ -171,7 +175,7 @@ export class DispatchRuntime {
             stateDir: () => this.stateDir(),
             agentDir: this.agentDir(),
             nodeExecPath: this.host.nodeExecPath ?? process.execPath,
-            workerPath: fileURLToPath(new URL("./pi-worker.js", import.meta.url)),
+            workerPath: this.host.workerPath ?? fileURLToPath(new URL("./pi-worker.js", import.meta.url)),
             sdkEntryUrl: import.meta.resolve("@earendil-works/pi-coding-agent"),
             bootstrapModule: this.host.workerBootstrapModule,
             bootstrapOptions: this.host.workerBootstrapOptions,
@@ -183,6 +187,7 @@ export class DispatchRuntime {
             boardPath: () => this.board?.path,
             boardSince: () => this.board?.maxSeq() ?? 0,
             boardIdleMs: this.host.boardIdleMs,
+            killGraceMs: this.host.killGraceMs,
             onChange: (job) => {
                 for (const fn of [...this.jobListeners]) {
                     try {
@@ -279,14 +284,28 @@ export class DispatchRuntime {
         const board = this.board;
         if (board === undefined || job.name === undefined)
             return;
+        this.activateTools(["board_post", "board_read", "board_wait"]);
         board.epoch += 1;
         board.post(COORDINATOR, `@${job.name} ${job.task}`);
+    }
+    activateTools(names) {
+        const pi = this.gate.pi;
+        if (pi === undefined || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function")
+            return;
+        try {
+            const current = pi.getActiveTools();
+            if (names.every((name) => current.includes(name)))
+                return;
+            pi.setActiveTools([...new Set([...current, ...names])]);
+        }
+        catch { /* stale pi or --no-tools */ }
     }
     boardTools() {
         const board = this.board;
         if (board !== undefined) {
             return createBoardTools({
                 self: COORDINATOR,
+                defaultActive: false,
                 post: (text, channel) => board.post(COORDINATOR, text, channel),
                 read: (options) => board.read(options),
                 wait: (since, mentionsOnly, signal) => board.wait(COORDINATOR, since, mentionsOnly, signal),
@@ -370,11 +389,16 @@ export class DispatchRuntime {
         if (this.role !== "root")
             return;
         this.board?.bind(sessionId);
+        if ((this.board?.maxSeq() ?? 0) > 0)
+            this.activateTools(["board_post", "board_read", "board_wait"]);
         if (reason !== "reload")
             this.timers.dropOtherSessions(sessionId);
         this.timers.fold(ctx.sessionManager.getEntries(), sessionId);
         this.timers.loadSchedules();
         this.openInbox();
+        if (this.inbox !== undefined || this.host.onOutbox !== undefined || this.timers.hasActiveSchedules()) {
+            this.activateTools(["outbox"]);
+        }
     }
     openInbox() {
         const target = this.inboxTarget();
@@ -416,33 +440,47 @@ export class DispatchRuntime {
     }
     tools() {
         const sessionId = () => this.gate.sessionId();
-        const tools = [
-            createDispatchBashTool(this.bg, sessionId),
+        const renderers = { ...defaultToolRenderers(), ...(this.host.ui?.toolRenderers ?? {}) };
+        const withRenderer = (tool) => ({ ...tool, ...renderers[tool.name] });
+        const bashTool = withRenderer(createDispatchBashTool(this.bg, sessionId));
+        const others = [
             ...createStatusTools({
                 registry: this.registry, ledger: this.ledger, pollGuard: this.pollGuard, bg: this.bg,
                 foregroundWaits: this.foregroundWaits, foregroundBudgetSeconds: this.host.foregroundBudgetSeconds,
+                unknownRefHint: this.host.ui?.unknownRefHint,
                 scope: this.role === "root" ? "all" : "own",
             }),
             createTimerTool(this.timers, this.role, sessionId),
         ];
         if (this.role === "task-worker")
-            tools.push(this.reportProgressTool());
+            others.push(this.reportProgressTool());
         if (this.pool !== undefined) {
-            tools.push(createTaskTool({
+            others.push(createTaskTool({
                 pool: this.pool, ledger: this.ledger, gate: this.gate, host: this.host, agents: () => this.agents(), notifyOnSettle: this.notifyOnSettle,
                 foregroundWaits: this.foregroundWaits, onJobChange: (fn) => this.onJobChange(fn),
                 peerForkEntries: (name) => this.peerForkEntries(name), postBrief: (job) => this.postBrief(job),
             }));
-            tools.push(createOutboxTool(this.host, sessionId, (text) => this.gate.ctx?.ui.notify(text, "info")));
+            const outboxDefaultActive = this.host.onOutbox !== undefined || this.inboxTarget() !== undefined;
+            others.push(createOutboxTool(this.host, sessionId, (text) => this.gate.ctx?.ui.notify(text, "info"), outboxDefaultActive));
         }
-        tools.push(...this.boardTools());
-        const renderers = { ...defaultToolRenderers(), ...(this.host.ui?.toolRenderers ?? {}) };
-        return tools.map((tool) => ({ ...tool, ...renderers[tool.name] }));
+        others.push(...this.boardTools());
+        return { bashTool, others: others.map(withRenderer) };
     }
     /** Bind this runtime to the `pi` of the session now loading (startup, `/reload`, a switch). */
     mount(pi) {
+        const { bashTool, others } = this.tools();
+        let bashMounted = false;
         this.gate.bindPi(pi);
-        this.ledger.bindEvents(pi, (ctx, reason) => this.onSessionStart(ctx, reason));
+        this.ledger.bindEvents(pi, (ctx, reason) => {
+            if (!bashMounted) {
+                bashMounted = true;
+                const externalBash = typeof pi.getAllTools === "function"
+                    && pi.getAllTools().some((tool) => tool.name === "bash" && tool.sourceInfo.source !== "builtin");
+                if (!externalBash)
+                    pi.registerTool(bashTool);
+            }
+            this.onSessionStart(ctx, reason);
+        });
         bindDispatchViews(pi, this);
         pi.on("agent_settled", async (_event, ctx) => {
             if (this.shouldDrain(ctx))
@@ -453,7 +491,7 @@ export class DispatchRuntime {
             if (event.reason === "quit")
                 await this.shutdown();
         });
-        for (const tool of this.tools())
+        for (const tool of others)
             pi.registerTool(tool);
         installApprovalGuard(pi, this.host, this.role);
     }

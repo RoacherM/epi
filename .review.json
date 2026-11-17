@@ -14,8 +14,8 @@
   },
   "highRisk": [
     "src/noninteractive.ts",
-    "src/worker.ts",
-    "src/worker-reaper.ts",
+    "src/dispatch-epi-worker.ts",
+    "src/extensions/dispatch/**",
     "src/monitor-stream.ts",
     "src/extensions/mcp.ts",
     "src/commands/mcp-cli.ts",
@@ -36,8 +36,6 @@
     "src/hooks-runtime.ts",
     "src/extensions/hooks.ts",
     "src/extensions/runtime.ts",
-    "src/task-runtime.ts",
-    "src/task-worktree.ts",
     "src/paths.ts",
     "src/project.ts",
     "src/assembly.ts",
@@ -53,6 +51,20 @@
     "tui": [
       "src/tui/**",
       "test/tui-*"
+    ],
+    "task": [
+      "src/extensions/dispatch/**",
+      "src/extensions/dispatch-*",
+      "src/dispatch-*",
+      "src/task-*",
+      "src/worker*",
+      "src/bash-guard*",
+      "src/monitor-stream*",
+      "test/dispatch*",
+      "test/task*",
+      "test/worker*",
+      "test/bash-guard*",
+      "test/monitor*"
     ],
     "extensions": [
       "src/extensions/**",
@@ -70,16 +82,6 @@
       "test/trace*",
       "test/web*",
       "test/skill-discovery*"
-    ],
-    "task": [
-      "src/task-*",
-      "src/worker*",
-      "src/bash-guard*",
-      "src/monitor-stream*",
-      "test/task*",
-      "test/worker*",
-      "test/bash-guard*",
-      "test/monitor*"
     ],
     "core": [
       "**"

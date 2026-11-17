@@ -12,11 +12,12 @@ export const OutboxParameters = Type.Object({
     details: Type.Optional(Type.String()),
     dedupKey: Type.Optional(Type.String({ description: "Same key = same message; repeats are dropped" })),
 });
-export function createOutboxTool(host, sessionId, notifyUi) {
+export function createOutboxTool(host, sessionId, notifyUi, defaultActive = true) {
     const recent = [];
     return {
         name: "outbox",
         label: "Outbox",
+        defaultActive,
         description: "Tell the user something (notify) or ask them a question (ask) from an unattended run. Stay silent when there is nothing worth reporting.",
         parameters: OutboxParameters,
         async execute(_toolCallId, params) {

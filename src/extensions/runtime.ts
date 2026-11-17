@@ -8,6 +8,7 @@ import type { ResolvedAssembly } from "../assembly.js";
 import {
   analyzeBashCommand,
   augmentBashTimeoutResult,
+  normalizeAsyncBashTimeout,
   normalizeBashTimeout,
 } from "../bash-guard.js";
 import { findNearestProjectManifest } from "../project.js";
@@ -22,7 +23,7 @@ import { renderAnimatedEpiStartupPage, renderEpiStartupPage, welcomeMotionStreng
 import { FrameTicker, motionTime } from "../tui/motion.js";
 import { crossProjectRefusal, type ProjectIdentity } from "../tui/project-guard.js";
 import { readUpdateCache, refreshUpdateCache, updateNotice } from "../update.js";
-import { initialLedgerOffset, inspectNewWorkerBackgroundPgids } from "../worker-reaper.js";
+import { initialLedgerOffset, inspectNewBackgroundPgids } from "./dispatch/reaper.js";
 
 /** Welcome-page frame interval: about 24 frames a second. */
 const HEADER_FRAME_MS = 42;
@@ -127,14 +128,33 @@ function combineBashResultText(
   return baseText.length > 0 ? `${baseText}\n${bgWarning}` : bgWarning;
 }
 
-function hasActiveMonitorTool(pi: ExtensionAPI): boolean {
-  return typeof pi.getActiveTools === "function" && pi.getActiveTools().includes("monitor");
+function hasActiveTool(pi: ExtensionAPI, name: string): boolean {
+  return typeof pi.getActiveTools === "function" && pi.getActiveTools().includes(name);
+}
+
+function checkBashInput(pi: ExtensionAPI, input: Record<string, unknown>): { block?: { block: true; reason: string }; defaulted: boolean } {
+  const hasMonitorTool = hasActiveTool(pi, "monitor");
+  const hasAsyncBash = hasActiveTool(pi, "task_input");
+  const asyncManaged = hasAsyncBash && (input.isDaemon === true || input.waitMsBeforeAsync !== undefined);
+  const timeoutCheck = asyncManaged ? normalizeAsyncBashTimeout(input.timeout) : normalizeBashTimeout(input.timeout, hasMonitorTool);
+  if (timeoutCheck.action === "block") return { block: { block: true, reason: timeoutCheck.reason }, defaulted: false };
+  if (typeof input.command === "string") {
+    const cmdCheck = analyzeBashCommand(input.command, {
+      effectiveTimeoutSec: timeoutCheck.timeoutSeconds,
+      timeoutDefaulted: timeoutCheck.defaulted,
+      hasMonitorTool,
+      asyncManaged,
+    });
+    if (cmdCheck.blocked) return { block: { block: true, reason: cmdCheck.reason }, defaulted: false };
+  }
+  if (timeoutCheck.defaulted && !hasAsyncBash) input.timeout = timeoutCheck.timeoutSeconds;
+  return { defaulted: timeoutCheck.defaulted };
 }
 
 function installBashExecutionGuard(pi: ExtensionAPI): () => void {
   const defaultedCalls = new Map<string, boolean>();
   const activeCallIds = new Set<string>();
-  const ledgerPath = process.env.EPI_PGID_LEDGER;
+  const ledgerPath = process.env.PI_DISPATCH_PGID_LEDGER ?? process.env.EPI_PGID_LEDGER;
   const warnedPgids = new Set<number>();
   let ledgerOffset = initialLedgerOffset(ledgerPath);
 
@@ -154,20 +174,9 @@ function installBashExecutionGuard(pi: ExtensionAPI): () => void {
 
   pi.on("tool_call", (event) => {
     if (event?.toolName !== "bash" || typeof event.input !== "object" || event.input === null) return undefined;
-    const input = event.input as Record<string, unknown>;
-    const hasMonitorTool = hasActiveMonitorTool(pi);
-    const timeoutCheck = normalizeBashTimeout(input.timeout, hasMonitorTool);
-    if (timeoutCheck.action === "block") return { block: true, reason: timeoutCheck.reason };
-    if (typeof input.command === "string") {
-      const cmdCheck = analyzeBashCommand(input.command, {
-        effectiveTimeoutSec: timeoutCheck.timeoutSeconds,
-        timeoutDefaulted: timeoutCheck.defaulted,
-        hasMonitorTool,
-      });
-      if (cmdCheck.blocked) return { block: true, reason: cmdCheck.reason };
-    }
-    if (timeoutCheck.defaulted) input.timeout = timeoutCheck.timeoutSeconds;
-    defaultedCalls.set(event.toolCallId, timeoutCheck.defaulted);
+    const verdict = checkBashInput(pi, event.input as Record<string, unknown>);
+    if (verdict.block !== undefined) return verdict.block;
+    defaultedCalls.set(event.toolCallId, verdict.defaulted);
     activeCallIds.add(event.toolCallId);
     return undefined;
   });
@@ -180,7 +189,7 @@ function installBashExecutionGuard(pi: ExtensionAPI): () => void {
 
     let bgWarning: string | undefined;
     if (ledgerPath && activeCallIds.size === 0) {
-      const inspected = inspectNewWorkerBackgroundPgids(ledgerPath, ledgerOffset, warnedPgids);
+      const inspected = inspectNewBackgroundPgids(ledgerPath, ledgerOffset, warnedPgids);
       ledgerOffset = inspected.nextOffset;
       bgWarning = inspected.warning;
     }
@@ -188,7 +197,7 @@ function installBashExecutionGuard(pi: ExtensionAPI): () => void {
     const rawContent = event.content as Array<{ type: string; text?: string }>;
     const firstText = rawContent.find((item) => item.type === "text" && typeof item.text === "string")?.text ?? "";
     const augmented = event.isError
-      ? augmentBashTimeoutResult(firstText, context?.cwd ?? process.cwd(), { defaulted, hasMonitorTool: hasActiveMonitorTool(pi) })
+      ? augmentBashTimeoutResult(firstText, context?.cwd ?? process.cwd(), { defaulted, hasMonitorTool: hasActiveTool(pi, "monitor") })
       : undefined;
     const finalText = combineBashResultText(firstText, augmented, bgWarning);
     if (finalText === firstText) return undefined;

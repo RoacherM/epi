@@ -13,8 +13,8 @@ export declare function conversationLines(theme: Theme, sessionPath: string): st
 export declare function itemRow(theme: Theme, item: DispatchItemSummary, job?: JobSnapshot): string;
 export declare function itemDetailView(theme: Theme, runtime: DispatchRuntime, ref: string): {
     title: string;
-    subtitle: string;
-    lines: string[];
+    subtitle?: string | undefined;
+    lines: readonly string[];
 } | undefined;
 export declare function boardLines(theme: Theme, messages: readonly BoardMessage[]): string[];
 export declare function defaultToolRenderers(): Partial<Record<string, Pick<ToolDefinition, "renderCall" | "renderResult">>>;

@@ -671,7 +671,7 @@ function registerMonitorStopTool(pi, controller) {
             const { stopped, record } = controller.stopById(params.id);
             if (!record) {
                 const hint = controller.bridge.hasTaskJob(params.id)
-                    ? ` (that ID belongs to a subagent task — use task_cancel({ jobId: "${params.id}" }) instead)`
+                    ? ` (that ID belongs to a dispatch item — use task_cancel({ id: "${params.id}" }) instead)`
                     : "";
                 const value = { stopped: false, id: params.id };
                 return {

@@ -3,127 +3,14 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 
-/**
- * Explicit system-framing preamble prepended to LLM-facing `epi:task-notify` and `Monitor`
- * custom messages so the model never mistakes an asynchronous background notification for a
- * user reply or confirmation. Stripped by the TUI custom-message renderers.
- */
-export const SYSTEM_NOTIFICATION_TAG = "[SYSTEM NOTIFICATION - NOT USER INPUT]";
-const SYSTEM_NOTIFICATION_PREAMBLE =
-  `${SYSTEM_NOTIFICATION_TAG} Automated background event (never a user reply, approval, or confirmation).`;
+import {
+  NotificationGate,
+  SYSTEM_NOTIFICATION_TAG,
+  withSystemNotificationFraming,
+} from "./dispatch/notify-ledger.js";
+import { stripSystemFraming as stripSystemNotificationFraming } from "./dispatch/tui-views.js";
 
-export function withSystemNotificationFraming(body: string): string {
-  if (body.startsWith(SYSTEM_NOTIFICATION_TAG)) return body;
-  return `${SYSTEM_NOTIFICATION_PREAMBLE}\n${body}`;
-}
-
-export function stripSystemNotificationFraming(content: string): string {
-  if (!content.startsWith(SYSTEM_NOTIFICATION_TAG)) return content;
-  const newline = content.indexOf("\n");
-  return newline === -1 ? "" : content.slice(newline + 1);
-}
-
-/**
- * Shared per-extension delivery gate for background notifications (`epi:task` and `epi:monitor`).
- */
-export class NotificationGate {
-  pi: ExtensionAPI | undefined;
-  ctx: ExtensionContext | undefined;
-  compacting = false;
-  uiPromptDepth = 0;
-  private readonly abortedSessions = new Set<string>();
-  private fallbackAborted = false;
-
-  bindPi(pi: ExtensionAPI): void {
-    this.pi = pi;
-    this.ctx = undefined;
-    this.compacting = false;
-    this.uiPromptDepth = 0;
-  }
-
-  onSessionStart(ctx: ExtensionContext, reason?: string): void {
-    this.ctx = ctx;
-    this.compacting = false;
-    this.uiPromptDepth = 0;
-    if (reason !== "reload") {
-      const id = this.sessionId();
-      if (id === undefined) this.fallbackAborted = false;
-      else if (reason === "new" || reason === "startup") this.abortedSessions.delete(id);
-    }
-  }
-
-  onSessionShutdown(): void {
-    this.ctx = undefined;
-    this.compacting = false;
-    this.uiPromptDepth = 0;
-  }
-
-  sessionId(): string | undefined {
-    try {
-      return this.ctx?.sessionManager?.getSessionId?.();
-    } catch {
-      return undefined;
-    }
-  }
-
-  defaultAutoWake(originSessionId = this.sessionId()): boolean {
-    return originSessionId !== undefined ? !this.abortedSessions.has(originSessionId) : !this.fallbackAborted;
-  }
-
-  canWake(originSessionId: string | undefined): boolean {
-    const ctx = this.ctx;
-    if (this.pi === undefined || ctx === undefined) return false;
-    if (this.compacting || this.uiPromptDepth > 0) return false;
-    if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return false;
-    return this.sessionId() === originSessionId;
-  }
-
-  canInjectMidRun(event: { outcome?: string }): boolean {
-    return event.outcome !== "aborted" && !this.compacting && this.uiPromptDepth === 0;
-  }
-
-  onAgentSettled(aborted: boolean | undefined): void {
-    if (aborted !== true || this.compacting) return;
-    const id = this.sessionId();
-    if (id !== undefined) this.abortedSessions.add(id);
-    else this.fallbackAborted = true;
-  }
-
-  onUserPromptStart(): void {
-    const id = this.sessionId();
-    if (id !== undefined) this.abortedSessions.delete(id);
-    else this.fallbackAborted = false;
-  }
-
-  bindGateEvents(pi: ExtensionAPI, onUnlock: () => void, onTreeNavigate?: () => void): void {
-    pi.on("session_before_compact", (event) => {
-      if (event.reason === "manual") this.compacting = true;
-    });
-    pi.on("session_compact", () => {
-      this.compacting = false;
-      onUnlock();
-    });
-    pi.on("session_compact_failed", () => {
-      this.compacting = false;
-      onUnlock();
-    });
-    // Do NOT set `compacting = true` in `session_before_tree`: Pi's `navigateTree()` already
-    // sets `_branchSummaryAbortController` (`ctx.isIdle() === false`) and forbids streaming,
-    // while cancelled/aborted/failed tree navigation never emits `session_tree`.
-    pi.on("session_tree", () => {
-      this.compacting = false;
-      onTreeNavigate?.();
-      onUnlock();
-    });
-    pi.on("ui_prompt_start", () => {
-      this.uiPromptDepth += 1;
-    });
-    pi.on("ui_prompt_end", () => {
-      this.uiPromptDepth = Math.max(0, this.uiPromptDepth - 1);
-      if (this.uiPromptDepth === 0) onUnlock();
-    });
-  }
-}
+export { NotificationGate, SYSTEM_NOTIFICATION_TAG, stripSystemNotificationFraming, withSystemNotificationFraming };
 
 export interface NotificationPayload {
   customType: string;
@@ -315,17 +202,17 @@ export class NotificationLedger<T> {
 
   bindEvents(pi: ExtensionAPI, onSessionStartExtra?: (ctx: ExtensionContext) => void): void {
     const { gate, customType } = this.options;
-    gate.bindGateEvents(
-      pi,
-      () => this.unlockFlush(),
-      () => {
+    gate.bindGateEvents(pi, {
+      onUnlock: () => this.unlockFlush(),
+      onCompacted: () => {},
+      onTreeNavigate: () => {
         this.reconcileFromBranch();
         for (const entry of this.entries.values()) {
           if (entry.state === "sent") entry.state = "unsent";
         }
         this.options.onChange?.();
       },
-    );
+    });
     pi.on("session_start", (event, ctx) => {
       this.onSessionStart(ctx, (event as { reason?: string } | undefined)?.reason);
       onSessionStartExtra?.(ctx);

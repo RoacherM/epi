@@ -3,7 +3,9 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 
-import type { TaskJobSnapshot } from "./task-runtime.js";
+import type { JobSnapshot } from "./extensions/dispatch/worker-host.js";
+
+export type TaskJobSnapshot = JobSnapshot;
 
 export const EPI_TASK_HOOK_CHANNEL = "epi/hooks/task/v1";
 

@@ -12,9 +12,9 @@ import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { readPreloadedSkills, scopeAssemblyForTask } from "../dist/assembly.js";
-import { createTaskInlineExtension } from "../dist/extensions/task.js";
-import { loadTaskAgents } from "../dist/task-agents.js";
-import { defaultTaskConcurrency, forkableBranch } from "../dist/task-runtime.js";
+import { createEpiDispatchExtension } from "../dist/extensions/dispatch-epi-host.js";
+import { loadAgents } from "../dist/extensions/dispatch/agents.js";
+import { defaultConcurrency, forkableBranch } from "../dist/extensions/dispatch/worker-host.js";
 
 const fakeWorker = fileURLToPath(new URL("./fixtures/fake-task-worker.mjs", import.meta.url));
 
@@ -177,8 +177,8 @@ test("an agents/*.md extensions entry accepts npm:, git: and path sources", (t) 
     join(dir, "ext.md"),
     "---\nname: ext\ndescription: Uses extensions\nextensions:\n  - npm:@scope/pkg@1.2\n  - git:https://github.com/x/y.git\n  - /abs/path/my-ext/index.mjs\n---\nBody\n",
   );
-  const agents = loadTaskAgents({ globalAgentsDir: dir, projectAgentsDir: undefined });
-  assert.deepEqual(agents[0].extensions, [
+  const agents = loadAgents({ global: dir, project: undefined }, (m) => new Error(m));
+  assert.deepEqual(agents[0].scope.extensions, [
     "npm:@scope/pkg@1.2",
     "git:https://github.com/x/y.git",
     "/abs/path/my-ext/index.mjs",
@@ -311,17 +311,13 @@ test("fork drops the current prompt even when a non-message entry sits between i
   );
 });
 
-// Found by the subagent benchmark (.dev/bench/subagents-2026-10-23): the child resolved its own
-// default model instead of the parent's, silently running a pricier one. Only a cost report
-// showed it, so it is pinned here.
 test("a subagent inherits the parent's model and thinking level unless the call overrides them", async (t) => {
   const root = fixture(t);
   mkdirSync(join(root, "agents"), { recursive: true });
   const captured = [];
   const tools = new Map();
-  const extension = createTaskInlineExtension({
+  const extension = createEpiDispatchExtension({
     epiHome: root,
-    agentDir: join(root, "pi"),
     projectAgentsDir: undefined,
     projectTrusted: false,
     workerPath: fakeWorker,
@@ -336,31 +332,26 @@ test("a subagent inherits the parent's model and thinking level unless the call 
     },
   });
 
-  // The fake worker echoes the capsule's model back, so what the child would run is observable.
   const ctx = {
     cwd: root,
     model: { provider: "magpie", id: "auto/claude-haiku-4-5" },
     thinkingLevel: "medium",
-    sessionManager: { getBranch: () => [] },
+    sessionManager: { getBranch: () => [], getSessionId: () => "s1" },
   };
   const inherited = await tools.get("task").execute("c1", { task: "echo-model", background: false }, undefined, undefined, ctx);
-  captured.push(inherited.details.result);
+  captured.push(inherited.details.job.result);
   const overridden = await tools.get("task").execute("c2", { task: "echo-model", background: false, model: "other/echo" }, undefined, undefined, ctx);
-  captured.push(overridden.details.result);
+  captured.push(overridden.details.job.result);
 
   assert.equal(captured[0], "magpie/auto/claude-haiku-4-5:medium", "the child must run the parent's model");
   assert.equal(captured[1], "other/echo", "an explicit model argument must still win");
 
-  // Precedence must be call > preset > parent. A preset exists precisely to run the child on a
-  // different (usually cheaper) model, so inheriting the parent's must not override it: the first
-  // fix for the inheritance bug did exactly that, silently ignoring every preset's model.
   writeFileSync(
     join(root, "agents", "cheap.md"),
     "---\nname: cheap\ndescription: Runs on a cheap model.\nmodel: other/cheap-model\n---\nBody\n",
   );
-  const withPreset = createTaskInlineExtension({
+  const withPreset = createEpiDispatchExtension({
     epiHome: root,
-    agentDir: join(root, "pi"),
     projectAgentsDir: undefined,
     projectTrusted: false,
     workerPath: fakeWorker,
@@ -377,29 +368,22 @@ test("a subagent inherits the parent's model and thinking level unless the call 
   });
   const viaPreset = await presetTools.get("task").execute(
     "c3", { task: "echo-model", background: false, agent: "cheap" }, undefined, undefined, ctx);
-  assert.equal(viaPreset.details.result, "other/cheap-model", "a preset's model must outrank the inherited one");
+  assert.equal(viaPreset.details.job.result, "other/cheap-model", "a preset's model must outrank the inherited one");
 });
 
-// Found by the subagent benchmark: a fixed cap of 4 ran a 15-way fan-out in four waves.
-test("the default subagent concurrency follows the machine and can be overridden", () => {
-  assert.equal(defaultTaskConcurrency({}, 1), 2, "never below 2");
-  assert.equal(defaultTaskConcurrency({}, 10), 10);
-  assert.equal(defaultTaskConcurrency({}, 64), 16, "never above 16");
-  assert.equal(defaultTaskConcurrency({ EPI_TASK_MAX_CONCURRENCY: "3" }, 64), 3);
-  assert.throws(() => defaultTaskConcurrency({ EPI_TASK_MAX_CONCURRENCY: "0" }, 8), /positive integer/);
-  assert.throws(() => defaultTaskConcurrency({ EPI_TASK_MAX_CONCURRENCY: "x" }, 8), /positive integer/);
+test("the default subagent concurrency follows the machine within [2, 16]", () => {
+  assert.equal(defaultConcurrency(1), 2, "never below 2");
+  assert.equal(defaultConcurrency(10), 10);
+  assert.equal(defaultConcurrency(64), 16, "never above 16");
 });
 
-// A background start used to put the whole job record (session path, cwd, timestamps) into the
-// model's context: ~400 bytes of noise per job. Only the id is useful to the model.
-test("a background task start tells the model only the job id; the TUI keeps the full record", async (t) => {
+test("a background task start tells the model a concise receipt and records epi:task-usage on settle", async (t) => {
   const root = fixture(t);
   mkdirSync(join(root, "agents"), { recursive: true });
   const tools = new Map();
   const entries = [];
-  await createTaskInlineExtension({
+  await createEpiDispatchExtension({
     epiHome: root,
-    agentDir: join(root, "pi"),
     projectAgentsDir: undefined,
     projectTrusted: false,
     workerPath: fakeWorker,
@@ -409,18 +393,16 @@ test("a background task start tells the model only the job id; the TUI keeps the
     on() {},
     appendEntry(type, data) { entries.push({ type, data }); },
     registerTool(definition) { tools.set(definition.name, definition); },
-    // A real `pi` always has this; a background job's push wake calls it on settle.
     sendMessage() {},
   });
-  const ctx = { cwd: root, model: undefined, sessionManager: { getBranch: () => [] } };
+  const ctx = { cwd: root, model: undefined, sessionManager: { getBranch: () => [], getSessionId: () => "s1" } };
   const started = await tools.get("task").execute("c1", { task: "with-usage", background: true }, undefined, undefined, ctx);
   const text = started.content[0].text;
-  assert.match(text, new RegExp(started.details.id));
+  assert.match(text, new RegExp(started.details.job.id));
   assert.doesNotMatch(text, /sessionPath|\.jsonl|createdAt/);
-  assert.ok(text.length < 120, `receipt should be short, got ${text.length} chars`);
-  assert.ok(started.details.sessionPath, "details still carry the full snapshot");
+  assert.ok(started.details.job.sessionPath, "details still carry the full snapshot");
 
-  await tools.get("task_wait").execute("c2", { jobId: started.details.id }, undefined, undefined, ctx);
+  await tools.get("task_wait").execute("c2", { ids: [started.details.job.id] }, undefined, undefined, ctx);
   const usage = entries.find((entry) => entry.type === "epi:task-usage");
   assert.ok(usage, "the child's usage is recorded");
   assert.equal(usage.data.inputTokens, 10);

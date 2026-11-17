@@ -12,7 +12,7 @@ description: 标准可移植 Pi 扩展（内置于 Epi src/extensions/dispatch/�
 - **抽离迁移而非推倒重写**：现有单层任务系统共 4,618 行（`src/extensions/task.ts`、`src/task-runtime.ts`、`src/worker.ts`、`src/extensions/task-notify.ts`、`src/worker-reaper.ts`、`src/task-worktree.ts`）。实施上先做行为不变的纯抽离解耦（现有 `test/task*.test.mjs` 全绿），再增量接入异步 `bash`、共享 `board`、Timer、外部事件收件箱与 Outbox/`/approve` 护栏。
 - **消除 `Swarm` 伪双轨，统一为「具名 `task` + 共享 `board`」**：工程协作需要的不是无主蚁群（Leaderless Swarm），而是「主控切清模块边界 + 专职子代理执行 + 同伴间按 `@name` 点对点交接」。因此不另造一套重复的 `swarm add/kill/status` 管理工具——所有后台 Agent 统一由 `task` 派生、由 `task_{status,wait,cancel}` 管控；传了 `name` 的具名子代理自动接入当前会话的共享 `board`（`board_post` / `board_read` / `board_wait`）。
 - **与 `epi:monitor` 解耦**：`src/extensions/index.ts:65-72` 将 `epi:monitor` 从 `buildTaskPair` 拆出，作为独立的流式日志/WebSocket 监听扩展保留；有限耗时命令与本地常驻测试服务统一走异步 `bash`。
-- 开发期 `src/extensions/dispatch/` 独立单测，最后阶段切换 `src/extensions/index.ts` 后归档旧 `task.ts` 与 [`subagents-design.md`](subagents-design.md)（`epi.json` 内仍兼容 `disable: ["epi:task"]` 开关）。
+- 开发期 `src/extensions/dispatch/` 独立单测，最后阶段切换 `src/extensions/index.ts` 后归档旧 `task.ts` 与 [`archive-subagents-design.md`](notes/archive-subagents-design.md)（`epi.json` 内仍兼容 `disable: ["epi:task"]` 开关）。
 
 ---
 
@@ -183,15 +183,14 @@ src/extensions/dispatch/
 
 ---
 
-## 7. 实现备注（Stage 1A–2，2026-11-17，核对 `@earendil-works/pi-coding-agent@1.4.0`）
+## 7. 实现备注（2026-11-17，核对 `@earendil-works/pi-coding-agent@1.4.0`）
 
-Stage 1A–2 已在 `dev/dispatch` 落地，`src/extensions/index.ts` 仍挂旧 `epi:task`（模型可见快照不变），以下为与 §2–§4 字面描述不同或补充的实现取舍，Stage 3 接入前需用户确认：
-
-1. **模块清单**：在 §2.3 基础上新增 `registry.ts`（`bg_*`/`job_*`/`tm_*` 统一路由）、`protocol.ts`（胶囊与 `fd 3` JSONL 通道，双向复用同一 socketpair）、`runtime.ts`（按角色组装全部原语）、`status-tools.ts`、`task-tool.ts`；`tui-views.ts` 留给 Stage 3。Epi 薄适配为 `src/extensions/dispatch-epi-host.ts` 与 `src/dispatch-epi-worker.ts`。
-2. **`entry_appended` 销账**：Pi 1.4 的 `entry_appended`/`compaction_end` 只是 `AgentSessionEvent`（`session.subscribe`），扩展 API 收不到。账本因此公开 `onEntryAppended(entry)`：Worker 由 `pi-worker.ts` 的 `session.subscribe` 喂入；纯 `pi -e` 根会话靠 `message_end`、边界草稿提交后的 `setImmediate` 分支对账与 `turn_start`/`agent_settled` 分支对账三路兜底。压缩后摘要挂在扩展事件 `session_compact` 上。
-3. **`bash` 参数语义**：`timeout` 沿用 Pi 语义＝命令总寿命（到点杀进程组），前台超时报错文案与 Pi 一致；`waitMsBeforeAsync`＝同步窗口（默认 `120000`，上限 `600000`，`isDaemon` 默认 `0`）。转后台的有限命令默认寿命 `1800s`、上限 `14400s`，守护进程默认不限寿命且退出时同样通知一次；被 `task_cancel` 停掉的不再通知。前台按 `Esc` 仍按 Pi 语义杀掉命令。
-4. **具名任务**：传 `name` 默认 `background: true`（否则停在 `board_wait` 的同伴会卡住前台调用）；名字须匹配 `^[a-z][a-z0-9-]{0,31}$` 且不得为 `all`/`coordinator`，根会话在看板上的身份为 `@coordinator`，只有点名 `@coordinator` 的消息进根账本。同伴系统提示追加一段看板说明（含启动时 `seq`）。
-5. **`board_wait`**：`mentions_only` 默认 `true`。除 §3.5 三路唤醒外，Worker 自己的后台项（`bg_*`/`tm_*`）入账时也会唤醒等待（避免同伴等看板时自身命令结束却无人可见）；空闲上限（默认 15m，`host.boardIdleMs` 可调）到期后本轮以 `partial`（`stoppedBy: "idle"`）收束，之后被 `@name` 点名即按原 `.jsonl` 续跑。
-6. **停滞检测**：`stall:<boardEpoch>:<maxSeq>` 中 `boardEpoch` 在每次启动具名任务时递增；检测做 300ms 去抖，且宿主向已停泊的被点名同伴推送消息时立即视其为已唤醒，避免 Worker 回报 `parked:false` 前的竞态误报。
-7. **`task_cancel` 工作区门禁**：取消总会停止任务；隔离工作区相对基线（`share`）或相对主检出 `HEAD`（`branch`：未提交改动或未合入提交）有改动时保留目录并在结果里给出 `diffStat` 与 `forceDirty: true` 提示，干净的直接删除（`branch` 同时删分支）。
-8. **Stage 3 待办**：Epi `src/extensions/runtime.ts` 的 bash 守卫仍把 `timeout` 钳到 600s 并拦截 `&`，挂到 Epi Worker 时与异步 `bash` 冲突；`src/noninteractive.ts` 首轮后 `disposeRuntime()` 尚未改走排空屏障；`task_stop` 钩子收到的 `job` 形状与旧 `TaskJobSnapshot` 不同；`dispatch-epi-worker.ts` 暂复制了 `src/worker.ts` 的子会话压缩钳制，旧文件归档时合并。
+1. **模块清单**：在 §2.3 基础上包含 `registry.ts`（`bg_*`/`job_*`/`tm_*` 统一路由）、`protocol.ts`（胶囊与 `fd 3` JSONL 通道，双向复用同一 socketpair）、`runtime.ts`（按角色组装全部原语）、`status-tools.ts`、`task-tool.ts` 与 `tui-views.ts`。Epi 薄适配为 `src/extensions/dispatch-epi-host.ts`、`src/extensions/dispatch-epi-ui.ts` 与 `src/dispatch-epi-worker.ts`。
+2. **工具渐进暴露与 `bash` 共存**：`board_post`/`board_read`/`board_wait` 在同伴 Worker 内首轮即激活，在根会话默认 `defaultActive: false`，当首次启动具名同伴（或恢复已有白板会话）时自动激活；`outbox` 仅在绑定 `inboxTarget`、`host.onOutbox` 或存在活跃 `schedule` 时自动激活，避免普通交互会话浪费上下文。`bash` 在 `session_start` 时检测若已有外部扩展覆盖 `bash`（如 `minilfs`），自动让出而不报冲突。
+3. **`entry_appended` 销账**：Pi 1.4 的 `entry_appended`/`compaction_end` 只是 `AgentSessionEvent`（`session.subscribe`），扩展 API 收不到。账本因此公开 `onEntryAppended(entry)`：Worker 由 `pi-worker.ts` 的 `session.subscribe` 喂入；纯 `pi -e` 根会话靠 `message_end`、边界草稿提交后的 `setImmediate` 分支对账与 `turn_start`/`agent_settled` 分支对账三路兜底。压缩后摘要挂在扩展事件 `session_compact` 上。
+4. **`bash` 参数语义**：`timeout` 沿用 Pi 语义＝命令总寿命（到点杀进程组），前台超时报错文案与 Pi 一致；`waitMsBeforeAsync`＝同步窗口（默认 `120000`，上限 `600000`，`isDaemon` 默认 `0`）。转后台的有限命令默认寿命 `1800s`、上限 `14400s`，守护进程默认不限寿命且退出时同样通知一次；被 `task_cancel` 停掉的不再通知。前台按 `Esc` 仍按 Pi 语义杀掉命令。
+5. **具名任务**：传 `name` 默认 `background: true`（否则停在 `board_wait` 的同伴会卡住前台调用）；名字须匹配 `^[a-z][a-z0-9-]{0,31}$` 且不得为 `all`/`coordinator`，根会话在看板上的身份为 `@coordinator`，只有点名 `@coordinator` 的消息进根账本。同伴系统提示追加一段看板说明（含启动时 `seq`）。
+6. **`board_wait`**：`mentions_only` 默认 `true`。除 §3.5 三路唤醒外，Worker 自己的后台项（`bg_*`/`tm_*`）入账时也会唤醒等待（避免同伴等看板时自身命令结束却无人可见）；空闲上限（默认 15m，`host.boardIdleMs` 可调）到期后本轮以 `partial`（`stoppedBy: "idle"`）收束，之后被 `@name` 点名即按原 `.jsonl` 续跑。
+7. **停滞检测**：`stall:<boardEpoch>:<maxSeq>` 中 `boardEpoch` 在每次启动具名任务时递增；检测做 300ms 去抖，且宿主向已停泊的被点名同伴推送消息时立即视其为已唤醒，避免 Worker 回报 `parked:false` 前的竞态误报。
+8. **`task_cancel` 工作区门禁**：取消总会停止任务；隔离工作区相对基线（`share`）或相对主检出 `HEAD`（`branch`：未提交改动或未合入提交）有改动时保留目录并在结果里给出 `diffStat` 与 `forceDirty: true` 提示，干净的直接删除（`branch` 同时删分支）。
+9. **Stage 3 视图与旧栈归档**：`tui-views.ts` 提供 `<= 14` 列底栏状态、`Alt+B` 条件热键 + `/bg` 前台放手、88% 宽 `Items` / `Board` 双页签浮层与 `.jsonl`/日志实时下钻；`dispatch-epi-ui.ts` 提供 Epi grok 工具行零行折叠渲染、行点击下钻（`CallLine.inspect`）、`TaskMonitorBridge` 联动与 `todo`；`bash-guard.ts` 放行 `isDaemon`/`waitMsBeforeAsync` 异步模式（上限 4h，保留拦截裸 `nohup`/`&` 与交互式 TUI）；旧 `src/{worker,worker-reaper,task-*}.ts` 与 `src/extensions/{task,task-view}.ts` 已移除，旧子代理设计归档至 [`notes/archive-subagents-design.md`](notes/archive-subagents-design.md)。

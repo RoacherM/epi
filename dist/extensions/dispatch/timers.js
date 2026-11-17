@@ -201,6 +201,13 @@ export class TimerRuntime {
         const kind = timer.kind === "schedule" ? `schedule ${timer.cadence} (${timer.sessionMode ?? "resume"})` : "follow_up";
         return { summary: this.summary(timer), text: `${timer.id} ${kind} ${due}: ${timer.prompt}`, details: { id: timer.id, status: timer.status, dueAt: timer.dueAt } };
     }
+    hasActiveSchedules() {
+        for (const timer of this.timers.values()) {
+            if (timer.kind === "schedule" && timer.status === "pending")
+                return true;
+        }
+        return false;
+    }
     provider() {
         return {
             kind: "tm",
@@ -224,7 +231,7 @@ export function timerNotice(timer) {
     return `[timer ${timer.id}] Follow-up you scheduled is due: ${timer.prompt}`;
 }
 function timerSchema(role) {
-    const prompt = Type.String({ description: "What to do when it fires; delivered back to you as a notification" });
+    const prompt = Type.String({ description: "Prompt delivered when due" });
     const delaySeconds = Type.Integer({ minimum: 1, description: "Seconds from now" });
     if (role !== "root") {
         return Type.Object({ kind: Type.Literal("follow_up"), delaySeconds, prompt });
@@ -232,9 +239,9 @@ function timerSchema(role) {
     return Type.Object({
         kind: Type.Union([Type.Literal("follow_up"), Type.Literal("schedule")]),
         delaySeconds: Type.Optional(delaySeconds),
-        cadence: Type.Optional(Type.String({ description: "schedule only: 'every:<N><s|m|h>' or 'daily:HH:MM' (local time)" })),
+        cadence: Type.Optional(Type.String({ description: "'every:<N><s|m|h>' or 'daily:HH:MM'" })),
         prompt,
-        sessionMode: Type.Optional(Type.Union([Type.Literal("resume"), Type.Literal("fresh")], { description: "schedule only: wake this session (resume) or run a fresh subagent (fresh)" })),
+        sessionMode: Type.Optional(Type.Union([Type.Literal("resume"), Type.Literal("fresh")])),
     });
 }
 export function createTimerTool(runtime, role, sessionId) {
@@ -242,8 +249,8 @@ export function createTimerTool(runtime, role, sessionId) {
         name: "timer",
         label: "Timer",
         description: role === "root"
-            ? "Set a one-shot follow_up alarm (returns tm_<id>; you are woken with the prompt when it is due) or a recurring schedule (needs a bound target). Query or cancel with task_status / task_cancel."
-            : "Set a one-shot follow_up alarm inside this run (must fire before your timeout); returns tm_<id>, cancel with task_cancel.",
+            ? "Set a one-shot follow_up alarm (delaySeconds) or recurring schedule (cadence, needs inbox target); cancel with task_cancel."
+            : "Set a one-shot follow_up alarm inside this run; cancel with task_cancel.",
         parameters: timerSchema(role),
         async execute(_toolCallId, rawParams) {
             const params = rawParams;

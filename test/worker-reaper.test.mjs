@@ -9,13 +9,13 @@ import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 
 import { createEpiRuntimeExtensions } from "../dist/extensions/runtime.js";
 import { createEpiRuntimeIdentity } from "../dist/runtime-identity.js";
-import { TaskRuntime } from "../dist/task-runtime.js";
+import { WorkerPool } from "../dist/extensions/dispatch/worker-host.js";
 import {
   initialLedgerOffset,
-  inspectNewWorkerBackgroundPgids,
-  prepareWorkerExecutionGuard,
-  reapWorkerOrphans,
-} from "../dist/worker-reaper.js";
+  inspectNewBackgroundPgids as inspectNewWorkerBackgroundPgids,
+  prepareExecutionGuard as prepareWorkerExecutionGuard,
+  reapOrphans as reapWorkerOrphans,
+} from "../dist/extensions/dispatch/reaper.js";
 import { EPI_PACKAGE_VERSION as EPI_VERSION } from "./fixtures/epi-package-version.mjs";
 
 function isPidAlive(pid) {
@@ -49,14 +49,14 @@ test(
     assert.equal(guard.env.GIT_TERMINAL_PROMPT, "0");
     assert.equal(guard.env.GCM_INTERACTIVE, "never");
     assert.equal(guard.env.GIT_PAGER, "cat");
-    assert.match(guard.cookie, /^wk_jobalpha1234_[0-9a-f]{12}$/);
+    assert.match(guard.cookie, /^pd_jobalpha1234_[0-9a-f]{12}$/);
 
     // Spawn top-level detached /bin/bash (mirroring Pi's bash tool) and a nested /bin/bash -c inside it:
     const res = spawnSync(
       "/bin/bash",
       [
         "-c",
-        'printf "OUTER_LEDGER=%s\\nUSER_HOOK=%s\\nOUTER_BASH_ENV=%s\\n" "${EPI_PGID_LEDGER:-unset}" "${USER_BASH_ENV_RAN:-no}" "${BASH_ENV:-unset}" && /bin/bash -c \'printf "INNER_HOOK=%s\\n" "${USER_BASH_ENV_RAN:-no}"\'',
+        'printf "OUTER_LEDGER=%s\\nUSER_HOOK=%s\\nOUTER_BASH_ENV=%s\\n" "${PI_DISPATCH_PGID_LEDGER:-unset}" "${USER_BASH_ENV_RAN:-no}" "${BASH_ENV:-unset}" && /bin/bash -c \'printf "INNER_HOOK=%s\\n" "${USER_BASH_ENV_RAN:-no}"\'',
       ],
       { env: guard.env, encoding: "utf8" },
     );
@@ -73,7 +73,7 @@ test(
     // Non-interactive GIT_EDITOR stub exits 1 immediately with actionable stderr:
     const editorRes = spawnSync(guard.env.GIT_EDITOR, ["COMMIT_EDITMSG"], { encoding: "utf8" });
     assert.equal(editorRes.status, 1);
-    assert.match(editorRes.stderr, /interactive git editor blocked in headless subagent/);
+    assert.match(editorRes.stderr, /interactive git editor blocked/);
   },
 );
 
@@ -226,13 +226,12 @@ test(
       workerScript,
       `
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
 const capsule = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const pidFile = join(capsule.cwd, capsule.task.includes("hang") ? "cancel-orphan.pid" : "done-orphan.pid");
 
-// Simulate Pi's bash tool spawning detached /bin/bash which in turn spawns a detached background process:
 const bash = spawn("/bin/bash", ["-c", \`\${JSON.stringify(process.execPath)} -e 'const { spawn } = require("node:child_process"); const fs = require("node:fs"); const c = spawn(process.execPath, ["-e", "setInterval(() => {}, 10000)"], { detached: true, stdio: "ignore" }); c.unref(); fs.writeFileSync(\${JSON.stringify(pidFile)}, String(c.pid));'\`], {
   detached: true,
   stdio: "ignore",
@@ -241,24 +240,27 @@ const bash = spawn("/bin/bash", ["-c", \`\${JSON.stringify(process.execPath)} -e
 await new Promise((resolve) => bash.on("close", resolve));
 
 if (capsule.task.includes("hang")) {
-  process.stdout.write(JSON.stringify({ type: "progress", phase: "report", summary: "spawned", turns: 1, steps: 1 }) + "\\n");
+  writeSync(3, JSON.stringify({ type: "progress", phase: "report", summary: "spawned", turns: 1, steps: 1 }) + "\\n");
   setInterval(() => {}, 10000);
 } else {
-  process.stdout.write(JSON.stringify({ type: "result", ok: true, output: "done", turns: 1 }) + "\\n");
+  writeSync(3, JSON.stringify({ type: "result", ok: true, output: "done", turns: 1 }) + "\\n");
   process.exit(0);
 }
 `,
     );
 
-    const runtime = new TaskRuntime({
-      workerPath: workerScript,
+    const runtime = new WorkerPool({
+      stateDir: () => join(root, "runtime", "dispatch"),
       agentDir: join(root, "pi"),
-      epiHome: root,
-      capsuleRoot: join(root, "runtime", "task"),
-      artifactRoot: join(root, "artifacts", "task"),
-      sessionRoot: join(root, "runtime", "task", "sessions"),
-      agents: [],
-      projectTrusted: false,
+      nodeExecPath: process.execPath,
+      workerPath: workerScript,
+      sdkEntryUrl: import.meta.resolve("@earendil-works/pi-coding-agent"),
+      agents: () => [],
+      sharedDaemonNames: ["hc", "herdr-core", "herdr-app"],
+      rewriteOutputText: (t) => t,
+      sessionShort: () => "reap",
+      boardPath: () => undefined,
+      boardSince: () => 0,
       killGraceMs: 100,
     });
 

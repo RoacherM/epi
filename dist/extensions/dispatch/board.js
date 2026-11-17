@@ -203,9 +203,11 @@ function waitText(backend, outcome) {
     }
 }
 export function createBoardTools(backend) {
+    const defaultActive = backend.defaultActive ?? true;
     const post = {
         name: "board_post",
         label: "Board Post",
+        defaultActive,
         description: `Post to the session board as @${backend.self}. Hand work to a peer with @name; it is woken directly, without the coordinator relaying.`,
         parameters: PostParameters,
         async execute(_id, params) {
@@ -216,6 +218,7 @@ export function createBoardTools(backend) {
     const read = {
         name: "board_read",
         label: "Board Read",
+        defaultActive,
         description: "Read board messages (by since, seqs, channel); returns the latest seq to pass to board_wait.",
         parameters: ReadParameters,
         async execute(_id, params) {
@@ -228,6 +231,7 @@ export function createBoardTools(backend) {
     const wait = {
         name: "board_wait",
         label: "Board Wait",
+        defaultActive,
         description: "Wait for the next board message addressed to you after `since` (also ends on a parent steer, Esc, or the idle cap).",
         parameters: WaitParameters,
         async execute(_id, params, signal) {
