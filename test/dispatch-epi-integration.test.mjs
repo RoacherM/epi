@@ -295,7 +295,7 @@ test("trusted project workspace: share preserves .epi/hooks.json tool_call guard
             {
               type: "command",
               command: "/bin/sh",
-              args: ["-c", "printf '{\"action\":\"block\",\"reason\":\"project-hook-blocked-bash\"}\\n'"],
+              args: ["-c", "cat >/dev/null && printf '{\"action\":\"block\",\"reason\":\"project-hook-blocked-bash\"}\\n'"],
             },
           ],
         },

@@ -213,3 +213,51 @@ test("PeerBoard rejects >16 KiB whitespace before emitting, dirty named workspac
   await call("board_post", { text: "sess-2 msg" });
   assert.equal(runtime.board.read({ since: 0 })[0].seq, 1);
 });
+
+test("peer board_post awaits parent seq receipt for read-your-own-writes, and share batch returns immediately without blocking", async (t) => {
+  const { runtime, call, root } = await rootFixture(t);
+  const repo = join(root, "repo-share-fast");
+  mkdirSync(join(repo, "node_modules", "pkg"), { recursive: true });
+  mkdirSync(join(repo, ".dev"), { recursive: true });
+  writeFileSync(join(repo, "node_modules", "pkg", "index.js"), "export default 1;\n");
+  writeFileSync(join(repo, ".dev", "scratch.txt"), "skip-me\n");
+  writeFileSync(join(repo, "README.md"), "hello\n");
+  git(repo, "init", "-q", "-b", "main");
+  writeFileSync(join(repo, ".gitignore"), "node_modules/\n.dev/\n");
+  git(repo, "add", ".");
+  git(repo, "commit", "-q", "-m", "init");
+
+  const t0 = Date.now();
+  await call("task", {
+    tasks: [
+      { name: "scanner", task: "peer-post-then-read check", cwd: repo, workspace: "share", model: MODEL },
+      { name: "helper", task: "child-simple quick", cwd: repo, workspace: "share", model: MODEL },
+    ],
+  });
+  const startElapsed = Date.now() - t0;
+  assert.ok(startElapsed < 250, `batch share start should not block event loop (took ${startElapsed}ms)`);
+
+  const scannerId = runtime.pool.resolve("scanner");
+  const helperId = runtime.pool.resolve("helper");
+  const [scannerDone, helperDone] = await Promise.all([runtime.pool.wait(scannerId), runtime.pool.wait(helperId)]);
+  assert.equal(scannerDone.status, "completed", scannerDone.error);
+  assert.equal(helperDone.status, "completed", helperDone.error);
+  assert.match(scannerDone.result, /POST_ACK=Posted #\d+ as @scanner\./, "peer board_post received seq receipt from parent");
+  assert.match(scannerDone.result, /READ_BACK=[\s\S]*@scanner: @coordinator SELF-READ-CHECK/, "immediate board_read saw own post");
+
+  // P1-1: concurrent startAsync with the same peer name rejects the duplicate instead of admitting two active peers:
+  const dupResults = await Promise.allSettled([
+    runtime.pool.startAsync({ name: "dup", task: "child-simple 1", cwd: repo, workspace: "share", inheritedModel: MODEL }),
+    runtime.pool.startAsync({ name: "dup", task: "child-simple 2", cwd: repo, workspace: "share", inheritedModel: MODEL }),
+  ]);
+  assert.equal(dupResults.filter((r) => r.status === "fulfilled").length, 1, "exactly one concurrent same-name startAsync succeeds");
+  assert.equal(dupResults.filter((r) => r.status === "rejected").length, 1, "second concurrent same-name startAsync is rejected");
+  await runtime.pool.wait(runtime.pool.resolve("dup"));
+
+  // P1-2: an @mention posted immediately after task(share) returns is NOT skipped by lazy boardSince():
+  await call("task", { name: "beta", task: "peer-beta wait for alpha", cwd: repo, workspace: "share", model: MODEL });
+  await call("board_post", { text: "@beta HANDOFF-FROM-ALPHA payload" });
+  const betaDone = await runtime.pool.wait(runtime.pool.resolve("beta"));
+  assert.equal(betaDone.status, "completed", betaDone.error);
+  assert.match(betaDone.result, /BETA-GOT-HANDOFF/);
+});

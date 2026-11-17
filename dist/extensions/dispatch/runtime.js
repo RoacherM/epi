@@ -343,10 +343,10 @@ export class DispatchRuntime {
     postBrief(job) {
         const board = this.boardFor(job.originSessionId);
         if (board === undefined || job.name === undefined)
-            return;
+            return undefined;
         this.activateTools(["board_post", "board_read", "board_wait"]);
         board.epoch += 1;
-        board.post(COORDINATOR, `@${job.name} ${job.task}`);
+        return board.post(COORDINATOR, `@${job.name} ${job.task}`).seq;
     }
     activateTools(names) {
         const pi = this.gate.pi;
@@ -382,10 +382,7 @@ export class DispatchRuntime {
             return [];
         return createBoardTools({
             self: peer.name,
-            post: (text, channel) => {
-                peer.post(text, channel);
-                return undefined;
-            },
+            post: (text, channel) => peer.post(text, channel),
             read: (options) => peer.read(options),
             wait: (since, mentionsOnly, signal) => peer.wait(since, mentionsOnly, signal),
             onIdle: () => this.worker?.idleStop?.(),
@@ -424,7 +421,7 @@ export class DispatchRuntime {
         const allowed = await this.allowBackgroundTaskStart({ type: "task_start", task: timer.prompt, cwd });
         if (!allowed)
             return;
-        const job = this.pool.start({
+        const job = await this.pool.startAsync({
             task: timer.prompt, cwd, inheritedModel: inheritedModelReference(ctx?.model, ctx?.thinkingLevel), originSessionId: this.gate.sessionId(),
         });
         this.notifyOnSettle.set(job.id, true);

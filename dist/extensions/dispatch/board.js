@@ -127,11 +127,13 @@ export class BoardHub {
         return this.room.park({ name, since, mentionsOnly }, signal, idleMs);
     }
 }
+const POST_ACK_TIMEOUT_MS = 1_000;
 /** A peer worker's view: posts go up fd 3, reads come from the file, pushes wake `board_wait`. */
 export class PeerBoard {
     options;
     room = new WaitRoom();
     pushed = [];
+    pendingAcks = [];
     constructor(options) {
         this.options = options;
     }
@@ -147,18 +149,40 @@ export class PeerBoard {
         this.pushed.push(message);
         if (this.pushed.length > 200)
             this.pushed.splice(0, this.pushed.length - 200);
+        if (message.sender === this.options.name) {
+            const idx = this.pendingAcks.findIndex((ack) => ack.text === message.text);
+            if (idx >= 0) {
+                const [ack] = this.pendingAcks.splice(idx, 1);
+                clearTimeout(ack.timer);
+                ack.resolve(message);
+            }
+        }
         this.room.offer(message);
     }
     /** A parent steer or this worker's own background notification ends a parked wait. */
     wake(reason) {
         this.room.wakeAll(reason);
     }
-    /** Synchronous: the fd 3 write is enqueued before the tool's first await (FIFO with peers). */
+    /** Enqueues the fd 3 write synchronously before any await (FIFO with peers), then awaits parent seq receipt. */
     post(text, channel) {
         const body = text.slice(0, MAX_TEXT_BYTES);
         if (body.trim().length === 0)
             throw new Error("board_post needs non-empty text");
         this.options.emit({ type: "board_post", text: body, ...(channel === undefined ? {} : { channel }) });
+        return new Promise((resolve) => {
+            const entry = {
+                text: body,
+                resolve,
+                timer: setTimeout(() => {
+                    const idx = this.pendingAcks.indexOf(entry);
+                    if (idx >= 0)
+                        this.pendingAcks.splice(idx, 1);
+                    resolve(undefined);
+                }, POST_ACK_TIMEOUT_MS),
+            };
+            entry.timer.unref();
+            this.pendingAcks.push(entry);
+        });
     }
     read(options) {
         return select(this.all(), options);
@@ -212,7 +236,7 @@ export function createBoardTools(backend) {
         description: `Post to the session board as @${backend.self}. Hand work to a peer with @name; it is woken directly, without the coordinator relaying.`,
         parameters: PostParameters,
         async execute(_id, params) {
-            const message = backend.post(params.text, params.channel);
+            const message = await backend.post(params.text, params.channel);
             return text(message === undefined ? `Posted as @${backend.self}.` : `Posted #${message.seq} as @${backend.self}.`, { seq: message?.seq });
         },
     };

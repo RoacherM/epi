@@ -170,10 +170,19 @@ export interface PeerBoardOptions {
   idleMs: number;
 }
 
+const POST_ACK_TIMEOUT_MS = 1_000;
+
+interface PendingPostAck {
+  text: string;
+  resolve: (message: BoardMessage | undefined) => void;
+  timer: NodeJS.Timeout;
+}
+
 /** A peer worker's view: posts go up fd 3, reads come from the file, pushes wake `board_wait`. */
 export class PeerBoard {
   private readonly room = new WaitRoom();
   private readonly pushed: BoardMessage[] = [];
+  private readonly pendingAcks: PendingPostAck[] = [];
 
   constructor(private readonly options: PeerBoardOptions) {}
 
@@ -190,6 +199,14 @@ export class PeerBoard {
   onPush(message: BoardMessage): void {
     this.pushed.push(message);
     if (this.pushed.length > 200) this.pushed.splice(0, this.pushed.length - 200);
+    if (message.sender === this.options.name) {
+      const idx = this.pendingAcks.findIndex((ack) => ack.text === message.text);
+      if (idx >= 0) {
+        const [ack] = this.pendingAcks.splice(idx, 1);
+        clearTimeout(ack!.timer);
+        ack!.resolve(message);
+      }
+    }
     this.room.offer(message);
   }
 
@@ -198,11 +215,24 @@ export class PeerBoard {
     this.room.wakeAll(reason);
   }
 
-  /** Synchronous: the fd 3 write is enqueued before the tool's first await (FIFO with peers). */
-  post(text: string, channel: string | undefined): void {
+  /** Enqueues the fd 3 write synchronously before any await (FIFO with peers), then awaits parent seq receipt. */
+  post(text: string, channel: string | undefined): Promise<BoardMessage | undefined> {
     const body = text.slice(0, MAX_TEXT_BYTES);
     if (body.trim().length === 0) throw new Error("board_post needs non-empty text");
     this.options.emit({ type: "board_post", text: body, ...(channel === undefined ? {} : { channel }) });
+    return new Promise((resolve) => {
+      const entry: PendingPostAck = {
+        text: body,
+        resolve,
+        timer: setTimeout(() => {
+          const idx = this.pendingAcks.indexOf(entry);
+          if (idx >= 0) this.pendingAcks.splice(idx, 1);
+          resolve(undefined);
+        }, POST_ACK_TIMEOUT_MS),
+      };
+      entry.timer.unref();
+      this.pendingAcks.push(entry);
+    });
   }
 
   read(options: ReadOptions): BoardMessage[] {
@@ -224,7 +254,7 @@ export class PeerBoard {
 export interface BoardBackend {
   self: string;
   defaultActive?: boolean | undefined;
-  post(text: string, channel: string | undefined): BoardMessage | undefined;
+  post(text: string, channel: string | undefined): Promise<BoardMessage | undefined> | BoardMessage | undefined;
   read(options: ReadOptions): BoardMessage[];
   wait(since: number, mentionsOnly: boolean, signal: AbortSignal | undefined): Promise<WaitOutcome>;
   /** Root only: the messages were read, so their notifications are delivered. */
@@ -272,7 +302,7 @@ export function createBoardTools(backend: BoardBackend): ToolDefinition[] {
     description: `Post to the session board as @${backend.self}. Hand work to a peer with @name; it is woken directly, without the coordinator relaying.`,
     parameters: PostParameters,
     async execute(_id, params: Static<typeof PostParameters>) {
-      const message = backend.post(params.text, params.channel);
+      const message = await backend.post(params.text, params.channel);
       return text(message === undefined ? `Posted as @${backend.self}.` : `Posted #${message.seq} as @${backend.self}.`, { seq: message?.seq });
     },
   };

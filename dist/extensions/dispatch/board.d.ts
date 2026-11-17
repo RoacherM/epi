@@ -48,21 +48,22 @@ export declare class PeerBoard {
     private readonly options;
     private readonly room;
     private readonly pushed;
+    private readonly pendingAcks;
     constructor(options: PeerBoardOptions);
     get name(): string;
     private all;
     onPush(message: BoardMessage): void;
     /** A parent steer or this worker's own background notification ends a parked wait. */
     wake(reason: "steer" | "notification"): void;
-    /** Synchronous: the fd 3 write is enqueued before the tool's first await (FIFO with peers). */
-    post(text: string, channel: string | undefined): void;
+    /** Enqueues the fd 3 write synchronously before any await (FIFO with peers), then awaits parent seq receipt. */
+    post(text: string, channel: string | undefined): Promise<BoardMessage | undefined>;
     read(options: ReadOptions): BoardMessage[];
     wait(since: number, mentionsOnly: boolean, signal: AbortSignal | undefined): Promise<WaitOutcome>;
 }
 export interface BoardBackend {
     self: string;
     defaultActive?: boolean | undefined;
-    post(text: string, channel: string | undefined): BoardMessage | undefined;
+    post(text: string, channel: string | undefined): Promise<BoardMessage | undefined> | BoardMessage | undefined;
     read(options: ReadOptions): BoardMessage[];
     wait(since: number, mentionsOnly: boolean, signal: AbortSignal | undefined): Promise<WaitOutcome>;
     /** Root only: the messages were read, so their notifications are delivered. */

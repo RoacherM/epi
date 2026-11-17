@@ -176,13 +176,12 @@
       }
     },
     {
-      "description": "Delegate work to an isolated subagent (its own context, tools and process). Give it a self-contained task. Named tasks (name) become board peers that hand off to each other with @name; workspace branch/share isolates file changes. Presets: worker (Deterministic full-runtime acceptance worker.).",
+      "description": "Delegate a self-contained task to an isolated subagent. Named tasks (name) coordinate via board_post/board_read/board_wait (no task tool); keep workspace inherit for read-only work. Presets: worker (Deterministic full-runtime acceptance worker.).",
       "name": "task",
       "parameters": {
         "additionalProperties": false,
         "properties": {
           "agent": {
-            "description": "Preset name",
             "type": "string"
           },
           "background": {
@@ -204,14 +203,12 @@
             "type": "string"
           },
           "excludeTools": {
-            "description": "Excluded tool names",
             "items": {
               "type": "string"
             },
             "type": "array"
           },
           "forkFrom": {
-            "description": "Peer name to fork from",
             "type": "string"
           },
           "jobId": {
@@ -254,7 +251,6 @@
             "type": "string"
           },
           "tasks": {
-            "description": "Parallel batch",
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -316,7 +312,6 @@
             "type": "integer"
           },
           "tools": {
-            "description": "Allowed tool names",
             "items": {
               "type": "string"
             },
@@ -340,7 +335,8 @@
                 "const": "share",
                 "type": "string"
               }
-            ]
+            ],
+            "description": "branch/share only for isolated file edits"
           }
         },
         "type": "object"
