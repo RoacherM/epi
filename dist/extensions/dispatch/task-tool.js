@@ -9,7 +9,9 @@ import { singleLine } from "./result.js";
 import { forkableBranch, inheritedModelReference, jobLabel, jobReport } from "./worker-host.js";
 const UPDATE_THROTTLE_MS = 250;
 const DEFAULT_FOREGROUND_BUDGET_SECONDS = 300;
-const Workspace = Type.Union([Type.Literal("inherit"), Type.Literal("branch"), Type.Literal("share")]);
+const Workspace = Type.Union([Type.Literal("inherit"), Type.Literal("branch"), Type.Literal("share")], {
+    description: 'Default "inherit"; pass "branch" or "share" only when isolating file edits',
+});
 const BatchItem = Type.Object({
     task: Type.String(),
     name: Type.Optional(Type.String()),
@@ -73,7 +75,7 @@ async function startOne(deps, item, shared, ctx) {
         verifyCommand: shared.verifyCommand, maxTurns: shared.maxTurns, timeoutSeconds: shared.timeoutSeconds,
         originSessionId: deps.gate.sessionId(),
     };
-    const job = deps.pool.start(request);
+    const job = await deps.pool.startAsync(request);
     if (job.name !== undefined)
         deps.postBrief?.(job);
     return job;
@@ -197,7 +199,7 @@ async function runBatch(deps, params, ctx, signal) {
 function description(agents) {
     const presets = agents.length === 0 ? "" : ` Presets: ${agents.map((agent) => `${agent.name} (${singleLine(agent.description, 80)})`).join("; ")}.`;
     return "Delegate work to an isolated subagent (its own context, tools and process). Give it a self-contained task. "
-        + "Named tasks (name) become board peers that hand off to each other with @name; workspace branch/share isolates file changes."
+        + "Named tasks (name) become board peers that hand off via board_post, board_read and board_wait (peers do not have task); keep default workspace inherit for read-only work."
         + presets;
 }
 export function createTaskTool(deps) {

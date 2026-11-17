@@ -15,7 +15,10 @@ import { newItemId, resolvePrefix } from "./registry.js";
 import { addUsage, boundedText, definedFields, formatTokenCount, singleLine } from "./result.js";
 import { addressedTo, COORDINATOR } from "./board.js";
 import { DISPATCH_DEPTH_ENV, type DispatchItemProvider, type DispatchItemReport, type DispatchItemSummary, type JobStatus, type SteerStrategy, type TaskUsage, type WorkspaceMode } from "./types.js";
-import { cleanupCleanWorkspace, createWorkspace, inspectWorkspaceDirty, removeWorkspace, type WorkspaceState } from "./worktree.js";
+import {
+  cleanupCleanWorkspace, cleanupCleanWorkspaceAsync, createWorkspaceAsync, inspectWorkspaceDirty, inspectWorkspaceDirtyAsync,
+  plannedWorkspaceRoot, removeWorkspaceAsync, type CreateWorkspaceRequest, type WorkspaceState,
+} from "./worktree.js";
 
 const RECENT_EVENTS_LIMIT = 10;
 const STDERR_TAIL_BYTES = 16 * 1024;
@@ -99,6 +102,7 @@ interface Job {
   stoppedBy: string | undefined;
   run: number;
   isResume: boolean;
+  workspaceSpec: CreateWorkspaceRequest | undefined;
   workspace: WorkspaceState | undefined;
   workspaceRemoved: boolean;
   diffStat: string | undefined;
@@ -310,21 +314,34 @@ export class WorkerPool {
     }
   }
 
-  start(request: JobRequest): JobSnapshot {
-    const { agent, cwd, timeoutSeconds } = this.validate(request);
-    if (request.name !== undefined) this.guardPriorNamedWorkspaces(request.name);
+  private async guardPriorNamedWorkspacesAsync(name: string): Promise<void> {
+    for (const prior of this.jobs.values()) {
+      if (prior.request.name !== name || !prior.settled || prior.workspace === undefined || prior.workspaceRemoved) continue;
+      const inspection = await inspectWorkspaceDirtyAsync(prior.workspace);
+      prior.diffStat = inspection.diffStat;
+      if (inspection.dirty) {
+        throw new Error(`prior @${name} (${prior.id}) still holds uncommitted work at ${prior.workspace.root}; resume with task({ jobId: "${name}", task }) or discard with task_cancel({ id: "${prior.id}", forceDirty: true })`);
+      }
+      if (await cleanupCleanWorkspaceAsync(prior.workspace)) prior.workspaceRemoved = true;
+    }
+  }
+
+  private enqueueJob(request: JobRequest, validated: { agent: AgentDefinition | undefined; cwd: string; timeoutSeconds: number }): JobSnapshot {
+    const { agent, cwd, timeoutSeconds } = validated;
     const id = newItemId("job");
     const mode = request.workspace ?? agent?.workspace ?? "inherit";
     const slug = request.name !== undefined ? `${request.name}-${id.slice(4)}` : id;
-    const workspace = createWorkspace({ mode, stateDir: this.options.stateDir(), sessionShort: this.options.sessionShort(), slug, cwd });
+    const workspaceSpec = mode === "inherit"
+      ? undefined
+      : { mode, stateDir: this.options.stateDir(), sessionShort: this.options.sessionShort(), slug, cwd };
     const { promise, resolve } = Promise.withResolvers<void>();
     const job: Job = {
-      id, request, agent, task: request.task, status: "queued", cwd: workspace.workerCwd, originCwd: cwd,
+      id, request, agent, task: request.task, status: "queued", cwd, originCwd: cwd,
       sessionPath: join(this.options.stateDir(), "sessions", `${id}.jsonl`), timeoutSeconds, createdAt: Date.now(),
       startedAt: undefined, finishedAt: undefined, deadlineAt: undefined, result: undefined, error: undefined, usage: undefined,
       runUsage: undefined, turns: undefined, progressTurns: 0, stepsBase: 0, steps: 0, currentActivity: undefined,
       lastSummary: undefined, recentEvents: [], stoppedBy: undefined, run: 0, isResume: false,
-      workspace: mode === "inherit" ? undefined : workspace, workspaceRemoved: false, diffStat: undefined,
+      workspaceSpec, workspace: undefined, workspaceRemoved: false, diffStat: undefined,
       process: undefined, channel: undefined, guard: undefined, capsuleDir: undefined, termination: undefined,
       workerResult: undefined, stderrTail: "", droppedSteers: [], parked: false, finite: 0,
       completion: promise, resolveCompletion: resolve, settled: false,
@@ -332,6 +349,18 @@ export class WorkerPool {
     this.jobs.set(id, job);
     this.enqueue(job);
     return this.snapshot(job);
+  }
+
+  start(request: JobRequest): JobSnapshot {
+    const validated = this.validate(request);
+    if (request.name !== undefined) this.guardPriorNamedWorkspaces(request.name);
+    return this.enqueueJob(request, validated);
+  }
+
+  async startAsync(request: JobRequest): Promise<JobSnapshot> {
+    const validated = this.validate(request);
+    if (request.name !== undefined) await this.guardPriorNamedWorkspacesAsync(request.name);
+    return this.enqueueJob(request, validated);
   }
 
   private enqueue(job: Job): void {
@@ -415,19 +444,24 @@ export class WorkerPool {
       job.finishedAt = Date.now();
       this.finish(job);
     } else if (!job.settled) {
+      job.termination ??= "cancelled";
       this.terminate(job, "cancelled");
       await job.completion;
     }
-    this.releaseWorkspace(job, forceDirty);
+    await this.releaseWorkspaceAsync(job, forceDirty);
     return this.snapshot(job);
   }
 
-  private releaseWorkspace(job: Job, forceDirty: boolean): void {
-    if (job.workspace === undefined || job.workspaceRemoved) return;
-    const inspection = inspectWorkspaceDirty(job.workspace);
+  private async releaseWorkspaceAsync(job: Job, forceDirty: boolean): Promise<void> {
+    if (job.workspaceRemoved) return;
+    if (job.workspace === undefined) {
+      if (job.workspaceSpec !== undefined) job.workspaceRemoved = true;
+      return;
+    }
+    const inspection = await inspectWorkspaceDirtyAsync(job.workspace);
     job.diffStat = inspection.diffStat;
     if (inspection.dirty && !forceDirty) return;
-    removeWorkspace(job.workspace);
+    await removeWorkspaceAsync(job.workspace);
     job.workspaceRemoved = true;
   }
 
@@ -435,7 +469,7 @@ export class WorkerPool {
     this.shuttingDown = true;
     await Promise.all([...this.jobs.values()].filter((job) => !job.settled).map((job) => this.cancel(job.id).catch(() => undefined)));
     for (const job of this.jobs.values()) {
-      if (job.workspace !== undefined && !job.workspaceRemoved && cleanupCleanWorkspace(job.workspace)) job.workspaceRemoved = true;
+      if (job.workspace !== undefined && !job.workspaceRemoved && (await cleanupCleanWorkspaceAsync(job.workspace))) job.workspaceRemoved = true;
     }
   }
 
@@ -443,12 +477,12 @@ export class WorkerPool {
     for (const job of this.jobs.values()) if (job.process?.pid !== undefined) signalGroup(job.process, "SIGTERM");
   }
 
-  /** Push a board message to every running peer in the same session except its sender. A parked
-   * addressee is counted as awake at once, so the stall detector never sees the gap before it reports. */
+  /** Push a board message to every running peer in the same session (including sender for seq ack).
+   * A parked addressee is counted as awake at once, so the stall detector never sees the gap before it reports. */
   pushBoard(message: BoardMessage, originSessionId?: string): void {
     for (const job of this.jobs.values()) {
       const name = job.request.name;
-      if (job.status !== "running" || name === undefined || name === message.sender) continue;
+      if (job.status !== "running" || name === undefined) continue;
       if (originSessionId !== undefined && job.request.originSessionId !== originSessionId) continue;
       if (job.parked && addressedTo(message, name)) job.parked = false;
       job.channel?.send({ type: "board", message });
@@ -525,6 +559,16 @@ export class WorkerPool {
     return exit.promise;
   }
 
+  private async ensureWorkspace(job: Job): Promise<boolean> {
+    if (job.workspace !== undefined || job.workspaceSpec === undefined) return true;
+    const ws = await createWorkspaceAsync(job.workspaceSpec);
+    job.workspace = ws;
+    job.cwd = ws.workerCwd;
+    if (job.termination !== undefined) return false;
+    this.changed(job);
+    return true;
+  }
+
   private async run(job: Job): Promise<void> {
     job.status = "running";
     job.startedAt = Date.now();
@@ -532,15 +576,20 @@ export class WorkerPool {
     job.run += 1;
     this.changed(job);
     let outcome: { code: number | null; error?: Error } = { code: null };
-    const timer = setTimeout(() => this.terminate(job, "timeout"), job.timeoutSeconds * 1000);
+    const timer = setTimeout(() => { job.termination ??= "timeout"; this.terminate(job, "timeout"); }, job.timeoutSeconds * 1000);
     try {
-      outcome = await this.spawnWorker(job);
-      await drainChannel(job.process?.stdio[3] as Duplex | undefined);
+      if (await this.ensureWorkspace(job)) {
+        outcome = await this.spawnWorker(job);
+        await drainChannel(job.process?.stdio[3] as Duplex | undefined);
+      }
     } catch (error) {
       outcome = { code: null, error: error instanceof Error ? error : new Error(String(error)) };
     } finally {
       clearTimeout(timer);
       await this.cleanupRun(job);
+      if (job.workspace !== undefined && !job.workspaceRemoved) {
+        job.diffStat = (await inspectWorkspaceDirtyAsync(job.workspace)).diffStat;
+      }
       this.settle(job, outcome);
       job.finishedAt = Date.now();
       this.finish(job);
@@ -591,9 +640,6 @@ export class WorkerPool {
 
   private finish(job: Job): void {
     if (job.settled) return;
-    if (job.workspace !== undefined && !job.workspaceRemoved) {
-      try { job.diffStat = inspectWorkspaceDirty(job.workspace).diffStat; } catch { job.diffStat = "modified"; }
-    }
     job.settled = true;
     job.resolveCompletion();
     this.changed(job);
@@ -679,7 +725,7 @@ export class WorkerPool {
         name: job.request.name, agent: job.agent?.name, startedAt: job.startedAt, finishedAt: job.finishedAt,
         deadlineAt: live ? job.deadlineAt : undefined, result: job.result, error: job.error, usage: job.usage, runUsage: job.runUsage,
         turns, currentActivity: job.currentActivity, lastSummary: job.lastSummary, stoppedBy: job.stoppedBy,
-        originSessionId: job.request.originSessionId, workspace: job.workspace === undefined ? undefined : workspaceView(job),
+        originSessionId: job.request.originSessionId, workspace: workspaceView(job),
       }),
     };
   }
@@ -711,9 +757,14 @@ function noteDroppedSteers(job: Job): void {
   job[field] = [job[field], ...dropped].filter((part) => part !== undefined).join("\n");
 }
 
-function workspaceView(job: Job): NonNullable<JobSnapshot["workspace"]> {
-  const ws = job.workspace!;
-  return { mode: ws.mode, path: ws.root, ...(job.diffStat === undefined ? {} : { diffStat: job.diffStat }), ...(job.workspaceRemoved ? { removed: true } : {}) };
+function workspaceView(job: Job): JobSnapshot["workspace"] {
+  if (job.workspace !== undefined) {
+    return { mode: job.workspace.mode, path: job.workspace.root, ...(job.diffStat === undefined ? {} : { diffStat: job.diffStat }), ...(job.workspaceRemoved ? { removed: true } : {}) };
+  }
+  if (job.workspaceSpec !== undefined) {
+    return { mode: job.workspaceSpec.mode, path: plannedWorkspaceRoot(job.workspaceSpec), ...(job.workspaceRemoved ? { removed: true } : {}) };
+  }
+  return undefined;
 }
 
 function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {

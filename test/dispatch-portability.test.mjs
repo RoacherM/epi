@@ -11,7 +11,15 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { DrainBarrier, NotificationGate, NotificationLedger, PollGuard } from "../dist/extensions/dispatch/notify-ledger.js";
-import { computeWorkspaceBaselineHash, createWorkspace, inspectWorkspaceDirty, removeWorkspace } from "../dist/extensions/dispatch/worktree.js";
+import {
+  computeWorkspaceBaselineHash,
+  createWorkspace,
+  createWorkspaceAsync,
+  inspectWorkspaceDirty,
+  inspectWorkspaceDirtyAsync,
+  removeWorkspace,
+  removeWorkspaceAsync,
+} from "../dist/extensions/dispatch/worktree.js";
 import { loadAgents } from "../dist/extensions/dispatch/agents.js";
 import { neutralizeRoleTags, singleLine } from "../dist/extensions/dispatch/result.js";
 import { addSignalCleanup } from "../dist/extensions/dispatch/reaper.js";
@@ -231,6 +239,33 @@ test("worktree share: CoW clone dirtiness is incremental over the creation basel
   assert.deepEqual(inspectWorkspaceDirty(ws), { dirty: true, diffStat: "1 file changed, 1 file added" });
   removeWorkspace(ws);
   assert.equal(existsSync(ws.root), false);
+});
+
+test("worktree share async: symlinks node_modules, skips .dev, and yields to the event loop", async (t) => {
+  const root = repo(t);
+  mkdirSync(join(root, ".dev", "reviews", "r1"), { recursive: true });
+  writeFileSync(join(root, ".dev", "reviews", "r1", "huge.txt"), "x".repeat(4096));
+  const stateDir = tempDir(t, "dispatch-async-ws-");
+
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 2);
+  let ws;
+  try {
+    ws = await createWorkspaceAsync({ mode: "share", stateDir, sessionShort: "s1", slug: "job_async", cwd: root });
+  } finally {
+    clearInterval(timer);
+  }
+  assert.ok(ticks >= 1, "event loop stayed responsive while creating share workspace");
+  assert.equal(existsSync(join(ws.root, ".dev")), false, ".dev scratch tree must not be cloned into share workspace");
+  assert.ok(existsSync(join(ws.root, "node_modules", "dep", "index.js")), "node_modules reachable via symlink");
+  const { lstatSync } = await import("node:fs");
+  assert.equal(lstatSync(join(ws.root, "node_modules")).isSymbolicLink(), true, "share workspace symlinks node_modules instead of cloning");
+  assert.deepEqual(await inspectWorkspaceDirtyAsync(ws), { dirty: false });
+  writeFileSync(join(ws.root, "worker.txt"), "created\n");
+  assert.deepEqual(await inspectWorkspaceDirtyAsync(ws), { dirty: true, diffStat: "1 file added" });
+  await removeWorkspaceAsync(ws);
+  assert.equal(existsSync(ws.root), false);
+  assert.ok(existsSync(join(root, "node_modules", "dep", "index.js")), "removing share workspace keeps source node_modules intact");
 });
 
 test("agents loader maps legacy isolation onto workspace and rejects unknown keys", (t) => {

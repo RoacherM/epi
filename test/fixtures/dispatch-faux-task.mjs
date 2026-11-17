@@ -53,6 +53,13 @@ const scenarios = {
   },
   // Peer forked from alpha: reports whether alpha's history came along.
   "peer-fork": (msgs) => say(all(msgs).includes("ALPHA-HISTORY-MARKER") ? "FORK-SAW-ALPHA" : "FORK-BLIND"),
+  // Peer: posts to the board then immediately calls board_read to verify read-your-own-writes + seq receipt.
+  "peer-post-then-read": (msgs) => {
+    const res = results(msgs);
+    if (res.length === 0) return call("board_post", { text: "@coordinator SELF-READ-CHECK" });
+    if (res.length === 1) return call("board_read", { since: 1 });
+    return say(`POST_ACK=${res[0]} | READ_BACK=${res[1]}`);
+  },
   // Child: hits an unrecoverable context overflow error (D85).
   "child-overflow": () => fauxAssistantMessage(fauxText(""), {
     stopReason: "error",

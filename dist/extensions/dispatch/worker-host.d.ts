@@ -3,7 +3,7 @@ import { type AgentDefinition } from "./agents.js";
 import { JsonlChannel, type BoardMessage, type ParentCommand, type WorkerEvent, type WorkerResult } from "./protocol.js";
 import { type ExecutionGuard } from "./reaper.js";
 import { type DispatchItemProvider, type DispatchItemReport, type DispatchItemSummary, type JobStatus, type SteerStrategy, type TaskUsage, type WorkspaceMode } from "./types.js";
-import { type WorkspaceState } from "./worktree.js";
+import { type CreateWorkspaceRequest, type WorkspaceState } from "./worktree.js";
 export declare const NAME_PATTERN: RegExp;
 export interface JobRequest {
     task: string;
@@ -85,6 +85,7 @@ interface Job {
     stoppedBy: string | undefined;
     run: number;
     isResume: boolean;
+    workspaceSpec: CreateWorkspaceRequest | undefined;
     workspace: WorkspaceState | undefined;
     workspaceRemoved: boolean;
     diffStat: string | undefined;
@@ -155,7 +156,10 @@ export declare class WorkerPool {
     private validate;
     private validateName;
     private guardPriorNamedWorkspaces;
+    private guardPriorNamedWorkspacesAsync;
+    private enqueueJob;
     start(request: JobRequest): JobSnapshot;
+    startAsync(request: JobRequest): Promise<JobSnapshot>;
     private enqueue;
     /** `job_<id>`, a unique id prefix, or a task name (the newest job of that name). */
     resolve(ref: string): string | undefined;
@@ -169,17 +173,18 @@ export declare class WorkerPool {
     wait(ref: string, signal?: AbortSignal, timeoutMs?: number): Promise<JobSnapshot>;
     /** Stop a job (if active) and remove its isolated workspace unless that would lose work. */
     cancel(ref: string, forceDirty?: boolean): Promise<JobSnapshot>;
-    private releaseWorkspace;
+    private releaseWorkspaceAsync;
     shutdown(): Promise<void>;
     killAllSync(): void;
-    /** Push a board message to every running peer in the same session except its sender. A parked
-     * addressee is counted as awake at once, so the stall detector never sees the gap before it reports. */
+    /** Push a board message to every running peer in the same session (including sender for seq ack).
+     * A parked addressee is counted as awake at once, so the stall detector never sees the gap before it reports. */
     pushBoard(message: BoardMessage, originSessionId?: string): void;
     private changed;
     private pump;
     private capsule;
     private writeCapsule;
     private spawnWorker;
+    private ensureWorkspace;
     private run;
     private cleanupRun;
     private failure;
