@@ -125,6 +125,7 @@ function drainChannel(stream) {
 export class WorkerPool {
     options;
     jobs = new Map();
+    pendingNames = new Set();
     queue = [];
     running = 0;
     shuttingDown = false;
@@ -169,9 +170,12 @@ export class WorkerPool {
         }
         return { agent, cwd, timeoutSeconds };
     }
-    validateName(name, selfId) {
+    validateName(name, selfId, ignorePendingSelf = false) {
         if (!NAME_PATTERN.test(name) || name === "all" || name === COORDINATOR) {
             throw new Error(`task name must match ${NAME_PATTERN.source} and not be "all" or "coordinator"`);
+        }
+        if (!ignorePendingSelf && this.pendingNames.has(name)) {
+            throw new Error(`a task named ${JSON.stringify(name)} is already starting`);
         }
         const clash = [...this.jobs.values()].find((job) => job.id !== selfId && job.request.name === name && !job.settled);
         if (clash !== undefined)
@@ -195,12 +199,14 @@ export class WorkerPool {
             if (prior.request.name !== name || !prior.settled || prior.workspace === undefined || prior.workspaceRemoved)
                 continue;
             const inspection = await inspectWorkspaceDirtyAsync(prior.workspace);
+            if (!prior.settled || prior.workspaceRemoved)
+                continue;
             prior.diffStat = inspection.diffStat;
             if (inspection.dirty) {
                 throw new Error(`prior @${name} (${prior.id}) still holds uncommitted work at ${prior.workspace.root}; resume with task({ jobId: "${name}", task }) or discard with task_cancel({ id: "${prior.id}", forceDirty: true })`);
             }
-            if (await cleanupCleanWorkspaceAsync(prior.workspace))
-                prior.workspaceRemoved = true;
+            await removeWorkspaceAsync(prior.workspace);
+            prior.workspaceRemoved = true;
         }
     }
     enqueueJob(request, validated) {
@@ -211,13 +217,14 @@ export class WorkerPool {
         const workspaceSpec = mode === "inherit"
             ? undefined
             : { mode, stateDir: this.options.stateDir(), sessionShort: this.options.sessionShort(), slug, cwd };
+        const startBoardSeq = request.name === undefined ? undefined : this.options.boardSince(request.originSessionId);
         const { promise, resolve } = Promise.withResolvers();
         const job = {
             id, request, agent, task: request.task, status: "queued", cwd, originCwd: cwd,
             sessionPath: join(this.options.stateDir(), "sessions", `${id}.jsonl`), timeoutSeconds, createdAt: Date.now(),
             startedAt: undefined, finishedAt: undefined, deadlineAt: undefined, result: undefined, error: undefined, usage: undefined,
             runUsage: undefined, turns: undefined, progressTurns: 0, stepsBase: 0, steps: 0, currentActivity: undefined,
-            lastSummary: undefined, recentEvents: [], stoppedBy: undefined, run: 0, isResume: false,
+            lastSummary: undefined, recentEvents: [], stoppedBy: undefined, run: 0, isResume: false, startBoardSeq,
             workspaceSpec, workspace: undefined, workspaceRemoved: false, diffStat: undefined,
             process: undefined, channel: undefined, guard: undefined, capsuleDir: undefined, termination: undefined,
             workerResult: undefined, stderrTail: "", droppedSteers: [], parked: false, finite: 0,
@@ -227,6 +234,11 @@ export class WorkerPool {
         this.enqueue(job);
         return this.snapshot(job);
     }
+    setStartBoardSeq(id, seq) {
+        const job = this.jobs.get(id);
+        if (job !== undefined)
+            job.startBoardSeq = seq;
+    }
     start(request) {
         const validated = this.validate(request);
         if (request.name !== undefined)
@@ -235,9 +247,22 @@ export class WorkerPool {
     }
     async startAsync(request) {
         const validated = this.validate(request);
-        if (request.name !== undefined)
-            await this.guardPriorNamedWorkspacesAsync(request.name);
-        return this.enqueueJob(request, validated);
+        const name = request.name;
+        if (name !== undefined)
+            this.pendingNames.add(name);
+        try {
+            if (name !== undefined)
+                await this.guardPriorNamedWorkspacesAsync(name);
+            if (this.shuttingDown)
+                throw new Error("dispatch worker pool is shutting down");
+            if (name !== undefined)
+                this.validateName(name, undefined, true);
+            return this.enqueueJob(request, validated);
+        }
+        finally {
+            if (name !== undefined)
+                this.pendingNames.delete(name);
+        }
     }
     enqueue(job) {
         this.queue.push(job.id);
@@ -297,8 +322,9 @@ export class WorkerPool {
         if (job.workspaceRemoved)
             throw new Error(`${job.id}'s workspace was removed; start a new task`);
         const { promise, resolve } = Promise.withResolvers();
+        const startBoardSeq = job.request.name === undefined ? undefined : this.options.boardSince(job.request.originSessionId);
         Object.assign(job, {
-            isResume: true, task, status: "queued", startedAt: undefined, deadlineAt: undefined, result: undefined, error: undefined, finishedAt: undefined, stoppedBy: undefined,
+            isResume: true, startBoardSeq, task, status: "queued", startedAt: undefined, deadlineAt: undefined, result: undefined, error: undefined, finishedAt: undefined, stoppedBy: undefined,
             workerResult: undefined, termination: undefined, currentActivity: undefined, progressTurns: 0, stepsBase: job.steps,
             runUsage: undefined, diffStat: undefined, stderrTail: "", parked: false, finite: 0, settled: false,
             completion: promise, resolveCompletion: resolve,
@@ -404,7 +430,7 @@ export class WorkerPool {
             version: 1, role: peer ? "peer-worker" : "task-worker", jobId: job.id, name: job.request.name,
             task: job.task, cwd: job.cwd, agentDir: this.options.agentDir, stateDir: this.options.stateDir(), sessionPath: job.sessionPath,
             forkEntries: job.isResume ? undefined : forkEntriesOf(job.request), ...presetSettings(job),
-            systemPrompt: [basePrompt, peer ? peerBrief(job.request.name, this.options.boardSince(sessionId)) : ""].filter((part) => part.trim().length > 0).join("\n\n"),
+            systemPrompt: [basePrompt, peer ? peerBrief(job.request.name, job.startBoardSeq ?? this.options.boardSince(sessionId)) : ""].filter((part) => part.trim().length > 0).join("\n\n"),
             deadlineAt: job.deadlineAt ?? Date.now() + job.timeoutSeconds * 1000,
             sdkEntryUrl: this.options.sdkEntryUrl, bootstrapModule: this.options.bootstrapModule,
             bootstrapOptions: this.options.bootstrapOptions?.({ ...job.agent?.scope, agent: job.agent?.name, cwd: job.cwd, originCwd: job.originCwd }),
@@ -472,7 +498,10 @@ export class WorkerPool {
         finally {
             clearTimeout(timer);
             await this.cleanupRun(job);
-            if (job.workspace !== undefined && !job.workspaceRemoved) {
+            if (job.workspace === undefined) {
+                job.workspaceSpec = undefined;
+            }
+            else if (!job.workspaceRemoved && job.termination !== "cancelled") {
                 job.diffStat = (await inspectWorkspaceDirtyAsync(job.workspace)).diffStat;
             }
             this.settle(job, outcome);

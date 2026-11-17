@@ -85,6 +85,7 @@ interface Job {
     stoppedBy: string | undefined;
     run: number;
     isResume: boolean;
+    startBoardSeq: number | undefined;
     workspaceSpec: CreateWorkspaceRequest | undefined;
     workspace: WorkspaceState | undefined;
     workspaceRemoved: boolean;
@@ -145,6 +146,7 @@ export declare function forkableBranch(entries: readonly unknown[]): unknown[];
 export declare class WorkerPool {
     private readonly options;
     private readonly jobs;
+    private readonly pendingNames;
     private readonly queue;
     private running;
     private shuttingDown;
@@ -158,6 +160,7 @@ export declare class WorkerPool {
     private guardPriorNamedWorkspaces;
     private guardPriorNamedWorkspacesAsync;
     private enqueueJob;
+    setStartBoardSeq(id: string, seq: number): void;
     start(request: JobRequest): JobSnapshot;
     startAsync(request: JobRequest): Promise<JobSnapshot>;
     private enqueue;

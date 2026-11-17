@@ -244,4 +244,20 @@ test("peer board_post awaits parent seq receipt for read-your-own-writes, and sh
   assert.equal(helperDone.status, "completed", helperDone.error);
   assert.match(scannerDone.result, /POST_ACK=Posted #\d+ as @scanner\./, "peer board_post received seq receipt from parent");
   assert.match(scannerDone.result, /READ_BACK=[\s\S]*@scanner: @coordinator SELF-READ-CHECK/, "immediate board_read saw own post");
+
+  // P1-1: concurrent startAsync with the same peer name rejects the duplicate instead of admitting two active peers:
+  const dupResults = await Promise.allSettled([
+    runtime.pool.startAsync({ name: "dup", task: "child-simple 1", cwd: repo, workspace: "share", inheritedModel: MODEL }),
+    runtime.pool.startAsync({ name: "dup", task: "child-simple 2", cwd: repo, workspace: "share", inheritedModel: MODEL }),
+  ]);
+  assert.equal(dupResults.filter((r) => r.status === "fulfilled").length, 1, "exactly one concurrent same-name startAsync succeeds");
+  assert.equal(dupResults.filter((r) => r.status === "rejected").length, 1, "second concurrent same-name startAsync is rejected");
+  await runtime.pool.wait(runtime.pool.resolve("dup"));
+
+  // P1-2: an @mention posted immediately after task(share) returns is NOT skipped by lazy boardSince():
+  await call("task", { name: "beta", task: "peer-beta wait for alpha", cwd: repo, workspace: "share", model: MODEL });
+  await call("board_post", { text: "@beta HANDOFF-FROM-ALPHA payload" });
+  const betaDone = await runtime.pool.wait(runtime.pool.resolve("beta"));
+  assert.equal(betaDone.status, "completed", betaDone.error);
+  assert.match(betaDone.result, /BETA-GOT-HANDOFF/);
 });

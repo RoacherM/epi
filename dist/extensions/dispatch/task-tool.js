@@ -76,8 +76,11 @@ async function startOne(deps, item, shared, ctx) {
         originSessionId: deps.gate.sessionId(),
     };
     const job = await deps.pool.startAsync(request);
-    if (job.name !== undefined)
-        deps.postBrief?.(job);
+    if (job.name !== undefined) {
+        const briefSeq = deps.postBrief?.(job);
+        if (briefSeq !== undefined)
+            deps.pool.setStartBoardSeq(job.id, briefSeq);
+    }
     return job;
 }
 function isBackground(deps, explicit, item) {

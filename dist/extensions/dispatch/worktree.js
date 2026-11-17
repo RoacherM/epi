@@ -69,12 +69,7 @@ function linkSharedNodeModules(sourceRoot, targetRoot) {
     const dest = join(targetRoot, "node_modules");
     if (!existsSync(sharedModules) || existsSync(dest))
         return;
-    let canonical = sharedModules;
-    try {
-        canonical = realpathSync(sharedModules);
-    }
-    catch { /* broken link */ }
-    symlinkSync(canonical, dest, "dir");
+    symlinkSync(realpathSync(sharedModules), dest, "dir");
 }
 function branchExists(repoRoot, branch) {
     try {

@@ -68,7 +68,7 @@ export interface TaskToolDeps {
   awaitSettledHooks?: (jobId: string) => Promise<void>;
   /** Named peers: entries of the peer to fork from, and the board brief for a new peer. */
   peerForkEntries?: (name: string) => unknown[];
-  postBrief?: (job: JobSnapshot) => void;
+  postBrief?: (job: JobSnapshot) => number | undefined;
 }
 
 type Result = AgentToolResult<unknown>;
@@ -118,7 +118,10 @@ async function startOne(deps: TaskToolDeps, item: StartItem, shared: TaskParams,
     originSessionId: deps.gate.sessionId(),
   };
   const job = await deps.pool.startAsync(request);
-  if (job.name !== undefined) deps.postBrief?.(job);
+  if (job.name !== undefined) {
+    const briefSeq = deps.postBrief?.(job);
+    if (briefSeq !== undefined) deps.pool.setStartBoardSeq(job.id, briefSeq);
+  }
   return job;
 }
 

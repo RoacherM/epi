@@ -343,12 +343,12 @@ export class DispatchRuntime {
     return forkableBranch(entries);
   }
 
-  private postBrief(job: JobSnapshot): void {
+  private postBrief(job: JobSnapshot): number | undefined {
     const board = this.boardFor(job.originSessionId);
-    if (board === undefined || job.name === undefined) return;
+    if (board === undefined || job.name === undefined) return undefined;
     this.activateTools(["board_post", "board_read", "board_wait"]);
     board.epoch += 1;
-    board.post(COORDINATOR, `@${job.name} ${job.task}`);
+    return board.post(COORDINATOR, `@${job.name} ${job.task}`).seq;
   }
 
   activateTools(names: readonly string[]): void {

@@ -50,7 +50,7 @@ export interface TaskToolDeps {
     awaitSettledHooks?: (jobId: string) => Promise<void>;
     /** Named peers: entries of the peer to fork from, and the board brief for a new peer. */
     peerForkEntries?: (name: string) => unknown[];
-    postBrief?: (job: JobSnapshot) => void;
+    postBrief?: (job: JobSnapshot) => number | undefined;
 }
 export declare function createTaskTool(deps: TaskToolDeps): ToolDefinition<typeof TaskParameters>;
 /** The settle notice a background (or handed-back) job puts into the ledger. */
