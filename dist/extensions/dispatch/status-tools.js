@@ -50,33 +50,44 @@ function statusTool(deps) {
         },
     };
 }
+function effectiveWaitMs(timeoutSeconds, mode, budgetSec) {
+    const defaultSec = mode === "tui" ? (budgetSec ?? 300) : 0;
+    const sec = timeoutSeconds ?? (defaultSec > 0 ? defaultSec : undefined);
+    return sec === undefined ? undefined : sec * 1_000;
+}
 function waitTool(deps) {
     return {
         name: "task_wait",
         label: "Task Wait",
         description: "Block until the given bg_* / job_* items settle (mode all, default) or the first one does (any). Waiting never stops them; Esc or timeoutSeconds just stops waiting.",
         parameters: WaitParameters,
-        async execute(_id, params, signal) {
+        async execute(_id, params, signal, _onUpdate, ctx) {
             const targets = params.ids.map((ref) => deps.registry.resolve(ref));
             const tm = targets.find((target) => target.provider.kind === "tm");
             if (tm !== undefined)
                 throw new Error(`${tm.id} is a timer; it notifies you when it fires`);
+            let detached = false;
             const controller = new AbortController();
             const onAbort = () => controller.abort();
+            const detach = () => { detached = true; controller.abort(); };
             signal?.addEventListener("abort", onAbort, { once: true });
-            const timer = params.timeoutSeconds === undefined ? undefined : setTimeout(onAbort, params.timeoutSeconds * 1000);
+            deps.foregroundWaits?.add(detach);
+            const waitMs = effectiveWaitMs(params.timeoutSeconds, ctx?.mode, deps.foregroundBudgetSeconds);
+            const timer = waitMs === undefined ? undefined : setTimeout(onAbort, waitMs);
             try {
                 const waits = targets.map((target) => target.provider.wait(target.id, controller.signal));
                 await ((params.mode ?? "all") === "any" ? Promise.race(waits) : Promise.all(waits));
             }
             finally {
                 clearTimeout(timer);
+                deps.foregroundWaits?.delete(detach);
                 signal?.removeEventListener("abort", onAbort);
             }
             const reports = targets.map((target) => target.provider.report(target.id));
             for (const report of reports)
                 collectIfSettled(deps.ledger, report);
-            return text(reports.map((report) => report.text).join("\n\n"), { items: reports.map((report) => report.details) });
+            const note = detached && reports.some((r) => r.summary.active) ? "\n\nStopped waiting (/bg); active items keep running in the background and will notify you when settled." : "";
+            return text(`${reports.map((report) => report.text).join("\n\n")}${note}`, { items: reports.map((report) => report.details) });
         },
     };
 }

@@ -66,6 +66,7 @@ export interface BgRuntimeOptions {
     sharedDaemonNames: readonly string[];
     /** A backgrounded command exited on its own (not through `task_cancel`). */
     onExit: (job: BgJob) => void;
+    onChange?: () => void;
 }
 export declare class BgProcessRuntime {
     private readonly options;
@@ -122,6 +123,8 @@ export declare const BashParameters: Type.TObject<{
     stdin: Type.TOptional<Type.TBoolean>;
 }>;
 export type BashParams = Static<typeof BashParameters>;
-/** Pi's bash tool, with the dispatch parameters and a background-capable execution backend. */
+/** Pi's bash tool, with the dispatch parameters and a background-capable execution backend.
+ * Omit Pi's built-in renderers so both Pi (`withBuiltInRenderers`) and Epi (`builtInToolRenderers`)
+ * attach their own native bash presentation automatically. */
 export declare function createDispatchBashTool(runtime: BgProcessRuntime, sessionId: () => string | undefined): ToolDefinition<typeof BashParameters>;
 //# sourceMappingURL=bg-bash.d.ts.map

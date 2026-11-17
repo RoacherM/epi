@@ -6,14 +6,18 @@
 //    bootstrap, hook bridge and policies.
 import { getAgentDir, type ExtensionAPI, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
+import { loadAgents } from "./agents.js";
 import { DispatchRuntime } from "./runtime.js";
-import { DISPATCH_RUNTIME_SYMBOL, type DispatchHostAdapter } from "./types.js";
+import { DISPATCH_RUNTIME_SYMBOL, DispatchConfigError, type DispatchHostAdapter } from "./types.js";
 
 export { DISPATCH_EXT_VERSION } from "./types.js";
-export type { DispatchHostAdapter, DispatchRole } from "./types.js";
+export type { DispatchExtraItem, DispatchHostAdapter, DispatchRole, DispatchUiAdapter } from "./types.js";
 export { enqueueExternalEvent } from "./inbox-spool.js";
 
 export function createDispatchExtension(host: DispatchHostAdapter = {}): ExtensionFactory {
+  if (host.agentsDirs !== undefined) {
+    loadAgents(host.agentsDirs, host.createConfigError ?? ((message) => new DispatchConfigError(message)));
+  }
   let runtime: DispatchRuntime | undefined;
   return (pi) => {
     runtime ??= new DispatchRuntime(host, "root");

@@ -7,7 +7,7 @@ import type { WorkerCapsule, WorkerEvent } from "./protocol.js";
 import { DispatchRegistry } from "./registry.js";
 import { TimerRuntime } from "./timers.js";
 import { type DispatchHostAdapter, type DispatchRole } from "./types.js";
-import { WorkerPool } from "./worker-host.js";
+import { WorkerPool, type JobSnapshot } from "./worker-host.js";
 /** What a worker process lends its own dispatch slice: the parent channel and its counters. */
 export interface WorkerBridge {
     capsule: WorkerCapsule;
@@ -36,6 +36,8 @@ export declare class DispatchRuntime {
     readonly barrier: DrainBarrier;
     /** Jobs whose settle must reach the model as a notification, and with which auto-wake. */
     readonly notifyOnSettle: Map<string, boolean>;
+    /** Foreground `task` / `task_wait` calls that `/bg` or `Alt+B` may detach early. */
+    readonly foregroundWaits: Set<() => void>;
     /** Root at depth 0: may spawn workers and talk to the user (`task`, `outbox`, board). */
     readonly canDelegate: boolean;
     private inbox;
@@ -44,9 +46,16 @@ export declare class DispatchRuntime {
     private readonly releaseSignalCleanup;
     private readonly firedStalls;
     private stallTimer;
+    private readonly uiListeners;
+    private readonly jobListeners;
     constructor(host: DispatchHostAdapter, role: DispatchRole, worker?: WorkerBridge | undefined);
     private createLedger;
     private createTimers;
+    emitUiChange(): void;
+    onUiChange(listener: () => void): () => void;
+    onJobChange(listener: (job: JobSnapshot) => void): () => void;
+    hasDetachableForeground(): boolean;
+    detachForeground(): number;
     stateDir(): string;
     agentDir(): string;
     inboxTarget(): string | undefined;

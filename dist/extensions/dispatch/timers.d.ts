@@ -29,6 +29,7 @@ export interface TimerRuntimeOptions {
     /** Root only: append the follow-up's state change to the session. */
     persist?: ((data: TimerEntryData) => void) | undefined;
     onFire: (timer: TimerItem) => void;
+    onChange?: () => void;
     /** Worker only: when the parent kills this worker. */
     deadlineAt?: number | undefined;
 }

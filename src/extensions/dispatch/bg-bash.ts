@@ -92,6 +92,7 @@ export interface BgRuntimeOptions {
   sharedDaemonNames: readonly string[];
   /** A backgrounded command exited on its own (not through `task_cancel`). */
   onExit: (job: BgJob) => void;
+  onChange?: () => void;
 }
 
 function shellPath(): string {
@@ -242,6 +243,7 @@ export class BgProcessRuntime {
     if (job.termination === "cancelled") job.notified = true;
     this.writeMeta(job);
     job.resolveExit();
+    this.options.onChange?.();
     if (!job.notified) this.options.onExit(job);
   }
 
@@ -267,6 +269,7 @@ export class BgProcessRuntime {
     job.backgrounded = true;
     job.onForeground = undefined;
     this.writeMeta(job);
+    this.options.onChange?.();
   }
 
   /** End every open foreground window now (`/bg`); returns how many were detached. */
@@ -562,9 +565,11 @@ function runningResult(runtime: BgProcessRuntime, job: BgJob): AgentToolResult<u
   return { content: [{ type: "text", text }], details: { dispatch: runtime.report(job.id).details } };
 }
 
-/** Pi's bash tool, with the dispatch parameters and a background-capable execution backend. */
+/** Pi's bash tool, with the dispatch parameters and a background-capable execution backend.
+ * Omit Pi's built-in renderers so both Pi (`withBuiltInRenderers`) and Epi (`builtInToolRenderers`)
+ * attach their own native bash presentation automatically. */
 export function createDispatchBashTool(runtime: BgProcessRuntime, sessionId: () => string | undefined): ToolDefinition<typeof BashParameters> {
-  const base = createBashToolDefinition(process.cwd());
+  const { renderCall: _rc, renderResult: _rr, ...base } = createBashToolDefinition(process.cwd());
   return {
     ...(base as unknown as ToolDefinition<typeof BashParameters>),
     parameters: BashParameters,

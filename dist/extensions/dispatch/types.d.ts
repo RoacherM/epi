@@ -72,10 +72,25 @@ export interface OutboxItem {
     dedupKey?: string;
     sessionId: string | undefined;
 }
+export interface DispatchExtraItem {
+    id: string;
+    active: boolean;
+    row: (theme: import("@earendil-works/pi-coding-agent").Theme) => string;
+    detail: (theme: import("@earendil-works/pi-coding-agent").Theme) => {
+        title: string;
+        subtitle: string;
+        lines: string[];
+    };
+}
 export interface DispatchUiAdapter {
     /** Host renderers for dispatch tools (Epi passes its transcript components); Pi's defaults
      * apply to any tool not listed. */
     toolRenderers?: Partial<Record<string, Pick<ToolDefinition, "renderCall" | "renderResult">>>;
+    /** Host-supplied custom message renderer for `dispatch:notify`. */
+    notifyRenderer?: Parameters<import("@earendil-works/pi-coding-agent").ExtensionAPI["registerMessageRenderer"]>[1];
+    /** Extra host-managed items (e.g. Epi's `monitor` streams) shown in `/tasks` and counted in the footer. */
+    extraItems?: () => readonly DispatchExtraItem[];
+    onExtraChange?: (listener: () => void) => () => void;
 }
 /** Everything a host may inject. Every field is optional: `pi -e dist/extensions/dispatch/index.js`
  * runs with none of them. */
@@ -113,8 +128,13 @@ export interface DispatchHostAdapter {
     inboxTarget?: string;
     /** Upper bound of the print-mode / worker settle drain. */
     drainMaxMs?: number;
+    /** How long a foreground `task` or `task_wait` call may hold an interactive TUI turn before
+     * handing back a receipt and moving to push wake (default 300s; 0 disables). */
+    foregroundBudgetSeconds?: number;
     /** How long a named peer may park in `board_wait` before it settles as partial (default 15m). */
     boardIdleMs?: number;
+    /** Custom entry type used to record subagent token usage (default `"dispatch:task-usage"`). */
+    usageEntryType?: string;
     ui?: DispatchUiAdapter;
 }
 /** What a usage-reporting worker spent; summed across runs by the host. */

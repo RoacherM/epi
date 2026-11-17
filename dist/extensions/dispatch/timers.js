@@ -69,6 +69,7 @@ export class TimerRuntime {
             this.writeSchedule(timer);
             this.arm(timer);
         }
+        this.options.onChange?.();
         this.options.onFire(timer);
     }
     persist(timer, op) {
@@ -89,6 +90,7 @@ export class TimerRuntime {
         this.timers.set(timer.id, timer);
         this.persist(timer, "set");
         this.arm(timer);
+        this.options.onChange?.();
         return timer;
     }
     schedule(cadence, prompt, sessionMode, sessionId) {
@@ -106,6 +108,7 @@ export class TimerRuntime {
         this.timers.set(timer.id, timer);
         this.writeSchedule(timer);
         this.arm(timer);
+        this.options.onChange?.();
         return timer;
     }
     writeSchedule(timer) {
@@ -128,6 +131,7 @@ export class TimerRuntime {
             this.persist(timer, "cancel");
         else
             rmSync(join(this.scheduleDir(timer.target), `${timer.id}.json`), { force: true });
+        this.options.onChange?.();
         return timer;
     }
     /** Rebuild this session's pending root follow-ups from its `dispatch:timer` entries. */

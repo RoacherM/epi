@@ -47,6 +47,7 @@ export interface TimerRuntimeOptions {
   /** Root only: append the follow-up's state change to the session. */
   persist?: ((data: TimerEntryData) => void) | undefined;
   onFire: (timer: TimerItem) => void;
+  onChange?: () => void;
   /** Worker only: when the parent kills this worker. */
   deadlineAt?: number | undefined;
 }
@@ -107,6 +108,7 @@ export class TimerRuntime {
       this.writeSchedule(timer);
       this.arm(timer);
     }
+    this.options.onChange?.();
     this.options.onFire(timer);
   }
 
@@ -128,6 +130,7 @@ export class TimerRuntime {
     this.timers.set(timer.id, timer);
     this.persist(timer, "set");
     this.arm(timer);
+    this.options.onChange?.();
     return timer;
   }
 
@@ -145,6 +148,7 @@ export class TimerRuntime {
     this.timers.set(timer.id, timer);
     this.writeSchedule(timer);
     this.arm(timer);
+    this.options.onChange?.();
     return timer;
   }
 
@@ -165,6 +169,7 @@ export class TimerRuntime {
     timer.status = "cancelled";
     if (timer.kind === "follow_up") this.persist(timer, "cancel");
     else rmSync(join(this.scheduleDir(timer.target!), `${timer.id}.json`), { force: true });
+    this.options.onChange?.();
     return timer;
   }
 

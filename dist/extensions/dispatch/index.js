@@ -5,11 +5,15 @@
 //  - `createDispatchExtension(host)` for a host (Epi) that injects its state dir, worker
 //    bootstrap, hook bridge and policies.
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { loadAgents } from "./agents.js";
 import { DispatchRuntime } from "./runtime.js";
-import { DISPATCH_RUNTIME_SYMBOL } from "./types.js";
+import { DISPATCH_RUNTIME_SYMBOL, DispatchConfigError } from "./types.js";
 export { DISPATCH_EXT_VERSION } from "./types.js";
 export { enqueueExternalEvent } from "./inbox-spool.js";
 export function createDispatchExtension(host = {}) {
+    if (host.agentsDirs !== undefined) {
+        loadAgents(host.agentsDirs, host.createConfigError ?? ((message) => new DispatchConfigError(message)));
+    }
     let runtime;
     return (pi) => {
         runtime ??= new DispatchRuntime(host, "root");

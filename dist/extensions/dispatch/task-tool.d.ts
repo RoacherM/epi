@@ -8,10 +8,12 @@ export declare const TaskParameters: Type.TObject<{
     task: Type.TOptional<Type.TString>;
     name: Type.TOptional<Type.TString>;
     agent: Type.TOptional<Type.TString>;
+    cwd: Type.TOptional<Type.TString>;
     tasks: Type.TOptional<Type.TArray<Type.TObject<{
         task: Type.TString;
         name: Type.TOptional<Type.TString>;
         agent: Type.TOptional<Type.TString>;
+        cwd: Type.TOptional<Type.TString>;
         workspace: Type.TOptional<Type.TUnion<[Type.TLiteral<"inherit">, Type.TLiteral<"branch">, Type.TLiteral<"share">]>>;
         model: Type.TOptional<Type.TString>;
     }>>>;
@@ -35,6 +37,10 @@ export interface TaskToolDeps {
     agents: () => readonly AgentDefinition[];
     /** Job ids whose settle must reach the model as a notification, with their auto-wake flag. */
     notifyOnSettle: Map<string, boolean>;
+    /** Foreground waits that `/bg` or `Alt+B` may detach to the background. */
+    foregroundWaits?: Set<() => void>;
+    /** Subscribe to pool progress updates while waiting in the foreground. */
+    onJobChange?: (listener: (job: JobSnapshot) => void) => () => void;
     /** Named peers: entries of the peer to fork from, and the board brief for a new peer. */
     peerForkEntries?: (name: string) => unknown[];
     postBrief?: (job: JobSnapshot) => void;

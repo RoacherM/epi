@@ -7,6 +7,10 @@ export interface StatusToolDeps {
     ledger: NotificationLedger;
     pollGuard: PollGuard;
     bg: BgProcessRuntime;
+    /** Foreground waits that `/bg` or `Alt+B` may detach early. */
+    foregroundWaits?: Set<() => void>;
+    /** Default TUI foreground wait budget in seconds (0 disables). */
+    foregroundBudgetSeconds?: number | undefined;
     /** Worker slices see only their own items; the description says so. */
     scope: "all" | "own";
 }

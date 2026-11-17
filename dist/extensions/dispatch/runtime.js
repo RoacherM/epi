@@ -18,6 +18,7 @@ import { readJsonl, singleLine } from "./result.js";
 import { createStatusTools } from "./status-tools.js";
 import { createTaskTool, jobNotice } from "./task-tool.js";
 import { createTimerTool, TimerRuntime, timerNotice } from "./timers.js";
+import { bindDispatchViews, defaultToolRenderers } from "./tui-views.js";
 import { DISPATCH_DEPTH_ENV, DISPATCH_INBOX_ENV, DISPATCH_TIMER_ENTRY, DispatchConfigError } from "./types.js";
 import { forkableBranch, jobLabel, WorkerPool } from "./worker-host.js";
 const DEFAULT_DRAIN_MAX_MS = 4 * 3_600_000 + 5_000;
@@ -55,6 +56,8 @@ export class DispatchRuntime {
     barrier;
     /** Jobs whose settle must reach the model as a notification, and with which auto-wake. */
     notifyOnSettle = new Map();
+    /** Foreground `task` / `task_wait` calls that `/bg` or `Alt+B` may detach early. */
+    foregroundWaits = new Set();
     /** Root at depth 0: may spawn workers and talk to the user (`task`, `outbox`, board). */
     canDelegate;
     inbox;
@@ -63,6 +66,8 @@ export class DispatchRuntime {
     releaseSignalCleanup;
     firedStalls = new Set();
     stallTimer;
+    uiListeners = new Set();
+    jobListeners = new Set();
     constructor(host, role, worker) {
         this.host = host;
         this.role = role;
@@ -70,7 +75,11 @@ export class DispatchRuntime {
         this.canDelegate = role === "root" && !(Number(process.env[DISPATCH_DEPTH_ENV]) >= 1);
         this.ledger = this.createLedger();
         const sharedDaemonNames = host.sharedDaemonNames ?? [];
-        this.bg = new BgProcessRuntime({ stateDir: () => this.stateDir(), role, sharedDaemonNames, onExit: (job) => this.ledger.put(job.id, { text: exitNotice(this.bg.report(job.id)) }, { originSessionId: job.sessionId }) });
+        this.bg = new BgProcessRuntime({
+            stateDir: () => this.stateDir(), role, sharedDaemonNames,
+            onChange: () => this.emitUiChange(),
+            onExit: (job) => this.ledger.put(job.id, { text: exitNotice(this.bg.report(job.id)) }, { originSessionId: job.sessionId }),
+        });
         this.timers = this.createTimers();
         this.board = this.canDelegate ? new BoardHub({ stateDir: () => this.stateDir(), onPosted: (message) => this.onBoardPosted(message) }) : undefined;
         this.peerBoard = role === "peer-worker" && worker !== undefined ? this.createPeerBoard(worker) : undefined;
@@ -95,6 +104,7 @@ export class DispatchRuntime {
             footer: () => this.inFlightFooter(),
             activeSummary: () => this.registry.activeSummary(),
             onAcked: (entries) => this.onAcked(entries),
+            onChange: () => this.emitUiChange(),
             onSendError: (error) => process.stderr.write(`dispatch: notification failed: ${error instanceof Error ? error.message : String(error)}\n`),
         });
     }
@@ -102,8 +112,34 @@ export class DispatchRuntime {
         return new TimerRuntime({
             role: this.role, stateDir: () => this.stateDir(), inboxTarget: () => this.inboxTarget(), deadlineAt: this.worker?.capsule.deadlineAt,
             persist: this.role === "root" ? (data) => this.gate.pi?.appendEntry(DISPATCH_TIMER_ENTRY, data) : undefined,
+            onChange: () => this.emitUiChange(),
             onFire: (timer) => this.onTimerFired(timer),
         });
+    }
+    emitUiChange() {
+        for (const fn of [...this.uiListeners]) {
+            try {
+                fn();
+            }
+            catch { /* UI listener errors never break dispatch */ }
+        }
+    }
+    onUiChange(listener) {
+        this.uiListeners.add(listener);
+        return () => { this.uiListeners.delete(listener); };
+    }
+    onJobChange(listener) {
+        this.jobListeners.add(listener);
+        return () => { this.jobListeners.delete(listener); };
+    }
+    hasDetachableForeground() {
+        return this.bg.foreground.size > 0 || this.foregroundWaits.size > 0;
+    }
+    detachForeground() {
+        const waitDetachers = [...this.foregroundWaits];
+        for (const detach of waitDetachers)
+            detach();
+        return this.bg.detachForeground() + waitDetachers.length;
     }
     stateDir() {
         return this.host.stateDir ?? this.worker?.capsule.stateDir ?? join(this.agentDir(), "dispatch");
@@ -147,6 +183,15 @@ export class DispatchRuntime {
             boardPath: () => this.board?.path,
             boardSince: () => this.board?.maxSeq() ?? 0,
             boardIdleMs: this.host.boardIdleMs,
+            onChange: (job) => {
+                for (const fn of [...this.jobListeners]) {
+                    try {
+                        fn(job);
+                    }
+                    catch { /* ignore */ }
+                }
+                this.emitUiChange();
+            },
             onSettled: (job) => this.onJobSettled(job),
             onBoardPost: (job, text, channel) => this.board?.post(job.name ?? job.id, text, channel),
             onPeerState: () => this.scheduleStallCheck(),
@@ -167,6 +212,7 @@ export class DispatchRuntime {
             this.ledger.put(`board:${message.seq}`, { text: `[board #${message.seq}] @${message.sender}: ${message.text}\nboard_read({ since: ${message.seq - 1} }) for context.` });
         }
         this.revivePeers(message);
+        this.emitUiChange();
         this.scheduleStallCheck();
     }
     /** A settled peer that is @mentioned again is resumed in place from its session file. */
@@ -307,7 +353,7 @@ export class DispatchRuntime {
         if (job.runUsage === undefined)
             return;
         try {
-            this.gate.pi?.appendEntry("dispatch:task-usage", {
+            this.gate.pi?.appendEntry(this.host.usageEntryType ?? "dispatch:task-usage", {
                 jobId: job.id, status: job.status, createdAt: job.createdAt, startedAt: job.startedAt, finishedAt: job.finishedAt, ...job.runUsage,
             });
         }
@@ -372,7 +418,11 @@ export class DispatchRuntime {
         const sessionId = () => this.gate.sessionId();
         const tools = [
             createDispatchBashTool(this.bg, sessionId),
-            ...createStatusTools({ registry: this.registry, ledger: this.ledger, pollGuard: this.pollGuard, bg: this.bg, scope: this.role === "root" ? "all" : "own" }),
+            ...createStatusTools({
+                registry: this.registry, ledger: this.ledger, pollGuard: this.pollGuard, bg: this.bg,
+                foregroundWaits: this.foregroundWaits, foregroundBudgetSeconds: this.host.foregroundBudgetSeconds,
+                scope: this.role === "root" ? "all" : "own",
+            }),
             createTimerTool(this.timers, this.role, sessionId),
         ];
         if (this.role === "task-worker")
@@ -380,18 +430,20 @@ export class DispatchRuntime {
         if (this.pool !== undefined) {
             tools.push(createTaskTool({
                 pool: this.pool, ledger: this.ledger, gate: this.gate, host: this.host, agents: () => this.agents(), notifyOnSettle: this.notifyOnSettle,
+                foregroundWaits: this.foregroundWaits, onJobChange: (fn) => this.onJobChange(fn),
                 peerForkEntries: (name) => this.peerForkEntries(name), postBrief: (job) => this.postBrief(job),
             }));
             tools.push(createOutboxTool(this.host, sessionId, (text) => this.gate.ctx?.ui.notify(text, "info")));
         }
         tools.push(...this.boardTools());
-        const renderers = this.host.ui?.toolRenderers ?? {};
+        const renderers = { ...defaultToolRenderers(), ...(this.host.ui?.toolRenderers ?? {}) };
         return tools.map((tool) => ({ ...tool, ...renderers[tool.name] }));
     }
     /** Bind this runtime to the `pi` of the session now loading (startup, `/reload`, a switch). */
     mount(pi) {
         this.gate.bindPi(pi);
         this.ledger.bindEvents(pi, (ctx, reason) => this.onSessionStart(ctx, reason));
+        bindDispatchViews(pi, this);
         pi.on("agent_settled", async (_event, ctx) => {
             if (this.shouldDrain(ctx))
                 await this.barrier.drain();

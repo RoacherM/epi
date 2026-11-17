@@ -175,6 +175,7 @@ export class BgProcessRuntime {
             job.notified = true;
         this.writeMeta(job);
         job.resolveExit();
+        this.options.onChange?.();
         if (!job.notified)
             this.options.onExit(job);
     }
@@ -200,6 +201,7 @@ export class BgProcessRuntime {
         job.backgrounded = true;
         job.onForeground = undefined;
         this.writeMeta(job);
+        this.options.onChange?.();
     }
     /** End every open foreground window now (`/bg`); returns how many were detached. */
     detachForeground() {
@@ -499,9 +501,11 @@ function runningResult(runtime, job) {
     ].join("");
     return { content: [{ type: "text", text }], details: { dispatch: runtime.report(job.id).details } };
 }
-/** Pi's bash tool, with the dispatch parameters and a background-capable execution backend. */
+/** Pi's bash tool, with the dispatch parameters and a background-capable execution backend.
+ * Omit Pi's built-in renderers so both Pi (`withBuiltInRenderers`) and Epi (`builtInToolRenderers`)
+ * attach their own native bash presentation automatically. */
 export function createDispatchBashTool(runtime, sessionId) {
-    const base = createBashToolDefinition(process.cwd());
+    const { renderCall: _rc, renderResult: _rr, ...base } = createBashToolDefinition(process.cwd());
     return {
         ...base,
         parameters: BashParameters,
