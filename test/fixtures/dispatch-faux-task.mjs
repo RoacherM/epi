@@ -53,6 +53,39 @@ const scenarios = {
   },
   // Peer forked from alpha: reports whether alpha's history came along.
   "peer-fork": (msgs) => say(all(msgs).includes("ALPHA-HISTORY-MARKER") ? "FORK-SAW-ALPHA" : "FORK-BLIND"),
+  // Child: hits an unrecoverable context overflow error (D85).
+  "child-overflow": () => fauxAssistantMessage(fauxText(""), {
+    stopReason: "error",
+    errorMessage: "prompt is too long: 210000 tokens > 200000 maximum",
+  }),
+  // Child: spawns a 30s background bash, then hits maxTurns immediately (DrainBarrier must not block).
+  "child-maxturns-bg": (msgs) => results(msgs).length === 0
+    ? call("bash", { command: "sleep 30", waitMsBeforeAsync: 50 })
+    : call("report_progress", { summary: "turn-2" }),
+  // Child: lists active tool names and system prompt check.
+  "child-list-tools": (_msgs, _signal, context) => {
+    const sysMsg = (context.messages ?? []).find((m) => m.role === "system");
+    const names = (sysMsg?.toolsAdded ?? []).map((t) => t.name).sort().join(",");
+    const sys = JSON.stringify(context.systemPrompt ?? context.messages ?? "");
+    return say(`TOOLS=${names} SYS_CUSTOM=${sys.includes("CUSTOM-SYS-MARKER")} LEAKED_SKILL=${sys.includes("LEAKED-AMBIENT-SKILL")}`);
+  },
+  // Child: tries to run a bash command gated by .epi/hooks.json, then reports tool result.
+  "child-hook-check": (msgs) => results(msgs).length === 0
+    ? call("bash", { command: "echo FORBIDDEN_CMD" })
+    : say(`HOOK-RESULT=${results(msgs).join(" | ")}`),
+  // Child: spawns a double-detached orphan grandchild via bash tool and writes pid + BASH_ENV check.
+  "child-escape-orphan": async (msgs, signal) => {
+    const prompt = firstUser(msgs);
+    const outFile = /OUT=([^\s]+)/.exec(prompt)?.[1] ?? "/tmp/orphan.json";
+    if (results(msgs).length === 0) {
+      const cmd = `node -e 'const {spawn}=require("node:child_process"),fs=require("node:fs");const c=spawn(process.execPath,["-e","setInterval(()=>{},10000)"],{detached:true,stdio:"ignore"});c.unref();fs.writeFileSync(${JSON.stringify(outFile)},JSON.stringify({pid:c.pid,userEnv:process.env.USER_BASH_ENV_RAN||"no"}));'`;
+      return call("bash", { command: cmd });
+    }
+    if (prompt.includes("hang-after")) {
+      await pause(15_000, signal);
+    }
+    return say("ORPHAN-SPAWNED-DONE");
+  },
 };
 
 async function reply(context, options) {

@@ -175,7 +175,7 @@ src/extensions/dispatch/
 
 | 阶段 | 交付与回滚检查点 | 核心验收条件 |
 |---|---|---|
-| **Stage 0：活体缺陷修复 + 解耦 `epi:monitor`** | 修 `src/tui/transcript.ts` 漏处理 `entry_appended`；`src/extensions/index.ts` 将 `epi:monitor` 从 `buildTaskPair` 独立拆出 | 先红后绿单测验证运行中边界草稿实时上屏，Herdr 终端跑通现有全套单测，独立 commit |
+| **Stage 0：活体缺陷修复 + 桥接 `epi:monitor`** | 修 `src/tui/transcript.ts` 漏处理 `entry_appended`；`src/extensions/index.ts` 通过窄接口 `TaskMonitorBridge` 将 `epi:monitor` 与 `dispatch` 解耦（对外仍挂在 `epi:task` Manifest 开关下，不增设新 Manifest 键） | 先红后绿单测验证运行中边界草稿实时上屏，Herdr 终端跑通现有全套单测，独立 commit |
 | **Stage 1A：纯搬迁构建 `src/extensions/dispatch/` 骨架** | 抽离现有 `task-*` 迁入 `src/extensions/dispatch/` 并抽出 `DispatchHostAdapter` 接口（保持行为不变） | 现有 `test/task*.test.mjs` 全量通过，独立 commit |
 | **Stage 1B：`fd 3` 协议 + 异步 `bash` / Timer / 收件箱 / 护栏** | `pi-worker.ts` 切 `fd 3` 零内部依赖；落地 `bg-bash.ts`、`timers.ts`、`inbox-spool.ts`、`outbox-guard.ts` | 静态扫描 `src/extensions/dispatch/` 零私有 import；单测 + Herdr 真实终端跑原生 `pi -e` 与 `epi -p` 完结排空冒烟，独立 commit |
 | **Stage 2：具名 `task` + 共享 `board` + 工作区隔离** | 落地 `board.ts`、`forkFrom` 同伴分支、`branch`/`share` 基线防误删与去重停滞检测 | 单测覆盖 `board_post + board_wait` FIFO、三路唤醒、脏工作区拒删与停滞告警，Herdr 端到端实测，独立 commit |

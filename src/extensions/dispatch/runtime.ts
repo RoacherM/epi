@@ -2,6 +2,7 @@
 // registry and every primitive -- async bash, timers, the worker pool, the inbox -- wired together
 // and mounted onto whichever `pi` the current session hands the factory. The runtime outlives
 // `/reload` and session switches (its children keep running); only a real quit shuts it down.
+import { existsSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,26 +23,28 @@ import { createStatusTools } from "./status-tools.js";
 import { createTaskTool, jobNotice } from "./task-tool.js";
 import { createTimerTool, TimerRuntime, timerNotice, type TimerItem } from "./timers.js";
 import { bindDispatchViews, defaultToolRenderers } from "./tui-views.js";
-import { DISPATCH_DEPTH_ENV, DISPATCH_INBOX_ENV, DISPATCH_TIMER_ENTRY, DispatchConfigError, type DispatchHostAdapter, type DispatchRole } from "./types.js";
-import { forkableBranch, jobLabel, WorkerPool, type JobSnapshot } from "./worker-host.js";
+import { DISPATCH_DEPTH_ENV, DISPATCH_INBOX_ENV, DISPATCH_TIMER_ENTRY, DispatchConfigError, type DispatchHostAdapter, type DispatchRole, type TaskLifecycleEvent } from "./types.js";
+import { forkableBranch, inheritedModelReference, jobLabel, WorkerPool, type JobSnapshot } from "./worker-host.js";
 
 const DEFAULT_DRAIN_MAX_MS = 4 * 3_600_000 + 5_000;
 const DRAIN_GRACE_MS = 5_000;
 const MILESTONE_PREFIX = ":m:";
 const STALL_DEBOUNCE_MS = 300;
+const HOOK_RESULT_CAP = 32 * 1024;
 const SELF_INDEX_PATH = fileURLToPath(new URL("./index.js", import.meta.url));
 
 function cliExtensionPaths(argv: readonly string[]): string[] {
   const paths: string[] = [];
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
+    if (arg === "--") break;
     if ((arg === "-e" || arg === "--extension") && typeof argv[i + 1] === "string") {
       paths.push(resolve(argv[++i]!));
     } else if (arg?.startsWith("--extension=")) {
       paths.push(resolve(arg.slice("--extension=".length)));
     }
   }
-  return paths.filter((path) => path !== SELF_INDEX_PATH && !path.endsWith("/extensions/dispatch/index.ts"));
+  return paths.filter((path) => path !== SELF_INDEX_PATH && !path.endsWith("/extensions/dispatch/index.ts") && existsSync(path));
 }
 
 /** What a worker process lends its own dispatch slice: the parent channel and its counters. */
@@ -64,8 +67,6 @@ export class DispatchRuntime {
   readonly bg: BgProcessRuntime;
   readonly timers: TimerRuntime;
   readonly pool: WorkerPool | undefined;
-  /** Root: the session board's single writer. Peer worker: its fd 3 view of the board. */
-  readonly board: BoardHub | undefined;
   readonly peerBoard: PeerBoard | undefined;
   readonly barrier: DrainBarrier;
   /** Jobs whose settle must reach the model as a notification, and with which auto-wake. */
@@ -74,6 +75,10 @@ export class DispatchRuntime {
   readonly foregroundWaits = new Set<() => void>();
   /** Root at depth 0: may spawn workers and talk to the user (`task`, `outbox`, board). */
   readonly canDelegate: boolean;
+  private readonly effectiveRole: DispatchRole;
+  private readonly boards = new Map<string, BoardHub>();
+  private readonly settledHooks = new Map<string, Promise<void>>();
+  private readonly activeHooks = new Set<Promise<void>>();
   private inbox: InboxSpool | undefined;
   private agentsCache: AgentDefinition[] | undefined;
   private milestoneSeq = 0;
@@ -85,15 +90,15 @@ export class DispatchRuntime {
 
   constructor(readonly host: DispatchHostAdapter, readonly role: DispatchRole, readonly worker?: WorkerBridge) {
     this.canDelegate = role === "root" && !(Number(process.env[DISPATCH_DEPTH_ENV]) >= 1);
+    this.effectiveRole = this.canDelegate ? "root" : (role === "root" ? "task-worker" : role);
     this.ledger = this.createLedger();
     const sharedDaemonNames = host.sharedDaemonNames ?? [];
     this.bg = new BgProcessRuntime({
-      stateDir: () => this.stateDir(), role, sharedDaemonNames,
+      stateDir: () => this.stateDir(), role: this.effectiveRole, sharedDaemonNames,
       onChange: () => this.emitUiChange(),
       onExit: (job) => this.ledger.put(job.id, { text: exitNotice(this.bg.report(job.id)) }, { originSessionId: job.sessionId }),
     });
     this.timers = this.createTimers();
-    this.board = this.canDelegate ? new BoardHub({ stateDir: () => this.stateDir(), onPosted: (message) => this.onBoardPosted(message) }) : undefined;
     this.peerBoard = role === "peer-worker" && worker !== undefined ? this.createPeerBoard(worker) : undefined;
     this.pool = this.canDelegate ? this.createPool(sharedDaemonNames) : undefined;
     for (const provider of [this.bg.provider(), this.timers.provider(), this.pool?.provider()]) if (provider !== undefined) this.registry.register(provider);
@@ -109,6 +114,23 @@ export class DispatchRuntime {
     });
   }
 
+  /** Active session's board on a delegating root, or undefined in workers / depth >= 1. */
+  get board(): BoardHub | undefined {
+    return this.boardFor(this.gate.sessionId());
+  }
+
+  boardFor(sessionId: string | undefined): BoardHub | undefined {
+    if (!this.canDelegate) return undefined;
+    const key = sessionId ?? "nosession";
+    let hub = this.boards.get(key);
+    if (hub === undefined) {
+      hub = new BoardHub({ stateDir: () => this.stateDir(), onPosted: (message) => this.onBoardPosted(sessionId, message) });
+      hub.bind(sessionId);
+      this.boards.set(key, hub);
+    }
+    return hub;
+  }
+
   private createLedger(): NotificationLedger {
     return new NotificationLedger({
       gate: this.gate,
@@ -122,8 +144,10 @@ export class DispatchRuntime {
 
   private createTimers(): TimerRuntime {
     return new TimerRuntime({
-      role: this.role, stateDir: () => this.stateDir(), inboxTarget: () => this.inboxTarget(), deadlineAt: this.worker?.capsule.deadlineAt,
-      persist: this.role === "root" ? (data) => this.gate.pi?.appendEntry(DISPATCH_TIMER_ENTRY, data) : undefined,
+      role: this.effectiveRole, stateDir: () => this.stateDir(), inboxTarget: () => this.inboxTarget(), deadlineAt: this.worker?.capsule.deadlineAt,
+      persist: this.canDelegate ? (data) => {
+        try { this.gate.pi?.appendEntry(DISPATCH_TIMER_ENTRY, data); } catch { /* stale pi across reload/switch */ }
+      } : undefined,
       onChange: () => {
         if (this.timers.hasActiveSchedules()) this.activateTools(["outbox"]);
         this.emitUiChange();
@@ -163,11 +187,11 @@ export class DispatchRuntime {
   }
 
   agentDir(): string {
-    return this.worker?.capsule.agentDir ?? getAgentDir();
+    return this.host.agentDir ?? this.worker?.capsule.agentDir ?? getAgentDir();
   }
 
   inboxTarget(): string | undefined {
-    return this.role === "root" ? this.host.inboxTarget ?? process.env[DISPATCH_INBOX_ENV] : undefined;
+    return this.canDelegate ? this.host.inboxTarget ?? process.env[DISPATCH_INBOX_ENV] : undefined;
   }
 
   agents(): readonly AgentDefinition[] {
@@ -203,8 +227,8 @@ export class DispatchRuntime {
       sharedDaemonNames,
       rewriteOutputText: this.host.rewriteOutputText ?? ((text) => text),
       sessionShort: () => this.sessionShort(),
-      boardPath: () => this.board?.path,
-      boardSince: () => this.board?.maxSeq() ?? 0,
+      boardPath: (sid) => this.boardFor(sid ?? this.gate.sessionId())?.path,
+      boardSince: (sid) => this.boardFor(sid ?? this.gate.sessionId())?.maxSeq() ?? 0,
       boardIdleMs: this.host.boardIdleMs,
       killGraceMs: this.host.killGraceMs,
       onChange: (job) => {
@@ -214,7 +238,7 @@ export class DispatchRuntime {
         this.emitUiChange();
       },
       onSettled: (job) => this.onJobSettled(job),
-      onBoardPost: (job, text, channel) => this.board?.post(job.name ?? job.id, text, channel),
+      onBoardPost: (job, text, channel) => this.boardFor(job.originSessionId)?.post(job.name ?? job.id, text, channel),
       onPeerState: () => this.scheduleStallCheck(),
       onMilestone: (job, summary) => this.ledger.put(`${job.id}${MILESTONE_PREFIX}${++this.milestoneSeq}`, { text: `${jobLabel(job)} progress: ${summary}` }, { originSessionId: job.originSessionId }),
     });
@@ -228,37 +252,64 @@ export class DispatchRuntime {
     });
   }
 
-  /** Root fan-out of one new board message: peers, the coordinator's ledger, revivals, stall. */
-  private onBoardPosted(message: BoardMessage): void {
-    this.pool?.pushBoard(message);
-    if (message.sender !== COORDINATOR && message.mentions.includes(COORDINATOR)) {
-      this.ledger.put(`board:${message.seq}`, { text: `[board #${message.seq}] @${message.sender}: ${message.text}\nboard_read({ since: ${message.seq - 1} }) for context.` });
+  private reportLifecycleFailure(error: unknown, ctx: ExtensionContext | undefined): void {
+    const message = error instanceof Error ? error.message : String(error);
+    if (ctx?.mode === "tui" && typeof ctx.ui?.notify === "function") {
+      try { ctx.ui.notify(message, "error"); return; } catch { /* fall back to stderr */ }
     }
-    this.revivePeers(message);
+    process.stderr.write(`epi: ${message}\n`);
+  }
+
+  private async allowBackgroundTaskStart(event: Extract<TaskLifecycleEvent, { type: "task_start" }>): Promise<boolean> {
+    const ctx = this.gate.ctx;
+    if (this.host.onTaskLifecycleEvent === undefined || ctx === undefined) return true;
+    try {
+      const decision = await this.host.onTaskLifecycleEvent(event, ctx);
+      if (decision.action === "continue") return true;
+      this.reportLifecycleFailure(new Error(decision.reason ?? `task_start was ${decision.action}ed by a hook`), ctx);
+      return false;
+    } catch (error) {
+      this.reportLifecycleFailure(error, ctx);
+      return false;
+    }
+  }
+
+  /** Root fan-out of one new board message: peers, the coordinator's ledger, revivals, stall. */
+  private onBoardPosted(originSessionId: string | undefined, message: BoardMessage): void {
+    this.pool?.pushBoard(message, originSessionId);
+    if (message.sender !== COORDINATOR && message.mentions.includes(COORDINATOR)) {
+      const key = `board:${originSessionId ?? "nosession"}:${message.seq}`;
+      this.ledger.put(key, { text: `[board #${message.seq}] @${message.sender}: ${message.text}\nboard_read({ since: ${message.seq - 1} }) for context.` }, { originSessionId });
+    }
+    void this.revivePeers(originSessionId, message);
     this.emitUiChange();
     this.scheduleStallCheck();
   }
 
   /** A settled peer that is @mentioned again is resumed in place from its session file. */
-  private revivePeers(message: BoardMessage): void {
+  private async revivePeers(originSessionId: string | undefined, message: BoardMessage): Promise<void> {
     const pool = this.pool;
     if (pool === undefined) return;
     for (const name of message.mentions) {
       if (name === "all" || name === COORDINATOR || name === message.sender) continue;
-      const id = pool.resolve(name);
-      const job = id === undefined ? undefined : pool.status(id);
-      if (job === undefined || (job.status !== "completed" && job.status !== "partial") || job.workspace?.removed === true) continue;
+      const candidate = [...pool.list()].reverse().find((j) => j.name === name && j.originSessionId === originSessionId);
+      if (candidate === undefined || (candidate.status !== "completed" && candidate.status !== "partial") || candidate.workspace?.removed === true) continue;
+      const prompt = `Board message #${message.seq} from @${message.sender}: ${message.text}`;
+      const allowed = await this.allowBackgroundTaskStart({
+        type: "task_start", task: prompt, cwd: candidate.cwd, ...(candidate.agent === undefined ? {} : { agent: candidate.agent }),
+      });
+      if (!allowed) continue;
       try {
-        pool.resume(job.id, `Board message #${message.seq} from @${message.sender}: ${message.text}`);
-        this.notifyOnSettle.set(job.id, true);
+        pool.resume(candidate.id, prompt);
+        this.notifyOnSettle.set(candidate.id, true);
       } catch {
-        // Its session file is gone: the coordinator still sees the message on the board.
+        // Its session file is gone or raced: the coordinator still sees the message on the board.
       }
     }
   }
 
   private scheduleStallCheck(): void {
-    if (this.board === undefined || this.stallTimer !== undefined) return;
+    if (!this.canDelegate || this.stallTimer !== undefined) return;
     this.stallTimer = setTimeout(() => {
       this.stallTimer = undefined;
       this.checkStall();
@@ -293,7 +344,7 @@ export class DispatchRuntime {
   }
 
   private postBrief(job: JobSnapshot): void {
-    const board = this.board;
+    const board = this.boardFor(job.originSessionId);
     if (board === undefined || job.name === undefined) return;
     this.activateTools(["board_post", "board_read", "board_wait"]);
     board.epoch += 1;
@@ -311,16 +362,19 @@ export class DispatchRuntime {
   }
 
   private boardTools(): ToolDefinition[] {
-    const board = this.board;
-    if (board !== undefined) {
+    if (this.canDelegate) {
       return createBoardTools({
         self: COORDINATOR,
         defaultActive: false,
-        post: (text, channel) => board.post(COORDINATOR, text, channel),
-        read: (options) => board.read(options),
-        wait: (since, mentionsOnly, signal) => board.wait(COORDINATOR, since, mentionsOnly, signal),
+        post: (text, channel) => this.board!.post(COORDINATOR, text, channel),
+        read: (options) => this.board!.read(options),
+        wait: (since, mentionsOnly, signal) => this.board!.wait(COORDINATOR, since, mentionsOnly, signal),
         collect: (messages) => {
-          for (const message of messages) this.ledger.collect(`board:${message.seq}`);
+          const sid = this.gate.sessionId() ?? "nosession";
+          for (const message of messages) {
+            this.ledger.collect(`board:${sid}:${message.seq}`);
+            this.ledger.collect(`board:${message.seq}`);
+          }
         },
       });
     }
@@ -357,18 +411,51 @@ export class DispatchRuntime {
       return;
     }
     if (timer.sessionMode === "fresh" && this.pool !== undefined) {
-      const job = this.pool.start({ task: timer.prompt, cwd: process.cwd(), originSessionId: this.gate.sessionId() });
-      this.notifyOnSettle.set(job.id, true);
+      void this.startFreshScheduledTask(timer);
       return;
     }
     this.ledger.put(`${timer.id}:${timer.lastRunAt ?? Date.now()}`, { text: timerNotice(timer) });
+  }
+
+  private async startFreshScheduledTask(timer: TimerItem): Promise<void> {
+    if (this.pool === undefined) return;
+    const ctx = this.gate.ctx;
+    const cwd = ctx?.cwd ?? process.cwd();
+    const allowed = await this.allowBackgroundTaskStart({ type: "task_start", task: timer.prompt, cwd });
+    if (!allowed) return;
+    const job = this.pool.start({
+      task: timer.prompt, cwd, inheritedModel: inheritedModelReference(ctx?.model, ctx?.thinkingLevel), originSessionId: this.gate.sessionId(),
+    });
+    this.notifyOnSettle.set(job.id, true);
+  }
+
+  private runTaskStopHook(job: JobSnapshot, ctx: ExtensionContext): void {
+    const fn = this.host.onTaskLifecycleEvent;
+    if (fn === undefined) return;
+    const boundedJob: JobSnapshot = job.result !== undefined && job.result.length > HOOK_RESULT_CAP
+      ? { ...job, result: `${job.result.slice(0, HOOK_RESULT_CAP)}\n[truncated]` }
+      : { ...job };
+    const promise = Promise.resolve()
+      .then(() => fn({ type: "task_stop", job: boundedJob }, ctx))
+      .then((decision) => {
+        if (decision.action !== "continue") {
+          throw new Error(decision.reason ?? `task_stop does not allow action "${decision.action}"`);
+        }
+      })
+      .catch((error: unknown) => this.reportLifecycleFailure(error, ctx))
+      .finally(() => {
+        this.activeHooks.delete(promise);
+        if (this.settledHooks.get(job.id) === promise) this.settledHooks.delete(job.id);
+      });
+    this.settledHooks.set(job.id, promise);
+    this.activeHooks.add(promise);
   }
 
   private onJobSettled(job: JobSnapshot): void {
     this.ledger.discard(`${job.id}${MILESTONE_PREFIX}`, true);
     this.recordUsage(job);
     const ctx = this.gate.ctx;
-    if (ctx !== undefined) void Promise.resolve(this.host.onTaskLifecycleEvent?.({ type: "task_stop", job: { ...job } }, ctx)).catch(() => undefined);
+    if (ctx !== undefined) this.runTaskStopHook(job, ctx);
     const autoWake = this.notifyOnSettle.get(job.id);
     if (autoWake === undefined) return;
     this.notifyOnSettle.delete(job.id);
@@ -392,10 +479,11 @@ export class DispatchRuntime {
     for (const meta of this.bg.reconcile(sessionId)) {
       if (!this.ledger.has(meta.id)) this.ledger.put(meta.id, { text: exitNotice(this.bg.report(meta.id)) }, { originSessionId: sessionId });
     }
-    if (this.role !== "root") return;
-    this.board?.bind(sessionId);
-    if ((this.board?.maxSeq() ?? 0) > 0) this.activateTools(["board_post", "board_read", "board_wait"]);
-    if (reason !== "reload") this.timers.dropOtherSessions(sessionId);
+    if (!this.canDelegate) return;
+    const board = this.boardFor(sessionId);
+    if ((board?.maxSeq() ?? 0) > 0) this.activateTools(["board_post", "board_read", "board_wait"]);
+    if (reason === "reload") this.agentsCache = undefined;
+    else this.timers.dropOtherSessions(sessionId);
     this.timers.fold(ctx.sessionManager.getEntries(), sessionId);
     this.timers.loadSchedules();
     this.openInbox();
@@ -452,15 +540,16 @@ export class DispatchRuntime {
         registry: this.registry, ledger: this.ledger, pollGuard: this.pollGuard, bg: this.bg,
         foregroundWaits: this.foregroundWaits, foregroundBudgetSeconds: this.host.foregroundBudgetSeconds,
         unknownRefHint: this.host.ui?.unknownRefHint,
-        scope: this.role === "root" ? "all" : "own",
+        scope: this.canDelegate ? "all" : "own",
       }),
-      createTimerTool(this.timers, this.role, sessionId),
+      createTimerTool(this.timers, this.effectiveRole, sessionId),
     ];
     if (this.role === "task-worker") others.push(this.reportProgressTool());
     if (this.pool !== undefined) {
       others.push(createTaskTool({
         pool: this.pool, ledger: this.ledger, gate: this.gate, host: this.host, agents: () => this.agents(), notifyOnSettle: this.notifyOnSettle,
         foregroundWaits: this.foregroundWaits, onJobChange: (fn) => this.onJobChange(fn),
+        awaitSettledHooks: async (jobId) => { await this.settledHooks.get(jobId); },
         peerForkEntries: (name) => this.peerForkEntries(name), postBrief: (job) => this.postBrief(job),
       }) as unknown as ToolDefinition);
       const outboxDefaultActive = this.host.onOutbox !== undefined || this.inboxTarget() !== undefined;
@@ -493,7 +582,7 @@ export class DispatchRuntime {
       if (event.reason === "quit") await this.shutdown();
     });
     for (const tool of others) pi.registerTool(tool);
-    installApprovalGuard(pi, this.host, this.role);
+    installApprovalGuard(pi, this.host, this.effectiveRole);
   }
 
   async shutdown(): Promise<void> {
@@ -502,6 +591,7 @@ export class DispatchRuntime {
     this.inbox?.close();
     this.inbox = undefined;
     await Promise.all([this.bg.shutdown(), this.pool?.shutdown()]);
+    await Promise.allSettled([...this.activeHooks]);
     this.releaseSignalCleanup();
   }
 }

@@ -4,6 +4,7 @@
 // the parent's decision, passed down in the capsule; a child never re-decides it.
 import { dirname, join } from "node:path";
 import { readPreloadedSkills, resolveAssembly, scopeAssemblyForTask } from "./assembly.js";
+import { resolveWorkerTools } from "./extensions/dispatch/protocol.js";
 import { buildInlineExtensions } from "./extensions/index.js";
 import { childProjectTrust } from "./project.js";
 import { notRunningWarnings, settleRegisteredProviders } from "./provider-startup.js";
@@ -18,9 +19,10 @@ function workerOptions(capsule) {
 }
 function workerAssembly(capsule, options) {
     const globalManifestPath = join(options.epiHome, "epi.json");
+    const assemblyCwd = typeof options.originCwd === "string" ? options.originCwd : capsule.cwd;
     return scopeAssemblyForTask(resolveAssembly({
-        agentDir: capsule.agentDir, globalManifestPath, epiHome: options.epiHome, cwd: capsule.cwd, noProject: false,
-        projectTrustOverride: childProjectTrust(options.projectRoot, options.projectTrusted, capsule.cwd, globalManifestPath),
+        agentDir: capsule.agentDir, globalManifestPath, epiHome: options.epiHome, cwd: assemblyCwd, noProject: false,
+        projectTrustOverride: childProjectTrust(options.projectRoot, options.projectTrusted, assemblyCwd, globalManifestPath),
         environment: process.env,
     }), options);
 }
@@ -66,7 +68,7 @@ export const createWorkerSession = async (capsule, extensions, sdk) => {
     const { modelRuntime, resourceLoader, diagnostics } = await sdk.createAgentSessionServices({
         cwd: capsule.cwd, agentDir: capsule.agentDir, settingsManager,
         resourceLoaderOptions: {
-            noExtensions: true, noSkills: options.skills !== true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+            noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
             systemPrompt: "", appendSystemPrompt: [], systemPromptOverride: () => undefined,
             appendSystemPromptOverride: () => systemPromptParts(capsule, preloaded),
             additionalExtensionPaths: assembly.externalExtensions.map((extension) => extension.value),
@@ -86,12 +88,13 @@ export const createWorkerSession = async (capsule, extensions, sdk) => {
     }).map((warning) => `; ${warning.message}`).join("");
     if (resolved?.error !== undefined)
         throw new Error(`${resolved.error}${notRunning}`);
+    const tools = resolveWorkerTools(capsule);
     const { session } = await sdk.createAgentSession({
         cwd: capsule.cwd, agentDir: capsule.agentDir, modelRuntime, resourceLoader, settingsManager,
         sessionManager: sdk.SessionManager.open(capsule.sessionPath, dirname(capsule.sessionPath), capsule.cwd),
         ...(resolved?.model === undefined ? {} : { model: resolved.model }),
         ...(resolved?.thinkingLevel === undefined ? {} : { thinkingLevel: resolved.thinkingLevel }),
-        ...(capsule.tools === undefined ? {} : { tools: capsule.tools }),
+        ...(tools === undefined ? {} : { tools }),
         ...(capsule.excludeTools === undefined ? {} : { excludeTools: capsule.excludeTools }),
     });
     await session.bindExtensions({ mode: "print" });

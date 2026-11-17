@@ -210,7 +210,7 @@ function bindInputAndToolHooks(pi, runtime) {
         }
     });
 }
-function bindSessionHooks(pi, runtime, unsubscribeTaskHooks) {
+function bindSessionHooks(pi, runtime, unsubscribeTaskHooks, awaitTaskStops) {
     pi.on("session_start", async (event, context) => {
         try {
             await runtime.run(sessionStartPayload(event, context), context);
@@ -230,6 +230,7 @@ function bindSessionHooks(pi, runtime, unsubscribeTaskHooks) {
         }
     });
     pi.on("session_shutdown", async (event, context) => {
+        await awaitTaskStops();
         runtime.abortActive();
         try {
             await runtime.run(sessionShutdownPayload(event, context), context, { ignoreSessionAbort: true });
@@ -270,11 +271,21 @@ export function createHooksInlineExtension(options) {
                 projectTrusted: options.projectTrusted === true,
                 ...(options.projectAgentsDir === undefined ? {} : { projectRoot: dirname(dirname(options.projectAgentsDir)) }),
             });
+            const inFlightTaskStops = new Set();
             const unsubscribeTaskHooks = pi.events.on(EPI_TASK_HOOK_CHANNEL, (value) => {
-                if (isTaskHookBridgeRequest(value))
-                    value.run = () => runtime.run(taskPayload(value.event), value.context);
+                if (!isTaskHookBridgeRequest(value))
+                    return;
+                value.run = () => {
+                    const isStop = value.event.type === "task_stop";
+                    const runPromise = runtime.run(taskPayload(value.event), value.context, isStop ? { ignoreSessionAbort: true } : undefined);
+                    if (isStop) {
+                        inFlightTaskStops.add(runPromise);
+                        void runPromise.finally(() => inFlightTaskStops.delete(runPromise)).catch(() => undefined);
+                    }
+                    return runPromise;
+                };
             });
-            bindSessionHooks(pi, runtime, unsubscribeTaskHooks);
+            bindSessionHooks(pi, runtime, unsubscribeTaskHooks, async () => { await Promise.allSettled([...inFlightTaskStops]); });
             bindInputAndToolHooks(pi, runtime);
         },
     };

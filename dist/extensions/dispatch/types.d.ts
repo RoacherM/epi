@@ -1,4 +1,5 @@
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { JobSnapshot } from "./worker-host.js";
 export declare const DISPATCH_EXT_VERSION = "0.1.0";
 /** Process-wide registry key: the default `pi -e` entry keeps its process tables here so a
  * `/reload` (which re-runs the factory with a fresh `pi`) finds the children it already owns. */
@@ -58,7 +59,7 @@ export type TaskLifecycleEvent = {
     cwd: string;
 } | {
     type: "task_stop";
-    job: Record<string, unknown>;
+    job: JobSnapshot;
 };
 export interface LifecycleDecision {
     action: "continue" | "block" | "cancel" | "transform" | "replace";
@@ -100,6 +101,8 @@ export interface DispatchHostAdapter {
     /** Root of `bg/`, `boards/`, `inbox/`, `schedules/`, worker capsules and sessions. Default:
      * `<agentDir>/dispatch`. */
     stateDir?: string;
+    /** Explicit Pi agent directory for workers and presets. Default: `getAgentDir()`. */
+    agentDir?: string;
     /** The Node binary workers run on. Default: `process.execPath`. */
     nodeExecPath?: string;
     /** Override the worker entry script path (used by offline test fixtures). */

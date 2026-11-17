@@ -117,11 +117,16 @@ test("a live owner.lock is a visible error; a dead owner's lock is taken over", 
 test("a bound root delivers inbox events through the ledger and moves them to done/ on receipt", async (t) => {
   const { fake, stateDir } = await mountRuntime(t, { host: { inboxTarget: "webhooks" } });
   enqueueExternalEvent(stateDir, "webhooks", { dedupKey: "gh-42", payload: { pr: 42, action: "opened" } });
+  enqueueExternalEvent(stateDir, "webhooks", { dedupKey: "bare-evt", payload: undefined });
   await waitFor(() => fake.sent.length > 0, { label: "inbox notification" });
-  const message = fake.sent[0].message;
-  assert.match(message.content, /\[inbox webhooks\] external event gh-42: \{"pr":42,"action":"opened"\}/);
-  await fake.emit("message_end", { message: { role: "custom", customType: "dispatch:notify", details: message.details } });
+  const combined = fake.sent.map((s) => s.message.content).join("\n");
+  assert.match(combined, /\[inbox webhooks\] external event gh-42: \{"pr":42,"action":"opened"\}/);
+  assert.match(combined, /\[inbox webhooks\] external event bare-evt:/);
+  for (const s of fake.sent) {
+    await fake.emit("message_end", { message: { role: "custom", customType: "dispatch:notify", details: s.message.details } });
+  }
   assert.ok(existsSync(join(stateDir, "inbox", "webhooks", "done", `${dedupHash("gh-42")}.json`)));
+  assert.ok(existsSync(join(stateDir, "inbox", "webhooks", "done", `${dedupHash("bare-evt")}.json`)));
 });
 
 test("outbox is root-only, hard de-duplicated by dedupKey, and delivered through host.onOutbox", async (t) => {

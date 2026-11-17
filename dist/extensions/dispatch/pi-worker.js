@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { Socket } from "node:net";
 import { dirname } from "node:path";
-import { CAPSULE_VERSION, JsonlChannel } from "./protocol.js";
+import { CAPSULE_VERSION, JsonlChannel, resolveWorkerTools } from "./protocol.js";
 import { collectEntryUsage, errorText, finalAssistantText, finalAssistantTextFromEntries, singleLine, tailLines } from "./result.js";
 import { DispatchRuntime } from "./runtime.js";
 const MAX_VERIFY_ATTEMPTS = 3;
@@ -22,7 +22,10 @@ function readCapsule(path) {
         parsed = JSON.parse(readFileSync(path, "utf8"));
     }
     finally {
-        unlinkSync(path);
+        try {
+            unlinkSync(path);
+        }
+        catch { /* missing */ }
     }
     const capsule = parsed;
     if (capsule === null || typeof capsule !== "object" || capsule.version !== CAPSULE_VERSION)
@@ -58,24 +61,87 @@ const defaultSession = async (capsule, extensions, sdk) => {
     const resolved = capsule.model === undefined ? undefined : sdk.resolveCliModel({ cliModel: capsule.model, modelRuntime });
     if (resolved?.error !== undefined)
         throw new Error(resolved.error);
+    const tools = resolveWorkerTools(capsule);
     const { session } = await sdk.createAgentSession({
         cwd: capsule.cwd, agentDir: capsule.agentDir, modelRuntime, resourceLoader, settingsManager, sessionManager: sdk.SessionManager.open(capsule.sessionPath, dirname(capsule.sessionPath), capsule.cwd),
         ...(resolved?.model === undefined ? {} : { model: resolved.model }),
         ...(resolved?.thinkingLevel === undefined ? {} : { thinkingLevel: resolved.thinkingLevel }),
-        ...(capsule.tools === undefined ? {} : { tools: capsule.tools }),
+        ...(tools === undefined ? {} : { tools }),
         ...(capsule.excludeTools === undefined ? {} : { excludeTools: capsule.excludeTools }),
     });
     await session.bindExtensions({ mode: "print" });
     return session;
 };
-function lastRequestError(messages) {
-    const last = [...messages].reverse().find((message) => message.role === "assistant");
+const OVERFLOW_PATTERNS = [
+    /prompt (?:is )?too long/i,
+    /prompt exceeds max length/i,
+    /request_too_large/i,
+    /input is too long for requested model/i,
+    /exceeds the context window/i,
+    /exceeds (?:the )?(?:model'?s )?maximum context length/i,
+    /input token count.*exceeds the maximum/i,
+    /maximum prompt length is \d+/i,
+    /reduce the length of the messages/i,
+    /maximum context length is \d+ tokens/i,
+    /exceeds (?:the )?maximum allowed input length/i,
+    /input \(\d+ tokens\) is longer than the model'?s context length/i,
+    /exceeds the limit of \d+/i,
+    /exceeds the available context size/i,
+    /greater than the context length/i,
+    /context window exceeds limit/i,
+    /exceeded model token limit/i,
+    /too large for model with \d+ maximum context length/i,
+    /prompt has [\d,]+ tokens?, but the configured context size/i,
+    /model_context_window_exceeded/i,
+    /prompt too long; exceeded (?:max )?context length/i,
+    /range of input length should be/i,
+    /context[_ ]length[_ ]exceeded/i,
+    /too many tokens/i,
+    /token limit exceeded/i,
+    /^(?:[\w -]+ API error \(413\):|413(?:\s|:|$))/i,
+];
+const NON_OVERFLOW_PATTERNS = [/^(?:Throttling error|Service unavailable):/i, /rate limit/i, /too many requests/i];
+function isOverflowErrorMessage(errorMessage) {
+    if (typeof errorMessage !== "string" || errorMessage.length === 0)
+        return false;
+    return !NON_OVERFLOW_PATTERNS.some((p) => p.test(errorMessage)) && OVERFLOW_PATTERNS.some((p) => p.test(errorMessage));
+}
+function assistantTokenCounts(usage) {
+    if (usage === undefined)
+        return { input: 0, output: 0 };
+    return { input: (usage.input ?? 0) + (usage.cacheRead ?? 0), output: usage.output ?? 0 };
+}
+function isWindowOverflow(stopReason, input, output, contextWindow) {
+    if (contextWindow === undefined)
+        return false;
+    if (stopReason === "stop")
+        return input > contextWindow;
+    return stopReason === "length" && output === 0 && input >= contextWindow * 0.99;
+}
+function isOverflowTokenCount(msg, contextWindow, maxTokens) {
+    const { input, output } = assistantTokenCounts(msg.usage);
+    if (isWindowOverflow(msg.stopReason, input, output, contextWindow))
+        return true;
+    return msg.stopReason === "length" && maxTokens !== undefined && maxTokens > 0 && output < maxTokens;
+}
+function isOverflowAssistant(msg, contextWindow, maxTokens) {
+    if (msg === undefined)
+        return false;
+    if (msg.stopReason === "error" && isOverflowErrorMessage(msg.errorMessage))
+        return true;
+    return isOverflowTokenCount(msg, contextWindow, maxTokens);
+}
+function findLastAssistant(messages) {
+    return [...messages].reverse().find((message) => message.role === "assistant");
+}
+function requestErrorOf(observed, messages) {
+    const last = observed ?? findLastAssistant(messages);
     if (last?.stopReason !== "error")
         return undefined;
     return typeof last.errorMessage === "string" && last.errorMessage.length > 0 ? last.errorMessage : "model request failed";
 }
-function lastStopReason(messages) {
-    return [...messages].reverse().find((message) => message.role === "assistant")?.stopReason;
+function effectiveStopReason(observed, messages) {
+    return (observed ?? findLastAssistant(messages))?.stopReason;
 }
 function runVerify(command, cwd, timeoutMs) {
     return new Promise((resolve) => {
@@ -107,6 +173,7 @@ class Worker {
     steps = 0;
     loopFinished = false;
     overflowUnrecoverable = false;
+    lastObservedAssistant;
     usageBaseline = 0;
     spent;
     pendingSteers = [];
@@ -120,7 +187,7 @@ class Worker {
         this.runtime = new DispatchRuntime({ sharedDaemonNames: capsule.sharedDaemonNames }, capsule.role, {
             capsule,
             emit: (event) => this.emit(event),
-            steerPending: () => this.followUps.length > 0 || this.interruptRequested,
+            steerPending: () => this.interrupted || this.stopping || this.followUps.length > 0 || this.interruptRequested,
             turns: () => this.turns,
             nextStep: () => ++this.steps,
             idleStop: () => {
@@ -158,11 +225,11 @@ class Worker {
         this.runtime.peerBoard?.wake("steer");
         if (strategy === "interrupt") {
             this.followUps.splice(0, this.followUps.length, text);
+            this.budgetStop = undefined;
+            this.stopping = false;
             if (this.inPrompt && !this.runtime.barrier.draining) {
                 this.interruptRequested = true;
                 this.hadInterrupt = true;
-                this.budgetStop = undefined;
-                this.stopping = false;
                 void session.abort();
             }
             this.runtime.barrier.wake();
@@ -249,10 +316,16 @@ class Worker {
                 await this.promptOnce(session, next, false);
         }
     }
+    hasUnrecoveredOutcome(session) {
+        const model = session.model;
+        return this.overflowUnrecoverable
+            || isOverflowAssistant(this.lastObservedAssistant, model?.contextWindow, model?.maxTokens)
+            || requestErrorOf(this.lastObservedAssistant, session.messages) !== undefined;
+    }
     /** Re-prompt on a failing verifyCommand; the same failure twice exhausts the stall budget. */
     async verifyGate(session) {
         const command = this.capsule.verifyCommand;
-        if (command === undefined || this.interrupted || this.budgetStop !== undefined)
+        if (command === undefined || this.interrupted || this.budgetStop !== undefined || this.hasUnrecoveredOutcome(session))
             return undefined;
         const seen = new Set();
         for (let attempts = 1;; attempts += 1) {
@@ -265,18 +338,34 @@ class Worker {
                 return { ok: false, attempts, output };
             seen.add(fingerprint);
             await this.drive(session, `verifyCommand \`${command}\` failed (exit ${result.code}). Fix the cause, then finish.\n${output}`, false);
+            if (this.budgetStop !== undefined || this.hasUnrecoveredOutcome(session))
+                return undefined;
         }
+    }
+    isContextStopped(session) {
+        const model = session.model;
+        const overflow = this.overflowUnrecoverable || isOverflowAssistant(this.lastObservedAssistant, model?.contextWindow, model?.maxTokens);
+        return overflow && effectiveStopReason(this.lastObservedAssistant, session.messages) !== "stop";
+    }
+    resolveStopped(budget, contextStop, verifyFailed) {
+        if (budget !== undefined)
+            return budget;
+        if (contextStop)
+            return "context";
+        return verifyFailed ? "verify" : undefined;
     }
     result(session, verify) {
         const entries = session.sessionManager.getEntries();
         const budget = this.stopping ? this.budgetStop : undefined;
-        const contextStop = budget === undefined && this.overflowUnrecoverable && lastStopReason(session.messages) !== "stop";
-        const requestError = budget !== undefined || contextStop ? undefined : lastRequestError(session.messages);
-        if (requestError !== undefined)
-            throw new Error(requestError);
-        const output = finalAssistantTextFromEntries(entries, this.usageBaseline, budget !== undefined || this.hadInterrupt);
+        const contextStop = budget === undefined && this.isContextStopped(session);
+        if (budget === undefined && !contextStop) {
+            const requestError = requestErrorOf(this.lastObservedAssistant, session.messages);
+            if (requestError !== undefined)
+                throw new Error(requestError);
+        }
+        const output = finalAssistantTextFromEntries(entries, this.usageBaseline, budget !== undefined || contextStop || this.hadInterrupt);
         const verifyFailed = verify !== undefined && !verify.ok;
-        const stopped = budget ?? (contextStop ? "context" : verifyFailed ? "verify" : undefined);
+        const stopped = this.resolveStopped(budget, contextStop, verifyFailed);
         return {
             type: "result", ok: true, turns: this.turns, usage: collectEntryUsage(entries, this.usageBaseline),
             output: verifyFailed ? `${output}\n[verifyCommand still failing after ${verify.attempts} attempt(s):\n${verify.output}]` : output,
@@ -287,25 +376,43 @@ class Worker {
     async bootstrap() {
         const sdk = (await import(this.capsule.sdkEntryUrl));
         writeForkEntries(this.capsule);
-        const slice = (pi) => this.runtime.mount(pi);
+        const slice = (pi) => {
+            this.runtime.mount(pi);
+            pi.on("before_agent_start", () => { this.lastObservedAssistant = undefined; });
+            pi.on("agent_end", (event) => {
+                const last = findLastAssistant(event.messages);
+                if (last !== undefined)
+                    this.lastObservedAssistant = last;
+            });
+        };
         const create = this.capsule.bootstrapModule === undefined
             ? defaultSession
             : (await import(this.capsule.bootstrapModule)).createWorkerSession;
         return create(this.capsule, [slice], sdk);
     }
     async run() {
-        const session = await this.bootstrap();
-        this.session = session;
-        this.usageBaseline = session.sessionManager.getEntries().length;
-        for (const item of this.pendingSteers.splice(0))
-            this.deliverSteer(item.text, item.strategy);
-        if (this.interrupted)
-            throw new Error("worker was interrupted");
-        this.emit({ type: "started", pid: process.pid });
-        const unsubscribe = this.subscribe(session);
+        let session;
+        let unsubscribe;
         try {
+            session = await this.bootstrap();
+            this.session = session;
+            this.usageBaseline = session.sessionManager.getEntries().length;
+            for (const item of this.pendingSteers.splice(0))
+                this.deliverSteer(item.text, item.strategy);
+            if (this.interrupted)
+                throw new Error("worker was interrupted");
+            this.emit({ type: "started", pid: process.pid });
+            unsubscribe = this.subscribe(session);
             await this.drive(session, this.capsule.task, true);
-            const verify = await this.verifyGate(session);
+            let verify = await this.verifyGate(session);
+            while (!this.interrupted && (this.interruptRequested || this.followUps.length > 0)) {
+                this.interruptRequested = false;
+                const next = this.followUps.shift();
+                if (next !== undefined) {
+                    await this.drive(session, next, false);
+                    verify = await this.verifyGate(session);
+                }
+            }
             this.loopFinished = true;
             if (this.interrupted)
                 throw new Error("worker was interrupted");
@@ -313,10 +420,11 @@ class Worker {
         }
         finally {
             this.loopFinished = true;
-            unsubscribe();
-            this.spent = collectEntryUsage(session.sessionManager.getEntries(), this.usageBaseline);
+            unsubscribe?.();
+            if (session !== undefined)
+                this.spent = collectEntryUsage(session.sessionManager.getEntries(), this.usageBaseline);
             await this.runtime.shutdown();
-            session.dispose();
+            session?.dispose();
             this.session = undefined;
         }
     }

@@ -123,7 +123,7 @@ function walk(root, dir, files) {
 }
 /** Content hash of every file and symlink under `dir` (skipping `.git` and `node_modules`). */
 export function computeWorkspaceBaselineHash(dir) {
-    const files = {};
+    const files = Object.create(null);
     walk(dir, dir, files);
     const digest = createHash("sha256");
     for (const key of Object.keys(files).sort())
@@ -134,32 +134,41 @@ function plural(count, word) {
     return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 function inspectShare(state) {
-    const { hash, files } = computeWorkspaceBaselineHash(state.root);
-    if (hash === state.baselineHash)
-        return { dirty: false };
-    const baseline = state.baseline ?? {};
-    let added = 0;
-    let changed = 0;
-    for (const [path, value] of Object.entries(files)) {
-        if (!(path in baseline))
-            added += 1;
-        else if (baseline[path] !== value)
-            changed += 1;
+    try {
+        const { hash, files } = computeWorkspaceBaselineHash(state.root);
+        if (hash === state.baselineHash)
+            return { dirty: false };
+        const baseline = state.baseline ?? {};
+        let added = 0;
+        let changed = 0;
+        for (const [path, value] of Object.entries(files)) {
+            if (!Object.hasOwn(baseline, path))
+                added += 1;
+            else if (baseline[path] !== value)
+                changed += 1;
+        }
+        const deleted = Object.keys(baseline).filter((path) => !Object.hasOwn(files, path)).length;
+        const parts = [
+            changed > 0 ? `${plural(changed, "file")} changed` : "",
+            added > 0 ? `${plural(added, "file")} added` : "",
+            deleted > 0 ? `${plural(deleted, "file")} deleted` : "",
+        ].filter((part) => part.length > 0);
+        return { dirty: true, diffStat: parts.join(", ") || "modified" };
     }
-    const deleted = Object.keys(baseline).filter((path) => !(path in files)).length;
-    const parts = [
-        changed > 0 ? `${plural(changed, "file")} changed` : "",
-        added > 0 ? `${plural(added, "file")} added` : "",
-        deleted > 0 ? `${plural(deleted, "file")} deleted` : "",
-    ].filter((part) => part.length > 0);
-    return { dirty: true, diffStat: parts.join(", ") || "modified" };
+    catch {
+        return { dirty: true, diffStat: "modified" };
+    }
 }
-/** Commits on the worktree branch that the main checkout's HEAD does not contain yet. */
+/** Commits on the worktree HEAD or managed branch that the main checkout's HEAD does not contain yet. */
 function unmergedCommits(state, head) {
     if (state.repoRoot === undefined)
         return 0;
     const target = runGit(state.repoRoot, ["rev-parse", "HEAD"]).trim();
-    return Number(runGit(state.root, ["rev-list", "--count", `${target}..${head}`]).trim()) || 0;
+    const headCount = Number(runGit(state.root, ["rev-list", "--count", `${target}..${head}`]).trim()) || 0;
+    if (state.branch === undefined || !branchExists(state.repoRoot, state.branch))
+        return headCount;
+    const branchCount = Number(runGit(state.repoRoot, ["rev-list", "--count", `${target}..refs/heads/${state.branch}`]).trim()) || 0;
+    return Math.max(headCount, branchCount);
 }
 function inspectBranch(state) {
     try {

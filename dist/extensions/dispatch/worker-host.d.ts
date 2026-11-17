@@ -12,6 +12,9 @@ export interface JobRequest {
     agent?: string | undefined;
     model?: string | undefined;
     inheritedModel?: string | undefined;
+    tools?: readonly string[] | undefined;
+    excludeTools?: readonly string[] | undefined;
+    systemPrompt?: string | undefined;
     context?: "fresh" | "fork" | undefined;
     forkEntries?: readonly unknown[] | undefined;
     workspace?: WorkspaceMode | undefined;
@@ -61,6 +64,7 @@ interface Job {
     task: string;
     status: JobStatus;
     cwd: string;
+    originCwd: string;
     sessionPath: string;
     timeoutSeconds: number;
     createdAt: number;
@@ -111,8 +115,8 @@ export interface WorkerPoolOptions {
     sharedDaemonNames: readonly string[];
     rewriteOutputText: (text: string) => string;
     sessionShort: () => string;
-    boardPath: () => string | undefined;
-    boardSince: () => number;
+    boardPath: (sessionId?: string) => string | undefined;
+    boardSince: (sessionId?: string) => number;
     boardIdleMs?: number | undefined;
     maxConcurrency?: number | undefined;
     maxOutputBytes?: number | undefined;
@@ -150,6 +154,7 @@ export declare class WorkerPool {
     private agent;
     private validate;
     private validateName;
+    private guardPriorNamedWorkspaces;
     start(request: JobRequest): JobSnapshot;
     private enqueue;
     /** `job_<id>`, a unique id prefix, or a task name (the newest job of that name). */
@@ -167,9 +172,9 @@ export declare class WorkerPool {
     private releaseWorkspace;
     shutdown(): Promise<void>;
     killAllSync(): void;
-    /** Push a board message to every running peer except its sender. A parked addressee is
-     * counted as awake at once, so the stall detector never sees the gap before it reports. */
-    pushBoard(message: BoardMessage): void;
+    /** Push a board message to every running peer in the same session except its sender. A parked
+     * addressee is counted as awake at once, so the stall detector never sees the gap before it reports. */
+    pushBoard(message: BoardMessage, originSessionId?: string): void;
     private changed;
     private pump;
     private capsule;

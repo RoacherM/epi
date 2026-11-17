@@ -112,6 +112,8 @@ export declare class JsonlChannel<In, Out> {
     /** End our side and stop the socket from holding the process open. */
     release(): void;
 }
+/** Preserve worker control tools (`report_progress` / `board_*`) when an explicit `tools` allowlist is set. */
+export declare function resolveWorkerTools(capsule: WorkerCapsule): string[] | undefined;
 export type DispatchSdk = typeof import("@earendil-works/pi-coding-agent");
 /** A host's worker bootstrap module (`DispatchHostAdapter.workerBootstrapModule`) exports this:
  * build the worker's session with `extensions` (the dispatch worker slice) mounted. */

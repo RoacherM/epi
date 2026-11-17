@@ -16,6 +16,7 @@
     "src/noninteractive.ts",
     "src/dispatch-epi-worker.ts",
     "src/extensions/dispatch/**",
+    "src/extensions/dispatch-*",
     "src/monitor-stream.ts",
     "src/extensions/mcp.ts",
     "src/commands/mcp-cli.ts",

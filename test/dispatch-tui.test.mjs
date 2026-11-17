@@ -17,9 +17,28 @@ const plainTheme = {
 
 function makeHarness(t, host = {}) {
   const dir = mkdtempSync(join(tmpdir(), "dispatch-tui-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const runtime = new DispatchRuntime({ stateDir: join(dir, "state"), ...host }, "root");
-  t.after(() => runtime.shutdown());
+  const agentDir = join(dir, "agent");
+  const agentsGlobal = join(dir, "agents");
+  mkdirSync(agentDir, { recursive: true });
+  mkdirSync(agentsGlobal, { recursive: true });
+  const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const savedDepth = process.env.PI_DISPATCH_DEPTH;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  delete process.env.PI_DISPATCH_DEPTH;
+  const runtime = new DispatchRuntime({
+    stateDir: join(dir, "state"),
+    agentDir,
+    agentsDirs: { global: agentsGlobal },
+    ...host,
+  }, "root");
+  t.after(async () => {
+    await runtime.shutdown();
+    if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
+    if (savedDepth === undefined) delete process.env.PI_DISPATCH_DEPTH;
+    else process.env.PI_DISPATCH_DEPTH = savedDepth;
+    rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+  });
 
   const tools = new Map();
   const commands = new Map();
@@ -248,4 +267,61 @@ test("createDispatchExtension validates agentsDirs eagerly and default renderers
   const notifyView = h.notifyRenderer({ content: "[SYSTEM NOTIFICATION - NOT USER INPUT] Auto\njob_123 completed: ok" }, { expanded: false }, plainTheme).render(80).join("\n");
   assert.doesNotMatch(notifyView, /SYSTEM NOTIFICATION/);
   assert.match(notifyView, /job_123 completed: ok/);
+});
+
+test("OSC 52, CSI, CR, C1, and bidi terminal escape sequences are stripped across /tasks detail, /board, and notifications", async (t) => {
+  const h = makeHarness(t);
+  const res = await h.tools.get("bash").execute(
+    "esc-1",
+    { command: "printf 'safe-start \\033]52;c;SGVsbG8=\\007 \\033[2J \\rSPOOF \\23331m safe-end\\n'", waitMsBeforeAsync: 500 },
+    undefined,
+    undefined,
+    h.ctx,
+  );
+  // Start a background command via a script file so "52;c;" does not appear in the command string:
+  const escScript = join(h.dir, "emit-esc.sh");
+  writeFileSync(escScript, "printf 'log-head \\033]52;c;c2VjcmV0\\007 \\033[2J \\rOVER \\23331m log-tail\\n'\n", { mode: 0o700 });
+  const bgRes = await h.tools.get("bash").execute(
+    "esc-2",
+    { command: `/bin/sh ${JSON.stringify(escScript)}`, isDaemon: true },
+    undefined,
+    undefined,
+    h.ctx,
+  );
+  assert.ok(res);
+  const bgId = bgRes.details.dispatch.id;
+  await h.tools.get("task_wait").execute("esc-wait", { ids: [bgId] }, undefined, undefined, h.ctx);
+
+  await h.tools.get("board_post").execute(
+    "b-esc",
+    { text: "@peer board-safe \x1b]52;c;c2VjcmV0\x07 \x1b[2J \rCARRIAGE \x9b31m \u202e board-end" },
+    undefined,
+    undefined,
+    h.ctx,
+  );
+
+  const detailClosed = h.commands.get("tasks").handler(bgId, h.ctx);
+  const detailText = h.overlay.component.render(90).join("\n");
+  assert.match(detailText, /log-head/);
+  assert.match(detailText, /log-tail/);
+  assert.equal(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/.test(detailText), false, "no raw escape/control chars in /tasks detail");
+  assert.doesNotMatch(detailText.split("\n").filter((l) => l.includes("log-tail")).join("\n"), /52;c;/);
+  h.overlay.component.handleInput("\x1b");
+  await detailClosed;
+
+  const boardClosed = h.commands.get("board").handler("", h.ctx);
+  const boardText = h.overlay.component.render(90).join("\n");
+  assert.match(boardText, /board-safe/);
+  assert.equal(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/.test(boardText), false, "no raw escape/control chars in /board");
+  assert.doesNotMatch(boardText, /52;c;/);
+  h.overlay.component.handleInput("\x1b");
+  await boardClosed;
+
+  const notifyText = h.notifyRenderer(
+    { content: "[SYSTEM NOTIFICATION - NOT USER INPUT] Auto\njob_1 done: \x1b]52;c;YWJj\x07\x1b[31mok\x1b[0m\rspoof" },
+    { expanded: true },
+    plainTheme,
+  ).render(80).join("\n");
+  assert.equal(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(notifyText), false, "no raw escape/control chars in notifyRenderer");
+  assert.doesNotMatch(notifyText, /52;c;/);
 });

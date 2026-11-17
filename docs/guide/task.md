@@ -24,35 +24,35 @@ task(task="读一遍 src/tui/，列出所有注册快捷键的地方，带文件
 
 ## 能力按需打开（默认全关）
 
-子代理默认**不带**技能、不连 MCP、不注入 Rules——省掉这些的加载与 token 开销。要哪项就开哪项：
+子代理默认**不带**技能、不连 MCP、不注入 Rules——省掉这些的加载与 token 开销。`task` 调用可直接传通用调度与裁剪参数，Epi 宿主装配域（`rules` / `skills` / `mcp` / `hooks` / `extensions`）则在 `agents/*.md` 预设里按需开启：
 
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `context` | `fresh` | `fork` 让子代理看到当前对话已完成的历史 |
-| `model` | 继承 | `provider/id` 或 `provider/id:thinking`，便宜的活可以换小模型 |
-| `rules` | `false` | 注入本次运行的 Rules（`AGENTS.md`） |
-| `skills` | `false` | `true` 列出全部技能；`["code-review"]` 把该技能正文直接预载，子代理不用先 `read` |
-| `mcp` | `false` | `true` 连全部；`["lark"]` 只连指定服务 |
-| `tools` / `excludeTools` | 继承 | 例如 `tools=["read","grep","find","ls"]` 做只读子代理 |
-| `hooks` | `true` | 子代理的工具调用同样受 `hooks.json` 约束 |
-| `extensions` | `true` | Manifest 外部扩展 |
-| `maxTurns` | 无 | 到达轮数后停下并交回已有产出（状态 `partial`） |
-| `timeoutSeconds` | `600` | 超时终止 |
+| 参数 | 位置 | 默认 | 说明 |
+|---|---|---|---|
+| `context` | 调用 / 预设 | `fresh` | `fork` 让子代理看到当前对话已完成的历史 |
+| `workspace` | 调用 / 预设 | `inherit` | `branch`（git worktree）或 `share`（CoW 克隆）做文件隔离 |
+| `model` | 调用 / 预设 | 继承 | `provider/id`、`provider/id:thinking` 或 `:thinking` |
+| `tools` / `excludeTools` | 调用 / 预设 | 继承 | 例如 `tools=["read","grep","find","ls"]` 做只读子代理（自动保留进度/看板工具） |
+| `systemPrompt` / `verifyCommand` | 调用 / 预设 | 无 | 追加系统指令；出口门禁命令须以 `0` 退出才允许收尾 |
+| `maxTurns` / `timeoutSeconds` | 调用 / 预设 | 无 / `600` | 到达轮数以 `partial` 交回已有产出；超时终止进程组 |
+| `rules` | `agents/*.md` | `false` | 注入本次运行的 Rules（`AGENTS.md`） |
+| `skills` | `agents/*.md` | `false` | `true` 列出全部技能；`["code-review"]` 把该技能正文直接预载 |
+| `mcp` | `agents/*.md` | `false` | `true` 连全部；`["lark"]` 只连指定服务 |
+| `hooks` / `extensions` | `agents/*.md` | `true` | 子代理的工具调用同样受 `hooks.json` 约束；裁剪 Manifest 外部扩展 |
 
 只读的审查子代理：
 
 ```text
 task(task="审查 git diff 里的安全问题，只报带文件:行号的实据",
-     tools=["read","grep","find","ls"], skills=["code-review"], rules=true)
+     tools=["read","grep","find","ls"])
 ```
 
 ## 后台与并发
 
-同一轮里发出多个 `task` 调用，它们就会并发运行，各自直接返回结果，不需要 `task_wait`。
+同一轮里发出多个 `task` 调用（或用 `tasks: [...]` 批量下发），它们就会并发运行，各自直接返回结果，不需要 `task_wait`。
 
 传 `background=true` 只返回一个 `jobId`，主会话继续干别的；之后用 `task_status` 查、`task_wait` 等、`task_cancel` 取消。只有主会话要在等待期间做别的事时才需要它。
 
-并发上限默认是 CPU 核数（最少 2，最多 16），超出的排队。用环境变量 `EPI_TASK_MAX_CONCURRENCY` 改。
+并发上限默认是 CPU 核数（最少 2，最多 16），超出的自动排队。
 
 每个子代理都要付一份系统提示词和一次进程启动（约 0.6 秒）。拆分时按工作量给，每个子代理分几个文件，不要一个小文件一个子代理。
 

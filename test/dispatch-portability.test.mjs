@@ -182,11 +182,40 @@ test("worktree branch: named branch, shared node_modules, unmerged commits count
   assert.match(dirty.diffStat, /1 file changed/);
   git(ws.root, "commit", "-q", "-am", "work");
   assert.match(inspectWorkspaceDirty(ws).diffStat, /1 unmerged commit on dispatch\/s1\/parser/);
+  // Detaching HEAD back to root's commit must still see the unmerged commit on state.branch:
+  git(ws.root, "checkout", "-q", "--detach", "HEAD~1");
+  assert.equal(inspectWorkspaceDirty(ws).dirty, true, "detached HEAD still protects unmerged branch commit");
+  git(ws.root, "checkout", "-q", "dispatch/s1/parser");
   git(root, "merge", "-q", "--ff-only", "dispatch/s1/parser");
   assert.deepEqual(inspectWorkspaceDirty(ws), { dirty: false }, "merged into the main checkout: clean");
   removeWorkspace(ws);
   assert.equal(existsSync(ws.root), false);
   assert.doesNotMatch(git(root, "branch", "--list"), /dispatch\/s1\/parser/);
+});
+
+test("ledger: throwing sendMessage with coalesceMs=0 does not recurse infinitely and stopWhen skips flushNow", async () => {
+  const fake = createFakePi();
+  let attempts = 0;
+  fake.pi.sendMessage = () => {
+    attempts += 1;
+    throw new Error("Runner is deactivated");
+  };
+  const gate = new NotificationGate();
+  const ledger = new NotificationLedger({ gate, coalesceMs: 0 });
+  gate.bindPi(fake.pi);
+  ledger.bindEvents(fake.pi);
+  await fake.emit("session_start", { reason: "startup" });
+
+  // Multiple large entries exceeding NOTIFY_BATCH_LIMIT_BYTES so unsent entries remain after first batch:
+  ledger.put("big_1", { text: "A".repeat(10_000) });
+  ledger.put("big_2", { text: "B".repeat(10_000) });
+  assert.ok(attempts <= 2, `throwing sendMessage must not recurse unboundedly (attempts=${attempts})`);
+
+  // DrainBarrier with stopWhen() === true immediately skips flushNow and returns right away:
+  const barrier = new DrainBarrier(ledger, { hasFiniteWork: () => true, maxMs: () => 5_000, stopWhen: () => true });
+  const before = attempts;
+  await barrier.drain();
+  assert.equal(attempts, before, "stopped DrainBarrier does not flush into a dying runner");
 });
 
 test("worktree share: CoW clone dirtiness is incremental over the creation baseline", (t) => {

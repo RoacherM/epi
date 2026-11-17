@@ -160,6 +160,16 @@ export class JsonlChannel<In, Out> {
   }
 }
 
+/** Preserve worker control tools (`report_progress` / `board_*`) when an explicit `tools` allowlist is set. */
+export function resolveWorkerTools(capsule: WorkerCapsule): string[] | undefined {
+  if (capsule.tools === undefined) return undefined;
+  if (capsule.tools.some((entry) => entry.startsWith("+") || entry.startsWith("-"))) return [...capsule.tools];
+  const excluded = new Set(capsule.excludeTools ?? []);
+  const required = capsule.role === "peer-worker" ? ["board_post", "board_read", "board_wait"] : ["report_progress"];
+  const extras = required.filter((name) => !capsule.tools!.includes(name) && !excluded.has(name));
+  return extras.length === 0 ? [...capsule.tools] : [...capsule.tools, ...extras];
+}
+
 export type DispatchSdk = typeof import("@earendil-works/pi-coding-agent");
 
 /** A host's worker bootstrap module (`DispatchHostAdapter.workerBootstrapModule`) exports this:

@@ -30,14 +30,17 @@ export function inheritedModelReference(model, thinkingLevel) {
 }
 /** A `:thinking`-only pick keeps the base model it modifies (call > preset > parent). */
 export function childModelReference(picked, preset, inherited) {
-    if (picked === undefined || !picked.startsWith(":"))
-        return picked ?? preset ?? inherited;
-    const base = preset !== undefined && !preset.startsWith(":") ? preset : inherited;
+    const chosen = picked ?? preset;
+    if (chosen === undefined)
+        return inherited;
+    if (!chosen.startsWith(":"))
+        return chosen;
+    const base = picked !== undefined && preset !== undefined && !preset.startsWith(":") ? preset : inherited;
     if (base === undefined)
-        return picked;
+        return undefined;
     const colon = base.lastIndexOf(":");
     const stripped = colon > 0 && THINKING_LEVELS.has(base.slice(colon + 1)) ? base.slice(0, colon) : base;
-    return `${stripped}${picked}`;
+    return `${stripped}${chosen}`;
 }
 function isMessageEntry(entry) {
     return typeof entry === "object" && entry !== null && entry.type === "message" && "message" in entry;
@@ -97,10 +100,12 @@ function peerBrief(name, since) {
 /** The call's settings over the preset's (an explicit argument always wins). */
 function presetSettings(job) {
     const { request, agent } = job;
+    const tools = request.tools !== undefined ? [...request.tools] : agent?.tools;
+    const excludeTools = request.excludeTools !== undefined ? [...request.excludeTools] : agent?.excludeTools;
     return {
         model: childModelReference(request.model, agent?.model, request.inheritedModel),
-        tools: agent?.tools,
-        excludeTools: agent?.excludeTools,
+        tools,
+        excludeTools,
         maxTurns: request.maxTurns ?? agent?.maxTurns,
         verifyCommand: request.verifyCommand ?? agent?.verifyCommand,
     };
@@ -164,22 +169,38 @@ export class WorkerPool {
         }
         return { agent, cwd, timeoutSeconds };
     }
-    validateName(name) {
+    validateName(name, selfId) {
         if (!NAME_PATTERN.test(name) || name === "all" || name === COORDINATOR) {
             throw new Error(`task name must match ${NAME_PATTERN.source} and not be "all" or "coordinator"`);
         }
-        const clash = [...this.jobs.values()].find((job) => job.request.name === name && !job.settled);
+        const clash = [...this.jobs.values()].find((job) => job.id !== selfId && job.request.name === name && !job.settled);
         if (clash !== undefined)
             throw new Error(`a task named ${JSON.stringify(name)} is already active (${clash.id}); steer it with task({ jobId: "${name}", task })`);
     }
+    guardPriorNamedWorkspaces(name) {
+        for (const prior of this.jobs.values()) {
+            if (prior.request.name !== name || !prior.settled || prior.workspace === undefined || prior.workspaceRemoved)
+                continue;
+            const inspection = inspectWorkspaceDirty(prior.workspace);
+            prior.diffStat = inspection.diffStat;
+            if (inspection.dirty) {
+                throw new Error(`prior @${name} (${prior.id}) still holds uncommitted work at ${prior.workspace.root}; resume with task({ jobId: "${name}", task }) or discard with task_cancel({ id: "${prior.id}", forceDirty: true })`);
+            }
+            if (cleanupCleanWorkspace(prior.workspace))
+                prior.workspaceRemoved = true;
+        }
+    }
     start(request) {
         const { agent, cwd, timeoutSeconds } = this.validate(request);
+        if (request.name !== undefined)
+            this.guardPriorNamedWorkspaces(request.name);
         const id = newItemId("job");
         const mode = request.workspace ?? agent?.workspace ?? "inherit";
-        const workspace = createWorkspace({ mode, stateDir: this.options.stateDir(), sessionShort: this.options.sessionShort(), slug: request.name ?? id, cwd });
+        const slug = request.name !== undefined ? `${request.name}-${id.slice(4)}` : id;
+        const workspace = createWorkspace({ mode, stateDir: this.options.stateDir(), sessionShort: this.options.sessionShort(), slug, cwd });
         const { promise, resolve } = Promise.withResolvers();
         const job = {
-            id, request, agent, task: request.task, status: "queued", cwd: workspace.workerCwd,
+            id, request, agent, task: request.task, status: "queued", cwd: workspace.workerCwd, originCwd: cwd,
             sessionPath: join(this.options.stateDir(), "sessions", `${id}.jsonl`), timeoutSeconds, createdAt: Date.now(),
             startedAt: undefined, finishedAt: undefined, deadlineAt: undefined, result: undefined, error: undefined, usage: undefined,
             runUsage: undefined, turns: undefined, progressTurns: 0, stepsBase: 0, steps: 0, currentActivity: undefined,
@@ -242,6 +263,8 @@ export class WorkerPool {
         const job = this.find(ref);
         if (!job.settled)
             throw new Error(`${job.id} is ${job.status}; steer it instead`);
+        if (job.request.name !== undefined)
+            this.validateName(job.request.name, job.id);
         if (task.trim().length === 0)
             throw new Error("task must be a non-empty string");
         if (!existsSync(job.sessionPath))
@@ -250,7 +273,7 @@ export class WorkerPool {
             throw new Error(`${job.id}'s workspace was removed; start a new task`);
         const { promise, resolve } = Promise.withResolvers();
         Object.assign(job, {
-            isResume: true, task, status: "queued", result: undefined, error: undefined, finishedAt: undefined, stoppedBy: undefined,
+            isResume: true, task, status: "queued", startedAt: undefined, deadlineAt: undefined, result: undefined, error: undefined, finishedAt: undefined, stoppedBy: undefined,
             workerResult: undefined, termination: undefined, currentActivity: undefined, progressTurns: 0, stepsBase: job.steps,
             runUsage: undefined, diffStat: undefined, stderrTail: "", parked: false, finite: 0, settled: false,
             completion: promise, resolveCompletion: resolve,
@@ -305,12 +328,14 @@ export class WorkerPool {
             if (job.process?.pid !== undefined)
                 signalGroup(job.process, "SIGTERM");
     }
-    /** Push a board message to every running peer except its sender. A parked addressee is
-     * counted as awake at once, so the stall detector never sees the gap before it reports. */
-    pushBoard(message) {
+    /** Push a board message to every running peer in the same session except its sender. A parked
+     * addressee is counted as awake at once, so the stall detector never sees the gap before it reports. */
+    pushBoard(message, originSessionId) {
         for (const job of this.jobs.values()) {
             const name = job.request.name;
             if (job.status !== "running" || name === undefined || name === message.sender)
+                continue;
+            if (originSessionId !== undefined && job.request.originSessionId !== originSessionId)
                 continue;
             if (job.parked && addressedTo(message, name))
                 job.parked = false;
@@ -342,15 +367,17 @@ export class WorkerPool {
     }
     capsule(job) {
         const peer = job.request.name !== undefined;
+        const sessionId = job.request.originSessionId;
+        const basePrompt = job.request.systemPrompt ?? job.agent?.systemPrompt ?? "";
         return {
             version: 1, role: peer ? "peer-worker" : "task-worker", jobId: job.id, name: job.request.name,
             task: job.task, cwd: job.cwd, agentDir: this.options.agentDir, stateDir: this.options.stateDir(), sessionPath: job.sessionPath,
             forkEntries: job.isResume ? undefined : forkEntriesOf(job.request), ...presetSettings(job),
-            systemPrompt: [job.agent?.systemPrompt ?? "", peer ? peerBrief(job.request.name, this.options.boardSince()) : ""].filter((part) => part.trim().length > 0).join("\n\n"),
+            systemPrompt: [basePrompt, peer ? peerBrief(job.request.name, this.options.boardSince(sessionId)) : ""].filter((part) => part.trim().length > 0).join("\n\n"),
             deadlineAt: job.deadlineAt ?? Date.now() + job.timeoutSeconds * 1000,
             sdkEntryUrl: this.options.sdkEntryUrl, bootstrapModule: this.options.bootstrapModule,
-            bootstrapOptions: this.options.bootstrapOptions?.({ ...job.agent?.scope, agent: job.agent?.name, cwd: job.cwd }),
-            extensionPaths: this.options.extensionPaths, boardPath: peer ? this.options.boardPath() : undefined,
+            bootstrapOptions: this.options.bootstrapOptions?.({ ...job.agent?.scope, agent: job.agent?.name, cwd: job.cwd, originCwd: job.originCwd }),
+            extensionPaths: this.options.extensionPaths, boardPath: peer ? this.options.boardPath(sessionId) : undefined,
             boardIdleMs: this.options.boardIdleMs, sharedDaemonNames: [...this.options.sharedDaemonNames],
         };
     }
@@ -460,8 +487,14 @@ export class WorkerPool {
     finish(job) {
         if (job.settled)
             return;
-        if (job.workspace !== undefined && !job.workspaceRemoved)
-            job.diffStat = inspectWorkspaceDirty(job.workspace).diffStat;
+        if (job.workspace !== undefined && !job.workspaceRemoved) {
+            try {
+                job.diffStat = inspectWorkspaceDirty(job.workspace).diffStat;
+            }
+            catch {
+                job.diffStat = "modified";
+            }
+        }
         job.settled = true;
         job.resolveCompletion();
         this.changed(job);
@@ -485,7 +518,10 @@ export class WorkerPool {
                 job.droppedSteers.push(event.message);
                 break;
             case "board_post":
-                this.options.onBoardPost?.(this.snapshot(job), event.text, event.channel);
+                try {
+                    this.options.onBoardPost?.(this.snapshot(job), event.text, event.channel);
+                }
+                catch { /* ignore malformed peer post */ }
                 break;
             case "state":
                 job.parked = event.parked === true;
@@ -544,7 +580,7 @@ export class WorkerPool {
             snapshotDescendantPgids(child.pid, job.guard);
         signalGroup(child, "SIGTERM");
         const timer = setTimeout(() => {
-            if (job.settled || job.process === undefined)
+            if (job.settled || job.process !== child)
                 return;
             if (job.guard !== undefined)
                 snapshotDescendantPgids(child.pid, job.guard);

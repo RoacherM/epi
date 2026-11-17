@@ -7,6 +7,7 @@
 // 6. `TaskMonitorBridge` links `epi:task` and `epi:monitor` for unified status, `/tasks`, and cross-ID hints.
 // 7. `:thinking`-only model selection keeps the base model (`childModelReference`).
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,10 +22,29 @@ import { createTaskMonitorBridge } from "../dist/extensions/task-notify.js";
 import { PROVIDER_LOGIN_HELP } from "../dist/pi-output.js";
 
 const fakeWorker = fileURLToPath(new URL("./fixtures/fake-task-worker.mjs", import.meta.url));
+const fauxTask = fileURLToPath(new URL("./fixtures/dispatch-faux-task.mjs", import.meta.url));
 
 function makeRoot(t) {
   const root = mkdtempSync(join(tmpdir(), "epi-dispatch-int-"));
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 3 }));
+  const savedHome = process.env.HOME;
+  const savedEpiHome = process.env.EPI_HOME;
+  const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const savedDepth = process.env.PI_DISPATCH_DEPTH;
+  process.env.HOME = root;
+  process.env.EPI_HOME = join(root, ".epi");
+  process.env.PI_CODING_AGENT_DIR = join(root, ".epi", "pi");
+  delete process.env.PI_DISPATCH_DEPTH;
+  mkdirSync(join(root, ".epi", "pi"), { recursive: true });
+  t.after(() => {
+    process.env.HOME = savedHome;
+    if (savedEpiHome === undefined) delete process.env.EPI_HOME;
+    else process.env.EPI_HOME = savedEpiHome;
+    if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
+    if (savedDepth === undefined) delete process.env.PI_DISPATCH_DEPTH;
+    else process.env.PI_DISPATCH_DEPTH = savedDepth;
+    rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+  });
   return root;
 }
 
@@ -108,6 +128,7 @@ test("project agents override global agents, broken agent throws EpiConfigError 
 
   assert.equal(childModelReference(":low", "other/preset:high", "magpie/parent:medium"), "other/preset:low");
   assert.equal(childModelReference(":high", undefined, "magpie/parent"), "magpie/parent:high");
+  assert.equal(childModelReference(undefined, ":low", "anthropic/claude-opus-4-8:high"), "anthropic/claude-opus-4-8:low");
 
   writeFileSync(join(globalDir, "broken.md"), "---\nname: broken\ndescription: x\nbogus: 1\n---\n");
   assert.throws(
@@ -248,4 +269,95 @@ test("TUI foreground budget (D96) hands back running jobs with autoWake, and Tas
   assert.match(h.messages[0].message.content, /steered:done-now/);
 
   await h.tools.get("monitor_stop").execute("m3", { id: monId }, undefined, undefined, ctx);
+});
+
+test("trusted project workspace: share preserves .epi/hooks.json tool_call guard, noSkills blocks ambient pi/skills, and task_stop failure surfaces visibly", async (t) => {
+  const root = makeRoot(t);
+  const epiHome = join(root, ".epi");
+  const proj = join(root, "proj");
+  mkdirSync(join(proj, ".epi", "agents"), { recursive: true });
+  mkdirSync(join(epiHome, "pi", "skills", "leaked-skill"), { recursive: true });
+  writeFileSync(
+    join(epiHome, "pi", "skills", "leaked-skill", "SKILL.md"),
+    "---\nname: leaked-skill\ndescription: LEAKED-AMBIENT-SKILL\n---\nBody\n",
+  );
+  writeFileSync(join(epiHome, "epi.json"), JSON.stringify({ version: 1, extensions: [fauxTask] }));
+  writeFileSync(join(proj, ".epi", "epi.json"), JSON.stringify({ version: 1 }));
+  writeFileSync(
+    join(proj, ".epi", "hooks.json"),
+    JSON.stringify({
+      version: 1,
+      hooks: [
+        {
+          event: "tool_call",
+          match: { toolName: "bash" },
+          handlers: [
+            {
+              type: "command",
+              command: "/bin/sh",
+              args: ["-c", "printf '{\"action\":\"block\",\"reason\":\"project-hook-blocked-bash\"}\\n'"],
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  writeFileSync(
+    join(proj, ".epi", "agents", "scoped.md"),
+    "---\nname: scoped\ndescription: scoped\nhooks: true\nskills: true\n---\nScoped preset.\n",
+  );
+
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "init", "-q", "-b", "main"], { cwd: proj });
+  writeFileSync(join(proj, "README.md"), "hi\n");
+  execFileSync("git", ["add", "."], { cwd: proj });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"], { cwd: proj });
+
+  const ext = createEpiDispatchExtension({
+    epiHome,
+    projectAgentsDir: join(proj, ".epi", "agents"),
+    projectTrusted: true,
+    projectRoot: proj,
+    killGraceMs: 100,
+  });
+
+  const notices = [];
+  let failStopHook = false;
+  const h = bindPi(ext);
+  h.pi.events.emit = (_chan, req) => {
+    if (failStopHook && req?.event?.type === "task_stop") {
+      req.run = async () => ({ action: "block", reason: "invalid-stop-decision" });
+    }
+  };
+  t.after(() => h.pi.emit("session_shutdown", { reason: "quit" }, {}));
+  const ctx = {
+    cwd: proj,
+    mode: "tui",
+    hasUI: true,
+    isIdle: () => true,
+    ui: { theme: { fg: (_t, s) => s, bg: (_t, s) => s, bold: (s) => s }, setStatus() {}, notify: (m, lv) => notices.push({ m, lv }) },
+    sessionManager: { getBranch: () => [], getSessionId: () => "s-share", getEntries: () => [] },
+  };
+  await h.pi.emit("session_start", { reason: "startup" }, ctx);
+
+  // 1. workspace: "share" inside trusted project still enforces <proj>/.epi/hooks.json!
+  const hookRes = await h.tools.get("task").execute(
+    "sh-1",
+    { task: "child-hook-check run", agent: "scoped", workspace: "share", model: "epi-faux/tools" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.match(hookRes.content[0].text, /project-hook-blocked-bash/, "trusted project .epi/hooks.json enforced inside share workspace");
+
+  // 2. skills: true on preset does NOT leak ambient <epiHome>/pi/skills/leaked-skill, and invalid task_stop decision surfaces via ui.notify!
+  failStopHook = true;
+  const skillRes = await h.tools.get("task").execute(
+    "sh-2",
+    { task: "child-list-tools check", agent: "scoped", model: "epi-faux/tools" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.match(skillRes.content[0].text, /LEAKED_SKILL=false/, "noSkills: true blocks ambient pi/skills discovery");
+  assert.equal(notices.some((n) => /invalid-stop-decision/.test(n.m) && n.lv === "error"), true, "task_stop failure surfaced visibly");
 });

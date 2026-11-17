@@ -269,14 +269,16 @@ export class NotificationLedger {
     const pi = this.gate.pi;
     const ready = this.batch(this.readyEntries(true));
     if (ready.length === 0 || pi === undefined) return;
+    let sent = false;
     try {
       pi.sendMessage(this.buildPayload(ready), { deliverAs: "followUp", triggerTurn: true });
       for (const entry of ready) entry.state = "sent";
+      sent = true;
     } catch (error) {
       this.options.onSendError?.(error);
     }
     this.options.onChange?.();
-    if (this.readyEntries(true).length > 0) this.scheduleFlush();
+    if (sent && this.readyEntries(true).length > 0) this.scheduleFlush();
   };
 
   scheduleFlush(): void {
@@ -496,6 +498,6 @@ export class DrainBarrier {
     } finally {
       this.active = false;
     }
-    this.ledger.flushNow();
+    if (this.options.stopWhen?.() !== true) this.ledger.flushNow();
   }
 }

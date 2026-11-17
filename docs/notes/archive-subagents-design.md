@@ -543,7 +543,7 @@ interface MailboxEntry {
 
 ## 12. 任务进度可点开（2026-10-28，D95）
 
-交互以原型 [`scripts/probes/fold-view-tasks-prototype.html`](../scripts/probes/fold-view-tasks-prototype.html) 为准（WF6；用户 2026-10-28 试过 10 项并选定 D1–D5 全部为推荐项）。
+交互以原型 [`scripts/probes/fold-view-tasks-prototype.html`](../../scripts/probes/fold-view-tasks-prototype.html) 为准（WF6；用户 2026-10-28 试过 10 项并选定 D1–D5 全部为推荐项）。
 
 以前只能看到一行摘要：call 行、底栏 `◐ 1 task`、`task_status` 都点不开，看不到子代理在做什么。
 

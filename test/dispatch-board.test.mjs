@@ -170,3 +170,46 @@ for (const mode of ["share", "branch"]) {
     if (mode === "branch") assert.doesNotMatch(git(repo, "branch", "--list"), /dispatch\//, "branches are dropped with their worktrees");
   });
 }
+
+test("PeerBoard rejects >16 KiB whitespace before emitting, dirty named workspaces refuse overwrite, and BoardHub isolates per session", async (t) => {
+  const { emitted, run } = peerFixture(t);
+  await assert.rejects(
+    run("board_post", { text: `${" ".repeat(16_384)}tail` }),
+    /board_post needs non-empty text/,
+  );
+  assert.equal(emitted.length, 0, "truncated-empty post must not emit board_post on fd 3");
+
+  const { runtime, call, fake, root } = await rootFixture(t);
+  const repo = join(root, "repo-named");
+  mkdirSync(repo);
+  git(repo, "init", "-q", "-b", "main");
+  writeFileSync(join(repo, "x.txt"), "1\n");
+  git(repo, "add", ".");
+  git(repo, "commit", "-q", "-m", "init");
+
+  // Start peer @writer in branch workspace, wait for settle, dirty its workspace, then try starting @writer again:
+  await call("task", { name: "writer", task: "child-simple first", cwd: repo, workspace: "branch", model: MODEL });
+  const firstId = runtime.pool.resolve("writer");
+  const firstDone = await runtime.pool.wait(firstId);
+  writeFileSync(join(firstDone.workspace.path, "dirty.txt"), "uncommitted\n");
+
+  await assert.rejects(
+    call("task", { name: "writer", task: "child-simple second", cwd: repo, workspace: "branch", model: MODEL }),
+    /prior @writer .* still holds uncommitted work/,
+  );
+
+  // Session switch isolates BoardHub per sessionId:
+  await call("board_post", { text: "sess-1 msg" });
+  const sess1Count = runtime.board.read({ since: 0 }).length;
+  assert.ok(sess1Count >= 2);
+  fake.ctx.sessionManager = {
+    getSessionId: () => "sess-2",
+    getSessionFile: () => undefined,
+    getBranch: () => [],
+    getEntries: () => [],
+  };
+  await fake.emit("session_start", { reason: "new" });
+  assert.deepEqual(runtime.board.read({ since: 0 }), [], "new session starts with an isolated empty board");
+  await call("board_post", { text: "sess-2 msg" });
+  assert.equal(runtime.board.read({ since: 0 })[0].seq, 1);
+});

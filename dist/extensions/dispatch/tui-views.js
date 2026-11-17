@@ -2,7 +2,7 @@
 // status, `/bg` + conditional `Alt+B` foreground detach, unified 88% `/tasks` + `/board` overlay
 // with live `.jsonl` / log drill-down, and compact default renderers. Imports only public Pi / pi-tui.
 import { readFileSync } from "node:fs";
-import { isKeyRelease, matchesKey, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { isKeyRelease, matchesKey, stripTerminalSequences, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { singleLine } from "./result.js";
 import { DISPATCH_NOTIFY_TYPE } from "./types.js";
 const STATUS_KEY = "tasks";
@@ -11,6 +11,13 @@ const RESULT_PREVIEW_CHARS = 500;
 const ARGS_PREVIEW_CHARS = 140;
 export function stripSystemFraming(text) {
     return text.replace(/^\[SYSTEM NOTIFICATION - NOT USER INPUT\][^\n]*\n?/, "");
+}
+/** Strip ANSI/OSC/DCS/APC terminal sequences, CR/C0/C1 controls, and bidi overrides from untrusted output. */
+export function sanitizeDispatchLine(text) {
+    return stripTerminalSequences(text)
+        .replace(/\r/g, "")
+        .replace(/\t/g, "  ")
+        .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, "");
 }
 /** `<= 14` col status segment: `◐ 3 · #5` with board traffic, `◐ 3 tasks` without, or unread counts. */
 export function formatDispatchStatusText(activeCount, boardSeq, unread) {
@@ -37,31 +44,31 @@ function previewArgs(args) {
     const rec = args;
     for (const key of ["command", "path", "pattern", "url", "query", "task", "text", "prompt"]) {
         if (typeof rec[key] === "string")
-            return singleLine(rec[key], ARGS_PREVIEW_CHARS);
+            return sanitizeDispatchLine(singleLine(rec[key], ARGS_PREVIEW_CHARS));
     }
-    return singleLine(JSON.stringify(args), ARGS_PREVIEW_CHARS);
+    return sanitizeDispatchLine(singleLine(JSON.stringify(args), ARGS_PREVIEW_CHARS));
 }
 function assistantPartLines(theme, part) {
     if (part.type === "text")
-        return part.text?.trim() ? part.text.trim().split("\n") : [];
+        return part.text?.trim() ? part.text.replace(/\r\n/g, "\n").trim().split("\n").map(sanitizeDispatchLine) : [];
     if (part.type === "thinking")
-        return part.thinking?.trim() ? [theme.fg("dim", `∴ ${singleLine(part.thinking, ARGS_PREVIEW_CHARS)}`)] : [];
+        return part.thinking?.trim() ? [theme.fg("dim", `∴ ${sanitizeDispatchLine(singleLine(part.thinking, ARGS_PREVIEW_CHARS))}`)] : [];
     if (part.type === "toolCall")
-        return [`${theme.fg("muted", "◆")} ${theme.fg("toolOutput", part.name ?? "tool")} ${theme.fg("muted", previewArgs(part.arguments))}`];
+        return [`${theme.fg("muted", "◆")} ${theme.fg("toolOutput", sanitizeDispatchLine(part.name ?? "tool"))} ${theme.fg("muted", previewArgs(part.arguments))}`];
     return [];
 }
 function entryLines(theme, entry) {
     if (entry.type === "compaction")
-        return [theme.fg("warning", `── compacted: ${singleLine(entry.summary ?? "", ARGS_PREVIEW_CHARS)}`), ""];
+        return [theme.fg("warning", `── compacted: ${sanitizeDispatchLine(singleLine(entry.summary ?? "", ARGS_PREVIEW_CHARS))}`), ""];
     const msg = entry.type === "message" ? entry.message : undefined;
     if (msg === undefined)
         return [];
     if (msg.role === "user")
-        return [theme.fg("accent", "❯ user"), ...textOf(msg.content).split("\n"), ""];
+        return [theme.fg("accent", "❯ user"), ...textOf(msg.content).replace(/\r\n/g, "\n").split("\n").map(sanitizeDispatchLine), ""];
     if (msg.role === "toolResult") {
-        const raw = textOf(msg.content).trimEnd();
+        const raw = textOf(msg.content).replace(/\r\n/g, "\n").trimEnd();
         const cut = raw.length > RESULT_PREVIEW_CHARS ? `${raw.slice(0, RESULT_PREVIEW_CHARS)}…` : (raw || "(no output)");
-        return [...cut.split("\n").map((line) => theme.fg(msg.isError ? "error" : "dim", `  ${line}`)), ""];
+        return [...cut.split("\n").map((line) => theme.fg(msg.isError ? "error" : "dim", `  ${sanitizeDispatchLine(line)}`)), ""];
     }
     if (msg.role !== "assistant")
         return [];
@@ -108,23 +115,23 @@ export function itemRow(theme, item, job) {
     const short = item.name !== undefined ? `@${item.name}` : item.id.slice(0, 12);
     const elapsed = `${Math.max(0, Math.round(((item.finishedAt ?? Date.now()) - item.startedAt) / 1000))}s`;
     const where = job !== undefined && item.active
-        ? `t${job.turns ?? 0}${job.parked ? " · board_wait" : job.currentActivity ? ` · ${singleLine(job.currentActivity, 28)}` : ""}`
+        ? `t${job.turns ?? 0}${job.parked ? " · board_wait" : job.currentActivity ? ` · ${sanitizeDispatchLine(singleLine(job.currentActivity, 28))}` : ""}`
         : elapsed;
-    return `${statusGlyph(theme, item.status, item.active)} ${kindBadge(theme, item)} ${theme.fg("accent", short)} ${theme.fg("muted", `${item.status} · ${where}`)} · ${singleLine(item.label, 52)}`;
+    return `${statusGlyph(theme, item.status, item.active)} ${kindBadge(theme, item)} ${theme.fg("accent", short)} ${theme.fg("muted", `${item.status} · ${where}`)} · ${sanitizeDispatchLine(singleLine(item.label, 52))}`;
 }
 function jobDetail(theme, job) {
     const facts = [`turn ${job.turns ?? 0}`, `${job.steps} steps`, ...(job.parked ? ["parked on board"] : [])];
     const ws = job.workspace === undefined || job.workspace.removed
         ? undefined
-        : `workspace (${job.workspace.mode}): ${job.workspace.path}${job.workspace.diffStat ? ` (${job.workspace.diffStat})` : ""}`;
+        : `workspace (${job.workspace.mode}): ${sanitizeDispatchLine(job.workspace.path)}${job.workspace.diffStat ? ` (${sanitizeDispatchLine(job.workspace.diffStat)})` : ""}`;
     const head = [
         `${theme.fg("accent", job.name ? `@${job.name} (${job.id.slice(0, 12)})` : job.id)} ${theme.bold(job.status)} ${theme.fg("muted", facts.join(" · "))}`,
-        ...(job.currentActivity ? [theme.fg("muted", `now: ${job.currentActivity}`)] : []),
+        ...(job.currentActivity ? [theme.fg("muted", `now: ${sanitizeDispatchLine(job.currentActivity)}`)] : []),
         ...(ws ? [theme.fg("dim", ws)] : []),
-        theme.fg("dim", `session: ${job.sessionPath}`),
+        theme.fg("dim", `session: ${sanitizeDispatchLine(job.sessionPath)}`),
         "",
     ];
-    const tail = job.status === "failed" && job.error ? [theme.fg("error", `✗ ${job.error}`)] : [];
+    const tail = job.status === "failed" && job.error ? [theme.fg("error", `✗ ${sanitizeDispatchLine(job.error)}`)] : [];
     return { title: job.name ? `@${job.name}` : job.id.slice(0, 12), subtitle: job.status, lines: [...head, ...conversationLines(theme, job.sessionPath), ...tail] };
 }
 export function itemDetailView(theme, runtime, ref) {
@@ -143,10 +150,10 @@ export function itemDetailView(theme, runtime, ref) {
         return jobDetail(theme, runtime.pool.status(resolved.id));
     if (resolved.kind === "bg") {
         const rep = runtime.bg.report(resolved.id, 80);
-        return { title: resolved.id, subtitle: rep.summary.status, lines: rep.text.split("\n") };
+        return { title: resolved.id, subtitle: rep.summary.status, lines: rep.text.replace(/\r\n/g, "\n").split("\n").map(sanitizeDispatchLine) };
     }
     const rep = runtime.timers.report(resolved.id);
-    return { title: resolved.id, subtitle: rep.summary.status, lines: rep.text.split("\n") };
+    return { title: resolved.id, subtitle: rep.summary.status, lines: rep.text.replace(/\r\n/g, "\n").split("\n").map(sanitizeDispatchLine) };
 }
 export function boardLines(theme, messages) {
     if (messages.length === 0) {
@@ -155,9 +162,10 @@ export function boardLines(theme, messages) {
     const out = [];
     for (const msg of messages) {
         const clock = new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        const chan = msg.channel && msg.channel !== "general" ? ` [${msg.channel}]` : "";
-        out.push(`${theme.fg("accent", `#${msg.seq}`)} ${theme.bold(`@${msg.sender}`)}${theme.fg("dim", `${chan} · ${clock}`)}`);
-        for (const line of msg.text.split("\n")) {
+        const chan = msg.channel && msg.channel !== "general" ? ` [${sanitizeDispatchLine(msg.channel)}]` : "";
+        out.push(`${theme.fg("accent", `#${msg.seq}`)} ${theme.bold(`@${sanitizeDispatchLine(msg.sender)}`)}${theme.fg("dim", `${chan} · ${clock}`)}`);
+        for (const rawLine of msg.text.replace(/\r\n/g, "\n").split("\n")) {
+            const line = sanitizeDispatchLine(rawLine);
             const styled = line.replace(/@([a-z][a-z0-9-]{0,31}|all|coordinator)\b/g, (m) => theme.fg("accent", m));
             out.push(`  ${styled}`);
         }
@@ -186,7 +194,7 @@ class DispatchOverlay {
     listRows() {
         const jobsById = new Map((this.runtime.pool?.list() ?? []).map((j) => [j.id, j]));
         const own = [...this.runtime.registry.list()].reverse().map((item) => ({
-            id: item.name ?? item.id,
+            id: item.id,
             text: itemRow(this.theme, item, jobsById.get(item.id)),
         }));
         const extras = [...(this.runtime.host.ui?.extraItems?.() ?? [])].reverse().map((extra) => ({
@@ -350,13 +358,14 @@ class DispatchOverlay {
     invalidate() { }
 }
 function portableCall(verb, detail, theme) {
-    return new Text(`${theme.fg("accent", "◆")} ${theme.bold(verb)}${detail ? ` ${theme.fg("muted", singleLine(detail, 72))}` : ""}`, 0, 0);
+    const clean = sanitizeDispatchLine(singleLine(detail, 72));
+    return new Text(`${theme.fg("accent", "◆")} ${theme.bold(verb)}${clean ? ` ${theme.fg("muted", clean)}` : ""}`, 0, 0);
 }
 function portableResult(result, options, theme) {
-    const raw = result.content.filter((c) => c.type === "text").map((c) => c.text).join("\n").trim();
+    const raw = result.content.filter((c) => c.type === "text").map((c) => c.text).join("\n").replace(/\r\n/g, "\n").trim();
     if (!raw)
         return new Text("", 0, 0);
-    const lines = raw.split("\n");
+    const lines = raw.split("\n").map(sanitizeDispatchLine);
     const shown = options.expanded ? lines : lines.slice(0, 3);
     const tone = result.isError ? "error" : "dim";
     const out = shown.map((line) => theme.fg(tone, truncateToWidth(line, 120)));
@@ -394,7 +403,7 @@ export function defaultToolRenderers() {
 }
 function defaultNotifyRenderer(message, options, theme) {
     const raw = typeof message.content === "string" ? message.content : textOf(message.content);
-    const rows = stripSystemFraming(raw).split("\n").filter((l) => l.trim().length > 0);
+    const rows = stripSystemFraming(raw).replace(/\r\n/g, "\n").split("\n").map(sanitizeDispatchLine).filter((l) => l.trim().length > 0);
     const shown = options.expanded ? rows : rows.slice(0, 4);
     const out = shown.map((line) => `${theme.fg("accent", "◐")} ${theme.fg("customMessageText", line)}`);
     if (rows.length > shown.length)

@@ -19,10 +19,10 @@ function capLines(theme, lines) {
     return [...lines.slice(0, MAX_DETAIL_LINES), theme.fg("muted", `… ${lines.length - MAX_DETAIL_LINES} more lines`)];
 }
 function failureLine(theme, text) {
-    return theme.fg("error", `✗ ${singleLine(text, 200)}`);
+    return theme.fg("error", `✗ ${sanitizeLine(singleLine(text, 200))}`);
 }
 function quoteShort(text) {
-    const one = singleLine(text, 51);
+    const one = sanitizeLine(singleLine(text, 51));
     return `"${one.length > 50 ? `${one.slice(0, 50)}…` : one}"`;
 }
 function unwrapJob(details) {
@@ -82,11 +82,11 @@ function renderJobResult(job, options, theme, context) {
         return job.status === "failed" ? new LinesComponent([failureLine(theme, job.error ?? "Task failed.")]) : new LinesComponent([]);
     }
     setCallSummary(context, settledJobTail(theme, job));
-    const detail = job.status === "completed" || job.status === "partial"
-        ? (job.result ?? "(no output)").split("\n")
-        : job.status === "failed" ? [job.error ?? "Task failed."] : [];
+    const detail = (job.status === "completed" || job.status === "partial"
+        ? (job.result ?? "(no output)").replace(/\r\n/g, "\n").split("\n")
+        : job.status === "failed" ? [job.error ?? "Task failed."] : []).map(sanitizeLine);
     const lines = capLines(theme, [jobSummaryLine(theme, job), ...detail]);
-    const inspectable = detail.length > MAX_DETAIL_LINES
+    const inspectable = 1 + detail.length > MAX_DETAIL_LINES
         ? { rows: [lines.length - 1], target: { title: `task ${shortId(job.id)}`, subtitle: job.status, lines: detail, text: detail.join("\n") } }
         : undefined;
     return new LinesComponent(lines, inspectable);
@@ -132,9 +132,9 @@ export function renderEpiDispatchResult(result, options, theme, context) {
         setCallSummary(context, undefined);
         return new LinesComponent([failureLine(theme, text || "Failed.")]);
     }
-    const first = text.split("\n")[0] ?? "";
+    const first = sanitizeLine(text.split("\n")[0] ?? "");
     setCallSummary(context, first ? theme.fg("dim", singleLine(first, 48)) : undefined);
-    return options.expanded && text.length > 0 ? new LinesComponent(capLines(theme, text.split("\n").map((l) => theme.fg("dim", l)))) : new LinesComponent([]);
+    return options.expanded && text.length > 0 ? new LinesComponent(capLines(theme, text.replace(/\r\n/g, "\n").split("\n").map((l) => theme.fg("dim", sanitizeLine(l))))) : new LinesComponent([]);
 }
 function inspectorTitle(rawTitle) {
     if (rawTitle.startsWith("job_"))
@@ -242,7 +242,7 @@ const epiNotifyRenderer = (message, options, theme) => {
     const raw = typeof message.content === "string"
         ? message.content
         : message.content.filter((p) => p.type === "text").map((p) => p.text).join("\n");
-    const rows = stripSystemFraming(raw).split("\n").filter((l) => l.trim().length > 0);
+    const rows = stripSystemFraming(raw).replace(/\r\n/g, "\n").split("\n").map(sanitizeLine).filter((l) => l.trim().length > 0);
     const shown = options.expanded ? rows : rows.slice(0, 4);
     const lines = shown.map((line) => {
         const glyph = /\b(?:failed|lost)\b/.test(line)

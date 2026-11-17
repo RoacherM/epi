@@ -24,7 +24,9 @@ const BatchItem = Type.Object({
   cwd: Type.Optional(Type.String()),
   workspace: Type.Optional(Workspace),
   model: Type.Optional(Type.String()),
-});
+  tools: Type.Optional(Type.Array(Type.String())),
+  excludeTools: Type.Optional(Type.Array(Type.String())),
+}, { additionalProperties: false });
 
 export const TaskParameters = Type.Object({
   task: Type.Optional(Type.String({ description: "Prompt (or steer/resume message with jobId)" })),
@@ -39,10 +41,13 @@ export const TaskParameters = Type.Object({
   forkFrom: Type.Optional(Type.String({ description: "Peer name to fork from" })),
   workspace: Type.Optional(Workspace),
   model: Type.Optional(Type.String({ description: "provider/id[:thinking] or :thinking" })),
+  tools: Type.Optional(Type.Array(Type.String(), { description: "Allowed tool names" })),
+  excludeTools: Type.Optional(Type.Array(Type.String(), { description: "Excluded tool names" })),
+  systemPrompt: Type.Optional(Type.String()),
   verifyCommand: Type.Optional(Type.String({ description: "Shell command that must exit 0" })),
   maxTurns: Type.Optional(Type.Integer({ minimum: 1 })),
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TASK_TIMEOUT_SECONDS })),
-});
+}, { additionalProperties: false });
 export type TaskParams = Static<typeof TaskParameters>;
 
 export interface TaskToolDeps {
@@ -57,6 +62,8 @@ export interface TaskToolDeps {
   foregroundWaits?: Set<() => void>;
   /** Subscribe to pool progress updates while waiting in the foreground. */
   onJobChange?: (listener: (job: JobSnapshot) => void) => () => void;
+  /** Wait until any pending `task_stop` lifecycle hooks for `jobId` complete. */
+  awaitSettledHooks?: (jobId: string) => Promise<void>;
   /** Named peers: entries of the peer to fork from, and the board brief for a new peer. */
   peerForkEntries?: (name: string) => unknown[];
   postBrief?: (job: JobSnapshot) => void;
@@ -91,16 +98,20 @@ interface StartItem {
   cwd?: string | undefined;
   workspace?: WorkspaceMode | undefined;
   model?: string | undefined;
+  tools?: readonly string[] | undefined;
+  excludeTools?: readonly string[] | undefined;
 }
 
 async function startOne(deps: TaskToolDeps, item: StartItem, shared: TaskParams, ctx: ExtensionContext): Promise<JobSnapshot> {
   const rawCwd = item.cwd ?? shared.cwd;
   const cwd = rawCwd === undefined ? ctx.cwd : resolve(ctx.cwd, rawCwd);
-  await gateStart(deps, ctx, { type: "task_start", task: item.task, cwd, ...(item.agent === undefined ? {} : { agent: item.agent }) });
+  const agent = item.agent ?? shared.agent;
+  await gateStart(deps, ctx, { type: "task_start", task: item.task, cwd, ...(agent === undefined ? {} : { agent }) });
   const request: JobRequest = {
-    task: item.task, cwd, name: item.name, agent: item.agent, model: item.model, workspace: item.workspace ?? shared.workspace,
+    task: item.task, cwd, name: item.name, agent, model: item.model ?? shared.model, workspace: item.workspace ?? shared.workspace,
+    tools: item.tools ?? shared.tools, excludeTools: item.excludeTools ?? shared.excludeTools, systemPrompt: shared.systemPrompt,
     inheritedModel: inheritedModelReference(ctx.model, ctx.thinkingLevel), context: shared.context,
-    forkEntries: forkEntries(deps, { context: shared.context, forkFrom: shared.forkFrom, agent: item.agent }, ctx),
+    forkEntries: forkEntries(deps, { context: shared.context, forkFrom: shared.forkFrom, agent }, ctx),
     verifyCommand: shared.verifyCommand, maxTurns: shared.maxTurns, timeoutSeconds: shared.timeoutSeconds,
     originSessionId: deps.gate.sessionId(),
   };
@@ -190,6 +201,7 @@ async function runJob(deps: TaskToolDeps, job: JobSnapshot, options: RunJobOptio
   if (waited.status === "queued" || waited.status === "running") {
     return handedBackResult(deps, waited, detached, options.signal, options.budgetMs);
   }
+  await deps.awaitSettledHooks?.(job.id);
   deps.ledger.collect(job.id);
   const report = jobReport(waited);
   return { ...textResult(report.text, report.details), ...(waited.status === "failed" ? { isError: true } : {}) };
@@ -245,7 +257,10 @@ export function createTaskTool(deps: TaskToolDeps): ToolDefinition<typeof TaskPa
       if (params.jobId !== undefined) return continueJob(deps, params, signal, onUpdate, ctx);
       if (params.tasks !== undefined) return runBatch(deps, params, ctx, signal);
       if (params.task === undefined) throw new Error("task needs task, tasks, or jobId");
-      const item: StartItem = { task: params.task, name: params.name, agent: params.agent, cwd: params.cwd, workspace: params.workspace, model: params.model };
+      const item: StartItem = {
+        task: params.task, name: params.name, agent: params.agent, cwd: params.cwd,
+        workspace: params.workspace, model: params.model, tools: params.tools, excludeTools: params.excludeTools,
+      };
       const job = await startOne(deps, item, params, ctx);
       return runJob(deps, job, { background: isBackground(deps, params.background, item), signal, onUpdate, budgetMs: foregroundBudgetMs(deps.host, ctx) });
     },

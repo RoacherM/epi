@@ -29,6 +29,9 @@ export interface JobRequest {
   agent?: string | undefined;
   model?: string | undefined;
   inheritedModel?: string | undefined;
+  tools?: readonly string[] | undefined;
+  excludeTools?: readonly string[] | undefined;
+  systemPrompt?: string | undefined;
   context?: "fresh" | "fork" | undefined;
   forkEntries?: readonly unknown[] | undefined;
   workspace?: WorkspaceMode | undefined;
@@ -75,6 +78,7 @@ interface Job {
   task: string;
   status: JobStatus;
   cwd: string;
+  originCwd: string;
   sessionPath: string;
   timeoutSeconds: number;
   createdAt: number;
@@ -126,8 +130,8 @@ export interface WorkerPoolOptions {
   sharedDaemonNames: readonly string[];
   rewriteOutputText: (text: string) => string;
   sessionShort: () => string;
-  boardPath: () => string | undefined;
-  boardSince: () => number;
+  boardPath: (sessionId?: string) => string | undefined;
+  boardSince: (sessionId?: string) => number;
   boardIdleMs?: number | undefined;
   maxConcurrency?: number | undefined;
   maxOutputBytes?: number | undefined;
@@ -153,12 +157,14 @@ export function inheritedModelReference(model: { provider: string; id: string } 
 
 /** A `:thinking`-only pick keeps the base model it modifies (call > preset > parent). */
 export function childModelReference(picked: string | undefined, preset: string | undefined, inherited: string | undefined): string | undefined {
-  if (picked === undefined || !picked.startsWith(":")) return picked ?? preset ?? inherited;
-  const base = preset !== undefined && !preset.startsWith(":") ? preset : inherited;
-  if (base === undefined) return picked;
+  const chosen = picked ?? preset;
+  if (chosen === undefined) return inherited;
+  if (!chosen.startsWith(":")) return chosen;
+  const base = picked !== undefined && preset !== undefined && !preset.startsWith(":") ? preset : inherited;
+  if (base === undefined) return undefined;
   const colon = base.lastIndexOf(":");
   const stripped = colon > 0 && THINKING_LEVELS.has(base.slice(colon + 1)) ? base.slice(0, colon) : base;
-  return `${stripped}${picked}`;
+  return `${stripped}${chosen}`;
 }
 
 function isMessageEntry(entry: unknown): entry is { type: "message"; message: { role?: unknown; content?: unknown } } {
@@ -218,10 +224,12 @@ function peerBrief(name: string, since: number): string {
 /** The call's settings over the preset's (an explicit argument always wins). */
 function presetSettings(job: Job): Pick<WorkerCapsule, "model" | "tools" | "excludeTools" | "maxTurns" | "verifyCommand"> {
   const { request, agent } = job;
+  const tools = request.tools !== undefined ? [...request.tools] : agent?.tools;
+  const excludeTools = request.excludeTools !== undefined ? [...request.excludeTools] : agent?.excludeTools;
   return {
     model: childModelReference(request.model, agent?.model, request.inheritedModel),
-    tools: agent?.tools,
-    excludeTools: agent?.excludeTools,
+    tools,
+    excludeTools,
     maxTurns: request.maxTurns ?? agent?.maxTurns,
     verifyCommand: request.verifyCommand ?? agent?.verifyCommand,
   };
@@ -282,22 +290,36 @@ export class WorkerPool {
     return { agent, cwd, timeoutSeconds };
   }
 
-  private validateName(name: string): void {
+  private validateName(name: string, selfId?: string): void {
     if (!NAME_PATTERN.test(name) || name === "all" || name === COORDINATOR) {
       throw new Error(`task name must match ${NAME_PATTERN.source} and not be "all" or "coordinator"`);
     }
-    const clash = [...this.jobs.values()].find((job) => job.request.name === name && !job.settled);
+    const clash = [...this.jobs.values()].find((job) => job.id !== selfId && job.request.name === name && !job.settled);
     if (clash !== undefined) throw new Error(`a task named ${JSON.stringify(name)} is already active (${clash.id}); steer it with task({ jobId: "${name}", task })`);
+  }
+
+  private guardPriorNamedWorkspaces(name: string): void {
+    for (const prior of this.jobs.values()) {
+      if (prior.request.name !== name || !prior.settled || prior.workspace === undefined || prior.workspaceRemoved) continue;
+      const inspection = inspectWorkspaceDirty(prior.workspace);
+      prior.diffStat = inspection.diffStat;
+      if (inspection.dirty) {
+        throw new Error(`prior @${name} (${prior.id}) still holds uncommitted work at ${prior.workspace.root}; resume with task({ jobId: "${name}", task }) or discard with task_cancel({ id: "${prior.id}", forceDirty: true })`);
+      }
+      if (cleanupCleanWorkspace(prior.workspace)) prior.workspaceRemoved = true;
+    }
   }
 
   start(request: JobRequest): JobSnapshot {
     const { agent, cwd, timeoutSeconds } = this.validate(request);
+    if (request.name !== undefined) this.guardPriorNamedWorkspaces(request.name);
     const id = newItemId("job");
     const mode = request.workspace ?? agent?.workspace ?? "inherit";
-    const workspace = createWorkspace({ mode, stateDir: this.options.stateDir(), sessionShort: this.options.sessionShort(), slug: request.name ?? id, cwd });
+    const slug = request.name !== undefined ? `${request.name}-${id.slice(4)}` : id;
+    const workspace = createWorkspace({ mode, stateDir: this.options.stateDir(), sessionShort: this.options.sessionShort(), slug, cwd });
     const { promise, resolve } = Promise.withResolvers<void>();
     const job: Job = {
-      id, request, agent, task: request.task, status: "queued", cwd: workspace.workerCwd,
+      id, request, agent, task: request.task, status: "queued", cwd: workspace.workerCwd, originCwd: cwd,
       sessionPath: join(this.options.stateDir(), "sessions", `${id}.jsonl`), timeoutSeconds, createdAt: Date.now(),
       startedAt: undefined, finishedAt: undefined, deadlineAt: undefined, result: undefined, error: undefined, usage: undefined,
       runUsage: undefined, turns: undefined, progressTurns: 0, stepsBase: 0, steps: 0, currentActivity: undefined,
@@ -362,12 +384,13 @@ export class WorkerPool {
     if (this.shuttingDown) throw new Error("dispatch worker pool is shutting down");
     const job = this.find(ref);
     if (!job.settled) throw new Error(`${job.id} is ${job.status}; steer it instead`);
+    if (job.request.name !== undefined) this.validateName(job.request.name, job.id);
     if (task.trim().length === 0) throw new Error("task must be a non-empty string");
     if (!existsSync(job.sessionPath)) throw new Error(`${job.id} has no session file at ${job.sessionPath}; nothing to resume`);
     if (job.workspaceRemoved) throw new Error(`${job.id}'s workspace was removed; start a new task`);
     const { promise, resolve } = Promise.withResolvers<void>();
     Object.assign(job, {
-      isResume: true, task, status: "queued" as const, result: undefined, error: undefined, finishedAt: undefined, stoppedBy: undefined,
+      isResume: true, task, status: "queued" as const, startedAt: undefined, deadlineAt: undefined, result: undefined, error: undefined, finishedAt: undefined, stoppedBy: undefined,
       workerResult: undefined, termination: undefined, currentActivity: undefined, progressTurns: 0, stepsBase: job.steps,
       runUsage: undefined, diffStat: undefined, stderrTail: "", parked: false, finite: 0, settled: false,
       completion: promise, resolveCompletion: resolve,
@@ -420,12 +443,13 @@ export class WorkerPool {
     for (const job of this.jobs.values()) if (job.process?.pid !== undefined) signalGroup(job.process, "SIGTERM");
   }
 
-  /** Push a board message to every running peer except its sender. A parked addressee is
-   * counted as awake at once, so the stall detector never sees the gap before it reports. */
-  pushBoard(message: BoardMessage): void {
+  /** Push a board message to every running peer in the same session except its sender. A parked
+   * addressee is counted as awake at once, so the stall detector never sees the gap before it reports. */
+  pushBoard(message: BoardMessage, originSessionId?: string): void {
     for (const job of this.jobs.values()) {
       const name = job.request.name;
       if (job.status !== "running" || name === undefined || name === message.sender) continue;
+      if (originSessionId !== undefined && job.request.originSessionId !== originSessionId) continue;
       if (job.parked && addressedTo(message, name)) job.parked = false;
       job.channel?.send({ type: "board", message });
     }
@@ -455,15 +479,17 @@ export class WorkerPool {
 
   private capsule(job: Job): WorkerCapsule {
     const peer = job.request.name !== undefined;
+    const sessionId = job.request.originSessionId;
+    const basePrompt = job.request.systemPrompt ?? job.agent?.systemPrompt ?? "";
     return {
       version: 1, role: peer ? "peer-worker" : "task-worker", jobId: job.id, name: job.request.name,
       task: job.task, cwd: job.cwd, agentDir: this.options.agentDir, stateDir: this.options.stateDir(), sessionPath: job.sessionPath,
       forkEntries: job.isResume ? undefined : forkEntriesOf(job.request), ...presetSettings(job),
-      systemPrompt: [job.agent?.systemPrompt ?? "", peer ? peerBrief(job.request.name!, this.options.boardSince()) : ""].filter((part) => part.trim().length > 0).join("\n\n"),
+      systemPrompt: [basePrompt, peer ? peerBrief(job.request.name!, this.options.boardSince(sessionId)) : ""].filter((part) => part.trim().length > 0).join("\n\n"),
       deadlineAt: job.deadlineAt ?? Date.now() + job.timeoutSeconds * 1000,
       sdkEntryUrl: this.options.sdkEntryUrl, bootstrapModule: this.options.bootstrapModule,
-      bootstrapOptions: this.options.bootstrapOptions?.({ ...job.agent?.scope, agent: job.agent?.name, cwd: job.cwd }),
-      extensionPaths: this.options.extensionPaths, boardPath: peer ? this.options.boardPath() : undefined,
+      bootstrapOptions: this.options.bootstrapOptions?.({ ...job.agent?.scope, agent: job.agent?.name, cwd: job.cwd, originCwd: job.originCwd }),
+      extensionPaths: this.options.extensionPaths, boardPath: peer ? this.options.boardPath(sessionId) : undefined,
       boardIdleMs: this.options.boardIdleMs, sharedDaemonNames: [...this.options.sharedDaemonNames],
     };
   }
@@ -565,7 +591,9 @@ export class WorkerPool {
 
   private finish(job: Job): void {
     if (job.settled) return;
-    if (job.workspace !== undefined && !job.workspaceRemoved) job.diffStat = inspectWorkspaceDirty(job.workspace).diffStat;
+    if (job.workspace !== undefined && !job.workspaceRemoved) {
+      try { job.diffStat = inspectWorkspaceDirty(job.workspace).diffStat; } catch { job.diffStat = "modified"; }
+    }
     job.settled = true;
     job.resolveCompletion();
     this.changed(job);
@@ -582,7 +610,9 @@ export class WorkerPool {
       case "progress": this.applyProgress(job, event); break;
       case "result": job.workerResult = event; break;
       case "steer_dropped": job.droppedSteers.push(event.message); break;
-      case "board_post": this.options.onBoardPost?.(this.snapshot(job), event.text, event.channel); break;
+      case "board_post":
+        try { this.options.onBoardPost?.(this.snapshot(job), event.text, event.channel); } catch { /* ignore malformed peer post */ }
+        break;
       case "state":
         job.parked = event.parked === true;
         job.finite = Number.isFinite(event.finite) ? event.finite : 0;
@@ -632,7 +662,7 @@ export class WorkerPool {
     if (job.guard !== undefined) snapshotDescendantPgids(child.pid, job.guard);
     signalGroup(child, "SIGTERM");
     const timer = setTimeout(() => {
-      if (job.settled || job.process === undefined) return;
+      if (job.settled || job.process !== child) return;
       if (job.guard !== undefined) snapshotDescendantPgids(child.pid, job.guard);
       signalGroup(child, "SIGKILL");
     }, this.killGraceMs);

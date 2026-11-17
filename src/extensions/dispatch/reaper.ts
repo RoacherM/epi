@@ -28,12 +28,20 @@ interface ProcessRow {
 
 const BASH_PGID_HOOK_SCRIPT = [
   'if [ -n "${PI_DISPATCH_PGID_LEDGER:-}" ]; then',
-  '  _pd_ledger="$PI_DISPATCH_PGID_LEDGER"; unset PI_DISPATCH_PGID_LEDGER',
+  '  _pd_ledger="$PI_DISPATCH_PGID_LEDGER"; _pd_parents="${PI_DISPATCH_PARENT_PGID_LEDGER:-}"',
+  '  unset PI_DISPATCH_PGID_LEDGER PI_DISPATCH_PARENT_PGID_LEDGER',
   '  _pd_pgid=$(/bin/ps -o pgid= -p "$$" 2>/dev/null || ps -o pgid= -p "$$" 2>/dev/null || printf \'%s\' "$$")',
   '  _pd_pgid="${_pd_pgid//[[:space:]]/}"',
   "  _pd_ts=$(/bin/date +%s 2>/dev/null || date +%s 2>/dev/null || printf '0')",
-  '  [ -n "$_pd_pgid" ] && printf \'%s %s\\n\' "$_pd_pgid" "$_pd_ts" >> "$_pd_ledger" 2>/dev/null || true',
-  "  unset _pd_ledger _pd_pgid _pd_ts",
+  '  if [ -n "$_pd_pgid" ]; then',
+  '    printf \'%s %s\\n\' "$_pd_pgid" "$_pd_ts" >> "$_pd_ledger" 2>/dev/null || true',
+  '    if [ -n "$_pd_parents" ]; then',
+  '      _pd_old_ifs="$IFS"; IFS=$\'\\n\'',
+  '      for _pd_pl in $_pd_parents; do [ -n "$_pd_pl" ] && printf \'%s %s\\n\' "$_pd_pgid" "$_pd_ts" >> "$_pd_pl" 2>/dev/null || true; done',
+  '      IFS="$_pd_old_ifs"; unset _pd_old_ifs _pd_pl',
+  '    fi',
+  '  fi',
+  "  unset _pd_ledger _pd_parents _pd_pgid _pd_ts",
   "fi",
   'if [ -n "${PI_DISPATCH_USER_BASH_ENV+x}" ]; then',
   '  BASH_ENV="$PI_DISPATCH_USER_BASH_ENV"; export BASH_ENV',
@@ -46,6 +54,13 @@ const BASH_PGID_HOOK_SCRIPT = [
 
 const ABORT_EDITOR_SCRIPT = "#!/bin/sh\necho \"dispatch: interactive git editor blocked in a headless command; pass -m or --no-edit instead.\" >&2\nexit 1\n";
 
+function resolveUserBashEnv(baseEnv: NodeJS.ProcessEnv): string | undefined {
+  if (baseEnv.BASH_ENV !== undefined && !baseEnv.BASH_ENV.endsWith("/dispatch-pgid.sh")) {
+    return baseEnv.BASH_ENV;
+  }
+  return baseEnv.PI_DISPATCH_USER_BASH_ENV;
+}
+
 export function prepareExecutionGuard(guardDir: string, jobId: string, baseEnv: NodeJS.ProcessEnv): ExecutionGuard {
   const cookie = `pd_${jobId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 12)}_${randomBytes(6).toString("hex")}`;
   const ledgerPath = join(guardDir, "pgids.log");
@@ -56,16 +71,23 @@ export function prepareExecutionGuard(guardDir: string, jobId: string, baseEnv: 
   writeFileSync(editorPath, ABORT_EDITOR_SCRIPT, { mode: 0o700 });
   chmodSync(editorPath, 0o700);
 
+  const inheritedCookies = baseEnv.PI_DISPATCH_COOKIE?.trim();
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
-    PI_DISPATCH_COOKIE: cookie,
+    PI_DISPATCH_COOKIE: inheritedCookies ? `${inheritedCookies},${cookie}` : cookie,
     GIT_TERMINAL_PROMPT: baseEnv.GIT_TERMINAL_PROMPT ?? "0",
     GCM_INTERACTIVE: baseEnv.GCM_INTERACTIVE ?? "never",
     GIT_PAGER: baseEnv.GIT_PAGER ?? "cat",
   };
   if (process.platform !== "win32") {
+    const parentLedgers = [baseEnv.PI_DISPATCH_PARENT_PGID_LEDGER, baseEnv.PI_DISPATCH_PGID_LEDGER]
+      .filter((p): p is string => typeof p === "string" && p.length > 0)
+      .join("\n");
+    if (parentLedgers.length > 0) env.PI_DISPATCH_PARENT_PGID_LEDGER = parentLedgers;
+    else delete env.PI_DISPATCH_PARENT_PGID_LEDGER;
     env.PI_DISPATCH_PGID_LEDGER = ledgerPath;
-    if (baseEnv.BASH_ENV !== undefined) env.PI_DISPATCH_USER_BASH_ENV = baseEnv.BASH_ENV;
+    const userBashEnv = resolveUserBashEnv(baseEnv);
+    if (userBashEnv !== undefined) env.PI_DISPATCH_USER_BASH_ENV = userBashEnv;
     else delete env.PI_DISPATCH_USER_BASH_ENV;
     env.BASH_ENV = hookPath;
     env.GIT_EDITOR = baseEnv.GIT_EDITOR ?? editorPath;
@@ -297,7 +319,12 @@ export function snapshotDescendantPgids(rootPid: number | undefined, guard: Exec
   }
 }
 
-function scanLinuxProcCookiePids(cookieToken: string, currentUid: number, rowsByPid: Map<number, ProcessRow>): number[] {
+function hasCookieEntry(entry: string, cookie: string): boolean {
+  if (!entry.startsWith("PI_DISPATCH_COOKIE=")) return false;
+  return entry.slice("PI_DISPATCH_COOKIE=".length).split(",").includes(cookie);
+}
+
+function scanLinuxProcCookiePids(cookie: string, currentUid: number, rowsByPid: Map<number, ProcessRow>): number[] {
   if (process.platform !== "linux" || !existsSync("/proc")) return [];
   let entries: string[];
   try { entries = readdirSync("/proc"); } catch { return []; }
@@ -307,7 +334,7 @@ function scanLinuxProcCookiePids(cookieToken: string, currentUid: number, rowsBy
     const row = rowsByPid.get(Number(entry));
     if (!row || row.uid !== currentUid || row.pgid <= 1) continue;
     try {
-      if (readFileSync(`/proc/${row.pid}/environ`, "utf8").split("\0").includes(cookieToken)) matched.push(row.pgid);
+      if (readFileSync(`/proc/${row.pid}/environ`, "utf8").split("\0").some((item) => hasCookieEntry(item, cookie))) matched.push(row.pgid);
     } catch { /* exited */ }
   }
   return matched;
@@ -333,9 +360,14 @@ function readKnownPgids(guard: ExecutionGuard, reapAtMs: number): Map<number, nu
   return candidates;
 }
 
+function hasCookieInCommand(command: string, cookie: string): boolean {
+  if (!command.includes("PI_DISPATCH_COOKIE=") || !command.includes(cookie)) return false;
+  return /PI_DISPATCH_COOKIE=([^\s]+)/.exec(command)?.[1]?.split(",").includes(cookie) === true;
+}
+
 function collectCandidatePgids(
   knownPgids: Map<number, number>,
-  cookieToken: string,
+  cookie: string,
   rows: ProcessRow[],
   currentUid: number,
   reapAtMs: number,
@@ -343,10 +375,10 @@ function collectCandidatePgids(
   const candidates = new Map<number, number>(knownPgids);
   if (process.platform === "darwin") {
     for (const row of rows) {
-      if (row.uid === currentUid && row.pgid > 1 && row.command.includes(cookieToken)) candidates.set(row.pgid, reapAtMs);
+      if (row.uid === currentUid && row.pgid > 1 && hasCookieInCommand(row.command, cookie)) candidates.set(row.pgid, reapAtMs);
     }
   } else if (process.platform === "linux") {
-    for (const pgid of scanLinuxProcCookiePids(cookieToken, currentUid, new Map(rows.map((r) => [r.pid, r])))) {
+    for (const pgid of scanLinuxProcCookiePids(cookie, currentUid, new Map(rows.map((r) => [r.pid, r])))) {
       candidates.set(pgid, reapAtMs);
     }
   }
@@ -411,11 +443,10 @@ export async function reapOrphans(
   const reapAtMs = Date.now();
   const knownPgids = readKnownPgids(guard, reapAtMs);
   const hasLiveKnown = [...knownPgids.keys()].some((pgid) => pgid !== process.pid && pgid !== process.ppid && isPgidAlive(pgid));
-  const cookieToken = `PI_DISPATCH_COOKIE=${guard.cookie}`;
-  const rows = await listUnixProcessesAsync(cookieToken, hasLiveKnown);
+  const rows = await listUnixProcessesAsync(guard.cookie, hasLiveKnown);
   const targets = rows.length === 0
     ? []
-    : selectSafeTargetPgids(collectCandidatePgids(knownPgids, cookieToken, rows, currentUid, reapAtMs), rows, {
+    : selectSafeTargetPgids(collectCandidatePgids(knownPgids, guard.cookie, rows, currentUid, reapAtMs), rows, {
         currentUid, createdAtMs: guard.createdAtMs, reapAtMs, daemonNames: daemonNameSet(sharedDaemonNames),
       });
   if (targets.length === 0) return [];

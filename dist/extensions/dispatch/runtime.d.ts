@@ -30,8 +30,6 @@ export declare class DispatchRuntime {
     readonly bg: BgProcessRuntime;
     readonly timers: TimerRuntime;
     readonly pool: WorkerPool | undefined;
-    /** Root: the session board's single writer. Peer worker: its fd 3 view of the board. */
-    readonly board: BoardHub | undefined;
     readonly peerBoard: PeerBoard | undefined;
     readonly barrier: DrainBarrier;
     /** Jobs whose settle must reach the model as a notification, and with which auto-wake. */
@@ -40,6 +38,10 @@ export declare class DispatchRuntime {
     readonly foregroundWaits: Set<() => void>;
     /** Root at depth 0: may spawn workers and talk to the user (`task`, `outbox`, board). */
     readonly canDelegate: boolean;
+    private readonly effectiveRole;
+    private readonly boards;
+    private readonly settledHooks;
+    private readonly activeHooks;
     private inbox;
     private agentsCache;
     private milestoneSeq;
@@ -49,6 +51,9 @@ export declare class DispatchRuntime {
     private readonly uiListeners;
     private readonly jobListeners;
     constructor(host: DispatchHostAdapter, role: DispatchRole, worker?: WorkerBridge | undefined);
+    /** Active session's board on a delegating root, or undefined in workers / depth >= 1. */
+    get board(): BoardHub | undefined;
+    boardFor(sessionId: string | undefined): BoardHub | undefined;
     private createLedger;
     private createTimers;
     emitUiChange(): void;
@@ -64,6 +69,8 @@ export declare class DispatchRuntime {
     private drainMaxMs;
     private createPool;
     private createPeerBoard;
+    private reportLifecycleFailure;
+    private allowBackgroundTaskStart;
     /** Root fan-out of one new board message: peers, the coordinator's ledger, revivals, stall. */
     private onBoardPosted;
     /** A settled peer that is @mentioned again is resumed in place from its session file. */
@@ -80,6 +87,8 @@ export declare class DispatchRuntime {
     private inFlightFooter;
     private onAcked;
     private onTimerFired;
+    private startFreshScheduledTask;
+    private runTaskStopHook;
     private onJobSettled;
     /** A worker's tokens are billed to the same account but spent in another process: record them. */
     private recordUsage;

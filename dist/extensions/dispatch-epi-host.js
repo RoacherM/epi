@@ -24,6 +24,7 @@ export function createEpiDispatchHost(options, events, getRuntime) {
     const projectRoot = resolveProjectRoot(options);
     return {
         stateDir: join(options.epiHome, "runtime", "dispatch"),
+        agentDir: join(options.epiHome, "pi"),
         agentsDirs: { global: join(options.epiHome, "agents"), project: options.projectAgentsDir },
         createConfigError: (message) => new EpiConfigError(message),
         rewriteOutputText: rewritePiText,

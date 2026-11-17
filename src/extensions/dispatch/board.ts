@@ -200,8 +200,9 @@ export class PeerBoard {
 
   /** Synchronous: the fd 3 write is enqueued before the tool's first await (FIFO with peers). */
   post(text: string, channel: string | undefined): void {
-    if (text.trim().length === 0) throw new Error("board_post needs non-empty text");
-    this.options.emit({ type: "board_post", text: text.slice(0, MAX_TEXT_BYTES), ...(channel === undefined ? {} : { channel }) });
+    const body = text.slice(0, MAX_TEXT_BYTES);
+    if (body.trim().length === 0) throw new Error("board_post needs non-empty text");
+    this.options.emit({ type: "board_post", text: body, ...(channel === undefined ? {} : { channel }) });
   }
 
   read(options: ReadOptions): BoardMessage[] {

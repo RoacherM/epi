@@ -4,6 +4,8 @@ import type { DispatchRuntime } from "./runtime.js";
 import { type DispatchItemSummary } from "./types.js";
 import type { JobSnapshot } from "./worker-host.js";
 export declare function stripSystemFraming(text: string): string;
+/** Strip ANSI/OSC/DCS/APC terminal sequences, CR/C0/C1 controls, and bidi overrides from untrusted output. */
+export declare function sanitizeDispatchLine(text: string): string;
 /** `<= 14` col status segment: `◐ 3 · #5` with board traffic, `◐ 3 tasks` without, or unread counts. */
 export declare function formatDispatchStatusText(activeCount: number, boardSeq: number, unread: {
     done: number;

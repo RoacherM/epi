@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { EventBus, ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
 
 import { EpiConfigError } from "../errors.js";
-import { emitTaskHook, type TaskHookEvent } from "../hook-events.js";
+import { emitTaskHook } from "../hook-events.js";
 import { rewritePiText } from "../pi-output.js";
 import { createEpiUiAdapter, createTodoTool, SessionTodoStore } from "./dispatch-epi-ui.js";
 import { loadAgents } from "./dispatch/agents.js";
@@ -48,6 +48,7 @@ export function createEpiDispatchHost(
   const projectRoot = resolveProjectRoot(options);
   return {
     stateDir: join(options.epiHome, "runtime", "dispatch"),
+    agentDir: join(options.epiHome, "pi"),
     agentsDirs: { global: join(options.epiHome, "agents"), project: options.projectAgentsDir },
     createConfigError: (message) => new EpiConfigError(message),
     rewriteOutputText: rewritePiText,
@@ -63,7 +64,7 @@ export function createEpiDispatchHost(
     onTaskLifecycleEvent: async (event: TaskLifecycleEvent, ctx: ExtensionContext): Promise<LifecycleDecision> => {
       const bus = events();
       if (bus === undefined) return { action: "continue" };
-      return emitTaskHook(bus, event as unknown as TaskHookEvent, ctx);
+      return emitTaskHook(bus, event, ctx);
     },
     ui: createEpiUiAdapter(getRuntime ?? (() => undefined), options.bridge),
     ...(options.workerPath === undefined ? {} : { workerPath: options.workerPath }),

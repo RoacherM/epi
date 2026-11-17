@@ -73,17 +73,25 @@ export class InboxSpool {
         if (owner !== undefined && owner.pid !== process.pid && isPidAlive(owner.pid)) {
             throw new Error(`inbox target ${JSON.stringify(this.options.target)} is owned by live pid ${owner.pid} (since ${new Date(owner.startedAt).toISOString()})`);
         }
-        writeFileSync(this.lockPath, `${JSON.stringify({ pid: process.pid, startedAt: Date.now() })}\n`, { mode: 0o600 });
+        const lockTmp = join(this.dir, "tmp", `owner.${process.pid}.${randomUUID()}.tmp`);
+        writeFileSync(lockTmp, `${JSON.stringify({ pid: process.pid, startedAt: Date.now() })}\n`, { mode: 0o600 });
+        renameSync(lockTmp, this.lockPath);
         this.pruneDone();
         this.scan();
         try {
-            this.watcher = watch(join(this.dir, "pending"), () => this.scan());
+            this.watcher = watch(join(this.dir, "pending"), () => { try {
+                this.scan();
+            }
+            catch { /* ignore */ } });
             this.watcher.unref();
         }
         catch {
             // fs.watch is only a hint; the interval scan still runs.
         }
-        this.interval = setInterval(() => this.scan(), FALLBACK_SCAN_MS);
+        this.interval = setInterval(() => { try {
+            this.scan();
+        }
+        catch { /* ignore */ } }, FALLBACK_SCAN_MS);
         this.interval.unref();
     }
     readLock() {
@@ -124,15 +132,27 @@ export class InboxSpool {
             catch { /* raced */ }
             return;
         }
-        let event;
+        let parsed;
         try {
-            event = JSON.parse(readFileSync(pending, "utf8"));
+            parsed = JSON.parse(readFileSync(pending, "utf8"));
         }
         catch {
             return;
         }
-        if (this.options.deliver(key, event))
-            this.delivered.add(key);
+        if (typeof parsed !== "object" || parsed === null || typeof parsed.dedupKey !== "string") {
+            try {
+                unlinkSync(pending);
+            }
+            catch { /* raced */ }
+            return;
+        }
+        try {
+            if (this.options.deliver(key, parsed))
+                this.delivered.add(key);
+        }
+        catch {
+            // Keep the file pending or avoid crashing the host scan loop.
+        }
     }
     /** The session persisted the event's notification: move it to `done/`. */
     markDone(key) {
@@ -172,7 +192,7 @@ export class InboxSpool {
 }
 /** One line for the ledger: the payload as compact JSON (or its text), bounded. */
 export function inboxNotice(target, event) {
-    const payload = typeof event.payload === "string" ? event.payload : JSON.stringify(event.payload);
-    return `[inbox ${target}] external event ${event.dedupKey}: ${payload.slice(0, 4_000)}`;
+    const raw = typeof event?.payload === "string" ? event.payload : (JSON.stringify(event?.payload) ?? "");
+    return `[inbox ${target}] external event ${event.dedupKey}: ${raw.slice(0, 4_000)}`;
 }
 //# sourceMappingURL=inbox-spool.js.map

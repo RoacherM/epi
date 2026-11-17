@@ -16,6 +16,8 @@ export declare const TaskParameters: Type.TObject<{
         cwd: Type.TOptional<Type.TString>;
         workspace: Type.TOptional<Type.TUnion<[Type.TLiteral<"inherit">, Type.TLiteral<"branch">, Type.TLiteral<"share">]>>;
         model: Type.TOptional<Type.TString>;
+        tools: Type.TOptional<Type.TArray<Type.TString>>;
+        excludeTools: Type.TOptional<Type.TArray<Type.TString>>;
     }>>>;
     jobId: Type.TOptional<Type.TString>;
     strategy: Type.TOptional<Type.TUnion<[Type.TLiteral<"steer">, Type.TLiteral<"enqueue">, Type.TLiteral<"interrupt">]>>;
@@ -24,6 +26,9 @@ export declare const TaskParameters: Type.TObject<{
     forkFrom: Type.TOptional<Type.TString>;
     workspace: Type.TOptional<Type.TUnion<[Type.TLiteral<"inherit">, Type.TLiteral<"branch">, Type.TLiteral<"share">]>>;
     model: Type.TOptional<Type.TString>;
+    tools: Type.TOptional<Type.TArray<Type.TString>>;
+    excludeTools: Type.TOptional<Type.TArray<Type.TString>>;
+    systemPrompt: Type.TOptional<Type.TString>;
     verifyCommand: Type.TOptional<Type.TString>;
     maxTurns: Type.TOptional<Type.TInteger>;
     timeoutSeconds: Type.TOptional<Type.TInteger>;
@@ -41,6 +46,8 @@ export interface TaskToolDeps {
     foregroundWaits?: Set<() => void>;
     /** Subscribe to pool progress updates while waiting in the foreground. */
     onJobChange?: (listener: (job: JobSnapshot) => void) => () => void;
+    /** Wait until any pending `task_stop` lifecycle hooks for `jobId` complete. */
+    awaitSettledHooks?: (jobId: string) => Promise<void>;
     /** Named peers: entries of the peer to fork from, and the board brief for a new peer. */
     peerForkEntries?: (name: string) => unknown[];
     postBrief?: (job: JobSnapshot) => void;

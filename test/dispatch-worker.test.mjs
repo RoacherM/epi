@@ -5,12 +5,14 @@
 // Offline: temp HOME / agent dir / EPI_HOME, loopback-free faux provider.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { Value } from "typebox/value";
 
 import dispatchExtension from "../dist/extensions/dispatch/index.js";
+import { TaskParameters } from "../dist/extensions/dispatch/task-tool.js";
 import { DISPATCH_RUNTIME_SYMBOL } from "../dist/extensions/dispatch/types.js";
 import { createEpiDispatchHost } from "../dist/extensions/dispatch-epi-host.js";
 import { createFakePi, waitFor } from "./helpers/dispatch-fake-pi.mjs";
@@ -88,30 +90,44 @@ test("cancelling a running worker settles it as cancelled", async (t) => {
   assert.equal(cancelled.status, "cancelled");
 });
 
-test("PI_DISPATCH_DEPTH >= 1 seals the topology: no task, no outbox", async (t) => {
+test("PI_DISPATCH_DEPTH >= 1 seals the topology: no task, no outbox, no inbox lock, no schedule, no /approve", async (t) => {
   const saved = process.env.PI_DISPATCH_DEPTH;
+  const savedInbox = process.env.PI_DISPATCH_INBOX;
   process.env.PI_DISPATCH_DEPTH = "1";
+  process.env.PI_DISPATCH_INBOX = "should-not-claim";
   t.after(() => {
     if (saved === undefined) delete process.env.PI_DISPATCH_DEPTH;
     else process.env.PI_DISPATCH_DEPTH = saved;
+    if (savedInbox === undefined) delete process.env.PI_DISPATCH_INBOX;
+    else process.env.PI_DISPATCH_INBOX = savedInbox;
   });
-  const { fake, runtime } = await mountRuntime(t);
+  const { fake, runtime, stateDir } = await mountRuntime(t, {
+    allowDepthEnv: true,
+    host: { classifyToolCall: () => "defer" },
+  });
   assert.equal(runtime.canDelegate, false);
   assert.equal(fake.tools.has("task"), false);
   assert.equal(fake.tools.has("outbox"), false);
+  assert.equal(fake.commands.has("approve"), false, "depth >= 1 must not register /approve");
+  assert.equal(existsSync(join(stateDir, "inbox", "should-not-claim", "owner.lock")), false, "depth >= 1 must not claim inbox owner.lock");
+  assert.deepEqual(Object.keys(fake.tools.get("timer").parameters.properties).sort(), ["delaySeconds", "kind", "prompt"]);
   assert.ok(fake.tools.has("bash") && fake.tools.has("task_status") && fake.tools.has("timer"));
 });
 
 test("the default export keeps one runtime per agent dir across /reload", (t) => {
   const agentDir = tempDir(t, "dispatch-reload-");
   const saved = process.env.PI_CODING_AGENT_DIR;
+  const savedDepth = process.env.PI_DISPATCH_DEPTH;
   process.env.PI_CODING_AGENT_DIR = agentDir;
+  delete process.env.PI_DISPATCH_DEPTH;
   t.after(async () => {
     const store = globalThis[DISPATCH_RUNTIME_SYMBOL];
     await store?.get(agentDir)?.shutdown();
     store?.delete(agentDir);
     if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = saved;
+    if (savedDepth === undefined) delete process.env.PI_DISPATCH_DEPTH;
+    else process.env.PI_DISPATCH_DEPTH = savedDepth;
   });
   dispatchExtension(createFakePi().pi);
   const first = globalThis[DISPATCH_RUNTIME_SYMBOL].get(agentDir);
@@ -147,4 +163,31 @@ test("Epi host adapter: Epi state dir and presets, EpiConfigError, and the Epi w
   const done = await runtime.pool.wait(job.id);
   assert.equal(done.status, "completed", done.error);
   assert.match(done.result, /CHILD-ANSWER-42/);
+});
+
+test("worker settles D85 context overflow as partial (context), stops DrainBarrier on maxTurns, and enforces per-call tools + strict schema", async (t) => {
+  assert.equal(Value.Check(TaskParameters, { task: "ok", tools: ["read"], systemPrompt: "hi" }), true);
+  assert.equal(Value.Check(TaskParameters, { task: "bad", unknownProperty: true }), false, "additionalProperties: false rejects unsupported fields");
+
+  const { runtime, start } = await poolFixture(t);
+
+  // 1. D85 context overflow settles as partial (stoppedBy: "context"), never silent completed:
+  const overflow = await runtime.pool.wait(start("child-overflow hit token cap").id);
+  assert.equal(overflow.status, "partial", overflow.error);
+  assert.equal(overflow.stoppedBy, "context");
+
+  // 2. Hitting maxTurns while a 30s background bash is running exits DrainBarrier immediately:
+  const t0 = Date.now();
+  const capped = await runtime.pool.wait(start("child-maxturns-bg fast stop", { maxTurns: 1 }).id);
+  assert.equal(capped.status, "partial", capped.error);
+  assert.equal(capped.stoppedBy, "maxTurns");
+  assert.ok(Date.now() - t0 < 8_000, "DrainBarrier must not block on remaining 30s bg bash after maxTurns");
+
+  // 3. Per-call tools allowlist keeps report_progress while excluding bash/edit/write, and applies systemPrompt:
+  const restricted = await runtime.pool.wait(
+    start("child-list-tools check", { tools: ["read"], systemPrompt: "CUSTOM-SYS-MARKER" }).id,
+  );
+  assert.equal(restricted.status, "completed", restricted.error);
+  assert.match(restricted.result, /TOOLS=read,report_progress/);
+  assert.match(restricted.result, /SYS_CUSTOM=true/);
 });
