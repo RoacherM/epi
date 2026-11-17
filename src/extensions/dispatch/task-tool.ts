@@ -15,9 +15,7 @@ import { forkableBranch, inheritedModelReference, jobLabel, jobReport, type JobR
 
 const UPDATE_THROTTLE_MS = 250;
 const DEFAULT_FOREGROUND_BUDGET_SECONDS = 300;
-const Workspace = Type.Union([Type.Literal("inherit"), Type.Literal("branch"), Type.Literal("share")], {
-  description: 'Default "inherit"; pass "branch" or "share" only when isolating file edits',
-});
+const Workspace = Type.Union([Type.Literal("inherit"), Type.Literal("branch"), Type.Literal("share")]);
 
 const BatchItem = Type.Object({
   task: Type.String(),
@@ -33,18 +31,20 @@ const BatchItem = Type.Object({
 export const TaskParameters = Type.Object({
   task: Type.Optional(Type.String({ description: "Prompt (or steer/resume message with jobId)" })),
   name: Type.Optional(Type.String({ description: "Board peer slug (@name, background)" })),
-  agent: Type.Optional(Type.String({ description: "Preset name" })),
+  agent: Type.Optional(Type.String()),
   cwd: Type.Optional(Type.String()),
-  tasks: Type.Optional(Type.Array(BatchItem, { minItems: 1, description: "Parallel batch" })),
+  tasks: Type.Optional(Type.Array(BatchItem, { minItems: 1 })),
   jobId: Type.Optional(Type.String({ description: "job_<id> or name to steer/resume" })),
   strategy: Type.Optional(Type.Union([Type.Literal("steer"), Type.Literal("enqueue"), Type.Literal("interrupt")])),
   background: Type.Optional(Type.Boolean()),
   context: Type.Optional(Type.Union([Type.Literal("fresh"), Type.Literal("fork")])),
-  forkFrom: Type.Optional(Type.String({ description: "Peer name to fork from" })),
-  workspace: Type.Optional(Workspace),
+  forkFrom: Type.Optional(Type.String()),
+  workspace: Type.Optional(Type.Union([Type.Literal("inherit"), Type.Literal("branch"), Type.Literal("share")], {
+    description: "branch/share only for isolated file edits",
+  })),
   model: Type.Optional(Type.String({ description: "provider/id[:thinking] or :thinking" })),
-  tools: Type.Optional(Type.Array(Type.String(), { description: "Allowed tool names" })),
-  excludeTools: Type.Optional(Type.Array(Type.String(), { description: "Excluded tool names" })),
+  tools: Type.Optional(Type.Array(Type.String())),
+  excludeTools: Type.Optional(Type.Array(Type.String())),
   systemPrompt: Type.Optional(Type.String()),
   verifyCommand: Type.Optional(Type.String({ description: "Shell command that must exit 0" })),
   maxTurns: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -243,8 +243,8 @@ async function runBatch(deps: TaskToolDeps, params: TaskParams, ctx: ExtensionCo
 
 function description(agents: readonly AgentDefinition[]): string {
   const presets = agents.length === 0 ? "" : ` Presets: ${agents.map((agent) => `${agent.name} (${singleLine(agent.description, 80)})`).join("; ")}.`;
-  return "Delegate work to an isolated subagent (its own context, tools and process). Give it a self-contained task. "
-    + "Named tasks (name) become board peers that hand off via board_post, board_read and board_wait (peers do not have task); keep default workspace inherit for read-only work."
+  return "Delegate a self-contained task to an isolated subagent. "
+    + "Named tasks (name) coordinate via board_post/board_read/board_wait (no task tool); keep workspace inherit for read-only work."
     + presets;
 }
 
