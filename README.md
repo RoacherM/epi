@@ -36,6 +36,14 @@ Epi 是基于 Pi SDK 的可定制终端编程助手。自有 grok 风格 TUI，�
 
 ## 最近更新
 
+**0.2.7：内置可移植异步调度与多代理协同引擎 `dispatch`（受管异步 `bash`、具名同伴共享看板、闹钟/收件箱与双页签视图）**
+
+[→ 特性展示](docs/showcase/0.2.7/README.md)
+
+- **统一异步调度与多代理协同引擎 `dispatch`（决策 DP1）**：内置 `epi:task` 升级为 100% 遵循公开 Pi `ExtensionAPI` 的可移植 `src/extensions/dispatch/` 引擎（子进程走独立 `fd 3` 双向 JSONL 管道，零私有内部依赖，外部可直接 `pi -e dist/extensions/dispatch/index.js` 加载）：统一收编受管异步 `bash`（`waitMsBeforeAsync` 同步窗口、`isDaemon`、`task_input`，前台按 `Alt+B` 或 `/bg` 一键放手转后台）、会话闹钟与定时任务（`timer` `follow_up`/`schedule`）、`link()` 原子去重外部收件箱与纯内存 `/approve` 护栏，以及 `epi -p` 与 Worker 共用的 `agent_settled` 完结排空屏障。
+- **具名同伴与共享看板（`board_post` / `board_read` / `board_wait`）**：不引入平行 Swarm 管理工具，传 `task({ name, task, workspace })` 即启动单层拓扑（`PI_DISPATCH_DEPTH=1`）下的具名看板同伴，支持 `@name` 横向直接交接、父进程序号写盘回执强一致、`forkFrom` 同伴上下文分支、空闲停泊后 `@name` 原地复活与去重停滞检测。
+- **非阻塞工作区隔离与双页签交互浮层**：`workspace: "branch" | "share"` 的创建、脏改动检查与清理全量异步化，`share` 模式直接软链 `node_modules` 并跳过 `.dev` 缓存目录，消除大仓库克隆阻塞 TUI 输入与管道；新增 `/tasks` 与 `/board` 88% 宽 `Items` / `Board` 双页签浮层，实时下钻查看子代理会话与 `bg_*` 日志并统一净化终端控制序列。
+
 **0.2.6：四层 `bash` 与子代理防挂死守卫、统一后台通知账本与 CLI/Magpie 加固**
 
 [→ 特性展示](docs/showcase/0.2.6/README.md)

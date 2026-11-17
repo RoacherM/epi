@@ -4,6 +4,7 @@
 
 | 版本 | 内容 |
 |---|---|
+| [0.2.7](0.2.7/README.md) | 内置可移植异步调度与多代理协同引擎 `dispatch`（DP1）：`fd 3` 独立协议 Worker、受管异步 `bash` 与 `Alt+B`/`/bg` 前台放手、具名同伴共享看板（`board_post`/`board_read`/`board_wait` + `forkFrom`）、会话闹钟与收件箱、非阻塞异步 `branch`/`share` 工作区隔离，以及 `/tasks`、`/board` 双页签实时浮层 |
 | [0.2.6](0.2.6/README.md) | 四层 `bash` 与子代理执行守卫（默认 120s 超时与 600s 秒单位校验、0ms 流式/TUI/脱管守护预检、子代理 `BASH_ENV` PGID 账本与 `EPI_WORKER_COOKIE` 孤儿进程组收割、非交互 Git/Editor 环境与退出即时 `abort()`）；统一 `task`/`Monitor` 通知门禁与账本、批量 `task` 原子回滚；`epi mcp` 子命令校验、Magpie 跨渠道签名与剪贴板图片防竞态。无界面变化 |
 | [0.2.5](0.2.5/README.md) | 异步子代理即时消费、纠偏策略（`steer`/`enqueue`/`interrupt`）、`report_progress` 与 `worktree` 隔离；内置 `Monitor`/`monitor_stop`/`monitor_list` 流式后台监控；微信粘贴图片 `EPERM` 剪贴板位图回退；Magpie Gemini 轨迹规范化 |
 | [0.2.4](0.2.4/README.md) | Magpie 内置 provider：Antigravity / `auto/*` 跨渠道签名与 `__ts*__` 清理及提示词脱敏、Gemini `skip_thought_signature_validator` 兜底、忽略旧 `models.json` 静态覆盖。无界面变化 |
