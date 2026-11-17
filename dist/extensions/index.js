@@ -4,9 +4,9 @@ import { builtInOffInstruction } from "../assembly.js";
 import { EpiConfigError } from "../errors.js";
 import { resolveEffectiveHooks } from "../hooks-config.js";
 import { createHooksInlineExtension, hooksForChild } from "./hooks.js";
+import { createEpiDispatchExtension } from "./dispatch-epi-host.js";
 import { createMonitorInlineExtension } from "./monitor.js";
 import { createTaskMonitorBridge } from "./task-notify.js";
-import { createTaskInlineExtension } from "./task.js";
 import { createEpiRuntimeExtensions } from "./runtime.js";
 import { createEpiMcpExtension, filterMcpServers, loadNativeMcpConfig } from "./mcp.js";
 import { createWebInlineExtension } from "./web.js";
@@ -38,9 +38,10 @@ function subagentOptions(value) {
 function buildTaskPair(assembly, epiHome) {
     const bridge = createTaskMonitorBridge();
     const projectTrusted = assembly.projectManifest?.loaded === true;
-    const projectAgentsDir = projectTrusted ? join(assembly.projectManifest.root, ".epi", "agents") : undefined;
+    const projectRoot = projectTrusted ? assembly.projectManifest.root : undefined;
+    const projectAgentsDir = projectRoot === undefined ? undefined : join(projectRoot, ".epi", "agents");
     return [
-        createTaskInlineExtension({ epiHome, agentDir: assembly.agentDir, projectAgentsDir, projectTrusted, bridge }),
+        createEpiDispatchExtension({ epiHome, projectAgentsDir, projectTrusted, projectRoot, bridge }),
         createMonitorInlineExtension({ epiHome, agentDir: assembly.agentDir, bridge }),
     ];
 }

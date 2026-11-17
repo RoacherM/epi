@@ -486,12 +486,12 @@ PI_CODING_AGENT_DIR=~/.epi/pi
 
 ### 9.5 `bash` 与子代理进程执行守卫
 
-`epi:runtime`（`src/extensions/runtime.ts`、`src/bash-guard.ts`）与 `TaskRuntime`（`src/task-runtime.ts`、`src/worker-reaper.ts`）提供四层零侵入守卫（不替换内置 `bash` 定义）：
+`epi:runtime`（`src/extensions/runtime.ts`、`src/bash-guard.ts`）与 `dispatch`（`src/extensions/dispatch/bg-bash.ts`、`src/extensions/dispatch/reaper.ts`、`src/extensions/dispatch/worker-host.ts`）提供四层进程执行守卫：
 
-- **超时边界**：`timeout` 缺省时注入默认 `120` 秒；非有限数、`<= 0` 或 `> 600` 秒在 `0ms` 直接阻断并说明 `bash.timeout` 单位为秒（`>= 1000` 时额外给出毫秒换算提示）；命令超时后在 `tool_result` 追加恢复建议与 `.git/index.lock` 检查提示，并保留 `structuredContent`。
-- **0ms 命令预检**：支持引号、转义、`#` 注释、`<<EOF` heredoc、`env`/`sudo`/`command`/`timeout` 包装（跳过 `command -v/-V` 探测）与最多 3 层 `sh|bash|zsh|dash -c` 展开（未闭合引号/替换做 fail-open，交给 shell 自身报错）。阻断无上界流式跟随（`tail -f`、`docker/podman/kubectl logs -f`、`journalctl -f`、`dmesg -w`、`watch`、`fswatch`、无 `-c/-w/-t/-o` 的 `ping`，但放行显式 `timeout <= 60s` 的短探测）、纯交互式 TUI/编辑器（`vim`/`nvim`/`nano`/`htop`/`top` 无快照参数等）以及脱离管控的后台守护命令（`nohup`/`setsid`/`disown`/`tmux new -d`/`screen -dm` 及同命令内无 `wait`/`kill`/`trap` 回收的顶层 `&`）。引导文案按当前宿主是否启用 `monitor` 区分主会话与子 Agent。
-- **子代理孤儿进程组收割（仅 `TaskRuntime`）**：每次子任务在 `capsuleDir` 生成兼容 Bash 3.2 的 `epi-pgid.sh`（通过 `BASH_ENV` 将顶层 `bash` 进程组写入 `pgids.log`，随即 `unset EPI_PGID_LEDGER` 并链式恢复用户原 `BASH_ENV`）与唯一 `EPI_WORKER_COOKIE`；并发 `bash` 全部落定后若 `pgids.log` 中有存活后台 PGID 则在 `tool_result` 追加回收预告；`terminateWorker` 发信号前快照子孙 PGID，任务结束 `finally` 块合并账本、子孙快照与 `EPI_WORKER_COOKIE` 环境扫描，经同 UID、非自身/父进程组、`lstart` 时间窗口与共享守护白名单过滤后执行 `SIGTERM -> 1.5s -> SIGKILL` 收割。退出主会话（`session_shutdown` `reason: "quit"` 且非空闲）立即调用 `context.abort()`。
-- **子代理非交互环境加固**：默认注入 `GIT_TERMINAL_PROMPT=0`、`GCM_INTERACTIVE=never`、`GIT_PAGER=cat` 与快速失败 `GIT_EDITOR` / `GIT_SEQUENCE_EDITOR` 脚本（尊重调用方显式环境变量，不设 `CI=1`）。
+- **超时边界**：同步 `timeout` 缺省时注入默认 `120` 秒；非有限数、`<= 0` 或同步 `> 600` 秒（带 `isDaemon` 或 `waitMsBeforeAsync` 的受管异步模式放宽至 `14400` 秒）在 `0ms` 直接阻断并说明 `bash.timeout` 单位为秒（`>= 1000` 时额外给出毫秒换算提示）；命令超时后在 `tool_result` 追加恢复建议与 `.git/index.lock` 检查提示，并保留 `structuredContent`。
+- **0ms 命令预检**：支持引号、转义、`#` 注释、`<<EOF` heredoc、`env`/`sudo`/`command`/`timeout` 包装（跳过 `command -v/-V` 探测）与最多 3 层 `sh|bash|zsh|dash -c` 展开（未闭合引号/替换做 fail-open，交给 shell 自身报错）。阻断无上界流式跟随（`tail -f`、`docker/podman/kubectl logs -f`、`journalctl -f`、`dmesg -w`、`watch`、`fswatch`、`ping` 无计数参数等，除非显式传 `isDaemon: true` 或 `timeout <= 60s`）、纯交互式 TUI/编辑器（`vim`/`nvim`/`nano`/`htop`/`top` 无快照参数等）以及脱离管控的裸后台命令（`nohup`/`setsid`/`disown`/`tmux new -d`/`screen -dm` 及同命令内无回收的顶层 `&`）。
+- **孤儿进程组收割（`src/extensions/dispatch/reaper.ts`）**：每次子任务或受管后台 `bash` 在守卫目录生成兼容 Bash 3.2 的 `pgid-hook.sh`（通过 `BASH_ENV` 将顶层 `bash` 进程组写入本级 `pgids.log` 并同步镜像至父胶囊 `PI_DISPATCH_PARENT_PGID_LEDGER`，随即 `unset PI_DISPATCH_PGID_LEDGER` 并链式恢复用户原 `BASH_ENV`）与累积式 `PI_DISPATCH_COOKIE`；`terminate` 发信号前快照子孙 PGID，结束 `finally` 块合并账本、子孙快照与 `PI_DISPATCH_COOKIE` token 匹配扫描，经同 UID、非自身/父进程组、`lstart` 时间窗口与共享守护白名单过滤后执行 `SIGTERM -> 1.5s -> SIGKILL` 收割。退出主会话（`session_shutdown` `reason: "quit"` 且非空闲）立即调用 `context.abort()`。
+- **非交互环境加固**：默认注入 `GIT_TERMINAL_PROMPT=0`、`GCM_INTERACTIVE=never`、`GIT_PAGER=cat` 与快速失败 `GIT_EDITOR` / `GIT_SEQUENCE_EDITOR` 脚本（尊重调用方显式环境变量，不设 `CI=1`）。
 
 ## 10. Effective Assembly
 
@@ -603,84 +603,65 @@ const extensionFactories: InlineExtension[] = [
 - Hook secret；
 - Task capsule 的私密内容。
 
-## 12. Task Extension（Subagents）
+## 12. Task Extension（Dispatch）
 
-不直接采用完整 `pi-subagents`（其 chains、fleet、intercom、workflows 超出 Epi 边界）。设计见 [subagents-design.md](subagents-design.md)。
+内置 `epi:task` 由可移植的 `src/extensions/dispatch/`（独立使用名 `pi-dispatch`）加薄宿主适配 `src/extensions/dispatch-epi-host.ts` / `src/dispatch-epi-worker.ts` 提供（决策 DP1）。完整架构与契约见 [dispatch-design.md](dispatch-design.md)（旧子代理设计归档于 [archive-subagents-design.md](notes/archive-subagents-design.md)）。
 
-**子代理 = 作用域受限的一次 Epi 运行**：`src/worker.ts` 走与其他入口相同的 `resolveAssembly` → `scopeAssemblyForTask` → `buildInlineExtensions` 管线（架构 §2），不另写一条装配路径。能力按需逐项打开，默认全关。
+**子代理 = 作用域受限的一次 Epi 运行**：`src/dispatch-epi-worker.ts` 走与其他入口相同的 `resolveAssembly` → `scopeAssemblyForTask` → `buildInlineExtensions` 管线（架构 §2），并通过 `fd 3` 双向 JSONL 管道与父进程 `WorkerPool` 通信（零 `takeOverStdout` 内部依赖）。
 
-### 12.1 工具面
+### 12.1 工具面与交互命令
 
 ```text
-task
-task_status
-task_wait
-task_cancel
+bash (async: waitMsBeforeAsync / isDaemon / stdin)
+task (匿名子代理 / 批量 tasks / 具名看板同伴 name / jobId 纠偏或续跑)
+task_status / task_wait / task_cancel / task_input (统一路由 bg_* / job_* / <name> / tm_*)
+board_post / board_read / board_wait
+timer (follow_up / schedule)
+outbox
 todo
 ```
 
-- `task_status` 省略 `jobId` 时列出本 runtime 的全部 Job（每行 `<id8> <status> <agent|task> · <turns>t <steps>s · <task 前 60 字>`）；给 `jobId` 时，未落定的 Job 返回紧凑进度块，已落定的 Job 仍返回其结果。
-- **`jobId` 既接受完整 uuid，也接受唯一前缀（至少 8 字符）**——列表只印 8 字符，因此这 8 字符必须能被 `task_status`/`task_wait`/`task_cancel`/`task` 原样用回（`findJobId()`，`src/task-runtime.ts`）；前缀不唯一时报错并列出候选的完整 id，绝不静默挑一个。
-- `task({ jobId, task })` 是中途转向（steer），不是新建 Job：running 的 Job 收到 `{"type":"steer","message":…}` 后由 worker 交给 Pi 的 **`session.agent.steer`**（即 Pi 自己 `_queueSteer` 的实体），在「当前工具执行完、下一次请求模型前」生效，调用立刻返回（绝不等待子进程）。**故意不走 `session.steer`**：后者会做命令/模板展开，并对子代理已注册的扩展命令（`/epi …`、`/web …`）**抛错**，而那个 rejection 曾无人接管——steer 一到 worker 就死，没有 `result` 行，正在跑的工具进程成了孤儿（round-1 P1-1）；steer 是父进程的指令而非用户输入，因此逐字投递、不做展开，也绝不允许把整轮跑挂掉。逐字投递也就绕过了子代理自己的 input hook（`user_prompt`），所以**running 的 steer 文本在父进程先过一遍 `task_start` hook**（block/cancel 时不投递），与 queued 替换同等处理（round-2 P2-A）。queued 的 Job 尚无进程可谈，因此**替换其 task 文本**，在它启动时按新文本运行——替换文本先过一遍 `task_start` hook（block/cancel 与新建任务同等处理），否则一个按文本拦截的 hook 能被“替换排队任务”绕过（round-1 P2-2）。已落定的 Job（`completed`/`partial`/`failed`/`cancelled`）**按 `jobId` 原地续跑**：用 `SessionManager.open(job.sessionPath)` 重开原会话文件，把 `task` 作为下一条 user 消息跑新一轮，子代理因此记得之前做过什么。Job 保持 id、`createdAt` 和 `sessionPath`，`turns`/`steps`/`compactions`/`usage` 跨轮累加（每次运行记一条 `epi:task-usage`；worker 只报自己这一轮的消耗，父进程逐轮相加，绝不从 session 第 0 条重算，也绝不把上一轮的总数再加一次）；capsule 复用 Job 的原始设置（model、tools、skills、mcp、rules、hooks、extensions、systemPrompt、cwd、projectRoot、maxTurns、timeoutSeconds），续跑时**不再写 fork entries**（原文件已含首次 fork 的历史）。会话文件缺失（例如启动即失败、从未建过 session）时报错并说明原因，不启动。续跑默认前台（与新建任务一样返回子代理答复），`background: true` 时只回执；续跑文本同样先过 `task_start` hook。给了 `jobId` 时其余设置字段一律忽略。
-- **前台等待有预算**（D96，`docs/subagents-design.md` §13）：`background: false` 时调用等作业落定，但 `mode === "tui"` 下最多等 300 秒（`TaskExtensionOptions.backgroundAfterSeconds`，`0` = 不设上限）。到期不杀作业，只解除等待：回执写明 id、状态和「答案会自己送达、不要重跑、不要习惯性 `task_wait`」，并置 `wakeOnSettle = true`，落定后照常 push 唤醒。`print`/`json`/`rpc` 不放手——它们的进程可能在作业落定前就结束，放手等于丢结果。与 Esc 的差别只有一处：Esc 的唤醒不自己开一轮（`autoWake: false`），预算的唤醒自己开。`task_wait` 省略 `timeoutSeconds` 时用同一个预算，到期返回进度行而不是未落定快照的原始 JSON（旧行为会把 `sessionPath`、`cwd` 和事件环一起打进上下文），并提示不要习惯性重拉。
-- 子代理的进度是 **Pull** 视图：父进程从 worker 的 `progress` 行维护 `turns`/`steps`/`currentActivity`/`lastSummary`/`recentEvents`（10 条环形缓冲，与运行时长无关），随 `TaskJobSnapshot` 暴露；TUI 折叠行对 running 的 Job 追加 `· turn N · now: <activity>`。
-- 子代理的完成还有 **Push** 视图：`background: true`（或前台等待被放手）的 Job 落定且无人等待时，父会话收到一条 `epi:task-notify` follow-up（`pi.sendMessage({customType:"epi:task-notify", …}, {deliverAs:"followUp", triggerTurn:true})`，内容 `Job <id8> <status>: <结果或错误前 400 字>` + `task_status({jobId}) for details`）；**只在父会话空闲时发**（`canWake` 检查 `ctx.isIdle()`）：会话正在跑时 `sendMessage` 会把通知排进 Pi 的 followUp 队列，之后 `task_wait` 收走同一份结果也撤不回它，同一答复会进上下文两次；非空闲时留到 `agent_settled` 再冲一次；300ms 内落定的多个 Job 合并成一条；已被 `task_wait`/`task_cancel` 收回（或前台 `task` 已返回）的那一轮不再推送，避免同一答复进上下文两次；`delivered` 按轮记，同一 Job 续跑后是新的一轮，会正常推送（round-2 review P2）；`pi` 取当前会话的（会话切换后旧的已 stale）。`epi -p`/json 模式下进程可能先于后台 Job 落定退出，此时没有会话可唤醒——已知限制，定时器 `unref` 不阻塞退出。
+交互命令与热键：`/tasks [id]`、`/board`、`/bg`（及前台等待时的 `Alt+B` 放手转后台）、`/approve <id> [allow|deny]`。
+
+- **前台等待预算**（D96，[archive-subagents-design.md](notes/archive-subagents-design.md) §13）：`mode === "tui"` 下前台 `task` 与省略 `timeoutSeconds` 的 `task_wait` 默认最多占用主会话 300 秒（`foregroundBudgetSeconds`）；到期或按 `Alt+B` / `/bg` 不杀作业，只解除前台等待并保持 `autoWake = true`，落定后经 `NotificationLedger`（`customType: "dispatch:notify"`）唤醒；用户按 `Esc` 中断则置 `autoWake = false`。
+- **会话用量与切换**：`DispatchRuntime` 建在 `createEpiDispatchExtension()` 作用域，跨 `/new`、`/resume`、`/fork`、`/reload` 保持运行中的 `bg_*` 与 `job_*`；子代理每轮结算向当前存活会话追加一条 `epi:task-usage`。
+- **隔离工作区**：`workspace: "inherit" | "branch" | "share"`；取消或退出时相对基线（`share`）或 `HEAD`（`branch`）有未合入改动的目录默认保留（除非传 `forceDirty: true`）。
 
 ### 12.2 可调能力（正交，默认全关）
 
-每个参数控制一个维度；`agents/*.md` 预设提供默认值，显式参数优先。
+通用调度参数可在 `task(...)` 单次调用或 `agents/*.md` 预设中指定（显式参数优先）；Epi 宿主装配作用域（`rules` / `skills` / `mcp` / `hooks` / `extensions`）写在 `agents/*.md` 预设中并经 `workerBootstrapOptions` 传入 `src/dispatch-epi-worker.ts`，保住可移植 `task` 工具 schema 纯净。
 
-| 参数 | 默认 | 语义 |
-|---|---|---|
-| `agent` | 无 | 可选预设；不传就是无名子代理（开箱即用，不再要求先写 `agents/*.md`） |
-| `context` | `fresh` | `fork` 复制父会话当前分支（裁剪规则见 §12.5） |
-| `model` | 继承 | `provider/id`、`provider/id:thinking` |
-| `systemPrompt` | 空 | 追加给子代理的系统指令 |
-| `rules` | `false` | 注入本次运行的 `# Epi Rules` |
-| `skills` | `false` | `true` 列出全部技能根；`["name"]` 把该 `SKILL.md` 正文预载进系统提示词（省掉第一轮 `read`），名字经 Pi 自己的 `loadSkillsFromDir` 解析 |
-| `mcp` | `false` | `true` 连接全部；`["name"]` 只连指定服务（未配置的名字直接报错） |
-| `tools` / `excludeTools` | 继承默认 | 透传 Pi `createAgentSession` 的白名单/黑名单 |
-| `hooks` | `true` | 子代理内的工具调用同受 `hooks.json` 约束 |
-| `extensions` | `true` | Manifest 外部扩展，可传名字数组裁剪 |
-| `maxTurns` | 无 | 到达轮次边界且该轮还有工具结果（即还有后续工作）时优雅停止并返回已有产出（`status: "partial"`，带 `turns`，会话文件保留）；该轮没有任何工具结果说明模型已给出最终答复，按 `completed` 正常结束 |
-| `timeoutSeconds` | 600 | 超时终止进程组 |
+| 参数 | 位置 | 默认 | 语义 |
+|---|---|---|---|
+| `agent` | 调用 | 无 | 可选预设；不传就是无名子代理（开箱即用，不再要求先写 `agents/*.md`） |
+| `name` / `forkFrom` | 调用 | 无 | 具名看板同伴（`@<name>`，自动后台）及从同伴历史分支 |
+| `workspace` | 调用 / 预设 | `inherit` | `branch`（git worktree）或 `share`（CoW 克隆）工作区隔离 |
+| `context` | 调用 / 预设 | `fresh` | `fork` 复制父会话当前分支（裁剪规则见 §12.5） |
+| `model` | 调用 / 预设 | 继承 | `provider/id`、`provider/id:thinking` 或 `:thinking` |
+| `systemPrompt` / `verifyCommand` | 调用 / 预设 | 空 / 无 | 追加给子代理的系统指令；收尾前必须退出 `0` 的门禁命令 |
+| `tools` / `excludeTools` | 调用 / 预设 | 继承默认 | 透传 Pi `createAgentSession` 的白名单/黑名单（白名单自动保留 `report_progress` / `board_*`） |
+| `maxTurns` / `timeoutSeconds` | 调用 / 预设 | 无 / 600 | 到达轮次边界以 `partial`（`stoppedBy: "maxTurns"`）停止并保留会话；超时终止进程组 |
+| `rules` | `agents/*.md` | `false` | 注入本次运行的 `# Epi Rules` |
+| `skills` | `agents/*.md` | `false` | `true` 列出全部技能根；`["name"]` 把该 `SKILL.md` 正文预载进系统提示词 |
+| `mcp` | `agents/*.md` | `false` | `true` 连接全部；`["name"]` 只连指定服务（未配置的名字直接报错） |
+| `hooks` / `extensions` | `agents/*.md` | `true` | 子代理内的工具调用同受 `hooks.json` 约束；可传名字数组裁剪 Manifest 外部扩展 |
 
-### 12.3 状态
+### 12.3 状态与会话切换
 
-```ts
-interface TaskJob {
-  id: string;
-  status: "queued" | "running" | "completed" | "partial" | "failed" | "cancelled";
-  sessionPath: string;   // 子会话 .jsonl，停止后可原地续跑
-  process?: ChildProcess;
-  result?: string;
-  error?: string;
-  /** 完成的轮数（续跑时跨轮累加），`partial` 时用来告诉模型停在哪一步。 */
-  turns?: number;
-  startedAt?: number;
-  finishedAt?: number;
-}
-```
+`DispatchRuntime`（含 `WorkerPool`、`BgRuntime`、`TimerRuntime`、按 `sessionId` 隔离的 `BoardHub` 映射与 `NotificationLedger`）建在 `createEpiDispatchExtension()` 作用域（`src/extensions/dispatch-epi-host.ts`），跨 `/new`、`/resume`、`/fork`、`/reload` 共用：
 
-Job Registry 属于扩展对象（真实运行中即一进程一份），跨 `/new`、`/resume`、`/fork`、`/reload` 共用；既不是每个 Pi Session 一份，也不是 module-global 单例。
-
-- Pi 在会话切换/重载时先发 `session_shutdown`，再 `invalidate()` 旧 `ExtensionRunner` 并重新执行每个扩展的 `factory(pi)`；之后旧 `pi`/`ctx` 上的任何调用都抛 "ctx is stale"。若 Registry 建在 `factory` 内，切换时保留下来的 Job 会变成孤儿：新实例查不到（`unknown task job`）、完成回调调旧 `pi.appendEntry` 抛错而丢掉 usage 与 `task_stop`、之后 `quit` 也只关掉最新那个 Registry。
-- 因此 `TaskRuntime` 与 `completionHooks` 建在 `createTaskInlineExtension()` 作用域（`src/extensions/task.ts`），同一扩展对象的所有 `factory(pi)` 调用共享；每个 `factory` 把当前 `pi` 写入可变 `current`，`session_start` 与每次工具 `execute` 更新 `current.ctx`。完成时的 usage 记录与 `task_stop` hook 一律用完成时刻的 `current`，绝不用启动时捕获的 `pi`/`ctx`。
-- 后果：在会话 A 启动、切到 B 之后才完成的 Job，其 `epi:task-usage` 条目记录在 B。没有存活的 `ctx` 时跳过 `task_stop` hook，usage 仍尽量记录；记录失败写 stderr，不静默吞掉。
+- 会话切换或重载时 `runtime.mount(pi)` 将 `NotificationGate` 重绑到最新 `pi`，运行中的 `bg_*` 与 `job_*` 不断连；
+- 子代理落定时的 `epi:task-usage` 追加与 `task_stop` hook 均使用落定时刻存活的 `gate.pi` / `gate.ctx`，并对失效的旧 `pi.appendEntry` 做保护；`task_stop` 抛错或返回非法动作时通过 `notify` / `stderr` 显式报错并在 `session_shutdown` 前等待在途 hook 收尾。
 
 ### 12.4 Child 约束
 
-- 每个 Child 是独立 Node.js process，启动包内 `dist/worker.js`，不查找 PATH 中的 `pi`；
-- **永不加载 `epi:task`**（`scopeAssemblyForTask` 强制剔除），因此不能递归派生 Child；
-- 资源是父会话装配的**子集**：未被父会话信任的项目配置不可能进入 Child（硬规则 1、2）；项目信任由父进程判定后随 capsule 下传，Child 不自行决定；
-- 子会话落在 `~/.epi/runtime/task/sessions/<jobId>.jsonl`（`0600`），**不进 Pi 的 session 目录**：后台子代理不会劫持 `epi -c`，也不出现在 `/resume` 列表；
-- Worker 首行调 `takeOverStdout()`：插件/MCP 的 `console.log` 一律改道 stderr，只有协议 JSONL 走真 stdout；
-- Hook 的 `type: "agent"` handler 所用的 TaskRuntime 固定 `allowHooks: false`，避免 `tool_call` hook 派生的子代理再次触发 hook 形成死循环；
-- 只有 `session_shutdown` 的 `reason === "quit"` 取消并回收 Child；`new`/`resume`/`fork`/`reload` 只是换会话，进程仍在，Child 继续跑，且共享的 Job Registry（§12.3）让新会话仍能 `task_status`/`task_wait`/`task_cancel` 它们（父会话 abort 自己的轮次，如 Esc 或 `/compact`，同样不杀 Child）；`quit` 由任一存活 `factory` 收到即关停共享 Registry，回收全部 Child；
-- 子代理的 stdin 是**双向管道**：`{"type":"steer","message":…}` 经 `session.agent.steer` 逐字投递（不展开、不抛错，见 §12.1）；**session 就绪前到达的 steer 缓存在 worker 内、按到达顺序在 session 建好后投递**（父进程在 spawn 时就把 Job 标为 running，这个窗口真实存在；早先版本在那里丢掉 steer 却回答 “Steered”，round-1 P2-1）。**agent loop 已结束（`session.prompt()` 已返回，worker 正在收尾）后才到达的 steer** 无法投递：worker 报 `{"type":"steer_dropped","message":…}`，父进程把一行 `[Not applied: a steer arrived after the job finished: "…". Resume with task({ jobId, task }) to apply it.]` 追加到该 Job 的结果（或错误）文本后，由模型决定是否续跑；**绝不自动续跑**（自动续跑会与 `task_wait` 竞态，并把已取消的 Job 复活），所以父进程回答过的 “Steered” 不会丢字（subagents-design §9 缺陷 5）。`{"type":"abort"}` 与 SIGTERM 同路径；解析不了的行只写 stderr 提示，绝不让 worker 崩溃。stdin **EOF 或 error**（父进程关闭管道，或被 SIGKILL 后内核关闭）即调 `interrupt()`：这是唯一的孤儿兜底，且它覆盖了旧的 `process.once("exit")` 兜底覆盖不了的 SIGKILL 情形（被 SIGKILL 的进程不执行任何 handler），因此模块级的 `liveWorkerPids` + exit 兜底已删除；worker 报完结果后 `unref` stdin，不让管道把它留在原地；
-- stdout/stderr 和最终结果有明确上限，超出后写 artifact；artifact 按轮命名（`<jobId>.run<N>.stdout.jsonl`），续跑不会撞名；写入失败（目录不可写等）在 `append` 内捕获、记到 Job 的 `artifactError` 上并继续跑，绝不从 stream 监听器抛出（那会以未捕获异常杀掉父进程）；一个 Job 失败不破坏其他 Job；
-- **子代理始终开启自动压缩**：session 建好后 `worker.ts` 的 `applyChildCompactionSettings` 通过 `settingsManager.applyOverrides` 强制 `compaction.enabled = true`，并把 `reserveTokens`/`keepRecentTokens` 分别压到模型 contextWindow 的 25%/40% 以内（用户设的过大值会让子代理每轮都压缩，或让 `prepareCompaction` 无内容可切），**并把 clamp 后的两个值同时写进 `compaction.modelOverrides["<provider>/<id>"]`**——per-model override 在 Pi 的查找里优先于顶层设置，不写就被用户的大值盖过（task-p2a review P3）——仅内存，绝不写用户 settings 文件；必须放在 session 装配之后，因为装配会 `reload()` 掉 override，另有一个 inline extension 在 `session_start`（`reason: "reload"`）时重放，覆盖扩展的 `ctx.reload()`。压缩进度作为 `phase: "compaction"` 的 progress 行上报（`reason`、`tokensBefore`/`tokensAfter`、`ok`），父进程只把成功的压缩计入 `compactions`（失败的仍写 `⟲ compaction failed` 事件行），`task_status` 在 N > 0 时显示 `· N compactions`。若压缩仍不够（Pi 的 `compaction_end` 带 `errorMessage`，或请求以 context overflow 失败，包括没有 `errorMessage` 的 `length` stop），子代理以 **`partial`** 结束：返回最后一段已完成的 assistant 文本（如有，从 session 原始 entries 读取，压缩摘要不会把它丢掉）并带 `stopped: "context"`；原因行 `[Stopped: context window full and compaction could not free enough space.]` 由父进程在截断结果之后追加（同 maxTurns footer），usage 从原始 entries 汇总（含每次 summarization 调用的 usage，fork 子代理跳过继承的父 entries），session 文件保留供续跑；非 overflow 的请求错误（auth、网络、5xx）仍是 `failed`；
-- capsule 文件权限仅当前用户可读写，Child 读取后立即删除。
+- 每个 Child 是独立 Node.js 进程，启动包内 `dist/extensions/dispatch/pi-worker.js`（注入 `dist/dispatch-epi-worker.js` 作为 `workerBootstrapModule`），不查找 PATH 中的 `pi`；
+- **单层拓扑封死（`PI_DISPATCH_DEPTH=1` + `scopeAssemblyForTask` 剔除 `epi:task`）**：Child 内挂载 `dispatch` 的 `task-worker` / `peer-worker` 切片（拥有异步 `bash`、自身 `bg_*`/`tm_*` 管理与单次 `follow_up` 闹钟），但绝无 `task`、`outbox`、`schedule` 或 `/approve`；即使在 `bash` 里再起 `epi -p` / `pi -p` 也会被 `PI_DISPATCH_DEPTH >= 1` 拦截；
+- 资源是父会话装配的**子集**：`originCwd`（工作区隔离前的真实任务目录）经 `childProjectTrust` 校验，使受信项目在 `workspace: "branch" | "share"` 下仍继承 `<project>/.epi/hooks.json` 与 `disable` 策略，而跨项目的未受信目录一律按 `projectTrusted: false` 处理；`resourceLoaderOptions.noSkills: true` 封死 `<agentDir>/pi/skills` 环境技能泄漏；
+- 子会话落在 `~/.epi/runtime/dispatch/sessions/<jobId>.jsonl`（`0600`），**不进 Pi 的 session 目录**；
+- 父子协议走独立 **`fd 3` 双向 JSONL socketpair**（`stdio: ["pipe", "ignore", "pipe", "pipe"]`）：扩展或 MCP 的 `console.log` 走 `fd 1` 绝不污染协议；父进程被 `SIGKILL` 时 `stdin` EOF 立即触发 `interrupt()` 并打断 `DrainBarrier` 退出；session 就绪前的 steer 在 Worker 内排队，收尾后才到达的 steer 通过 `steer_dropped` 显式附在结果末尾；
+- **子代理始终开启自动压缩并拦截 D85 溢出**：`dispatch-epi-worker.ts` 仅在内存将 `reserveTokens`/`keepRecentTokens` 压到模型窗口的 25%/40% 以内（含 `modelOverrides`）；`pi-worker.ts` 经公开 `agent_end` 追踪 `lastObservedAssistant`，当上下文溢出且恢复压缩仍无法继续时以 `status: "partial"`（`stoppedBy: "context"`）结算而非静默报 `completed`；
+- capsule 文件权限 `0600`，Child 读取后立即删除。
 
 ### 12.5 `context: "fork"` 的裁剪规则
 

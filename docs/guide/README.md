@@ -24,7 +24,7 @@
 | `magpie` provider | 本地 Magpie 网关；自动发现模型，按模型使用 Messages / Responses / Chat Completions / Gemini | [Magpie](magpie.md) |
 | `epi:preview` | `/preview` 与 `/review`：agent 改动的 diff、连续审查、版本绑定批注和三栏文件浏览，只在交互界面里，模型看不到 | [Preview](preview.md)、[Review](review.md) |
 | `epi:trace` | `/trace`：会话执行轨迹，时间轴、步骤列表和五栏目详情，只在交互界面里，模型看不到 | [Trace](trace.md) |
-| `epi:task` | `task`、`task_status`、`task_wait`、`task_cancel`、`todo`：在隔离的子进程里跑子任务，Agent profile 放在 `agents/*.md` | [Task](task.md) |
+| `epi:task` | 异步 `bash`、`task`（子代理与具名看板同伴）、`task_{status,wait,cancel,input}`、`board_{post,read,wait}`、`timer`、`outbox`、`todo` | [Task](task.md) |
 | `epi:mcp` | 读 `mcp.json` 接入 MCP 服务，使用锁定 Pi 的原生 MCP 支持；`epi mcp` 管理 | [MCP](mcp.md) |
 | `epi:hooks` | 读 `hooks.json`，在会话、提示、工具调用等事件上运行 command/http/prompt/agent handler | [Hooks](hooks.md) |
 | `epi:web` | `web_search`、`web_fetch`：同时查所有配置了的检索源（DeepSeek、Exa、MCP 检索工具），合并去重、每条带日期；没有配置时模型看不到这两个工具 | [网页检索](web.md) |

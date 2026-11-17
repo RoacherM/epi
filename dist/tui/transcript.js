@@ -214,66 +214,57 @@ export class Transcript {
         this.tui.requestRender();
     }
     handle(event) {
+        if (!this.handleMessageOrToolEvent(event))
+            this.handleLifecycleEvent(event);
+        this.tui.requestRender();
+    }
+    handleMessageOrToolEvent(event) {
         switch (event.type) {
             case "message_start":
                 this.messageStarted(event.message);
-                break;
+                return true;
             case "message_update":
                 if (event.message.role === "assistant") {
                     this.streaming ??= this.assistant(event.message, true);
                     this.streaming.updateContent(event.message, true, event.assistantMessageEvent);
                     this.syncToolCalls(event.message, false);
                 }
-                break;
+                return true;
             case "message_end":
                 this.messageEnded(event.message);
-                break;
+                return true;
+            case "tool_execution_start":
+                // Nested calls (from codemode scripts) render inside their parent's own block (Pi's
+                // interactive-mode.js: `if (event.parentToolCallId) break;`).
+                if (event.parentToolCallId === undefined)
+                    this.tool(event.toolName, event.toolCallId, event.args).markExecutionStarted();
+                return true;
+            case "tool_execution_update":
+                if (event.parentToolCallId === undefined)
+                    this.tool(event.toolName, event.toolCallId).updateResult({ ...event.partialResult, isError: false }, true);
+                return true;
+            case "tool_execution_end":
+                if (event.parentToolCallId === undefined)
+                    this.toolEnded(event);
+                return true;
+            default:
+                return false;
+        }
+    }
+    handleLifecycleEvent(event) {
+        switch (event.type) {
             case "agent_start":
-                // `??=`, not `=`: `agent.continue()` (a retry, a compaction continuation) re-emits
-                // agent_start for the *same* prompt run -- overwriting this would reset the clock on every
-                // continuation instead of timing the whole run from when the user actually asked for it. A
-                // queued follow-up's own clock starts at its user message_start (above).
                 this.turnStartedAt ??= Date.now();
                 break;
             case "agent_end":
-                // Not the footer yet: agent_end fires once per continuation (a retry, a compaction
-                // recovery), so the *last* one's messages -- read again by agent_settled below, once the
-                // whole prompt run has actually finished -- are what decide the label.
                 this.lastTurnMessages = event.messages;
                 break;
             case "agent_settled":
-                // Fired exactly once per session.prompt()/steer()/followUp() call, after every retry,
-                // compaction recovery and queued continuation has run its course (agent-session.js
-                // _runAgentPrompt's finally block) -- the one point that's both "the turn is really over"
-                // and "print the (last turn's) footer exactly once", regardless of how many
-                // agent_start/agent_end pairs happened along the way.
                 this.turnFooter(this.lastTurnMessages);
                 break;
             case "auto_retry_end":
                 if (!event.success)
                     this.retryFailed(event.finalError);
-                break;
-            case "tool_execution_start":
-                // Nested calls (from codemode scripts) render inside their parent's own block (Pi's
-                // "CallToolResult"/console output there); a separate top-level block for the same call
-                // would duplicate it. Mirrors Pi's own interactive-mode.js: "Nested calls (from codemode
-                // scripts) are shown inside their parent's row" -- `if (event.parentToolCallId) break;`.
-                // Unlike Pi's pendingTools.get() (a plain no-op lookup for an unknown id), Epi's tool()
-                // helper always creates a new entry on first reference, so update/end must skip explicitly
-                // too, not just rely on start never having created one.
-                if (event.parentToolCallId !== undefined)
-                    break;
-                this.tool(event.toolName, event.toolCallId, event.args).markExecutionStarted();
-                break;
-            case "tool_execution_update":
-                if (event.parentToolCallId !== undefined)
-                    break;
-                this.tool(event.toolName, event.toolCallId).updateResult({ ...event.partialResult, isError: false }, true);
-                break;
-            case "tool_execution_end":
-                if (event.parentToolCallId !== undefined)
-                    break;
-                this.toolEnded(event);
                 break;
             case "compaction_end":
                 this.compactionEnded(event);
@@ -281,10 +272,12 @@ export class Transcript {
             case "auto_retry_start":
                 this.notice(`Retrying (${event.attempt}/${event.maxAttempts}) in ${Math.round(event.delayMs / 1000)}s: ${event.errorMessage}`, "warning");
                 break;
+            case "entry_appended":
+                this.entryAppended(event.entry);
+                break;
             default:
                 break;
         }
-        this.tui.requestRender();
     }
     messageStarted(message) {
         if (message.role === "user") {
@@ -322,6 +315,21 @@ export class Transcript {
         else if (message.role === "custom") {
             this.addFinishedMessage(message);
         }
+    }
+    entryAppended(entry) {
+        // Boundary drafts committed at turn_end / agent_before_settle (task-notify.ts, dispatch
+        // notifications) emit entry_appended rather than message_start/message_end (agent-session.js
+        // _commitBoundaryDrafts). Mirror Pi's interactive-mode.js so mid-run wakeups render live.
+        if (entry.type !== "custom_message" || !entry.display)
+            return;
+        this.addFinishedMessage({
+            role: "custom",
+            customType: entry.customType,
+            content: entry.content,
+            display: entry.display,
+            details: entry.details,
+            timestamp: new Date(entry.timestamp).getTime(),
+        });
     }
     retryFailed(finalError) {
         this.notice(`Retry failed: ${finalError ?? "unknown error"}`, "error");

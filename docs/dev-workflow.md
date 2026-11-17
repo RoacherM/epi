@@ -15,7 +15,7 @@
 | 审查子代理 | `agy` 并行盲审（`gemini-4-carbon-high` + `gemini-4-argon-high`），由 `scripts/review.sh` 转调全局评审执行器驱动 | 功能或重构完成（或触及高风险路径）合入 `main` 前盲审一次冻结副本 |
 
 - **本地 Git 钩子（`.githooks/pre-commit` 与 `.githooks/pre-merge-commit`，`core.hooksPath=.githooks`）**：转调 `scripts/review.sh hook-pre-commit`（读取 `.review.json`）：① 不允许在 `main` 直接提交 `src/**`；② 在 `main` 执行 `git merge --no-ff`（无论有无冲突）时均运行 `check-gate`，只改文档或测试直接放行，触及高风险路径或属功能/重构分支凭 `verified.sha` 放行，带 `test/**` 改动且未碰高风险路径的修复分支凭 `fix.sha` 放行；③ 提交 `src/**` 时检查无半暂存且 `dist/` 与构建产物一致。
-- **子代理（WF5）**：用内置 `task` 工具并发派发互不依赖的阅读或长命令，不再装 `npm:pi-subagents`。子代理默认 `rules: false`、`skills: false`（`src/assembly.ts`）；派发执行代码修改的 `task` 子代理时传 `rules: true, skills: ["vibe-coding", "ub-mode"]`，让子代理直接继承仓内开发规范与预加载技能。
+- **子代理（WF5）**：用内置 `task` 工具并发派发互不依赖的阅读或长命令，不再装 `npm:pi-subagents`。子代理默认 `rules: false`、`skills: false`（`src/assembly.ts`）；需要注入仓内开发规范与预加载技能时，在 `.epi/agents/<name>.md` 预设中声明 `rules: true`、`skills: vibe-coding,ub-mode` 并传 `agent: "<name>"`（通用裁剪参数 `tools`/`excludeTools`/`workspace`/`verifyCommand` 可直接随 `task` 调用传入）。
 
 ## 2. 任务闭环（合并原 N3 逐包评审与 N6 阶段终审）
 
@@ -32,10 +32,10 @@
 
 1. **预检命令（`precheck`）**：`scripts/dev/precheck.sh` 在冻结副本内依次执行 `npm run build`、`git diff --exit-code -- dist`、`tsc --noEmit --noUnusedLocals --noUnusedParameters`、`model-snapshot.mjs --diff`、改动 `src/**/*.ts` 的 ESLint + `sonarjs` 检查，以及禁网沙箱全套测试。
 2. **高风险路径（`highRisk`，触及任一路径时再小也审）**：
-   - **线协议 / IPC / MCP**：`src/noninteractive.ts`、`src/worker.ts`、`src/worker-reaper.ts`、`src/monitor-stream.ts`、`src/extensions/mcp.ts`、`src/commands/mcp-cli.ts`
+   - **线协议 / IPC / MCP**：`src/noninteractive.ts`、`src/dispatch-epi-worker.ts`、`src/extensions/dispatch/**`、`src/extensions/dispatch-*`、`src/monitor-stream.ts`、`src/extensions/mcp.ts`、`src/commands/mcp-cli.ts`
    - **凭证与环境隔离**：`src/commands/auth-cli.ts`、`src/providers/**`、`src/provider-startup.ts`、`src/provider-validation.ts`、`src/web/config.ts`、`src/isolate-pi-env.ts`、`src/pi-env.ts`
    - **权限白名单、信任与门禁边界**：`src/bash-guard.ts`、`src/trust-prompt.ts`、`src/tui/project-guard.ts`、`src/manifest.ts`、`src/commands/manifest-cli.ts`、`src/skill-discovery.ts`、`src/hooks-config.ts`、`src/hooks-runtime.ts`、`src/extensions/hooks.ts`、`src/extensions/runtime.ts`、`.review.json`、`.githooks/**`、`scripts/review.sh`、`scripts/dev/{run-review.sh,precheck.sh,eslint.config.mjs}`
-   - **持久化、装配与自更新发版**：`src/task-runtime.ts`、`src/task-worktree.ts`、`src/paths.ts`、`src/project.ts`、`src/assembly.ts`、`src/host.ts`、`src/update.ts`、`scripts/release.mjs`、`install.sh`
+   - **持久化、装配与自更新发版**：`src/paths.ts`、`src/project.ts`、`src/assembly.ts`、`src/host.ts`、`src/update.ts`、`scripts/release.mjs`、`install.sh`
 3. **分片、目录与修复确认**：非生成文件全量 diff 超过 2000 行时按 `.review.json` 的 `shards`（`tui`、`extensions`、`task`、`core`）自动切分并行双审；评审产物写 `.dev/reviews/<id>/`；非阻塞意见（P2/P3）记入 `docs/dogfood-issues.md`；阻塞修复跑过 `precheck <id>-r2 <fix-base> HEAD` 后，用 `scripts/review.sh confirm <id>-r2 <carbon|argon> <fix-base> HEAD` 由原阻塞模型单审修复 diff 与碰到的文件。
 
 ## 4. 交接物与目录

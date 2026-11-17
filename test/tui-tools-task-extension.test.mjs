@@ -13,7 +13,7 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 
 import { piTui } from "../dist/tui/pi-tui.js";
 import { createEpiTheme } from "../dist/tui/theme.js";
-import { createTaskInlineExtension } from "../dist/extensions/task.js";
+import { createEpiDispatchExtension } from "../dist/extensions/dispatch-epi-host.js";
 
 initTheme("dark");
 const theme = createEpiTheme("dark");
@@ -22,9 +22,8 @@ const theme = createEpiTheme("dark");
 function loadTools(t) {
   const epiHome = mkdtempSync(join(tmpdir(), "epi-task-ext-"));
   t.after(() => rmSync(epiHome, { recursive: true, force: true }));
-  const extension = createTaskInlineExtension({
+  const extension = createEpiDispatchExtension({
     epiHome,
-    agentDir: join(epiHome, "pi"),
     projectAgentsDir: undefined,
     projectTrusted: false,
   });

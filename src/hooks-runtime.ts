@@ -14,9 +14,11 @@ import type {
   HookMatchValue,
   ResolvedHook,
 } from "./hooks-config.js";
+import { EPI_SHARED_DAEMON_NAMES, epiWorkerBootstrapUrl } from "./extensions/dispatch-epi-host.js";
+import type { AgentDefinition } from "./extensions/dispatch/agents.js";
+import { inheritedModelReference, WorkerPool } from "./extensions/dispatch/worker-host.js";
 import type { HookDecision } from "./hook-events.js";
-import type { TaskAgentDefinition } from "./task-agents.js";
-import { inheritedModelReference, TaskRuntime } from "./task-runtime.js";
+import { rewritePiText } from "./pi-output.js";
 
 const MAX_HOOK_PAYLOAD_BYTES = 64 * 1024;
 const MAX_HOOK_OUTPUT_BYTES = 64 * 1024;
@@ -53,11 +55,11 @@ export interface HooksRuntimeOptions {
   hooks: readonly ResolvedHook[];
   agentDir: string;
   epiHome: string;
-  agents: readonly TaskAgentDefinition[];
+  agents: readonly AgentDefinition[];
   workerPath: string;
   capsuleRoot: string;
-  artifactRoot: string;
-  sessionRoot: string;
+  artifactRoot?: string;
+  sessionRoot?: string;
   projectTrusted: boolean;
   /** The parent's trusted project root (`epi:hooks` passes the parent of `.epi/agents`). A child
    * whose cwd lies in another project resolves untrusted instead of re-reading `trust.json`. */
@@ -322,10 +324,27 @@ function assertDecisionAllowed(
   }
 }
 
+function applyHookDecision(
+  decision: HookDecision,
+  currentPayload: HookPayload,
+  finalDecision: HookDecision,
+): { payload: HookPayload; final: HookDecision } {
+  if (decision.action === "transform") {
+    return { payload: { ...currentPayload, text: decision.text }, final: decision };
+  }
+  if (decision.action === "replace") {
+    return {
+      payload: { ...currentPayload, content: [{ type: "text", text: decision.text }], isError: decision.isError ?? false },
+      final: decision,
+    };
+  }
+  return { payload: currentPayload, final: finalDecision };
+}
+
 export class HooksRuntime {
   private readonly hooks: readonly ResolvedHook[];
   private readonly agentDir: string;
-  private readonly taskRuntime: TaskRuntime;
+  private readonly taskRuntime: WorkerPool;
   private readonly activeControllers = new Set<AbortController>();
   private readonly sessionController = new AbortController();
   private modelRuntimePromise: Promise<ModelRuntime> | undefined;
@@ -334,21 +353,30 @@ export class HooksRuntime {
   constructor(options: HooksRuntimeOptions) {
     this.hooks = options.hooks;
     this.agentDir = options.agentDir;
-    this.taskRuntime = new TaskRuntime({
-      workerPath: options.workerPath,
+    this.taskRuntime = new WorkerPool({
+      stateDir: () => options.capsuleRoot,
       agentDir: options.agentDir,
-      epiHome: options.epiHome,
-      capsuleRoot: options.capsuleRoot,
-      artifactRoot: options.artifactRoot,
-      sessionRoot: options.sessionRoot,
-      agents: options.agents,
-      projectTrusted: options.projectTrusted,
-      projectRoot: options.projectRoot,
+      nodeExecPath: process.execPath,
+      workerPath: options.workerPath,
+      sdkEntryUrl: import.meta.resolve("@earendil-works/pi-coding-agent"),
+      bootstrapModule: epiWorkerBootstrapUrl(),
+      bootstrapOptions: (request) => ({
+        ...request,
+        epiHome: options.epiHome,
+        projectTrusted: options.projectTrusted,
+        ...(options.projectRoot === undefined ? {} : { projectRoot: options.projectRoot }),
+        // Design §9 (defect 4): a hook's agent handler must not itself trigger hooks.
+        hooks: false,
+      }),
+      agents: () => options.agents,
+      sharedDaemonNames: EPI_SHARED_DAEMON_NAMES,
+      rewriteOutputText: rewritePiText,
+      sessionShort: () => "hooks",
+      boardPath: () => undefined,
+      boardSince: () => 0,
       maxConcurrency: 2,
       maxOutputBytes: MAX_HOOK_OUTPUT_BYTES,
-      // Design §9 (defect 4): a hook's agent handler must not itself trigger hooks, or a
-      // tool_call hook that runs an agent would recurse without bound.
-      allowHooks: false,
+      killGraceMs: KILL_GRACE_MS,
     });
   }
 
@@ -402,17 +430,7 @@ export class HooksRuntime {
         if (decision.action === "block" || decision.action === "cancel") {
           return decision;
         }
-        if (decision.action === "transform") {
-          currentPayload = { ...currentPayload, text: decision.text };
-          finalDecision = decision;
-        } else if (decision.action === "replace") {
-          currentPayload = {
-            ...currentPayload,
-            content: [{ type: "text", text: decision.text }],
-            isError: decision.isError ?? false,
-          };
-          finalDecision = decision;
-        }
+        ({ payload: currentPayload, final: finalDecision } = applyHookDecision(decision, currentPayload, finalDecision));
       }
     }
     return finalDecision;

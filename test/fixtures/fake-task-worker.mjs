@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 
-import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, fstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { Socket } from "node:net";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 const capsulePath = process.argv[2];
 const capsule = JSON.parse(readFileSync(capsulePath, "utf8"));
-unlinkSync(capsulePath);
+if (process.env.EPI_TEST_CAPSULE_OUT) {
+  writeFileSync(process.env.EPI_TEST_CAPSULE_OUT, JSON.stringify(capsule));
+}
+try { unlinkSync(capsulePath); } catch {}
 
-// The real worker's SessionManager.open creates this file; the fake one has to as well, or a resume
-// has nothing to reopen (test/task-resume.test.mjs). Appending the task also proves the same file
-// is reused across runs.
+mkdirSync(dirname(capsule.sessionPath), { recursive: true });
 appendFileSync(
   capsule.sessionPath,
   `${JSON.stringify({ type: "message", message: { role: "user", content: capsule.task } })}\n`,
@@ -19,17 +21,25 @@ appendFileSync(
 process.once("SIGTERM", () => process.exit(143));
 process.once("SIGINT", () => process.exit(130));
 
+let hasFd3 = false;
+try {
+  fstatSync(3);
+  hasFd3 = true;
+} catch {}
+
 function emit(event) {
-  process.stdout.write(`${JSON.stringify(event)}\n`);
+  const line = `${JSON.stringify(event)}\n`;
+  if (hasFd3) writeSync(3, line);
+  else process.stdout.write(line);
 }
 
-/** The first command the parent sends on stdin, or undefined when it closes the pipe first. Lines
- * that are not JSON are ignored, the way the real worker ignores them. */
+/** The first command the parent sends on fd 3 (or stdin), or undefined when closed first. */
 function readFirstCommand() {
   return new Promise((resolve) => {
     let buffer = "";
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => {
+    const stream = hasFd3 ? new Socket({ fd: 3, readable: true, writable: false }) : process.stdin;
+    stream.setEncoding("utf8");
+    stream.on("data", (chunk) => {
       buffer += chunk;
       let newline = buffer.indexOf("\n");
       while (newline >= 0) {
@@ -39,16 +49,15 @@ function readFirstCommand() {
         if (line.trim().length === 0) continue;
         try {
           resolve(JSON.parse(line));
-          // The fake worker has what it needs; an open pipe must not keep it alive afterwards.
-          process.stdin.unref();
+          stream.unref?.();
           return;
         } catch {
-          process.stderr.write("fake worker: ignoring malformed stdin line\n");
+          process.stderr.write("fake worker: ignoring malformed line\n");
         }
       }
     });
-    process.stdin.on("end", () => {
-      process.stdin.unref();
+    stream.on("end", () => {
+      stream.unref?.();
       resolve(undefined);
     });
   });
@@ -114,7 +123,7 @@ if (capsule.task === "sleep") {
   });
   emit({ type: "result", ok: true, output: "stdin closed" });
 } else if (capsule.task === "fail") {
-  process.stdout.write(`${JSON.stringify({ type: "result", ok: false, error: "fixture failure" })}\n`);
+  emit({ type: "result", ok: false, error: "fixture failure" });
   process.exitCode = 1;
 } else if (capsule.task.startsWith("pi-guidance-exit-")) {
   // Pi's "No API key found" error as a worker reports it; the exit code picks task-runtime's branch.
@@ -126,22 +135,18 @@ if (capsule.task === "sleep") {
     `  ${join(getDocsPath(), "providers.md")}`,
     `  ${join(getDocsPath(), "models.md")}`,
   ].join("\n");
-  process.stdout.write(`${JSON.stringify({ type: "result", ok: false, error })}\n`);
+  emit({ type: "result", ok: false, error });
   process.exitCode = Number(capsule.task.slice("pi-guidance-exit-".length));
 } else if (capsule.task === "echo-model") {
-  process.stdout.write(`${JSON.stringify({ type: "result", ok: true, output: String(capsule.model) })}\n`);
+  emit({ type: "result", ok: true, output: String(capsule.model) });
 } else if (capsule.task === "with-usage") {
   const usage = { inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, costUsd: 0.001 };
-  process.stdout.write(`${JSON.stringify({ type: "result", ok: true, output: "done", usage })}\n`);
+  emit({ type: "result", ok: true, output: "done", usage });
 } else if (capsule.task === "slow-usage") {
-  // Finishes only after a session switch has replaced the extension runtime, so the usage record
-  // has to go through the *live* pi (test/task.test.mjs).
   await delay(300);
   const usage = { inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, costUsd: 0.001 };
-  process.stdout.write(`${JSON.stringify({ type: "result", ok: true, output: "done", usage })}\n`);
+  emit({ type: "result", ok: true, output: "done", usage });
 } else if (capsule.task === "compact-wait") {
-  // Compaction is parent-visible progress, then the worker waits so a test can read the live
-  // status block before the job settles.
   emit({ type: "progress", turns: 1, steps: 1, phase: "tool_start", tool: "read", target: "src/big.ts" });
   emit({ type: "progress", turns: 1, steps: 1, phase: "tool_end", tool: "read", target: "src/big.ts" });
   emit({ type: "progress", turns: 1, steps: 1, phase: "compaction", reason: "threshold", tokensBefore: 182000, tokensAfter: 41000, ok: true });
@@ -149,32 +154,28 @@ if (capsule.task === "sleep") {
   const command = await readFirstCommand();
   emit({ type: "result", ok: true, output: command?.type === "steer" ? `steered:${command.message}` : "compaction done" });
 } else if (capsule.task === "late-steer") {
-  // Reports a result, then a steer that arrived too late to deliver: the parent must resume the
-  // job with that text rather than lose it (test/task-resume.test.mjs).
   emit({ type: "progress", turns: 1, steps: 1, phase: "tool_start", tool: "bash", target: "sleep 1" });
   const command = await readFirstCommand();
   emit({ type: "result", ok: true, turns: 1, output: "first-run" });
   emit({ type: "steer_dropped", message: command?.message ?? "" });
 } else if (capsule.task === "partial") {
-  process.stdout.write(`${JSON.stringify({ type: "result", ok: true, partial: true, turns: 3, output: "half done" })}\n`);
+  emit({ type: "result", ok: true, partial: true, turns: 3, output: "half done" });
 } else if (capsule.task === "context-stop-large") {
-  // A context stop whose answer is longer than the parent's output budget: the reason the parent
-  // adds must survive the truncation (review round 2 P2-1).
-  process.stdout.write(`${JSON.stringify({ type: "result", ok: true, partial: true, stopped: "context", turns: 3, output: "y".repeat(2000) })}\n`);
+  emit({ type: "result", ok: true, partial: true, stopped: "context", turns: 3, output: "y".repeat(2000) });
 } else if (capsule.task === "empty") {
-  process.stdout.write(`${JSON.stringify({ type: "result", ok: true, output: "" })}\n`);
+  emit({ type: "result", ok: true, output: "" });
 } else if (capsule.task === "large") {
-  process.stdout.write(`${JSON.stringify({ type: "result", ok: true, output: "x".repeat(4096) })}\n`);
+  emit({ type: "result", ok: true, output: "x".repeat(4096) });
 } else if (capsule.task.startsWith("HOOK_CONTINUE")) {
-  process.stdout.write(`${JSON.stringify({
+  emit({
     type: "result",
     ok: true,
     output: JSON.stringify({ action: "continue" }),
-  })}\n`);
+  });
 } else {
-  process.stdout.write(`${JSON.stringify({
+  emit({
     type: "result",
     ok: true,
     output: `fake:${capsule.task}:${capsule.systemPrompt.trim()}`,
-  })}\n`);
+  });
 }

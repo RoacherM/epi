@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
 export const DEFAULT_BASH_TIMEOUT_SECONDS = 120;
 export const MAX_BASH_TIMEOUT_SECONDS = 600;
+export const MAX_ASYNC_BASH_TIMEOUT_SECONDS = 14_400;
 const MAX_STREAM_PROBE_SECONDS = 60;
 const MAX_SHELL_UNWRAP_DEPTH = 3;
 const DETACHED_BINS = new Set(["nohup", "setsid", "disown", "daemonize"]);
@@ -43,6 +44,17 @@ export function normalizeBashTimeout(rawTimeout, hasMonitorTool = true) {
         return {
             action: "block",
             reason: `Invalid bash timeout: ${rawTimeout}s exceeds the ${MAX_BASH_TIMEOUT_SECONDS}s (10m) maximum (\`bash.timeout\` is in SECONDS, default: ${DEFAULT_BASH_TIMEOUT_SECONDS}s). Pass \`timeout <= ${MAX_BASH_TIMEOUT_SECONDS}\`, or ${delegate}.`,
+        };
+    }
+    return { action: "allow", timeoutSeconds: rawTimeout, defaulted: false };
+}
+export function normalizeAsyncBashTimeout(rawTimeout) {
+    if (rawTimeout === undefined)
+        return { action: "allow", timeoutSeconds: 0, defaulted: false };
+    if (typeof rawTimeout !== "number" || !Number.isFinite(rawTimeout) || rawTimeout <= 0 || rawTimeout > MAX_ASYNC_BASH_TIMEOUT_SECONDS) {
+        return {
+            action: "block",
+            reason: `Invalid async bash timeout (${String(rawTimeout)}): \`bash.timeout\` must be between 1 and ${MAX_ASYNC_BASH_TIMEOUT_SECONDS}s (4h) in SECONDS.`,
         };
     }
     return { action: "allow", timeoutSeconds: rawTimeout, defaulted: false };
@@ -367,7 +379,10 @@ function inspectSegment(seg, ctx) {
         if (innerHit.blocked)
             return innerHit;
     }
-    const directHit = checkStreamFollow(bin, args, seg.text, probeBound, ctx.options.hasMonitorTool) ?? checkInteractiveTui(bin, args, seg.text);
+    const streamHit = ctx.options.asyncManaged === true
+        ? undefined
+        : checkStreamFollow(bin, args, seg.text, probeBound, ctx.options.hasMonitorTool);
+    const directHit = streamHit ?? checkInteractiveTui(bin, args, seg.text);
     if (directHit !== undefined)
         return directHit;
     return seg.sep === "&" && !ctx.cleanedUp

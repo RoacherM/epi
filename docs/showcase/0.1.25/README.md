@@ -2,7 +2,7 @@
 
 [← 特性展示](../README.md) · 场景脚本 [scripts/docs/showcase/0.1.25.mjs](../../../scripts/docs/showcase/0.1.25.mjs)
 
-0.1.25 的主题是内置子代理：`epi:task` 2.0 取代外部的 `npm:pi-subagents`。主会话把大块阅读交给子代理，自己只收结论，上下文保持干净。设计与实现状态见 [subagents-design.md](../../subagents-design.md) §10。
+0.1.25 的主题是内置子代理：`epi:task` 2.0 取代外部的 `npm:pi-subagents`。主会话把大块阅读交给子代理，自己只收结论，上下文保持干净。设计与实现状态见 [archive-subagents-design.md](../../notes/archive-subagents-design.md) §10。
 
 演示内容：问两件互不相关的事。模型在同一轮派出两个 `reader` 子代理，它们各自在独立进程、独立上下文里 `grep` 代码，只把带 `文件:行号` 的一句话结论交回来。
 

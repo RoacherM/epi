@@ -9,13 +9,13 @@ import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 
 import { createEpiRuntimeExtensions } from "../dist/extensions/runtime.js";
 import { createEpiRuntimeIdentity } from "../dist/runtime-identity.js";
-import { TaskRuntime } from "../dist/task-runtime.js";
+import { WorkerPool } from "../dist/extensions/dispatch/worker-host.js";
 import {
   initialLedgerOffset,
-  inspectNewWorkerBackgroundPgids,
-  prepareWorkerExecutionGuard,
-  reapWorkerOrphans,
-} from "../dist/worker-reaper.js";
+  inspectNewBackgroundPgids as inspectNewWorkerBackgroundPgids,
+  prepareExecutionGuard as prepareWorkerExecutionGuard,
+  reapOrphans as reapWorkerOrphans,
+} from "../dist/extensions/dispatch/reaper.js";
 import { EPI_PACKAGE_VERSION as EPI_VERSION } from "./fixtures/epi-package-version.mjs";
 
 function isPidAlive(pid) {
@@ -49,14 +49,14 @@ test(
     assert.equal(guard.env.GIT_TERMINAL_PROMPT, "0");
     assert.equal(guard.env.GCM_INTERACTIVE, "never");
     assert.equal(guard.env.GIT_PAGER, "cat");
-    assert.match(guard.cookie, /^wk_jobalpha1234_[0-9a-f]{12}$/);
+    assert.match(guard.cookie, /^pd_jobalpha1234_[0-9a-f]{12}$/);
 
     // Spawn top-level detached /bin/bash (mirroring Pi's bash tool) and a nested /bin/bash -c inside it:
     const res = spawnSync(
       "/bin/bash",
       [
         "-c",
-        'printf "OUTER_LEDGER=%s\\nUSER_HOOK=%s\\nOUTER_BASH_ENV=%s\\n" "${EPI_PGID_LEDGER:-unset}" "${USER_BASH_ENV_RAN:-no}" "${BASH_ENV:-unset}" && /bin/bash -c \'printf "INNER_HOOK=%s\\n" "${USER_BASH_ENV_RAN:-no}"\'',
+        'printf "OUTER_LEDGER=%s\\nUSER_HOOK=%s\\nOUTER_BASH_ENV=%s\\n" "${PI_DISPATCH_PGID_LEDGER:-unset}" "${USER_BASH_ENV_RAN:-no}" "${BASH_ENV:-unset}" && /bin/bash -c \'printf "INNER_HOOK=%s\\n" "${USER_BASH_ENV_RAN:-no}"\'',
       ],
       { env: guard.env, encoding: "utf8" },
     );
@@ -73,7 +73,22 @@ test(
     // Non-interactive GIT_EDITOR stub exits 1 immediately with actionable stderr:
     const editorRes = spawnSync(guard.env.GIT_EDITOR, ["COMMIT_EDITMSG"], { encoding: "utf8" });
     assert.equal(editorRes.status, 1);
-    assert.match(editorRes.stderr, /interactive git editor blocked in headless subagent/);
+    assert.match(editorRes.stderr, /interactive git editor blocked/);
+
+    // Nested guard preserves outer cookie + outer PGID ledger so worker bash mirrors PGIDs up to parent capsule:
+    const childDir = join(dir, "child-guard");
+    mkdirSync(childDir);
+    const childGuard = prepareWorkerExecutionGuard(childDir, "bg-inner-5678", guard.env);
+    assert.equal(childGuard.env.PI_DISPATCH_COOKIE, `${guard.cookie},${childGuard.cookie}`);
+    assert.match(childGuard.env.PI_DISPATCH_PARENT_PGID_LEDGER, new RegExp(guard.ledgerPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    const innerRes = spawnSync("/bin/bash", ["-c", 'printf "INNER_USER=%s\\n" "${USER_BASH_ENV_RAN:-no}"'], {
+      env: childGuard.env,
+      encoding: "utf8",
+    });
+    assert.equal(innerRes.status, 0, innerRes.stderr);
+    assert.match(innerRes.stdout, /INNER_USER=yes/);
+    const parentLinesAfterNested = readFileSync(guard.ledgerPath, "utf8").trim().split("\n").filter(Boolean);
+    assert.equal(parentLinesAfterNested.length, 2, "nested worker bash mirrored its PGID into parent capsule pgids.log");
   },
 );
 
@@ -226,13 +241,12 @@ test(
       workerScript,
       `
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
 const capsule = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const pidFile = join(capsule.cwd, capsule.task.includes("hang") ? "cancel-orphan.pid" : "done-orphan.pid");
 
-// Simulate Pi's bash tool spawning detached /bin/bash which in turn spawns a detached background process:
 const bash = spawn("/bin/bash", ["-c", \`\${JSON.stringify(process.execPath)} -e 'const { spawn } = require("node:child_process"); const fs = require("node:fs"); const c = spawn(process.execPath, ["-e", "setInterval(() => {}, 10000)"], { detached: true, stdio: "ignore" }); c.unref(); fs.writeFileSync(\${JSON.stringify(pidFile)}, String(c.pid));'\`], {
   detached: true,
   stdio: "ignore",
@@ -241,24 +255,27 @@ const bash = spawn("/bin/bash", ["-c", \`\${JSON.stringify(process.execPath)} -e
 await new Promise((resolve) => bash.on("close", resolve));
 
 if (capsule.task.includes("hang")) {
-  process.stdout.write(JSON.stringify({ type: "progress", phase: "report", summary: "spawned", turns: 1, steps: 1 }) + "\\n");
+  writeSync(3, JSON.stringify({ type: "progress", phase: "report", summary: "spawned", turns: 1, steps: 1 }) + "\\n");
   setInterval(() => {}, 10000);
 } else {
-  process.stdout.write(JSON.stringify({ type: "result", ok: true, output: "done", turns: 1 }) + "\\n");
+  writeSync(3, JSON.stringify({ type: "result", ok: true, output: "done", turns: 1 }) + "\\n");
   process.exit(0);
 }
 `,
     );
 
-    const runtime = new TaskRuntime({
-      workerPath: workerScript,
+    const runtime = new WorkerPool({
+      stateDir: () => join(root, "runtime", "dispatch"),
       agentDir: join(root, "pi"),
-      epiHome: root,
-      capsuleRoot: join(root, "runtime", "task"),
-      artifactRoot: join(root, "artifacts", "task"),
-      sessionRoot: join(root, "runtime", "task", "sessions"),
-      agents: [],
-      projectTrusted: false,
+      nodeExecPath: process.execPath,
+      workerPath: workerScript,
+      sdkEntryUrl: import.meta.resolve("@earendil-works/pi-coding-agent"),
+      agents: () => [],
+      sharedDaemonNames: ["hc", "herdr-core", "herdr-app"],
+      rewriteOutputText: (t) => t,
+      sessionShort: () => "reap",
+      boardPath: () => undefined,
+      boardSince: () => 0,
       killGraceMs: 100,
     });
 
@@ -286,5 +303,79 @@ if (capsule.task.includes("hang")) {
     const cancelled = await runtime.cancel(startedHang.id);
     assert.equal(cancelled.status, "cancelled");
     assert.equal(isPidAlive(cancelPid), false, `expected orphan ${cancelPid} to be reaped on task cancellation`);
+  },
+);
+
+test(
+  "real pi-worker.js + bash tool preserves user BASH_ENV, mirrors PGIDs to capsule ledger, and reaps escaped orphans",
+  { skip: process.platform === "win32" || !existsSync("/bin/bash") },
+  async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "epi-real-worker-reap-"));
+    const orphanPids = [];
+    const savedBashEnv = process.env.BASH_ENV;
+    const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const savedDepth = process.env.PI_DISPATCH_DEPTH;
+    const userHook = join(root, "user-env.sh");
+    writeFileSync(userHook, "export USER_BASH_ENV_RAN=from-user-hook\n", { mode: 0o600 });
+    process.env.BASH_ENV = userHook;
+    process.env.PI_CODING_AGENT_DIR = join(root, "pi");
+    delete process.env.PI_DISPATCH_DEPTH;
+    mkdirSync(join(root, "pi"), { recursive: true });
+    t.after(() => {
+      if (savedBashEnv === undefined) delete process.env.BASH_ENV;
+      else process.env.BASH_ENV = savedBashEnv;
+      if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
+      if (savedDepth === undefined) delete process.env.PI_DISPATCH_DEPTH;
+      else process.env.PI_DISPATCH_DEPTH = savedDepth;
+      for (const pid of orphanPids) {
+        try { process.kill(-pid, "SIGKILL"); } catch {}
+        try { process.kill(pid, "SIGKILL"); } catch {}
+      }
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    });
+
+    const faux = new URL("./fixtures/dispatch-faux-task.mjs", import.meta.url).pathname;
+    const workDir = join(root, "work");
+    mkdirSync(workDir, { recursive: true });
+
+    const pool = new WorkerPool({
+      stateDir: () => join(root, "runtime", "dispatch"),
+      agentDir: join(root, "pi"),
+      nodeExecPath: process.execPath,
+      workerPath: new URL("../dist/extensions/dispatch/pi-worker.js", import.meta.url).pathname,
+      sdkEntryUrl: import.meta.resolve("@earendil-works/pi-coding-agent"),
+      extensionPaths: [faux],
+      agents: () => [],
+      sharedDaemonNames: ["hc", "herdr-core", "herdr-app"],
+      rewriteOutputText: (s) => s,
+      sessionShort: () => "real",
+      boardPath: () => undefined,
+      boardSince: () => 0,
+      killGraceMs: 100,
+    });
+
+    const outDone = join(workDir, "done.json");
+    const job1 = pool.start({ cwd: workDir, task: `child-escape-orphan OUT=${outDone}`, inheritedModel: "epi-faux/tools" });
+    const done1 = await pool.wait(job1.id);
+    assert.equal(done1.status, "completed", done1.error);
+    const meta1 = JSON.parse(readFileSync(outDone, "utf8"));
+    orphanPids.push(meta1.pid);
+    assert.equal(meta1.userEnv, "from-user-hook", "real pi-worker bash tool preserved user BASH_ENV");
+    assert.equal(isPidAlive(meta1.pid), false, `expected real pi-worker orphan ${meta1.pid} to be reaped on completion`);
+
+    const outCancel = join(workDir, "cancel.json");
+    const job2 = pool.start({ cwd: workDir, task: `child-escape-orphan hang-after OUT=${outCancel}`, inheritedModel: "epi-faux/tools" });
+    const deadline = Date.now() + 8_000;
+    while (!existsSync(outCancel) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    assert.ok(existsSync(outCancel), "real pi-worker wrote cancel.json");
+    const meta2 = JSON.parse(readFileSync(outCancel, "utf8"));
+    orphanPids.push(meta2.pid);
+    assert.equal(isPidAlive(meta2.pid), true);
+    const cancelled = await pool.cancel(job2.id);
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(isPidAlive(meta2.pid), false, `expected real pi-worker orphan ${meta2.pid} to be reaped on cancel`);
   },
 );

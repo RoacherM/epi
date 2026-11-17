@@ -144,6 +144,39 @@ test("a custom message_end draws the message", () => {
   assert.match(rendered(transcript), /CUSTOM-TEXT/);
 });
 
+test("a boundary-committed custom_message entry_appended draws when display is true and hides when false", () => {
+  const transcript = transcriptWithTools();
+  transcript.handle({
+    type: "entry_appended",
+    entry: {
+      type: "custom_message",
+      id: "e1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      customType: "epi:task-notify",
+      content: "BOUNDARY-VISIBLE",
+      display: true,
+      details: { jobIds: ["j1"] },
+    },
+  });
+  transcript.handle({
+    type: "entry_appended",
+    entry: {
+      type: "custom_message",
+      id: "e2",
+      parentId: "e1",
+      timestamp: new Date().toISOString(),
+      customType: "epi:task-notify",
+      content: "BOUNDARY-HIDDEN",
+      display: false,
+      details: { jobIds: ["j2"] },
+    },
+  });
+  const output = rendered(transcript);
+  assert.match(output, /BOUNDARY-VISIBLE/);
+  assert.doesNotMatch(output, /BOUNDARY-HIDDEN/);
+});
+
 // tool_execution_end carries durationMs at the top level, not inside `result`; replayed toolResult
 // messages carry it themselves. Both reach a renderer as `context.durationMs` (docs/tui-transcript-
 // layout-implementation.md W1), live and on /resume alike.

@@ -56,14 +56,15 @@ test("a running task job opens from its call row and from the footer, and its pa
     ["waitFor", "◐ 1 task", { screen: true }],
     ["clickText", "child job please"], ["waitFor", "CHILD-STEP", { screen: true }], ["screen", "fromRow"],
     ["key", "esc"], ["waitGone", "(running)"],
-    ["clickText", "◐ 1 task"], ["waitFor", "tasks (1 job)", { screen: true }], ["screen", "list"],
-    ["key", "enter"], ["waitFor", "CHILD-FINAL-ANSWER", { screen: true, timeoutMs: 20_000 }], ["screen", "live"],
-    ["key", "esc"], ["waitFor", "tasks (1 job)", { screen: true }], ["screen", "back"], ["detach"],
+    ["clickText", "◐ 1 task"], ["waitFor", "Items (1)", { screen: true }], ["screen", "list"],
+    ["key", "enter"], ["waitFor", "CHILD-FINAL-ANSWER", { screen: true, timeoutMs: 20_000 }],
+    ["waitFor", { regex: "job_[0-9a-f]{8} · completed" }, { screen: true, timeoutMs: 20_000 }], ["screen", "live"],
+    ["key", "esc"], ["waitFor", "Items (1)", { screen: true }], ["screen", "back"], ["detach"],
   ], { rows: 50 });
   assert.match(screen(screens, "fromRow"), /task [0-9a-f]{8} \(running\)/);
   assert.match(screen(screens, "fromRow"), /◆ bash echo CHILD-STEP/);
-  assert.match(screen(screens, "list"), /◐ [0-9a-f]{8} running task · turn \d/);
+  assert.match(screen(screens, "list"), /◐ ◆ job_[0-9a-f]{8} running · t\d/);
   // The same page, left open, picked up the child's answer and its new status.
-  assert.match(screen(screens, "live"), /task [0-9a-f]{8} \(completed\)/);
-  assert.match(screen(screens, "back"), /✓ [0-9a-f]{8} completed task/);
+  assert.match(screen(screens, "live"), /job_[0-9a-f]{8} · completed/);
+  assert.match(screen(screens, "back"), /✓ ◆ job_[0-9a-f]{8} completed/);
 });

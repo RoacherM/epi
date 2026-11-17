@@ -10,7 +10,7 @@ import test from "node:test";
 
 import { getSelectListTheme, initTheme } from "@earendil-works/pi-coding-agent";
 
-import { createTaskInlineExtension } from "../dist/extensions/task.js";
+import { createEpiDispatchExtension } from "../dist/extensions/dispatch-epi-host.js";
 import { BlockInspectorOverlay } from "../dist/tui/buffer/inspector.js";
 import { UserMessageBlock, shortcutsBar } from "../dist/tui/chrome.js";
 import { ChipEditor } from "../dist/tui/paste-chips.js";
@@ -246,15 +246,19 @@ const fakeWorker = fileURLToPath(new URL("./fixtures/fake-task-worker.mjs", impo
 /** The real extension on a fake `pi` and a fake overlay host that records every overlay. */
 function bindTaskExtension(t, options = {}) {
   const root = mkdtempSync(join(tmpdir(), "epi-fold-task-"));
-  const extension = createTaskInlineExtension({ epiHome: root, agentDir: join(root, "pi"), projectAgentsDir: undefined, workerPath: fakeWorker, killGraceMs: 100, ...options });
+  const extension = createEpiDispatchExtension({ epiHome: root, projectAgentsDir: undefined, projectTrusted: false, workerPath: fakeWorker, killGraceMs: 100, ...options });
   const tools = new Map();
   const commands = new Map();
   const handlers = new Map();
+  const fire = async (event, payload, context) => {
+    for (const fn of handlers.get(event) ?? []) await fn(payload, context);
+  };
   extension.factory({
     events: { emit() {}, on: () => () => {} },
-    on: (event, handler) => handlers.set(event, handler),
+    on: (event, handler) => handlers.set(event, [...(handlers.get(event) ?? []), handler]),
     registerTool: (definition) => tools.set(definition.name, definition),
     registerCommand: (name, command) => commands.set(name, command),
+    registerMessageRenderer() {},
     appendEntry() {},
     sendMessage() {},
   });
@@ -264,32 +268,34 @@ function bindTaskExtension(t, options = {}) {
     theme,
     notify() {},
     setStatus() {},
+    onTerminalInput: () => () => {},
     custom: (factory, options_) => new Promise((resolve) => {
       const entry = { hidden: false, options: options_ };
       entry.component = factory(tui, theme, {}, (value) => { entry.hidden = true; resolve(value); });
       overlays.push(entry);
     }),
   };
-  const ctx = { mode: "tui", ui, cwd: root, model: undefined, sessionManager: { getSessionId: () => "s1", getBranch: () => [] } };
+  const ctx = { mode: "tui", ui, cwd: root, model: undefined, sessionManager: { getSessionId: () => "s1", getSessionFile: () => undefined, getEntries: () => [], getBranch: () => [] } };
+  void fire("session_start", { type: "session_start", reason: "startup" }, ctx);
   t.after(async () => {
-    await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx);
+    await fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx);
     rmSync(root, { recursive: true, force: true, maxRetries: 3 });
   });
-  return { tools, commands, handlers, overlays, ctx };
+  return { tools, commands, fire, overlays, ctx };
 }
 
 test("/tasks keeps one overlay: opening it again replaces it, and a session switch closes it", async (t) => {
-  const { commands, handlers, overlays, ctx } = bindTaskExtension(t);
+  const { commands, fire, overlays, ctx } = bindTaskExtension(t);
   void commands.get("tasks").handler("", ctx);
   void commands.get("tasks").handler("", ctx);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(overlays.filter((overlay) => !overlay.hidden).length, 1, "the second open replaced the first");
-  await handlers.get("session_shutdown")({ type: "session_shutdown", reason: "new" }, ctx);
+  await fire("session_shutdown", { type: "session_shutdown", reason: "new" }, ctx);
   assert.equal(overlays.filter((overlay) => !overlay.hidden).length, 0, "a session switch closes it");
 });
 
 test("a foreground task names its job in its first update, so its row opens the page while queued", async (t) => {
-  const { tools, ctx } = bindTaskExtension(t, { maxConcurrency: 1 });
+  const { tools, ctx } = bindTaskExtension(t);
   const task = tools.get("task");
   const context = { state: {}, isPartial: true, executionStarted: true, isError: false, expanded: false };
   const row = task.renderCall({ task: "foreground work" }, theme, context);

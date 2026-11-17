@@ -1,35 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-/**
- * Explicit system-framing preamble prepended to LLM-facing `epi:task-notify` and `Monitor`
- * custom messages so the model never mistakes an asynchronous background notification for a
- * user reply or confirmation. Stripped by the TUI custom-message renderers.
- */
-export declare const SYSTEM_NOTIFICATION_TAG = "[SYSTEM NOTIFICATION - NOT USER INPUT]";
-export declare function withSystemNotificationFraming(body: string): string;
-export declare function stripSystemNotificationFraming(content: string): string;
-/**
- * Shared per-extension delivery gate for background notifications (`epi:task` and `epi:monitor`).
- */
-export declare class NotificationGate {
-    pi: ExtensionAPI | undefined;
-    ctx: ExtensionContext | undefined;
-    compacting: boolean;
-    uiPromptDepth: number;
-    private readonly abortedSessions;
-    private fallbackAborted;
-    bindPi(pi: ExtensionAPI): void;
-    onSessionStart(ctx: ExtensionContext, reason?: string): void;
-    onSessionShutdown(): void;
-    sessionId(): string | undefined;
-    defaultAutoWake(originSessionId?: string | undefined): boolean;
-    canWake(originSessionId: string | undefined): boolean;
-    canInjectMidRun(event: {
-        outcome?: string;
-    }): boolean;
-    onAgentSettled(aborted: boolean | undefined): void;
-    onUserPromptStart(): void;
-    bindGateEvents(pi: ExtensionAPI, onUnlock: () => void, onTreeNavigate?: () => void): void;
-}
+import { NotificationGate, SYSTEM_NOTIFICATION_TAG, withSystemNotificationFraming } from "./dispatch/notify-ledger.js";
+import { stripSystemFraming as stripSystemNotificationFraming } from "./dispatch/tui-views.js";
+export { NotificationGate, SYSTEM_NOTIFICATION_TAG, stripSystemNotificationFraming, withSystemNotificationFraming };
 export interface NotificationPayload {
     customType: string;
     content: string;

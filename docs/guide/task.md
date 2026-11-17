@@ -2,14 +2,14 @@
 
 [← 文档索引](README.md)
 
-`epi:task` 默认开启（Manifest 里 `"disable": ["epi:task"]` 可关掉），可用工具：
+`epi:task` 默认开启（Manifest 里 `"disable": ["epi:task"]` 可关掉），由内置 `dispatch` 引擎提供统一异步调度与多代理协同能力，可用工具与命令：
 
 ```text
-task
-task_status
-task_wait
-task_cancel
-todo
+bash (waitMsBeforeAsync / isDaemon / stdin)
+task / task_status / task_wait / task_cancel / task_input
+board_post / board_read / board_wait
+timer / outbox / todo
+/tasks [id] · /board · /bg (Alt+B)
 ```
 
 **子代理**是另一个 Epi 进程：有自己的上下文窗口，只把结论带回主会话。适合会把主上下文撑爆的工作——大范围搜索、长时构建、一个任务里互不相干的几条分支。
@@ -24,45 +24,45 @@ task(task="读一遍 src/tui/，列出所有注册快捷键的地方，带文件
 
 ## 能力按需打开（默认全关）
 
-子代理默认**不带**技能、不连 MCP、不注入 Rules——省掉这些的加载与 token 开销。要哪项就开哪项：
+子代理默认**不带**技能、不连 MCP、不注入 Rules——省掉这些的加载与 token 开销。`task` 调用可直接传通用调度与裁剪参数，Epi 宿主装配域（`rules` / `skills` / `mcp` / `hooks` / `extensions`）则在 `agents/*.md` 预设里按需开启：
 
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `context` | `fresh` | `fork` 让子代理看到当前对话已完成的历史 |
-| `model` | 继承 | `provider/id` 或 `provider/id:thinking`，便宜的活可以换小模型 |
-| `rules` | `false` | 注入本次运行的 Rules（`AGENTS.md`） |
-| `skills` | `false` | `true` 列出全部技能；`["code-review"]` 把该技能正文直接预载，子代理不用先 `read` |
-| `mcp` | `false` | `true` 连全部；`["lark"]` 只连指定服务 |
-| `tools` / `excludeTools` | 继承 | 例如 `tools=["read","grep","find","ls"]` 做只读子代理 |
-| `hooks` | `true` | 子代理的工具调用同样受 `hooks.json` 约束 |
-| `extensions` | `true` | Manifest 外部扩展 |
-| `maxTurns` | 无 | 到达轮数后停下并交回已有产出（状态 `partial`） |
-| `timeoutSeconds` | `600` | 超时终止 |
+| 参数 | 位置 | 默认 | 说明 |
+|---|---|---|---|
+| `context` | 调用 / 预设 | `fresh` | `fork` 让子代理看到当前对话已完成的历史 |
+| `workspace` | 调用 / 预设 | `inherit` | `branch`（git worktree）或 `share`（CoW 克隆）做文件隔离 |
+| `model` | 调用 / 预设 | 继承 | `provider/id`、`provider/id:thinking` 或 `:thinking` |
+| `tools` / `excludeTools` | 调用 / 预设 | 继承 | 例如 `tools=["read","grep","find","ls"]` 做只读子代理（自动保留进度/看板工具） |
+| `systemPrompt` / `verifyCommand` | 调用 / 预设 | 无 | 追加系统指令；出口门禁命令须以 `0` 退出才允许收尾 |
+| `maxTurns` / `timeoutSeconds` | 调用 / 预设 | 无 / `600` | 到达轮数以 `partial` 交回已有产出；超时终止进程组 |
+| `rules` | `agents/*.md` | `false` | 注入本次运行的 Rules（`AGENTS.md`） |
+| `skills` | `agents/*.md` | `false` | `true` 列出全部技能；`["code-review"]` 把该技能正文直接预载 |
+| `mcp` | `agents/*.md` | `false` | `true` 连全部；`["lark"]` 只连指定服务 |
+| `hooks` / `extensions` | `agents/*.md` | `true` | 子代理的工具调用同样受 `hooks.json` 约束；裁剪 Manifest 外部扩展 |
 
 只读的审查子代理：
 
 ```text
 task(task="审查 git diff 里的安全问题，只报带文件:行号的实据",
-     tools=["read","grep","find","ls"], skills=["code-review"], rules=true)
+     tools=["read","grep","find","ls"])
 ```
 
 ## 后台与并发
 
-同一轮里发出多个 `task` 调用，它们就会并发运行，各自直接返回结果，不需要 `task_wait`。
+同一轮里发出多个 `task` 调用（或用 `tasks: [...]` 批量下发），它们就会并发运行，各自直接返回结果，不需要 `task_wait`。
 
 传 `background=true` 只返回一个 `jobId`，主会话继续干别的；之后用 `task_status` 查、`task_wait` 等、`task_cancel` 取消。只有主会话要在等待期间做别的事时才需要它。
 
-并发上限默认是 CPU 核数（最少 2，最多 16），超出的排队。用环境变量 `EPI_TASK_MAX_CONCURRENCY` 改。
+并发上限默认是 CPU 核数（最少 2，最多 16），超出的自动排队。
 
 每个子代理都要付一份系统提示词和一次进程启动（约 0.6 秒）。拆分时按工作量给，每个子代理分几个文件，不要一个小文件一个子代理。
 
 ## 查看、纠偏与续跑
 
-- **查看**：`task_status({ jobId })` 显示运行中子代理的轮次、步数、当前在做什么、最近 10 步和压缩次数；`task_status({})` 列出本进程的全部子代理。`jobId` 可以只给前 8 位。
-- **纠偏**：对运行中的子代理调用 `task({ jobId, task: "新指令" })`，它在当前工具执行完、下一次请求模型前按新指令调整，已有上下文不丢。对还在排队的子代理，这会替换它的任务文本。纠偏文本和新任务一样先过 `task_start` hook。
-- **续跑**：对已结束（completed / partial / failed / cancelled）的子代理调用 `task({ jobId, task: "追问" })`，它在原来的会话上继续，记得之前读过、做过的一切。默认前台返回结论；传 `background: true` 则立即返回。
-- **自动唤醒**：`background: true` 的子代理结束、且没被 `task_wait` 取走时，主会话会收到一条 `epi:task-notify` 消息。`epi -p` 下进程可能在子代理结束前就退出。
-- 子代理最后一轮结束后才到的纠偏不会自动生效，结果里会写明“未应用”，需要时用续跑。
+- **查看**：`task_status({ id })` 显示运行中子代理、后台命令（`bg_*`）或闹钟（`tm_*`）的状态与输出；`task_status({})` 列出全部后台项。交互界面里可点右下角状态计数或输入 `/tasks`、`/board` 查看双页签浮层，前台等待中按 `Alt+B` 或输入 `/bg` 可放手转后台。
+- **具名同伴与看板**：`task({ name: "parser", workspace: "branch", task: "..." })` 启动具名同伴并加入共享看板，同伴间用 `board_post("@peer ...")` + `board_wait` 直接交接，支持 `forkFrom: "<name>"` 复制同伴上下文。
+- **纠偏**：对运行中的子代理调用 `task({ jobId, task: "新指令", strategy })`（`jobId` 可传 `job_<id>` 或具名 `name`），已有上下文不丢；纠偏文本同样先过 `task_start` hook。
+- **续跑**：对已结束（completed / partial / failed / cancelled）的子代理调用 `task({ jobId, task: "追问" })`，它在原来的会话上继续。
+- **自动唤醒**：后台项结束且未被主动拉取时，主会话收到一条 `dispatch:notify` 消息；`epi -p` 下 `agent_settled` 排空屏障会自动等待有限后台项汇报后再收尾退出。
 
 ## 上下文与压缩
 
@@ -76,7 +76,7 @@ task(task="审查 git diff 里的安全问题，只报带文件:行号的实据"
 
 - 子代理**不能再派子代理**（它那边不加载 `epi:task`）。
 - 子代理的资源是主会话的子集：主会话没信任的项目配置，子代理也拿不到。
-- 子会话文件在 `~/.epi/runtime/task/sessions/`，不会出现在 `epi -c` 或 `/resume` 里。
+- 子会话文件在 `~/.epi/runtime/dispatch/sessions/`，不会出现在 `epi -c` 或 `/resume` 里。
 
 ## 预设（可选）
 

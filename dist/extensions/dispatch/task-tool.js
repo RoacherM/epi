@@ -1,0 +1,233 @@
+// The root's `task` tool (docs/dispatch-design.md §4): start one subagent, a parallel batch, or a
+// named peer; steer a running job or resume a settled one by `jobId` (an id or a task name).
+// A foreground call waits for the answer; a background one (and every named peer) returns a
+// receipt and reports back once through the notification ledger.
+import { resolve } from "node:path";
+import { Type } from "typebox";
+import { MAX_TASK_TIMEOUT_SECONDS } from "./agents.js";
+import { singleLine } from "./result.js";
+import { forkableBranch, inheritedModelReference, jobLabel, jobReport } from "./worker-host.js";
+const UPDATE_THROTTLE_MS = 250;
+const DEFAULT_FOREGROUND_BUDGET_SECONDS = 300;
+const Workspace = Type.Union([Type.Literal("inherit"), Type.Literal("branch"), Type.Literal("share")]);
+const BatchItem = Type.Object({
+    task: Type.String(),
+    name: Type.Optional(Type.String()),
+    agent: Type.Optional(Type.String()),
+    cwd: Type.Optional(Type.String()),
+    workspace: Type.Optional(Workspace),
+    model: Type.Optional(Type.String()),
+    tools: Type.Optional(Type.Array(Type.String())),
+    excludeTools: Type.Optional(Type.Array(Type.String())),
+}, { additionalProperties: false });
+export const TaskParameters = Type.Object({
+    task: Type.Optional(Type.String({ description: "Prompt (or steer/resume message with jobId)" })),
+    name: Type.Optional(Type.String({ description: "Board peer slug (@name, background)" })),
+    agent: Type.Optional(Type.String({ description: "Preset name" })),
+    cwd: Type.Optional(Type.String()),
+    tasks: Type.Optional(Type.Array(BatchItem, { minItems: 1, description: "Parallel batch" })),
+    jobId: Type.Optional(Type.String({ description: "job_<id> or name to steer/resume" })),
+    strategy: Type.Optional(Type.Union([Type.Literal("steer"), Type.Literal("enqueue"), Type.Literal("interrupt")])),
+    background: Type.Optional(Type.Boolean()),
+    context: Type.Optional(Type.Union([Type.Literal("fresh"), Type.Literal("fork")])),
+    forkFrom: Type.Optional(Type.String({ description: "Peer name to fork from" })),
+    workspace: Type.Optional(Workspace),
+    model: Type.Optional(Type.String({ description: "provider/id[:thinking] or :thinking" })),
+    tools: Type.Optional(Type.Array(Type.String(), { description: "Allowed tool names" })),
+    excludeTools: Type.Optional(Type.Array(Type.String(), { description: "Excluded tool names" })),
+    systemPrompt: Type.Optional(Type.String()),
+    verifyCommand: Type.Optional(Type.String({ description: "Shell command that must exit 0" })),
+    maxTurns: Type.Optional(Type.Integer({ minimum: 1 })),
+    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TASK_TIMEOUT_SECONDS })),
+}, { additionalProperties: false });
+function textResult(text, details) {
+    return { content: [{ type: "text", text }], details };
+}
+async function gateStart(deps, ctx, event) {
+    const decision = await deps.host.onTaskLifecycleEvent?.(event, ctx);
+    if (decision === undefined || decision.action === "continue")
+        return;
+    throw new Error(decision.reason ?? `task_start was ${decision.action}ed by a hook`);
+}
+function forkEntries(deps, params, ctx) {
+    if (params.forkFrom !== undefined) {
+        if (deps.peerForkEntries === undefined)
+            throw new Error("forkFrom needs a named peer on the session board");
+        return deps.peerForkEntries(params.forkFrom);
+    }
+    const preset = deps.agents().find((agent) => agent.name === params.agent);
+    if ((params.context ?? preset?.context ?? "fresh") !== "fork")
+        return undefined;
+    return forkableBranch(ctx.sessionManager.getBranch());
+}
+async function startOne(deps, item, shared, ctx) {
+    const rawCwd = item.cwd ?? shared.cwd;
+    const cwd = rawCwd === undefined ? ctx.cwd : resolve(ctx.cwd, rawCwd);
+    const agent = item.agent ?? shared.agent;
+    await gateStart(deps, ctx, { type: "task_start", task: item.task, cwd, ...(agent === undefined ? {} : { agent }) });
+    const request = {
+        task: item.task, cwd, name: item.name, agent, model: item.model ?? shared.model, workspace: item.workspace ?? shared.workspace,
+        tools: item.tools ?? shared.tools, excludeTools: item.excludeTools ?? shared.excludeTools, systemPrompt: shared.systemPrompt,
+        inheritedModel: inheritedModelReference(ctx.model, ctx.thinkingLevel), context: shared.context,
+        forkEntries: forkEntries(deps, { context: shared.context, forkFrom: shared.forkFrom, agent }, ctx),
+        verifyCommand: shared.verifyCommand, maxTurns: shared.maxTurns, timeoutSeconds: shared.timeoutSeconds,
+        originSessionId: deps.gate.sessionId(),
+    };
+    const job = deps.pool.start(request);
+    if (job.name !== undefined)
+        deps.postBrief?.(job);
+    return job;
+}
+function isBackground(deps, explicit, item) {
+    if (explicit !== undefined)
+        return explicit;
+    if (item.name !== undefined)
+        return true;
+    return deps.agents().find((agent) => agent.name === item.agent)?.background ?? false;
+}
+function receipt(job) {
+    const ref = job.name ?? job.id;
+    return `${jobLabel(job)} started in the background. You will be notified when it settles; do not poll. task_status({ id: "${ref}" }) shows progress, task({ jobId: "${ref}", task }) steers it, task_cancel({ id: "${ref}" }) stops it.`;
+}
+function watchProgress(deps, jobId, onUpdate) {
+    if (onUpdate === undefined || deps.onJobChange === undefined)
+        return () => { };
+    let timer;
+    let lastKey = "";
+    const unsub = deps.onJobChange((snap) => {
+        if (snap.id !== jobId)
+            return;
+        const key = `${snap.turns ?? 0}|${snap.steps}|${snap.currentActivity ?? ""}|${snap.lastSummary ?? ""}|${snap.status}`;
+        if (key === lastKey || timer !== undefined)
+            return;
+        lastKey = key;
+        timer = setTimeout(() => {
+            timer = undefined;
+            try {
+                const latest = deps.pool.status(jobId);
+                onUpdate(textResult(`${jobLabel(latest)} ${latest.status}`, { job: latest }));
+            }
+            catch { /* settled or gone */ }
+        }, UPDATE_THROTTLE_MS);
+        timer.unref();
+    });
+    return () => {
+        unsub();
+        clearTimeout(timer);
+    };
+}
+function foregroundBudgetMs(host, ctx) {
+    if (ctx.mode !== "tui")
+        return undefined;
+    const sec = host.foregroundBudgetSeconds ?? DEFAULT_FOREGROUND_BUDGET_SECONDS;
+    return sec > 0 ? Math.ceil(sec * 1_000) : undefined;
+}
+function handedBackResult(deps, waited, detached, signal, budgetMs) {
+    const timedOut = !detached && signal?.aborted !== true;
+    deps.notifyOnSettle.set(waited.id, detached || timedOut || deps.gate.compacting);
+    const why = detached
+        ? "moved to the background (/bg)"
+        : timedOut
+            ? `still running after ${Math.round((budgetMs ?? 0) / 1_000)}s`
+            : "the wait was interrupted";
+    return textResult(`${jobLabel(waited)} keeps running in the background (${why}). You will be notified when it settles; task_status({ id: "${waited.name ?? waited.id}" }) checks on it.`, { job: waited });
+}
+async function runJob(deps, job, options) {
+    if (options.background) {
+        deps.notifyOnSettle.set(job.id, true);
+        return textResult(receipt(job), { job });
+    }
+    options.onUpdate?.(textResult(`${jobLabel(job)} running`, { job }));
+    const stopWatch = watchProgress(deps, job.id, options.onUpdate);
+    let detached = false;
+    const detachCtrl = new AbortController();
+    const detach = () => { detached = true; detachCtrl.abort(); };
+    deps.foregroundWaits?.add(detach);
+    const combinedSignal = options.signal === undefined ? detachCtrl.signal : AbortSignal.any([options.signal, detachCtrl.signal]);
+    let waited;
+    try {
+        waited = await deps.pool.wait(job.id, combinedSignal, options.budgetMs);
+    }
+    finally {
+        deps.foregroundWaits?.delete(detach);
+        stopWatch();
+    }
+    if (waited.status === "queued" || waited.status === "running") {
+        return handedBackResult(deps, waited, detached, options.signal, options.budgetMs);
+    }
+    await deps.awaitSettledHooks?.(job.id);
+    deps.ledger.collect(job.id);
+    const report = jobReport(waited);
+    return { ...textResult(report.text, report.details), ...(waited.status === "failed" ? { isError: true } : {}) };
+}
+async function continueJob(deps, params, signal, onUpdate, ctx) {
+    if (params.task === undefined)
+        throw new Error("task({ jobId }) needs a task: the steer or resume prompt");
+    const current = deps.pool.status(params.jobId);
+    await gateStart(deps, ctx, { type: "task_start", task: params.task, cwd: current.cwd, ...(current.agent === undefined ? {} : { agent: current.agent }) });
+    if (current.status === "queued" || current.status === "running") {
+        const steered = deps.pool.steer(params.jobId, params.task, params.strategy);
+        return textResult(`Steered ${jobLabel(steered)} (${params.strategy ?? "steer"}); it picks the message up after its current step.`, { job: steered });
+    }
+    const resumed = deps.pool.resume(params.jobId, params.task);
+    return runJob(deps, resumed, { background: params.background ?? resumed.name !== undefined, signal, onUpdate, budgetMs: foregroundBudgetMs(deps.host, ctx) });
+}
+async function runBatch(deps, params, ctx, signal) {
+    const started = [];
+    try {
+        for (const item of params.tasks)
+            started.push(await startOne(deps, item, params, ctx));
+    }
+    catch (error) {
+        await Promise.all(started.map((job) => deps.pool.cancel(job.id, true).catch(() => undefined)));
+        throw error;
+    }
+    if (params.background === true) {
+        for (const job of started)
+            deps.notifyOnSettle.set(job.id, true);
+        return textResult(started.map(receipt).join("\n"), { jobs: started });
+    }
+    const budgetMs = foregroundBudgetMs(deps.host, ctx);
+    const results = await Promise.all(started.map((job) => runJob(deps, job, {
+        background: isBackground(deps, undefined, { task: job.task, name: job.name, agent: job.agent }),
+        signal, onUpdate: undefined, budgetMs,
+    })));
+    return textResult(results.map((result) => result.content[0].text).join("\n\n"), { jobs: results.map((result) => result.details) });
+}
+function description(agents) {
+    const presets = agents.length === 0 ? "" : ` Presets: ${agents.map((agent) => `${agent.name} (${singleLine(agent.description, 80)})`).join("; ")}.`;
+    return "Delegate work to an isolated subagent (its own context, tools and process). Give it a self-contained task. "
+        + "Named tasks (name) become board peers that hand off to each other with @name; workspace branch/share isolates file changes."
+        + presets;
+}
+export function createTaskTool(deps) {
+    return {
+        name: "task",
+        label: "Task",
+        description: description(deps.agents()),
+        promptSnippet: "Delegate bounded work to a subagent with its own context window.",
+        parameters: TaskParameters,
+        async execute(_toolCallId, params, signal, onUpdate, ctx) {
+            if (params.jobId !== undefined)
+                return continueJob(deps, params, signal, onUpdate, ctx);
+            if (params.tasks !== undefined)
+                return runBatch(deps, params, ctx, signal);
+            if (params.task === undefined)
+                throw new Error("task needs task, tasks, or jobId");
+            const item = {
+                task: params.task, name: params.name, agent: params.agent, cwd: params.cwd,
+                workspace: params.workspace, model: params.model, tools: params.tools, excludeTools: params.excludeTools,
+            };
+            const job = await startOne(deps, item, params, ctx);
+            return runJob(deps, job, { background: isBackground(deps, params.background, item), signal, onUpdate, budgetMs: foregroundBudgetMs(deps.host, ctx) });
+        },
+    };
+}
+/** The settle notice a background (or handed-back) job puts into the ledger. */
+export function jobNotice(job) {
+    const ref = job.name ?? job.id;
+    const body = singleLine(job.result ?? job.error ?? "", 400);
+    const ws = job.workspace === undefined || job.workspace.removed === true ? "" : `\nworkspace (${job.workspace.mode}): ${job.workspace.path}${job.workspace.diffStat === undefined ? "" : ` (${job.workspace.diffStat})`}`;
+    return `${jobLabel(job)} ${job.status}${job.stoppedBy === undefined ? "" : ` (stopped: ${job.stoppedBy})`}: ${body}${ws}\ntask_status({ id: "${ref}" }) for the full result.`;
+}
+//# sourceMappingURL=task-tool.js.map
