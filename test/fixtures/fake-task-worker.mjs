@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { appendFileSync, fstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, createReadStream, fstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { Socket } from "node:net";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -37,7 +37,11 @@ function emit(event) {
 function readFirstCommand() {
   return new Promise((resolve) => {
     let buffer = "";
-    const stream = hasFd3 ? new Socket({ fd: 3, readable: true, writable: false }) : process.stdin;
+    const stream = hasFd3
+      ? process.versions.bun
+        ? createReadStream("", { fd: 3, autoClose: false })
+        : new Socket({ fd: 3, readable: true, writable: false })
+      : process.stdin;
     stream.setEncoding("utf8");
     stream.on("data", (chunk) => {
       buffer += chunk;
@@ -49,7 +53,8 @@ function readFirstCommand() {
         if (line.trim().length === 0) continue;
         try {
           resolve(JSON.parse(line));
-          stream.unref?.();
+          if (typeof stream.unref === "function") stream.unref();
+          else stream.destroy();
           return;
         } catch {
           process.stderr.write("fake worker: ignoring malformed line\n");

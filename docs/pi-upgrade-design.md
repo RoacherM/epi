@@ -79,10 +79,10 @@ B 的直接后果：用户只能通过 Epi 的新发布拿到新 Pi，所以 Epi
 
 1. 从 `package.json` 读版本号 `X`，tag 定为 `vX`；
 2. tag 已存在（`git ls-remote --tags origin refs/tags/vX`）就跳过，直接结束——这样 `release.yml` 每次 push 到 main 都能安全地跑，不需要额外判断"是不是刚发布过"；
-3. `npm pack --json` 打包出 `epi-X.tgz`；
-4. 用 `node:crypto` 对这个 tgz 算 SHA-256（不用 `npm pack` 自带的 `shasum`，那是 SHA-1）；
+3. 用 Bun 在干净暂存目录复制 `package.json`、`npm-shrinkwrap.json` 和 `dist/`，执行 `bun install --production --ignore-scripts --frozen-lockfile --no-save` 后打包为通用预打包归档 `epi-X-bundle.tar.gz`（不再发布单独的 npm `.tgz`，决策 IN1）；
+4. 用 `node:crypto` 对这个归档算 SHA-256；
 5. 把算出来的版本号和哈希填进 `install.sh` 模板的两个占位符，渲染到临时文件；
-6. `gh release create vX <tgz> <渲染后的 install.sh> --generate-notes --target <commit>`：tag 由这一步顺带创建，不需要单独 `git tag` / `git push`，CI 也就不需要给 main 推任何提交。
+6. `gh release create vX <bundle.tar.gz> <渲染后的 install.sh> --generate-notes --target <commit>`：tag 由这一步顺带创建，不需要单独 `git tag` / `git push`，CI 也就不需要给 main 推任何提交。
 
 `releases/download/vX/install.sh` 和 `releases/latest/download/install.sh` 都能拿到这份渲染好的文件（后者随最新 release 自动指向新版本，README 的一键安装命令用这个，不用每次发布改链接）；`epi update`（`src/update.ts` 的 `installerUrl`）用的是前一种带具体版本号的地址，跟发布产物的命名对得上，不用改。
 

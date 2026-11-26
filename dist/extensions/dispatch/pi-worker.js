@@ -6,9 +6,10 @@
 // ends the drain and arrives as the next `user` prompt. `verifyCommand` gates the finish.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, createReadStream, createWriteStream, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { Socket } from "node:net";
 import { dirname } from "node:path";
+import { Duplex } from "node:stream";
 import { CAPSULE_VERSION, JsonlChannel, resolveWorkerTools } from "./protocol.js";
 import { collectEntryUsage, errorText, finalAssistantText, finalAssistantTextFromEntries, singleLine, tailLines } from "./result.js";
 import { DispatchRuntime } from "./runtime.js";
@@ -160,6 +161,36 @@ function runVerify(command, cwd, timeoutMs) {
         });
     });
 }
+function openProtocolStream() {
+    if (!process.versions.bun) {
+        return new Socket({ fd: 3, readable: true, writable: true });
+    }
+    // Bun's `net.Socket({ fd: 3 })` drops reads from `child_process.spawn` stdio[3]; separate fs
+    // streams over fd 3 work bidirectionally on Bun's socketpair and close cleanly on release().
+    const reader = createReadStream("", { fd: 3, autoClose: false });
+    const writer = createWriteStream("", { fd: 3, autoClose: false });
+    const duplex = new Duplex({
+        read() { },
+        write(chunk, encoding, callback) {
+            writer.write(chunk, encoding, callback);
+        },
+        final(callback) {
+            reader.destroy();
+            writer.end(() => {
+                try {
+                    closeSync(3);
+                }
+                catch { /* already closed */ }
+                callback();
+            });
+        },
+    });
+    reader.on("data", (chunk) => duplex.push(chunk));
+    reader.on("end", () => duplex.push(null));
+    reader.on("error", (error) => duplex.destroy(error));
+    writer.on("error", (error) => duplex.destroy(error));
+    return duplex;
+}
 class Worker {
     capsule;
     session;
@@ -182,8 +213,7 @@ class Worker {
     runtime;
     constructor(capsule) {
         this.capsule = capsule;
-        const socket = new Socket({ fd: 3, readable: true, writable: true });
-        this.channel = new JsonlChannel(socket, (command) => this.handle(command), () => void this.interrupt());
+        this.channel = new JsonlChannel(openProtocolStream(), (command) => this.handle(command), () => void this.interrupt());
         this.runtime = new DispatchRuntime({ sharedDaemonNames: capsule.sharedDaemonNames }, capsule.role, {
             capsule,
             emit: (event) => this.emit(event),

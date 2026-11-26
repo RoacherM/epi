@@ -36,9 +36,9 @@ set +e
   step "checkout $short"
   git worktree add --detach "$dir" "$sha" >/dev/null
   cd "$dir"
-  step "node $(node --version), npm $(npm --version) (package.json engines: $(node -p 'JSON.stringify(require("./package.json").engines)'))"
-  step "npm ci --ignore-scripts"
-  npm ci --ignore-scripts --no-audit --no-fund
+  step "node $(node --version), bun $(bun --version), npm $(npm --version) (package.json engines: $(node -p 'JSON.stringify(require("./package.json").engines)'))"
+  step "bun install --frozen-lockfile --ignore-scripts --no-save"
+  bun install --frozen-lockfile --ignore-scripts --no-save
   step "npm run build"
   npm run build
   step "dist/ is committed and matches the build"
