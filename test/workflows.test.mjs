@@ -58,7 +58,8 @@ test("ci.yml parses and runs build, the dist check, and the tests", () => {
   assert.equal(doc.permissions.contents, "read");
   assertNeedsResolve(doc, "ci.yml");
   const runs = stepRuns(doc.jobs.test).join("\n");
-  assert.match(runs, /npm ci/);
+  assert.match(text, /oven-sh\/setup-bun@v2/);
+  assert.match(runs, /bun install --frozen-lockfile --ignore-scripts --no-save/);
   assert.match(runs, /npm run build/);
   assert.match(runs, /git diff --exit-code.*dist/);
   assert.match(runs, /npm test/);
@@ -121,7 +122,7 @@ test("pi-upgrade.yml parses, runs the gate, and branches on the result", () => {
 });
 
 test("release.yml parses, runs the full gate before releasing, and serializes with a concurrency group", () => {
-  const { doc } = loadWorkflow("release.yml");
+  const { doc, text } = loadWorkflow("release.yml");
   assert.deepEqual(doc.on.push.branches, ["main"]);
   assert.equal(doc.permissions.contents, "write");
   assertNeedsResolve(doc, "release.yml");
@@ -130,10 +131,11 @@ test("release.yml parses, runs the full gate before releasing, and serializes wi
   const job = doc.jobs.release;
   const checkout = job.steps.find((step) => step.uses?.startsWith("actions/checkout"));
   assert.equal(checkout.with["persist-credentials"], false);
+  assert.match(text, /oven-sh\/setup-bun@v2/);
 
   const runs = stepRuns(job);
   const joined = runs.join("\n");
-  assert.match(joined, /npm ci --ignore-scripts/);
+  assert.match(joined, /bun install --frozen-lockfile --ignore-scripts --no-save/);
   assert.match(joined, /npm run build/);
   assert.match(joined, /git diff --exit-code.*dist/);
   assert.match(joined, /npm test/);

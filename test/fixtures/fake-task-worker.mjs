@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { appendFileSync, fstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, closeSync, createReadStream, fstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { Socket } from "node:net";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -37,9 +37,25 @@ function emit(event) {
 function readFirstCommand() {
   return new Promise((resolve) => {
     let buffer = "";
-    const stream = hasFd3 ? new Socket({ fd: 3, readable: true, writable: false }) : process.stdin;
+    let settled = false;
+    const stream = hasFd3
+      ? process.versions.bun
+        ? createReadStream("", { fd: 3, autoClose: false })
+        : new Socket({ fd: 3, readable: true, writable: false })
+      : process.stdin;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      // Bun's createReadStream({ fd: 3, autoClose: false }).destroy() still closes fd 3 and breaks
+      // subsequent writeSync(3, ...); pause instead and close fd 3 after final emit().
+      if (typeof stream.unref === "function") stream.unref();
+      else stream.pause();
+      resolve(value);
+    };
     stream.setEncoding("utf8");
+    stream.on("error", () => finish(undefined));
     stream.on("data", (chunk) => {
+      if (settled) return;
       buffer += chunk;
       let newline = buffer.indexOf("\n");
       while (newline >= 0) {
@@ -48,18 +64,14 @@ function readFirstCommand() {
         newline = buffer.indexOf("\n");
         if (line.trim().length === 0) continue;
         try {
-          resolve(JSON.parse(line));
-          stream.unref?.();
+          finish(JSON.parse(line));
           return;
         } catch {
           process.stderr.write("fake worker: ignoring malformed line\n");
         }
       }
     });
-    stream.on("end", () => {
-      stream.unref?.();
-      resolve(undefined);
-    });
+    stream.on("end", () => finish(undefined));
   });
 }
 
@@ -178,4 +190,8 @@ if (capsule.task === "sleep") {
     ok: true,
     output: `fake:${capsule.task}:${capsule.systemPrompt.trim()}`,
   });
+}
+
+if (process.versions.bun && hasFd3) {
+  try { closeSync(3); } catch {}
 }

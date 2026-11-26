@@ -205,12 +205,11 @@ Tab               切到文件浏览
 ## 快速开始
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/RoacherM/epi/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/RoacherM/epi/releases/latest/download/install.sh | bash
 epi
 ```
 
-要求 Node.js `>=22.19.0`。启动后用 `/login` 登录模型服务。
+无需预装 Node.js 或 npm（支持 macOS 与 Linux；复用本机已有的 Bun，没有时自动下载校验过的私有 Bun 到 `~/.epi/runtime/bun`）。启动后用 `/login` 登录模型服务。
 
 ## 文档
 

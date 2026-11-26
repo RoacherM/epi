@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// Cuts a GitHub release for the version currently in package.json: packs the tarball, hashes it,
-// renders install.sh with that version+hash, and uploads both as release assets. The SHA-256 is
-// computed here and only here -- nothing in the repo ever carries a hand-edited hash (see
-// docs/pi-upgrade-design.md §5). `git`/`gh`/`exec` are injectable so tests never touch the network
-// or a real npm/git/gh binary.
+// Cuts a GitHub release for the version currently in package.json: builds a self-contained
+// universal bundle (`epi-<version>-bundle.tar.gz`) using Bun (`bun install --production
+// --ignore-scripts --frozen-lockfile --no-save`), hashes it, renders install.sh with that
+// version+hash, and uploads both as release assets. The SHA-256 is computed here and only here --
+// nothing in the repo ever carries a hand-edited hash (see docs/pi-upgrade-design.md §5).
+// `git`/`bun`/`tar`/`gh`/`exec` are injectable so tests never touch the network or real binaries.
 
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -59,15 +60,59 @@ export function tagExists({ cwd, tag, exec = defaultExec }) {
   return result.stdout.trim().length > 0;
 }
 
-/** `npm pack --json` builds the tarball without publishing anything; its JSON output names the
- * file it wrote so we don't have to guess epi's package name/version formatting. */
-export function packPackage({ cwd, exec = defaultExec }) {
-  const result = exec("npm", ["pack", "--json"], { cwd });
-  if (result.status !== 0) {
-    throw new Error(`npm pack failed: ${result.stderr || result.stdout}`);
+/** Assembles a self-contained universal bundle (`epi-<version>-bundle.tar.gz`) in a clean staging
+ * directory: copies `package.json`, `npm-shrinkwrap.json`, and `dist/`, installs production
+ * dependencies via Bun (migrating `npm-shrinkwrap.json` with `--frozen-lockfile --ignore-scripts`),
+ * and archives the `epi/` directory with `COPYFILE_DISABLE=1` so macOS xattrs never leak in. */
+export function packBundle({
+  cwd,
+  version,
+  outputDir,
+  exec = defaultExec,
+  stageTempDir = () => mkdtempSync(join(tmpdir(), "epi-bundle-stage-")),
+}) {
+  const distDir = join(cwd, "dist");
+  const shrinkwrapPath = join(cwd, "npm-shrinkwrap.json");
+  if (!existsSync(join(distDir, "cli.js"))) {
+    throw new Error(`cannot pack bundle: ${join(distDir, "cli.js")} not found (run build first)`);
   }
-  const [entry] = JSON.parse(result.stdout);
-  return { tarballPath: join(cwd, entry.filename), tarballName: entry.filename };
+  if (!existsSync(shrinkwrapPath)) {
+    throw new Error(`cannot pack bundle: ${shrinkwrapPath} not found`);
+  }
+
+  const bundleName = `epi-${version}-bundle.tar.gz`;
+  const bundlePath = join(outputDir, bundleName);
+  const stageDir = stageTempDir();
+  const bundleRoot = join(stageDir, "epi");
+  try {
+    mkdirSync(bundleRoot, { recursive: true });
+    cpSync(join(cwd, "package.json"), join(bundleRoot, "package.json"));
+    cpSync(shrinkwrapPath, join(bundleRoot, "npm-shrinkwrap.json"));
+    cpSync(distDir, join(bundleRoot, "dist"), { recursive: true });
+
+    const install = exec(
+      "bun",
+      ["install", "--production", "--ignore-scripts", "--frozen-lockfile", "--no-save"],
+      { cwd: bundleRoot },
+    );
+    if (install.status !== 0) {
+      throw new Error(`bun install failed: ${install.stderr || install.stdout}`);
+    }
+
+    // Keep npm-shrinkwrap.json as the sole lockfile inside the shipped bundle.
+    rmSync(join(bundleRoot, "bun.lock"), { force: true });
+
+    const archive = exec("tar", ["-czf", bundlePath, "-C", stageDir, "epi"], {
+      cwd,
+      env: { ...process.env, COPYFILE_DISABLE: "1" },
+    });
+    if (archive.status !== 0) {
+      throw new Error(`tar failed: ${archive.stderr || archive.stdout}`);
+    }
+    return { bundlePath, bundleName };
+  } finally {
+    rmSync(stageDir, { recursive: true, force: true });
+  }
 }
 
 /** `gh release create` also creates the tag (from --target's commit), so there is no separate
@@ -86,7 +131,7 @@ export function createRelease({ tag, targetSha, assets, exec = defaultExec, cwd 
 
 /**
  * Runs the full release: skip if the tag already exists (so re-running after a no-op push, or
- * `release.yml` racing `ci.yml`, is harmless); otherwise pack, hash, render, and publish.
+ * `release.yml` racing `ci.yml`, is harmless); otherwise bundle with Bun, hash, render, and publish.
  */
 export function runRelease({
   cwd,
@@ -95,6 +140,7 @@ export function runRelease({
   targetSha = process.env.GITHUB_SHA,
   writeFile = writeFileSync,
   tempDir = () => mkdtempSync(join(tmpdir(), "epi-release-")),
+  stageTempDir = () => mkdtempSync(join(tmpdir(), "epi-bundle-stage-")),
   log = () => {},
 }) {
   const version = readPackageVersion(cwd);
@@ -104,16 +150,16 @@ export function runRelease({
     return { skipped: true, version, tag };
   }
 
-  const { tarballPath, tarballName } = packPackage({ cwd, exec });
-  const sha256 = computeSha256(tarballPath);
-  const rendered = renderInstallScript(installTemplate, { version, sha256 });
   const directory = tempDir();
+  const { bundlePath, bundleName } = packBundle({ cwd, version, outputDir: directory, exec, stageTempDir });
+  const sha256 = computeSha256(bundlePath);
+  const rendered = renderInstallScript(installTemplate, { version, sha256 });
   const installScriptPath = join(directory, "install.sh");
   writeFile(installScriptPath, rendered);
 
-  createRelease({ tag, targetSha, assets: [tarballPath, installScriptPath], exec, cwd });
-  log(`published ${tag} (${tarballName}, sha256 ${sha256})`);
-  return { skipped: false, version, tag, tarballPath, sha256, installScriptPath };
+  createRelease({ tag, targetSha, assets: [bundlePath, installScriptPath], exec, cwd });
+  log(`published ${tag} (${bundleName}, sha256 ${sha256})`);
+  return { skipped: false, version, tag, bundlePath, bundleName, sha256, installScriptPath };
 }
 
 async function main() {
