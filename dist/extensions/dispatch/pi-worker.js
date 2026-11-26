@@ -165,30 +165,59 @@ function openProtocolStream() {
     if (!process.versions.bun) {
         return new Socket({ fd: 3, readable: true, writable: true });
     }
-    // Bun's `net.Socket({ fd: 3 })` drops reads from `child_process.spawn` stdio[3]; separate fs
-    // streams over fd 3 work bidirectionally on Bun's socketpair and close cleanly on release().
+    // Bun's `net.Socket({ fd: 3 })` drops reads from `child_process.spawn` stdio[3], and Bun's
+    // `createReadStream({ fd: 3, autoClose: false }).destroy()` ignores `autoClose: false` and closes
+    // fd 3 asynchronously (double-close / EBADF). Pause the reader instead and close fd 3 once after
+    // writes flush or on destroy.
     const reader = createReadStream("", { fd: 3, autoClose: false });
     const writer = createWriteStream("", { fd: 3, autoClose: false });
+    let closing = false;
+    let fdClosed = false;
+    const closeFdOnce = () => {
+        if (fdClosed)
+            return;
+        fdClosed = true;
+        try {
+            closeSync(3);
+        }
+        catch { /* already closed */ }
+    };
     const duplex = new Duplex({
         read() { },
         write(chunk, encoding, callback) {
             writer.write(chunk, encoding, callback);
         },
         final(callback) {
-            reader.destroy();
+            closing = true;
+            reader.pause();
             writer.end(() => {
-                try {
-                    closeSync(3);
-                }
-                catch { /* already closed */ }
+                closeFdOnce();
                 callback();
             });
         },
+        destroy(error, callback) {
+            closing = true;
+            reader.pause();
+            closeFdOnce();
+            callback(error);
+        },
     });
-    reader.on("data", (chunk) => duplex.push(chunk));
-    reader.on("end", () => duplex.push(null));
-    reader.on("error", (error) => duplex.destroy(error));
-    writer.on("error", (error) => duplex.destroy(error));
+    reader.on("data", (chunk) => {
+        if (!closing)
+            duplex.push(chunk);
+    });
+    reader.on("end", () => {
+        if (!closing)
+            duplex.push(null);
+    });
+    reader.on("error", (error) => {
+        if (!closing)
+            duplex.destroy(error);
+    });
+    writer.on("error", (error) => {
+        if (!closing)
+            duplex.destroy(error);
+    });
     return duplex;
 }
 class Worker {

@@ -8,9 +8,11 @@ EPI_VERSION="__EPI_VERSION__"
 DEFAULT_DOWNLOAD_URL="https://github.com/RoacherM/epi/releases/download/v${EPI_VERSION}/epi-${EPI_VERSION}-bundle.tar.gz"
 DEFAULT_PACKAGE_SHA256="__EPI_PACKAGE_SHA256__"
 
-# Pinned Bun runtime downloaded privately into <install-dir>/runtime/bun only when no usable Bun is
-# already installed on the machine. Checksums come from oven-sh/bun's official SHASUMS256.txt.
+# Pinned Bun runtime downloaded privately into <install-dir>/runtime/bun only when no usable Bun
+# (>= MIN_BUN_VERSION) is already installed on the machine. Checksums come from oven-sh/bun's
+# official SHASUMS256.txt.
 BUN_VERSION="1.4.5"
+MIN_BUN_VERSION="1.2.0"
 DEFAULT_BUN_BASE_URL="https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}"
 
 die() {
@@ -61,6 +63,44 @@ verify_sha256() {
     die "${label} checksum mismatch (expected ${expected}, got ${actual})"
 }
 
+version_ge() {
+  cur=$1
+  req=$2
+  # Strip optional leading 'v' or prerelease/build suffixes (e.g. 1.4.5-canary).
+  cur=${cur#v}
+  cur=${cur%%-*}
+  cur=${cur%%+*}
+  req=${req#v}
+
+  old_ifs=$IFS
+  IFS=.
+  # shellcheck disable=SC2086
+  set -- $cur
+  c1=${1:-0}; c2=${2:-0}; c3=${3:-0}
+  # shellcheck disable=SC2086
+  set -- $req
+  r1=${1:-0}; r2=${2:-0}; r3=${3:-0}
+  IFS=$old_ifs
+
+  case "$c1$c2$c3" in
+    *[!0-9]* | '') return 1 ;;
+  esac
+
+  if [ "$c1" -gt "$r1" ]; then return 0; fi
+  if [ "$c1" -lt "$r1" ]; then return 1; fi
+  if [ "$c2" -gt "$r2" ]; then return 0; fi
+  if [ "$c2" -lt "$r2" ]; then return 1; fi
+  [ "$c3" -ge "$r3" ]
+}
+
+bun_meets_version() {
+  candidate=$1
+  min_ver=$2
+  [ -x "$candidate" ] || return 1
+  found=$("$candidate" --version 2>/dev/null | head -n 1 | tr -d '\r') || return 1
+  version_ge "$found" "$min_ver"
+}
+
 detect_bun_target() {
   os_raw=$(uname -s)
   arch_raw=$(uname -m)
@@ -109,14 +149,14 @@ detect_bun_target() {
 
 bun_sha256_for_target() {
   case "$1" in
-    darwin-aarch64)         printf '%s\n' "b5d6bc2e13caf14e57c89661e89efd073ff16165b41bfe43882616410609cd10" ;;
-    darwin-x64)             printf '%s\n' "a4972e778cce4b6a194d7d289f326aa61576d71d80b7a53e9da2f3739566e5fd" ;;
-    darwin-x64-baseline)    printf '%s\n' "fb0121739a7e80e7511b6bfe4d2116422b48ba18a013acadef0c425348e95891" ;;
-    linux-aarch64)          printf '%s\n' "18656a3bf0ea5641f5796ae4213b75255579a70a0fded2f337933785568cdf84" ;;
-    linux-aarch64-musl)     printf '%s\n' "d655765d3a0c0fdf707e27c7aa1a4f2c84f1bbc1f759db7e6e3d3c5be414396c" ;;
-    linux-x64)              printf '%s\n' "94559b3b528995a49452f9f2404cec74f2efd7d06e0a000a8cd214b02c3666eb" ;;
-    linux-x64-baseline)     printf '%s\n' "dcb23a18a1c2fff12d57bcef696dbbb42eb67fde29f43816ecb595459a24c463" ;;
-    linux-x64-musl)         printf '%s\n' "9b6bdba1fa0914b6adfe48e4438212e2c106d9199b77ba642a9b8a3968a49a59" ;;
+    darwin-aarch64)          printf '%s\n' "b5d6bc2e13caf14e57c89661e89efd073ff16165b41bfe43882616410609cd10" ;;
+    darwin-x64)              printf '%s\n' "a4972e778cce4b6a194d7d289f326aa61576d71d80b7a53e9da2f3739566e5fd" ;;
+    darwin-x64-baseline)     printf '%s\n' "fb0121739a7e80e7511b6bfe4d2116422b48ba18a013acadef0c425348e95891" ;;
+    linux-aarch64)           printf '%s\n' "18656a3bf0ea5641f5796ae4213b75255579a70a0fded2f337933785568cdf84" ;;
+    linux-aarch64-musl)      printf '%s\n' "d655765d3a0c0fdf707e27c7aa1a4f2c84f1bbc1f759db7e6e3d3c5be414396c" ;;
+    linux-x64)               printf '%s\n' "94559b3b528995a49452f9f2404cec74f2efd7d06e0a000a8cd214b02c3666eb" ;;
+    linux-x64-baseline)      printf '%s\n' "dcb23a18a1c2fff12d57bcef696dbbb42eb67fde29f43816ecb595459a24c463" ;;
+    linux-x64-musl)          printf '%s\n' "9b6bdba1fa0914b6adfe48e4438212e2c106d9199b77ba642a9b8a3968a49a59" ;;
     linux-x64-musl-baseline) printf '%s\n' "96fb94108eed872ff623ed39007d6b5699a83a5d0086fcfba84921c18145e3e6" ;;
     *) die "no pinned Bun checksum for platform: $1" ;;
   esac
@@ -139,23 +179,34 @@ ensure_bun() {
   tmp_dir=$2
   private_bun="$install_dir/runtime/bun/bin/bun"
 
+  explicit_bun=${EPI_BUN:-${EPI_LAUNCHER_BUN:-}}
   if [ -n "${EPI_BUN:-}" ]; then
     [ -x "$EPI_BUN" ] || die "EPI_BUN is not executable: $EPI_BUN"
+    bun_meets_version "$EPI_BUN" "$MIN_BUN_VERSION" || \
+      die "EPI_BUN must be Bun >=$MIN_BUN_VERSION (got $($EPI_BUN --version 2>/dev/null || printf unknown))"
     printf '%s\n' "$EPI_BUN"
     return 0
   fi
 
-  if command -v bun >/dev/null 2>&1; then
-    command -v bun
+  if [ -n "$explicit_bun" ] && [ "$explicit_bun" != "$private_bun" ] && bun_meets_version "$explicit_bun" "$MIN_BUN_VERSION"; then
+    printf '%s\n' "$explicit_bun"
     return 0
   fi
 
-  if [ -x "$HOME/.bun/bin/bun" ]; then
+  if command -v bun >/dev/null 2>&1; then
+    sys_bun=$(command -v bun)
+    if bun_meets_version "$sys_bun" "$MIN_BUN_VERSION"; then
+      printf '%s\n' "$sys_bun"
+      return 0
+    fi
+  fi
+
+  if bun_meets_version "$HOME/.bun/bin/bun" "$MIN_BUN_VERSION"; then
     printf '%s\n' "$HOME/.bun/bin/bun"
     return 0
   fi
 
-  if [ -x "$private_bun" ]; then
+  if bun_meets_version "$private_bun" "$BUN_VERSION"; then
     printf '%s\n' "$private_bun"
     return 0
   fi
@@ -221,8 +272,8 @@ case "$expected_sha256" in
 esac
 [ "${#expected_sha256}" -eq 64 ] || die "invalid package SHA-256 length"
 
-bin_dir=${custom_dir:-${EPI_BIN_DIR:-$HOME/.local/bin}}
-install_dir=${EPI_INSTALL_DIR:-${EPI_HOME:-$HOME/.epi}}
+bin_dir=${custom_dir:-${EPI_BIN_DIR:-${EPI_LAUNCHER_BIN_DIR:-$HOME/.local/bin}}}
+install_dir=${EPI_INSTALL_DIR:-${EPI_LAUNCHER_INSTALL_DIR:-${EPI_HOME:-$HOME/.epi}}}
 
 case "$bin_dir" in
   /*) ;;
@@ -236,7 +287,18 @@ esac
 umask 077
 tmp_root=${TMPDIR:-/tmp}
 tmp_dir=$(mktemp -d "${tmp_root%/}/epi-install.XXXXXX") || die "could not create a temporary directory"
-trap 'rm -rf "$tmp_dir"' 0 HUP INT TERM
+stage_dir=""
+old_release_backup=""
+cleanup() {
+  rm -rf "$tmp_dir"
+  if [ -n "$stage_dir" ]; then
+    rm -rf "$stage_dir"
+  fi
+  if [ -n "$old_release_backup" ]; then
+    rm -rf "$old_release_backup"
+  fi
+}
+trap cleanup 0 HUP INT TERM
 
 bun_bin=$(ensure_bun "$install_dir" "$tmp_dir")
 "$bun_bin" --version >/dev/null 2>&1 || die "Bun runtime at $bun_bin failed to execute"
@@ -256,29 +318,49 @@ mkdir -p "$stage_dir"
 tar -xzf "$archive" --strip-components=1 -C "$stage_dir"
 [ -f "$stage_dir/dist/cli.js" ] || die "archive is missing dist/cli.js"
 
+# Record the previously active release so we keep N-1 on disk during upgrades (concurrently open
+# `epi` TUI sessions keep their files intact until closed).
+prev_version=""
+if [ -L "$install_dir/current" ]; then
+  prev_target=$(readlink "$install_dir/current" 2>/dev/null || true)
+  case "$prev_target" in
+    releases/*) prev_version=${prev_target#releases/} ;;
+  esac
+fi
+
 target_release="$releases_dir/${EPI_VERSION}"
 if [ -e "$target_release" ]; then
-  rm -rf "$target_release"
+  old_release_backup="$releases_dir/.old-${EPI_VERSION}-$$"
+  rm -rf "$old_release_backup"
+  mv "$target_release" "$old_release_backup"
 fi
 mv "$stage_dir" "$target_release"
+stage_dir=""
 ln -sfn "releases/${EPI_VERSION}" "$install_dir/current"
+if [ -n "$old_release_backup" ]; then
+  rm -rf "$old_release_backup"
+  old_release_backup=""
+fi
 
 for entry in "$releases_dir"/*; do
   [ -e "$entry" ] || continue
   base=$(basename "$entry")
-  if [ "$base" != "$EPI_VERSION" ]; then
+  if [ "$base" != "$EPI_VERSION" ] && [ "$base" != "$prev_version" ]; then
     rm -rf "$entry"
   fi
 done
 
 mkdir -p "$bin_dir"
-epi_bin="${bin_dir%/}/epi"
-launcher_tmp="${bin_dir%/}/.epi.tmp.$$"
+clean_bin_dir=${bin_dir%/}
+epi_bin="${clean_bin_dir}/epi"
+launcher_tmp="${clean_bin_dir}/.epi.tmp.$$"
+quoted_bin_dir=$(sh_quote "$clean_bin_dir")
 quoted_install_dir=$(sh_quote "$install_dir")
 quoted_bun_bin=$(sh_quote "$bun_bin")
 cat > "$launcher_tmp" <<EOF
 #!/bin/sh
 set -eu
+BIN_DIR=${quoted_bin_dir}
 INSTALL_DIR=${quoted_install_dir}
 DETECTED_BUN=${quoted_bun_bin}
 if [ -n "\${EPI_BUN:-}" ] && [ -x "\$EPI_BUN" ]; then
@@ -295,6 +377,9 @@ else
   printf 'epi: Bun runtime not found. Re-run the Epi installer to restore it.\n' >&2
   exit 1
 fi
+export EPI_LAUNCHER_BIN_DIR="\$BIN_DIR"
+export EPI_LAUNCHER_INSTALL_DIR="\$INSTALL_DIR"
+export EPI_LAUNCHER_BUN="\$BUN_BIN"
 exec "\$BUN_BIN" "\$INSTALL_DIR/current/dist/cli.js" "\$@"
 EOF
 chmod 755 "$launcher_tmp"
@@ -306,15 +391,15 @@ printf 'Installed Epi at %s (runtime: %s)\n' "$epi_bin" "$bun_bin"
 "$epi_bin" --version
 
 case ":${PATH:-}:" in
-  *":${bin_dir%/}:"*) ;;
+  *":${clean_bin_dir}:"*) ;;
   *)
-    printf '\nAdd %s to your PATH to run epi directly:\n' "${bin_dir%/}"
-    printf "  export PATH=\"%s:\$PATH\"\n" "${bin_dir%/}"
+    printf '\nAdd %s to your PATH to run epi directly:\n' "${clean_bin_dir}"
+    printf "  export PATH=\"%s:\$PATH\"\n" "${clean_bin_dir}"
     ;;
 esac
 
 resolved_epi=$(command -v epi 2>/dev/null || true)
 if [ -n "$resolved_epi" ] && [ "$resolved_epi" != "$epi_bin" ]; then
   printf '\nNote: another epi was found earlier in PATH at %s.\n' "$resolved_epi"
-  printf 'If it is from an older npm install, remove it with "npm uninstall -g epi" or place %s earlier in PATH.\n' "${bin_dir%/}"
+  printf 'If it is from an older npm install, remove it with "npm uninstall -g epi" or place %s earlier in PATH.\n' "${clean_bin_dir}"
 fi

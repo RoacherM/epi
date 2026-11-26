@@ -96,6 +96,19 @@ export function updateNotice(cache, currentVersion) {
     }
     return `Update available! epi ${currentVersion} → ${latest} · Run: ${UPDATE_COMMAND}`;
 }
+/** Builds the env handed to `install.sh` during `epi update`: forwards the active launcher's
+ * install location and Bun runtime (`EPI_LAUNCHER_*`) unless the caller explicitly overrode
+ * `EPI_BIN_DIR` / `EPI_INSTALL_DIR` / `EPI_BUN`. */
+export function resolveUpdateInstallerEnv(env = process.env) {
+    const next = { ...env };
+    if (!next.EPI_BIN_DIR && next.EPI_LAUNCHER_BIN_DIR)
+        next.EPI_BIN_DIR = next.EPI_LAUNCHER_BIN_DIR;
+    if (!next.EPI_INSTALL_DIR && next.EPI_LAUNCHER_INSTALL_DIR)
+        next.EPI_INSTALL_DIR = next.EPI_LAUNCHER_INSTALL_DIR;
+    if (!next.EPI_BUN && next.EPI_LAUNCHER_BUN)
+        next.EPI_BUN = next.EPI_LAUNCHER_BUN;
+    return next;
+}
 /** `epi update`: runs the installer of the latest release, which verifies the package checksum. */
 export async function runEpiUpdate(options) {
     const write = options.write ?? ((text) => process.stdout.write(text));
@@ -118,7 +131,7 @@ export async function runEpiUpdate(options) {
         const scriptPath = join(directory, "install.sh");
         writeFileSync(scriptPath, await response.text());
         const runInstaller = options.runInstaller ??
-            ((path) => spawnSync("sh", [path], { stdio: "inherit" }).status ?? 1);
+            ((path) => spawnSync("sh", [path], { stdio: "inherit", env: resolveUpdateInstallerEnv() }).status ?? 1);
         return runInstaller(scriptPath);
     }
     finally {

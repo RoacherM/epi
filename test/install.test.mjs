@@ -227,7 +227,7 @@ test("installer rejects a bundle with the wrong checksum without modifying insta
   assert.equal(existsSync(join(f.binDir, "epi")), false);
 });
 
-test("upgrading swaps the current symlink and prunes the old release directory", (t) => {
+test("upgrading swaps current, keeps N-1 release for live sessions, and prunes older releases", (t) => {
   const f = createFixture(t, "0.2.8");
   const envBase = {
     PATH: `${f.binDir}${delimiter}${SYSTEM_ONLY_PATH}`,
@@ -255,7 +255,134 @@ test("upgrading swaps the current symlink and prunes the old release directory",
   assert.equal(second.status, 0, second.stderr);
   assert.equal(readlinkSync(join(f.installDir, "current")), "releases/0.2.9");
   assert.equal(existsSync(join(f.installDir, "releases", "0.2.9", "dist", "cli.js")), true);
-  assert.equal(existsSync(join(f.installDir, "releases", "0.2.8")), false, "old release should be pruned");
+  assert.equal(existsSync(join(f.installDir, "releases", "0.2.8")), true, "N-1 release kept for concurrently open sessions");
+
+  const v3Bundle = createBundleArchive(f.root, "0.2.10");
+  const v3Installer = renderedInstallerPath(f.root, "0.2.10", v3Bundle.sha256);
+  const third = spawnSync("/bin/sh", [v3Installer], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    env: { ...envBase, EPI_DOWNLOAD_URL: v3Bundle.url },
+  });
+  assert.equal(third.status, 0, third.stderr);
+  assert.equal(readlinkSync(join(f.installDir, "current")), "releases/0.2.10");
+  assert.equal(existsSync(join(f.installDir, "releases", "0.2.9")), true, "new N-1 release retained");
+  assert.equal(existsSync(join(f.installDir, "releases", "0.2.8")), false, "older N-2 release pruned");
+});
+
+test("custom --dir / EPI_INSTALL_DIR launcher propagates install metadata so epi update upgrades in place", (t) => {
+  const f = createFixture(t, "0.2.8");
+  // Fake Bun executes a tiny JS-like sh dispatcher: --version prints the release's version from
+  // package.json, and `update <installerPath>` invokes `sh <installerPath>` just like src/update.ts.
+  const dispatchBun = join(f.root, "dispatch-bun");
+  writeFileSync(
+    dispatchBun,
+    `#!/bin/sh
+set -eu
+if [ "\${1:-}" = "--version" ]; then
+  printf '1.4.5\\n'
+  exit 0
+fi
+cli_js=$1
+shift
+if [ "\${1:-}" = "--version" ]; then
+  ver=$(sed -n 's/.*"version":"\\([^"]*\\)".*/\\1/p' "$(dirname "$cli_js")/../package.json")
+  printf 'epi %s\\npi ${piVersion}\\n' "$ver"
+  exit 0
+fi
+if [ "\${1:-}" = "update" ]; then
+  exec /bin/sh "$2"
+fi
+exit 1
+`,
+  );
+  chmodSync(dispatchBun, 0o755);
+
+  const installV1 = spawnSync("/bin/sh", [f.installerPath, "--dir", f.binDir], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    env: {
+      PATH: `${f.binDir}${delimiter}${SYSTEM_ONLY_PATH}`,
+      HOME: f.home,
+      EPI_INSTALL_DIR: f.installDir,
+      EPI_DOWNLOAD_URL: f.bundle.url,
+      EPI_BUN: dispatchBun,
+    },
+  });
+  assert.equal(installV1.status, 0, installV1.stderr);
+
+  const v2Bundle = createBundleArchive(f.root, "0.2.9");
+  const v2Installer = renderedInstallerPath(f.root, "0.2.9", v2Bundle.sha256);
+
+  // Run `epi update` WITHOUT EPI_INSTALL_DIR, EPI_BIN_DIR, or EPI_BUN in caller env.
+  const upd = spawnSync(join(f.binDir, "epi"), ["update", v2Installer], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    env: {
+      PATH: `${f.binDir}${delimiter}${SYSTEM_ONLY_PATH}`,
+      HOME: f.home,
+      EPI_DOWNLOAD_URL: v2Bundle.url,
+    },
+  });
+  assert.equal(upd.status, 0, upd.stderr);
+  assert.equal(existsSync(join(f.home, ".local", "bin", "epi")), false, "must not duplicate into ~/.local/bin");
+  assert.equal(existsSync(join(f.home, ".epi", "current")), false, "must not duplicate into ~/.epi");
+
+  const ver = spawnSync(join(f.binDir, "epi"), ["--version"], {
+    encoding: "utf8",
+    env: { PATH: SYSTEM_ONLY_PATH, HOME: f.home },
+  });
+  assert.equal(ver.status, 0, ver.stderr);
+  assert.match(ver.stdout, /epi 0\.2\.9/);
+});
+
+test("installer cleans up staging directory when archive extraction fails", (t) => {
+  const f = createFixture(t);
+  const badTar = join(f.root, "not-a-tar.tar.gz");
+  writeFileSync(badTar, "not a gzip archive\n");
+  const badSha = createHash("sha256").update(readFileSync(badTar)).digest("hex");
+  const installer = renderedInstallerPath(f.root, epiVersion, badSha);
+
+  const result = spawnSync("/bin/sh", [installer, "--dir", f.binDir], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    env: {
+      PATH: SYSTEM_ONLY_PATH,
+      HOME: f.home,
+      EPI_INSTALL_DIR: f.installDir,
+      EPI_DOWNLOAD_URL: pathToFileURL(badTar).href,
+      EPI_BUN: f.fakeBun,
+    },
+  });
+  assert.notEqual(result.status, 0);
+  const releasesDir = join(f.installDir, "releases");
+  if (existsSync(releasesDir)) {
+    const leftover = spawnSync("ls", ["-A", releasesDir], { encoding: "utf8" }).stdout.trim();
+    assert.equal(leftover, "", `expected no orphaned staging dir, found: ${leftover}`);
+  }
+});
+
+test("installer skips system bun older than 1.2.0 and falls back to private Bun download", (t) => {
+  const f = createFixture(t);
+  const oldBin = join(f.root, "old-bun-bin");
+  mkdirSync(oldBin, { recursive: true });
+  writeFileSync(join(oldBin, "bun"), "#!/bin/sh\nprintf '1.1.9\\n'\n");
+  chmodSync(join(oldBin, "bun"), 0o755);
+
+  const result = spawnSync("/bin/sh", [f.installerPath, "--dir", f.binDir], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    env: {
+      PATH: `${oldBin}${delimiter}${SYSTEM_ONLY_PATH}`,
+      HOME: f.home,
+      EPI_INSTALL_DIR: f.installDir,
+      EPI_DOWNLOAD_URL: f.bundle.url,
+      EPI_BUN_BASE_URL: "file:///nonexistent-bun-mirror",
+      EPI_BUN_SHA256: "a".repeat(64),
+    },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Downloading Bun .* runtime/, "must ignore Bun < 1.2.0 and attempt private Bun download");
 });
 
 test("installer warns when another epi binary appears earlier in PATH", (t) => {

@@ -27,6 +27,10 @@ export declare function refreshUpdateCache(options: {
  * flags at `--`; bug 9's passthroughHasFlag respects that same boundary). */
 export declare function updateCheckDisabled(environment: NodeJS.ProcessEnv, piArguments: readonly string[]): boolean;
 export declare function updateNotice(cache: UpdateCache | undefined, currentVersion: string): string | undefined;
+/** Builds the env handed to `install.sh` during `epi update`: forwards the active launcher's
+ * install location and Bun runtime (`EPI_LAUNCHER_*`) unless the caller explicitly overrode
+ * `EPI_BIN_DIR` / `EPI_INSTALL_DIR` / `EPI_BUN`. */
+export declare function resolveUpdateInstallerEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 /** `epi update`: runs the installer of the latest release, which verifies the package checksum. */
 export declare function runEpiUpdate(options: {
     currentVersion: string;

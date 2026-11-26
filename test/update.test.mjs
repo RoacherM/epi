@@ -12,6 +12,7 @@ import {
   isNewerVersion,
   readUpdateCache,
   refreshUpdateCache,
+  resolveUpdateInstallerEnv,
   runEpiUpdate,
   updateCheckDisabled,
   updateNotice,
@@ -100,6 +101,29 @@ test("epi update reports up to date without running the installer", async () => 
   assert.equal(code, 0);
   assert.equal(ran, false);
   assert.match(output.join(""), /epi 0\.1\.4 is up to date/);
+});
+
+test("resolveUpdateInstallerEnv forwards launcher install metadata unless caller overrides", () => {
+  const forwarded = resolveUpdateInstallerEnv({
+    EPI_LAUNCHER_BIN_DIR: "/custom/bin",
+    EPI_LAUNCHER_INSTALL_DIR: "/custom/epi",
+    EPI_LAUNCHER_BUN: "/custom/bun",
+  });
+  assert.equal(forwarded.EPI_BIN_DIR, "/custom/bin");
+  assert.equal(forwarded.EPI_INSTALL_DIR, "/custom/epi");
+  assert.equal(forwarded.EPI_BUN, "/custom/bun");
+
+  const overridden = resolveUpdateInstallerEnv({
+    EPI_BIN_DIR: "/override/bin",
+    EPI_INSTALL_DIR: "/override/epi",
+    EPI_BUN: "/override/bun",
+    EPI_LAUNCHER_BIN_DIR: "/custom/bin",
+    EPI_LAUNCHER_INSTALL_DIR: "/custom/epi",
+    EPI_LAUNCHER_BUN: "/custom/bun",
+  });
+  assert.equal(overridden.EPI_BIN_DIR, "/override/bin");
+  assert.equal(overridden.EPI_INSTALL_DIR, "/override/epi");
+  assert.equal(overridden.EPI_BUN, "/override/bun");
 });
 
 test("epi update runs the installer of the latest release", async () => {
