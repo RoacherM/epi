@@ -123,11 +123,12 @@ src/extensions/dispatch/
 ### 3.3 进程内受管异步 `bash` 与分离式崩溃对账（`bg-bash.ts` + `reaper.ts`）
 
 1. **自定义 `execute`（兼容原生 `BashToolDetails`）与零重跑放手**：
-   - 同步完成时严格保持 `BashToolDetails`（`truncation`、`fullOutputPath`）结构；输出写尾部环形缓冲与 `<stateDir>/bg/<id>.log`（`0600`，`20 MiB` 封顶后停止写盘但持续排空管道防 `SIGPIPE`）。
+   - 同步完成时严格保持 `BashToolDetails`（`truncation`、`fullOutputPath`）结构；非守护命令经管道把输出写入尾部环形缓冲与 `<stateDir>/bg/<id>.log`（`0600`，`20 MiB` 封顶后停止写盘但持续排空管道防 `SIGPIPE`）；`isDaemon: true` 守护命令在 `spawn` 时直接将 `stdout`/`stderr` 绑定到 `<stateDir>/bg/<id>.log` 文件描述符（`O_APPEND`，父进程立即关闭自身副本，查询时按偏移读文件尾部），确保宿主退出后持续写日志不会因断管收到 `SIGPIPE`/`EPIPE`（Issue #16）。
    - 前台竞速 `[exitPromise, syncWindowTimer, manualDetachSignal]`：超窗、`isDaemon: true` 或按放手快捷键时提前返回 `{ status: "running", id: "bg_<id>", logPath }`，同一 `ChildProcess` 留在内存注册表并在 `exit` 时推入账本。
-2. **分离「进程终态 (`status`)」与「会话通知 (`notified`)」的崩溃对账**：
-   - 转后台时写 `<stateDir>/bg/<id>.json`（`{ id, sessionId, hostPid, cookie, command, logPath, status: "running", exitCode?: number, notified: false }`）；正常退出写 `status: "exited"` 与 `exitCode`，收到 `entry_appended`/`message_end` 回执后置 `notified: true`。
-   - **任意宿主启动时分两步扫描全部 `bg/*.json`**：① 先对所有 `status === "running"` 且不在本进程内存注册表（跨会话记录判原 `hostPid` 已不存在）的条目，按 `cookie` 清扫残留孤儿进程组，改标 `status: "lost"`（保持 `notified: false`）；② 再对属于当前恢复 `sessionId` 且 **`status !== "running" && notified === false`** 的全部终态条目，按 `id` 幂等补压完成或 `bg_lost` 通知，收到落盘回执后置 `notified: true`。
+2. **分离「进程终态 (`status`)」、「解绑存活 (`detached`)」与「会话通知 (`notified`)」的生命周期与崩溃对账**：
+   - 转后台时写 `<stateDir>/bg/<id>.json`（`{ id, sessionId, hostPid, cookie, pgid, command, logPath, status: "running", detached?: boolean, exitCode?: number, notified: false }`）；正常退出写 `status: "exited"` 与 `exitCode`，收到 `entry_appended`/`message_end` 回执后置 `notified: true`。
+   - **无头根会话正常退出保留守护进程**：`root` 角色在 `print`/`json` 模式收到正常 `session_shutdown({ reason: "quit" })`（且未触发信号强退 `killAllSync`）时，先对仍在运行的 `isDaemon: true` 作业执行 `detachDaemons()`——写入 `detached: true, notified: true`、销毁父侧 `stdin` 管道、移除事件监听并 `child.unref()` 使宿主立即退出，随后仅终止有限（`!isDaemon`）作业；交互式 `tui`、`rpc`、子代理 `worker` 退出、信号中断（`SIGINT`/`SIGTERM`/`SIGHUP`）及显式 `task_cancel` 仍全量终止并回收进程树。
+   - **任意宿主启动时分步扫描全部 `bg/*.json`**：① 对 `detached: true` 的守护记录，若进程组仍存活则跳过孤儿清扫（同 `sessionId` 恢复时挂入 `history` 供 `task_status` 查看或 `task_cancel` 显式停止），若已自行退出则清理 `.guard` 并收敛为 `status: "exited", notified: true`；② 对其余 `status === "running"` 且不在本进程内存注册表（跨会话记录判原 `hostPid` 已不存在）的崩溃残留条目，按 `cookie` 清扫残留孤儿进程组，改标 `status: "lost"`（保持 `notified: false`）；③ 再对属于当前恢复 `sessionId` 且 **`status !== "running" && notified === false`** 的全部终态条目，按 `id` 幂等补压完成或 `bg_lost` 通知，收到落盘回执后置 `notified: true`。
 3. **可移植信号钩子**：`SIGINT` / `SIGTERM` / `SIGHUP` 退出清理由扩展内 `reaper.ts` 引用计数安装，原生 `pi -p -e` 与 `epi -p` 行为一致。
 
 ### 3.4 共用完结排空屏障与父会话 `steer` 原角色穿透

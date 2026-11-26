@@ -95,8 +95,10 @@ export declare class DispatchRuntime {
     private onSessionStart;
     private openInbox;
     private shouldDrain;
+    private shouldDetachDaemons;
     private reportProgressTool;
     private tools;
+    private onSessionShutdown;
     /** Bind this runtime to the `pi` of the session now loading (startup, `/reload`, a switch). */
     mount(pi: ExtensionAPI): void;
     shutdown(): Promise<void>;
