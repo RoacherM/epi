@@ -20,6 +20,7 @@ export interface BgMeta {
     ledgerPath: string;
     createdAtMs: number;
     isDaemon: boolean;
+    detached?: boolean | undefined;
     status: BgStatus;
     exitCode?: number | undefined;
     finishedAt?: number | undefined;
@@ -83,6 +84,8 @@ export declare class BgProcessRuntime {
      * so the child never blocks on a full pipe or dies of SIGPIPE. */
     private onData;
     private closeLog;
+    private flushForegroundDaemon;
+    private finishForegroundJob;
     private finalize;
     private meta;
     private writeMeta;
@@ -93,16 +96,21 @@ export declare class BgProcessRuntime {
     terminate(job: BgJob, cause: "aborted" | "timeout" | "cancelled"): void;
     private signal;
     cancel(id: string): Promise<BgJob | BgMeta>;
+    private cancelDetached;
     input(id: string, input: string | undefined, end: boolean): string;
     markNotified(id: string): void;
     private missing;
     /** Synchronous last-chance kill for process exit and fatal signals. */
     killAllSync(): void;
+    /** Detach live `isDaemon` jobs on clean headless shutdown so they survive without pinning the event loop. */
+    detachDaemons(): void;
     shutdown(): Promise<void>;
     private loadMetas;
-    /** ① reap every dead host's `running` record and mark it `lost`; ② return this session's
+    /** ① reap every dead host's non-detached `running` record and mark it `lost`; ② return this session's
      * terminal, unnotified records for the ledger (docs/dispatch-design.md §3.3.2). */
     reconcile(sessionId: string | undefined): BgMeta[];
+    private reconcileOne;
+    private reconcileDetached;
     private markLost;
     private forget;
     private visibleIds;

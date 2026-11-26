@@ -516,6 +516,9 @@ export class DispatchRuntime {
     shouldDrain(ctx) {
         return this.role !== "root" || ctx.mode === "print" || ctx.mode === "json";
     }
+    shouldDetachDaemons(mode) {
+        return this.role === "root" && (mode === "print" || mode === "json");
+    }
     reportProgressTool() {
         const worker = this.worker;
         return {
@@ -563,6 +566,15 @@ export class DispatchRuntime {
         others.push(...this.boardTools());
         return { bashTool, others: others.map(withRenderer) };
     }
+    async onSessionShutdown(reason, ctx) {
+        const mode = ctx?.mode ?? this.gate.ctx?.mode;
+        this.gate.onSessionShutdown();
+        if (reason !== "quit")
+            return;
+        if (this.shouldDetachDaemons(mode))
+            this.bg.detachDaemons();
+        await this.shutdown();
+    }
     /** Bind this runtime to the `pi` of the session now loading (startup, `/reload`, a switch). */
     mount(pi) {
         const { bashTool, others } = this.tools();
@@ -583,11 +595,7 @@ export class DispatchRuntime {
             if (this.shouldDrain(ctx))
                 await this.barrier.drain();
         });
-        pi.on("session_shutdown", async (event) => {
-            this.gate.onSessionShutdown();
-            if (event.reason === "quit")
-                await this.shutdown();
-        });
+        pi.on("session_shutdown", (event, ctx) => this.onSessionShutdown(event.reason, ctx));
         for (const tool of others)
             pi.registerTool(tool);
         installApprovalGuard(pi, this.host, this.effectiveRole);

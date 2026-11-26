@@ -6,7 +6,7 @@
 // fields of `<stateDir>/bg/<id>.json`, so a crashed host's commands are reaped and still reported.
 import { spawn, type ChildProcess } from "node:child_process";
 import {
-  closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync,
+  appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, unlinkSync, writeFileSync, writeSync,
 } from "node:fs";
 import { constants } from "node:os";
 import { join } from "node:path";
@@ -16,7 +16,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 
-import { prepareExecutionGuard, reapOrphans, isPidAlive, snapshotDescendantPgids, type ExecutionGuard } from "./reaper.js";
+import { prepareExecutionGuard, reapOrphans, isPidAlive, isPgidAlive, snapshotDescendantPgids, type ExecutionGuard } from "./reaper.js";
 import { newItemId, resolvePrefix } from "./registry.js";
 import { singleLine, tailLines } from "./result.js";
 import { DISPATCH_DEPTH_ENV, type BgStatus, type DispatchItemProvider, type DispatchItemReport, type DispatchItemSummary, type DispatchRole } from "./types.js";
@@ -43,6 +43,7 @@ export interface BgMeta {
   ledgerPath: string;
   createdAtMs: number;
   isDaemon: boolean;
+  detached?: boolean | undefined;
   status: BgStatus;
   exitCode?: number | undefined;
   finishedAt?: number | undefined;
@@ -135,6 +136,79 @@ function elapsed(job: { startedAt: number; finishedAt?: number | undefined }): s
   return `${Math.max(0, Math.round(((job.finishedAt ?? Date.now()) - job.startedAt) / 1000))}s`;
 }
 
+function isMetaDaemonAlive(meta: BgMeta): boolean {
+  return meta.pgid !== undefined && (isPgidAlive(meta.pgid) || isPidAlive(meta.pgid));
+}
+
+function isHostOwnerAlive(hostPid: number): boolean {
+  return hostPid === process.pid || isPidAlive(hostPid);
+}
+
+function isExpiredMeta(meta: BgMeta, now: number): boolean {
+  return meta.notified && (meta.finishedAt ?? now) < now - RETENTION_MS;
+}
+
+function metaSummary(meta: BgMeta): DispatchItemSummary {
+  const detachedAlive = meta.detached === true && meta.status === "running" && isMetaDaemonAlive(meta);
+  const status: BgStatus = meta.status === "running" && !detachedAlive ? "exited" : meta.status;
+  const finishedAt = meta.finishedAt ?? (status === "running" ? undefined : Date.now());
+  return {
+    id: meta.id, kind: "bg", status, label: singleLine(meta.command, 80), active: detachedAlive, finite: !meta.isDaemon,
+    startedAt: meta.createdAtMs, ...(finishedAt === undefined ? {} : { finishedAt }),
+  };
+}
+
+function guardFromMeta(meta: BgMeta): ExecutionGuard {
+  return {
+    cookie: meta.cookie, ledgerPath: meta.ledgerPath, env: {}, createdAtMs: meta.createdAtMs,
+    descendantPgids: new Map(meta.pgid === undefined ? [] : [[meta.pgid, meta.createdAtMs]]),
+  };
+}
+
+function signalMetaGroup(pgid: number | undefined, signal: NodeJS.Signals): void {
+  if (pgid === undefined) return;
+  try {
+    if (process.platform !== "win32") process.kill(-pgid, signal);
+    else process.kill(pgid, signal);
+  } catch { /* already gone */ }
+}
+
+function spawnWithStdio(request: SpawnRequest, env: NodeJS.ProcessEnv, logFd: number): ChildProcess {
+  const stdinMode = request.stdin ? "pipe" : "ignore";
+  let ok = false;
+  try {
+    const child = spawn(shellPath(), ["-c", request.command], {
+      cwd: request.cwd,
+      env,
+      detached: process.platform !== "win32",
+      // Daemons write directly to `logPath` so post-exit access logs never hit SIGPIPE/EPIPE (Issue #16).
+      stdio: request.isDaemon ? [stdinMode, logFd, logFd] : [stdinMode, "pipe", "pipe"],
+    });
+    ok = true;
+    return child;
+  } finally {
+    if (request.isDaemon || !ok) {
+      try { closeSync(logFd); } catch { /* already closed */ }
+    }
+  }
+}
+
+function releaseChildHandles(child: ChildProcess): void {
+  child.removeAllListeners();
+  if (child.stdin !== null) {
+    child.stdin.removeAllListeners();
+    child.stdin.on("error", () => {});
+    child.stdin.destroy();
+  }
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  child.unref();
+}
+
+function jobTailText(job: BgJob): string {
+  return job.isDaemon ? (readTail(job.logPath) ?? job.tail.toString("utf8")) : job.tail.toString("utf8");
+}
+
 export class BgProcessRuntime {
   readonly jobs = new Map<string, BgJob>();
   /** Terminal records of this session read back from disk (a previous host's commands). */
@@ -157,17 +231,16 @@ export class BgProcessRuntime {
     mkdirSync(guardDir, { recursive: true, mode: 0o700 });
     const guard = prepareExecutionGuard(guardDir, id, request.env);
     const env: NodeJS.ProcessEnv = { ...guard.env, ...(this.options.role === "root" ? {} : { [DISPATCH_DEPTH_ENV]: "1" }) };
-    const child = spawn(shellPath(), ["-c", request.command], {
-      cwd: request.cwd, env, detached: process.platform !== "win32", stdio: [request.stdin ? "pipe" : "ignore", "pipe", "pipe"],
-    });
     const logPath = join(dir, `${id}.log`);
+    const logFd = openSync(logPath, "a", 0o600);
+    const child = spawnWithStdio(request, env, logFd);
     const exit = Promise.withResolvers<void>();
     const now = Date.now();
     const job: BgJob = {
       id, command: request.command, cwd: request.cwd, sessionId: request.sessionId, isDaemon: request.isDaemon,
       startedAt: now, finishedAt: undefined, status: "running", exitCode: undefined, child, guard, guardDir,
       deadlineAt: request.lifetimeSeconds === undefined ? undefined : now + request.lifetimeSeconds * 1000,
-      logPath, metaPath: join(dir, `${id}.json`), logFd: openSync(logPath, "a", 0o600), logBytes: 0, tail: Buffer.alloc(0),
+      logPath, metaPath: join(dir, `${id}.json`), logFd: request.isDaemon ? undefined : logFd, logBytes: 0, tail: Buffer.alloc(0),
       backgrounded: false, notified: false, termination: undefined, onForeground: undefined, exit: exit.promise, resolveExit: exit.resolve,
     };
     this.jobs.set(id, job);
@@ -183,7 +256,11 @@ export class BgProcessRuntime {
     let spawnError: Error | undefined;
     child.once("error", (error) => {
       spawnError = error;
-      this.onData(job, Buffer.from(`dispatch: failed to start: ${error.message}\n`));
+      const msg = Buffer.from(`dispatch: failed to start: ${error.message}\n`);
+      if (job.isDaemon) {
+        try { appendFileSync(job.logPath, msg); } catch { /* ignore */ }
+      }
+      this.onData(job, msg);
       void this.finalize(job, 127, null);
     });
     child.once("exit", (code, signal) => {
@@ -222,6 +299,20 @@ export class BgProcessRuntime {
     job.logFd = undefined;
   }
 
+  private flushForegroundDaemon(job: BgJob): void {
+    if (!job.isDaemon || job.onForeground === undefined) return;
+    const captured = readTail(job.logPath);
+    if (captured !== undefined && captured.length > 0) job.onForeground(Buffer.from(captured, "utf8"));
+  }
+
+  private finishForegroundJob(job: BgJob): void {
+    this.flushForegroundDaemon(job);
+    this.jobs.delete(job.id);
+    rmSync(job.guardDir, { recursive: true, force: true });
+    rmSync(job.logPath, { force: true });
+    job.resolveExit();
+  }
+
   private async finalize(job: BgJob, code: number | null, signal: NodeJS.Signals | null): Promise<void> {
     if (job.status !== "running") return;
     await Promise.all([drainStream(job.child.stdout), drainStream(job.child.stderr)]);
@@ -233,10 +324,7 @@ export class BgProcessRuntime {
     job.status = job.termination === "cancelled" ? "cancelled" : "exited";
     if (job.termination !== undefined) await reapOrphans(job.guard, this.options.sharedDaemonNames);
     if (!job.backgrounded) {
-      this.jobs.delete(job.id);
-      rmSync(job.guardDir, { recursive: true, force: true });
-      rmSync(job.logPath, { force: true });
-      job.resolveExit();
+      this.finishForegroundJob(job);
       return;
     }
     rmSync(job.guardDir, { recursive: true, force: true });
@@ -303,10 +391,31 @@ export class BgProcessRuntime {
 
   async cancel(id: string): Promise<BgJob | BgMeta> {
     const job = this.jobs.get(id);
-    if (job === undefined) return this.history.get(id) ?? this.missing(id);
-    this.terminate(job, "cancelled");
-    await job.exit;
-    return job;
+    if (job !== undefined) {
+      this.terminate(job, "cancelled");
+      await job.exit;
+      return job;
+    }
+    const meta = this.history.get(id) ?? this.missing(id);
+    if (meta.detached === true && meta.status === "running") await this.cancelDetached(meta);
+    return meta;
+  }
+
+  private async cancelDetached(meta: BgMeta): Promise<void> {
+    const guard = guardFromMeta(meta);
+    snapshotDescendantPgids(meta.pgid, guard);
+    signalMetaGroup(meta.pgid, "SIGTERM");
+    await reapOrphans(guard, this.options.sharedDaemonNames);
+    if (isMetaDaemonAlive(meta)) {
+      await waitDetachedExit(meta, AbortSignal.timeout(KILL_GRACE_MS));
+      if (isMetaDaemonAlive(meta)) signalMetaGroup(meta.pgid, "SIGKILL");
+    }
+    rmSync(join(this.bgDir(), `${meta.id}.guard`), { recursive: true, force: true });
+    meta.detached = false;
+    meta.status = "cancelled";
+    meta.finishedAt = Date.now();
+    meta.notified = true;
+    try { writeJsonAtomic(join(this.bgDir(), `${meta.id}.json`), meta); } catch { /* best effort */ }
   }
 
   input(id: string, input: string | undefined, end: boolean): string {
@@ -342,7 +451,30 @@ export class BgProcessRuntime {
 
   /** Synchronous last-chance kill for process exit and fatal signals. */
   killAllSync(): void {
-    for (const job of this.jobs.values()) if (job.status === "running") this.signal(job, "SIGTERM");
+    for (const job of this.jobs.values()) {
+      if (job.status !== "running") continue;
+      job.termination ??= "aborted";
+      this.signal(job, "SIGTERM");
+    }
+  }
+
+  /** Detach live `isDaemon` jobs on clean headless shutdown so they survive without pinning the event loop. */
+  detachDaemons(): void {
+    for (const job of this.jobs.values()) {
+      if (job.status !== "running" || !job.isDaemon || job.termination !== undefined) continue;
+      job.backgrounded = true;
+      job.onForeground = undefined;
+      job.notified = true;
+      try {
+        writeJsonAtomic(job.metaPath, { ...this.meta(job), detached: true, notified: true });
+      } catch {
+        // The state dir vanished under us.
+      }
+      releaseChildHandles(job.child);
+      this.closeLog(job);
+      job.resolveExit();
+      this.jobs.delete(job.id);
+    }
   }
 
   async shutdown(): Promise<void> {
@@ -358,31 +490,50 @@ export class BgProcessRuntime {
       .filter((meta): meta is BgMeta => meta !== undefined);
   }
 
-  /** ① reap every dead host's `running` record and mark it `lost`; ② return this session's
+  /** ① reap every dead host's non-detached `running` record and mark it `lost`; ② return this session's
    * terminal, unnotified records for the ledger (docs/dispatch-design.md §3.3.2). */
   reconcile(sessionId: string | undefined): BgMeta[] {
     const now = Date.now();
     const pending: BgMeta[] = [];
+    this.history.clear();
     for (const meta of this.loadMetas()) {
-      if (this.jobs.has(meta.id)) continue;
-      if (meta.status === "running" && (meta.hostPid === process.pid || isPidAlive(meta.hostPid))) continue;
-      if (meta.status === "running") this.markLost(meta);
-      if (meta.notified && (meta.finishedAt ?? now) < now - RETENTION_MS) {
-        this.forget(meta);
-        continue;
-      }
-      if (meta.sessionId !== sessionId) continue;
-      this.history.set(meta.id, meta);
-      if (!meta.notified) pending.push(meta);
+      if (!this.jobs.has(meta.id)) this.reconcileOne(meta, now, sessionId, pending);
     }
     return pending;
   }
 
+  private reconcileOne(meta: BgMeta, now: number, sessionId: string | undefined, pending: BgMeta[]): void {
+    if (this.reconcileDetached(meta, now, sessionId)) return;
+    if (meta.status === "running") {
+      if (isHostOwnerAlive(meta.hostPid)) return;
+      this.markLost(meta);
+    }
+    if (isExpiredMeta(meta, now)) {
+      this.forget(meta);
+      return;
+    }
+    if (sessionId === undefined || meta.sessionId !== sessionId) return;
+    this.history.set(meta.id, meta);
+    if (!meta.notified) pending.push(meta);
+  }
+
+  private reconcileDetached(meta: BgMeta, now: number, sessionId: string | undefined): boolean {
+    if (meta.detached !== true) return false;
+    if (meta.status === "running" && isMetaDaemonAlive(meta)) {
+      if (sessionId !== undefined && meta.sessionId === sessionId) this.history.set(meta.id, meta);
+      return true;
+    }
+    rmSync(join(this.bgDir(), `${meta.id}.guard`), { recursive: true, force: true });
+    meta.detached = false;
+    if (meta.status === "running") meta.status = "exited";
+    meta.finishedAt ??= now;
+    meta.notified = true;
+    try { writeJsonAtomic(join(this.bgDir(), `${meta.id}.json`), meta); } catch { /* best effort */ }
+    return false;
+  }
+
   private markLost(meta: BgMeta): void {
-    const guard: ExecutionGuard = {
-      cookie: meta.cookie, ledgerPath: meta.ledgerPath, env: {}, createdAtMs: meta.createdAtMs,
-      descendantPgids: new Map(meta.pgid === undefined ? [] : [[meta.pgid, meta.createdAtMs]]),
-    };
+    const guard = guardFromMeta(meta);
     void reapOrphans(guard, this.options.sharedDaemonNames).finally(() => rmSync(join(this.bgDir(), `${meta.id}.guard`), { recursive: true, force: true }));
     meta.status = "lost";
     meta.finishedAt = Date.now();
@@ -390,6 +541,7 @@ export class BgProcessRuntime {
   }
 
   private forget(meta: BgMeta): void {
+    rmSync(join(this.bgDir(), `${meta.id}.guard`), { recursive: true, force: true });
     for (const path of [join(this.bgDir(), `${meta.id}.json`), meta.logPath]) {
       try { unlinkSync(path); } catch { /* gone */ }
     }
@@ -408,25 +560,23 @@ export class BgProcessRuntime {
         ...(job.deadlineAt === undefined ? {} : { deadlineAt: job.deadlineAt }),
       };
     }
-    const meta = this.history.get(id) ?? this.missing(id);
-    return {
-      id, kind: "bg", status: meta.status, label: singleLine(meta.command, 80), active: false, finite: !meta.isDaemon,
-      startedAt: meta.createdAtMs, ...(meta.finishedAt === undefined ? {} : { finishedAt: meta.finishedAt }),
-    };
+    return metaSummary(this.history.get(id) ?? this.missing(id));
   }
 
   private source(id: string): { logPath: string; tail: string; exitCode: number | undefined; isDaemon: boolean; pid: number | undefined } {
     const job = this.jobs.get(id);
-    if (job !== undefined) return { logPath: job.logPath, tail: job.tail.toString("utf8"), exitCode: job.exitCode, isDaemon: job.isDaemon, pid: job.child.pid };
+    if (job !== undefined) return { logPath: job.logPath, tail: jobTailText(job), exitCode: job.exitCode, isDaemon: job.isDaemon, pid: job.child.pid };
     const meta = this.history.get(id) ?? this.missing(id);
-    return { logPath: meta.logPath, tail: readTail(meta.logPath), exitCode: meta.exitCode, isDaemon: meta.isDaemon, pid: undefined };
+    return { logPath: meta.logPath, tail: readTail(meta.logPath) ?? "", exitCode: meta.exitCode, isDaemon: meta.isDaemon, pid: meta.pgid };
   }
 
   /** Status line, last output and log path; the model's view of one `bg_*`. */
   report(id: string, lines = 40): DispatchItemReport {
     const summary = this.summary(id);
     const { logPath, tail, exitCode, isDaemon, pid } = this.source(id);
-    const state = summary.status === "exited" ? `exited with code ${exitCode}` : summary.status;
+    const state = summary.status === "exited"
+      ? (exitCode === undefined ? "exited" : `exited with code ${exitCode}`)
+      : summary.status;
     const header = `${id}${isDaemon ? " (daemon)" : ""} ${state} after ${elapsed(summary)}: ${summary.label}`;
     const body = tail.trim().length === 0 ? "(no output yet)" : tailLines(tail, lines);
     return { summary, text: `${header}\n${body}\nFull log: ${logPath}`, details: { id, status: summary.status, exitCode, logPath, pid } };
@@ -440,8 +590,12 @@ export class BgProcessRuntime {
       report: (id) => this.report(id),
       wait: async (id, signal) => {
         const job = this.jobs.get(id);
-        if (job === undefined || job.status !== "running") return;
-        await raceAbort(job.exit, signal);
+        if (job !== undefined && job.status === "running") {
+          await raceAbort(job.exit, signal);
+          return;
+        }
+        const meta = this.history.get(id);
+        if (meta?.detached === true && meta.status === "running") await waitDetachedExit(meta, signal);
       },
       cancel: async (id) => {
         await this.cancel(id);
@@ -451,13 +605,36 @@ export class BgProcessRuntime {
   }
 }
 
-function readTail(path: string): string {
+function waitDetachedExit(meta: BgMeta, signal: AbortSignal | undefined): Promise<void> {
+  if (!isMetaDaemonAlive(meta) || signal?.aborted === true) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = (): void => {
+      clearInterval(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setInterval(() => { if (!isMetaDaemonAlive(meta)) done(); }, 100);
+    timer.unref();
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+function readTail(path: string): string | undefined {
+  let fd: number | undefined;
   try {
-    const size = statSync(path).size;
-    const buffer = readFileSync(path);
-    return buffer.subarray(Math.max(0, size - TAIL_BYTES)).toString("utf8");
+    fd = openSync(path, "r");
+    const size = fstatSync(fd).size;
+    const length = Math.min(size, TAIL_BYTES);
+    if (length === 0) return "";
+    const buffer = Buffer.allocUnsafe(length);
+    const bytesRead = readSync(fd, buffer, 0, length, size - length);
+    return buffer.subarray(0, bytesRead).toString("utf8");
   } catch {
-    return "";
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* already closed */ }
+    }
   }
 }
 
@@ -553,7 +730,7 @@ function foregroundExec(runtime: BgProcessRuntime, settings: BashSettings, sessi
 }
 
 function runningResult(runtime: BgProcessRuntime, job: BgJob): AgentToolResult<unknown> {
-  const sofar = job.tail.toString("utf8");
+  const sofar = jobTailText(job);
   const input = job.child.stdin !== null ? `, task_input({ id: "${job.id}", input }) writes to its stdin` : "";
   const lifetime = job.deadlineAt === undefined ? "" : ` It is stopped after ${Math.round((job.deadlineAt - job.startedAt) / 1000)}s.`;
   const text = [

@@ -508,6 +508,10 @@ export class DispatchRuntime {
     return this.role !== "root" || ctx.mode === "print" || ctx.mode === "json";
   }
 
+  private shouldDetachDaemons(mode: string | undefined): boolean {
+    return this.role === "root" && (mode === "print" || mode === "json");
+  }
+
   private reportProgressTool(): ToolDefinition {
     const worker = this.worker!;
     return {
@@ -556,6 +560,14 @@ export class DispatchRuntime {
     return { bashTool, others: others.map(withRenderer) };
   }
 
+  private async onSessionShutdown(reason: string, ctx: ExtensionContext | undefined): Promise<void> {
+    const mode = ctx?.mode ?? this.gate.ctx?.mode;
+    this.gate.onSessionShutdown();
+    if (reason !== "quit") return;
+    if (this.shouldDetachDaemons(mode)) this.bg.detachDaemons();
+    await this.shutdown();
+  }
+
   /** Bind this runtime to the `pi` of the session now loading (startup, `/reload`, a switch). */
   mount(pi: ExtensionAPI): void {
     const { bashTool, others } = this.tools();
@@ -574,10 +586,7 @@ export class DispatchRuntime {
     pi.on("agent_settled", async (_event, ctx) => {
       if (this.shouldDrain(ctx)) await this.barrier.drain();
     });
-    pi.on("session_shutdown", async (event) => {
-      this.gate.onSessionShutdown();
-      if (event.reason === "quit") await this.shutdown();
-    });
+    pi.on("session_shutdown", (event, ctx) => this.onSessionShutdown(event.reason, ctx));
     for (const tool of others) pi.registerTool(tool);
     installApprovalGuard(pi, this.host, this.effectiveRole);
   }
