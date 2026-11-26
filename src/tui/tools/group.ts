@@ -97,7 +97,7 @@ export class ToolEntry extends ToolExecutionComponent implements SpineMember, Cl
   /** With its call row outside the transcript's tip: drawn at the time it last showed inside it, so
    * the duration bar and the rotating marker hold still and a landing shake doesn't play, while the
    * rest redraws as usual (spine.ts ClockGated). */
-  override render(width: number): string[] {
+  override render(width: number): readonly string[] {
     if (this.clockLive) {
       this.shownAt = Date.now();
       return super.render(width);
@@ -506,7 +506,7 @@ interface Placed extends SpineBlock {
   /** What the tip is tracked by, when not `component` (a folded run's row: its own key). */
   clockKey?: Component;
   /** Drawn live this frame: draws it again held, for when this frame's layout put it outside the tip. */
-  held?: () => string[];
+  held?: () => readonly string[];
   skipped: number;
   /** A tool row: a tool block, a group line, or a group's "N more"/"fold" row. */
   toolish: boolean;
@@ -514,7 +514,7 @@ interface Placed extends SpineBlock {
 
 const TRUNK: SpineMember = { spineRole: "trunk" };
 
-function place(component: Component, lines: string[], width: number): Placed {
+function place(component: Component, lines: readonly string[], width: number): Placed {
   const member = component instanceof piTui.Spacer ? "spacer" : spineMember(component);
   const placed: Placed = { component, lines: [...lines], skipped: 0, member, toolish: component instanceof ToolEntry };
   if (isClockGated(component) && component.clockLive) {

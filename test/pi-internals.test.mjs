@@ -788,9 +788,11 @@ const registry = [
   {
     id: "cache-warmer-ttl",
     async check() {
-      const warmer = await import(pathToFileURL(join(piDist, "core", "cache-warmer.js")).href);
-      assert.equal(typeof warmer.getPromptCacheTtlMs, "function", "Pi's cache-warmer.js no longer exports getPromptCacheTtlMs");
-      assert.equal(warmer.getPromptCacheTtlMs({ promptCache: { short: 300 } }, {}), 300000, "getPromptCacheTtlMs no longer reads promptCache.short in seconds");
+      const { getPromptCacheTtlMs } = await import("@earendil-works/pi-ai");
+      assert.equal(typeof getPromptCacheTtlMs, "function", "pi-ai no longer exports getPromptCacheTtlMs");
+      assert.equal(getPromptCacheTtlMs({ promptCache: { short: 300 } }, {}), 300000, "getPromptCacheTtlMs no longer reads promptCache.short in seconds");
+      const warmerText = readFileSync(join(piDist, "core", "cache-warmer.js"), "utf8");
+      assert.match(warmerText, /getPromptCacheTtlMs\(/, "Pi's cache-warmer.js no longer uses getPromptCacheTtlMs");
     },
   },
   {
@@ -833,7 +835,7 @@ const registry = [
       );
       assert.match(
         printText,
-        /finally \{[\s\S]{0,200}await disposeRuntime\(\);\s*await flushRawStdout\(\);/,
+        /finally \{[\s\S]{0,260}await disposeRuntime\(\);[\s\S]{0,160}await flushRawStdout\(\);/,
         `${printPath} no longer disposes the runtime (session_shutdown) before its final stdout flush`,
       );
       const sessionPath = join(piDist, "core", "agent-session.js");
@@ -977,8 +979,10 @@ const registry = [
       const { parseDiffString } = await import(pathToFileURL(join(root, "dist", "tui", "tools", "mutating.js")).href);
       const editPath = join(piDist, "core", "tools", "edit.js");
       const editText = readFileSync(editPath, "utf8");
-      assert.match(editText, /const diffResult = generateDiffString\(/, `${editPath} no longer builds its diff with generateDiffString`);
-      assert.match(editText, /details: \{ diff: diffResult\.diff,/, `${editPath} no longer returns generateDiffString's output as details.diff`);
+      assert.match(editText, /const editDiff = generateEditDiff\(/, `${editPath} no longer builds its diff with generateEditDiff`);
+      assert.match(editText, /details: editDiff,/, `${editPath} no longer returns generateEditDiff's output as details`);
+      const editDiffText = readFileSync(join(piDist, "core", "tools", "edit-diff.js"), "utf8");
+      assert.match(editDiffText, /export function generateEditDiff\([\s\S]*return \{ diff: output\.join\("\\n"\),/, "generateEditDiff no longer returns { diff }");
       // 12 lines; line 3 becomes two lines (so new-file numbers run one ahead), line 10 is replaced.
       // One context line keeps the expected rows short; Epi doesn't depend on the context count.
       const old = Array.from({ length: 12 }, (_, i) => `l${i + 1}`).join("\n") + "\n";

@@ -58,7 +58,10 @@ test("stdout noise from a worker extension cannot corrupt the fd 3 protocol", as
   const done = await runtime.pool.wait(job.id);
   assert.equal(done.status, "completed", done.error);
   assert.match(done.result, /CHILD-ANSWER-42/);
-  assert.ok(done.usage.inputTokens > 0, "usage crosses the protocol");
+  assert.ok(
+    done.usage.inputTokens + done.usage.cacheWriteTokens > 0 && done.usage.outputTokens > 0,
+    "usage crosses the protocol",
+  );
 });
 
 test("a steer reaches a running worker as the next user prompt", async (t) => {

@@ -74,7 +74,7 @@ function imagePopup(theme, chip, width, cache) {
     const capabilities = piTui.getCapabilities();
     if (!capabilities.images)
         return box(theme, boxWidth, [], fittedTitle, undefined);
-    return box(theme, boxWidth, pictureFor(theme, image, cache).render(inner), fittedTitle, undefined);
+    return box(theme, boxWidth, [...pictureFor(theme, image, cache).render(inner)], fittedTitle, undefined);
 }
 /** Empty when nothing is being previewed, so it costs zero rows in the layout otherwise. A left
  * click on a text chip's popup hands the chip to `onView` (the full text, editable). */

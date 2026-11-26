@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { createModels, InMemoryModelsStore, InMemoryCredentialStore, Type } from "@earendil-works/pi-ai";
+import { createModels, InMemoryModelsStore, InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 
 import {
   createMagpieProvider,
@@ -229,13 +230,13 @@ test("a saved catalog from before pricing is refreshed, not kept forever", async
 // The lifetime exists for Pi's CacheWarmer: getPromptCacheTtlMs is what decides whether a model is
 // eligible at all, so assert against Pi's own function, not just the field's shape.
 test("Pi's cache warmer reads the parsed five-minute lifetime (300000 ms)", async () => {
-  const cacheWarmer = await import(new URL("./core/cache-warmer.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href);
+  const { getPromptCacheTtlMs } = await import("@earendil-works/pi-ai");
   const baseUrl = "http://localhost:1234";
   const byId = new Map(parseMagpieModels({ data: magpieCatalog }, baseUrl).map((model) => [model.id, model]));
-  assert.equal(cacheWarmer.getPromptCacheTtlMs(byId.get("claude/claude-opus-test"), {}), 300000);
-  assert.equal(cacheWarmer.getPromptCacheTtlMs(byId.get("other/chat"), {}), 300000);
-  assert.equal(cacheWarmer.getPromptCacheTtlMs(byId.get("antigravity/gemini-3-flash"), {}), undefined);
-  assert.equal(cacheWarmer.getPromptCacheTtlMs(byId.get("claude/claude-opus-test"), { cacheRetention: "none" }), undefined);
+  assert.equal(getPromptCacheTtlMs(byId.get("claude/claude-opus-test"), {}), 300000);
+  assert.equal(getPromptCacheTtlMs(byId.get("other/chat"), {}), 300000);
+  assert.equal(getPromptCacheTtlMs(byId.get("antigravity/gemini-3-flash"), {}), undefined);
+  assert.equal(getPromptCacheTtlMs(byId.get("claude/claude-opus-test"), { cacheRetention: "none" }), undefined);
 });
 
 test("discovery authenticates, honors pagination, HTTP errors, timeout and cancellation", async (t) => {

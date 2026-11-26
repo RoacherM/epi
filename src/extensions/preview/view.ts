@@ -150,7 +150,7 @@ export class Viewer {
     let rows: string[] | undefined;
     if (rendered) {
       try {
-        rows = new Markdown(doc.markdown!, 1, 0, getMarkdownTheme()).render(width);
+        rows = [...new Markdown(doc.markdown!, 1, 0, getMarkdownTheme()).render(width)];
       } catch {
         rows = undefined;
       }

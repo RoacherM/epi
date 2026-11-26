@@ -468,7 +468,7 @@ export class PromptFrame implements Component {
 
   /** Finds the editor's own top/bottom border rows within its rendered output at `inner` width,
    * so render() and handleMouse() agree on which rows are content. */
-  private contentBounds(inner: number): { lines: string[]; top: number; bottom: number } {
+  private contentBounds(inner: number): { lines: readonly string[]; top: number; bottom: number } {
     const lines = this.editor.render(inner);
     const top = lines.findIndex(isBorderRule);
     let bottom = -1;

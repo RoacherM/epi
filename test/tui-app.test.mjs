@@ -146,7 +146,7 @@ test("TUI v2 /login and /logout label subscription and account sign-ins like Pi"
   assert.match(marks.method, /Sign in with an account\s/);
   assert.doesNotMatch(marks.method, /\(subscription\)/);
   const logout = marks.logout.slice(marks.logout.lastIndexOf("Select provider to logout"));
-  assert.match(logout, /OpenRouter \[account\]/);
+  assert.match(logout, /OpenRouter[^\n]* \[account\]/);
   assert.match(logout, /Anthropic[^\n]* \[subscription\]/);
   assert.match(logout, /OpenAI \[API key\]/);
 });

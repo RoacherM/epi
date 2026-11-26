@@ -102,7 +102,7 @@ function isBlank(line: string): boolean {
 }
 
 /** `rows` without blank rows at either end. */
-function trimBlankRows(rows: string[]): string[] {
+function trimBlankRows(rows: readonly string[]): string[] {
   let start = 0;
   let end = rows.length;
   while (start < end && isBlank(rows[start]!)) start += 1;
@@ -166,7 +166,7 @@ export class MeasuredMarkdown implements Component {
     return rows;
   }
 
-  private renderSegment(segment: Segment, index: number, width: number): string[] {
+  private renderSegment(segment: Segment, index: number, width: number): readonly string[] {
     if (segment.kind === "prose") return this.markdown(index, segment.source).render(Math.min(width, this.measure + 2 * CONTENT_COLUMN));
     if (segment.kind === "table") return this.markdown(index, segment.source).render(width);
     const codeWidth = Math.max(1, width - CONTENT_COLUMN);
