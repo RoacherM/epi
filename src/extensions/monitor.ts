@@ -11,7 +11,7 @@ import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   getShellConfig,
   type ExtensionAPI,

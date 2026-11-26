@@ -70,7 +70,7 @@ const SUBMENU = "Default thinking level per model";
 // exist in Pi's list when the terminal can draw images.
 const HIDDEN = [
   "Show images", "Image width", "Editor padding", "Output padding", "Clear on shrink",
-  "Hide thinking", "Mermaid diagrams", "Cache miss notices", "Collapse changelog", "Quiet startup",
+  "Hide thinking", "Mermaid diagrams", "Notices", "Collapse changelog", "Quiet startup",
   "Install telemetry", "Default project trust", "Warnings", "TUI mode", "Fullscreen exit output", "Theme",
   // Pi 1.4 added /share's upload destination (auto/gist/radius). Epi's /share only creates a GitHub
   // gist (docs/tui-design.md 4.6), with no Radius identity, so the setting would change nothing.
@@ -118,7 +118,7 @@ test("every item saves to ~/.epi/pi/settings.json, nothing lands under ~/.pi or 
     ["mark", "changed"], ...quit,
   ]);
   assert.match(marks.changed, /HTTP idle timeout: disabled/);
-  assert.match(marks.changed, /Cache warming: idle/);
+  assert.match(marks.changed, /Cache warming: off/);
   // One Enter each, from Pi's defaults: the next value in each item's list.
   assert.deepEqual(env.readSettings(), {
     compaction: { enabled: false },
@@ -131,7 +131,7 @@ test("every item saves to ~/.epi/pi/settings.json, nothing lands under ~/.pi or 
     followUpMode: "all",
     transport: "sse",
     httpIdleTimeoutMs: 0,
-    cacheWarming: "idle",
+    cacheWarming: "off",
     doubleEscapeAction: "fork",
     treeFilterMode: "no-tools",
     fullscreenScrollbar: "always",
@@ -153,7 +153,7 @@ test("every item saves to ~/.epi/pi/settings.json, nothing lands under ~/.pi or 
   for (const [label, value] of [
     ["Auto-compact", "false"], ["Block images", "true"], ["Terminal progress", "true"], ["Steering mode", "all"], ["Transport", "sse"],
     ["Double-escape action", "fork"],
-    ["HTTP idle timeout", "disabled"], ["Cache warming", "idle"], ["Tree filter mode", "no-tools"],
+    ["HTTP idle timeout", "disabled"], ["Cache warming", "off"], ["Tree filter mode", "no-tools"],
     ["Fullscreen copy on select", "false"], ["Fullscreen wheel scrolling", "1"],
   ]) assert.match(list, new RegExp(`→ ${label} +${value}`), label);
 });
@@ -504,7 +504,7 @@ test("Epi's items match Pi's SettingsSelectorComponent: same order, labels, desc
     httpIdleTimeoutMs: settings.getHttpIdleTimeoutMs(), cacheWarmingMode: settings.getCacheWarmingMode(),
     thinkingLevel: "medium", availableThinkingLevels: ["off", "medium"], modelThinkingLevels: {},
     currentTheme: "dark", availableThemes: ["dark"], hideThinkingBlock: false,
-    mermaidRenderingMode: settings.getMermaidRenderingMode(), showCacheMissNotices: settings.getShowCacheMissNotices(),
+    mermaidRenderingMode: settings.getMermaidRenderingMode(), notices: settings.getNotices(),
     collapseChangelog: settings.getCollapseChangelog(), enableInstallTelemetry: settings.getEnableInstallTelemetry(),
     doubleEscapeAction: settings.getDoubleEscapeAction(), treeFilterMode: settings.getTreeFilterMode(),
     showHardwareCursor: settings.getShowHardwareCursor(), editorPaddingX: settings.getEditorPaddingX(),

@@ -36,6 +36,13 @@ Epi 是基于 Pi SDK 的可定制终端编程助手。自有 grok 风格 TUI，�
 
 ## 最近更新
 
+**0.2.9：免 Node.js 一键安装与 Bun 预打包发行、Pi SDK 升级至 1.6.1**
+
+[→ 特性展示](docs/showcase/0.2.9/README.md)
+
+- **免 Node.js 一键安装与 Bun 预打包发行（决策 IN1）**：`curl -fsSL https://github.com/RoacherM/epi/releases/latest/download/install.sh | bash` 零前置依赖安装，自动复用或下载经 SHA-256 校验的私有 Bun 运行时（`~/.epi/runtime/bun`），下载通用预打包归档 `epi-<version>-bundle.tar.gz` 原子切换至 `~/.epi/current`（保留 `N-1` 版本保护并发会话），`epi update` 保留自定义 `--dir` / `EPI_INSTALL_DIR` 原地升级；修复 Bun 下 `dispatch` `fd 3` 协议双关与丢读问题，CI/Release 全面接入 Bun 加速。
+- **Pi SDK 升级（`1.4.0 → 1.6.1`）**：同步锁定全部 `@earendil-works/*` 包（含新增 `@earendil-works/pi-schema`），适配 `pi-tui` `readonly string[]` 渲染签名与 Pi 1.6 新增 `PI_*` 环境变量隔离。
+
 **0.2.8：无头模式 `isDaemon` 常驻服务跨退出保活、防断管 `SIGPIPE` 与启动对账豁免**
 
 [→ 特性展示](docs/showcase/0.2.8/README.md)

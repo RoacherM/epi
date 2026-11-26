@@ -25,6 +25,7 @@ export const PI_ENV_RULES = {
     PI_TUI_WRITE_LOG: { kind: "cleared" },
     PI_MANAGED_INSTALL_ROOT: { kind: "cleared" },
     PI_INSTALLER_API_BASE: { kind: "cleared" },
+    PI_SELF_UPDATE_COMMAND: { kind: "cleared" },
     PI_PROGRAM_STATUS: { kind: "cleared" },
     // Pi 1.4: remote clipboard (OSC 52) and the codemode worker limit. Both are user-facing knobs, so
     // Epi's own names bridge them like every other user-facing switch (docs/cli-design.md §2.1).
@@ -55,6 +56,9 @@ export const PI_ENV_NOT_READ = [
     // process.env; Pi's own interactive mode only, which Epi does not run.
     "PI_LOGO_COLORS",
     "PI_LOGO_PIXELS",
+    // Module constants in Pi 1.6's MCP OAuth helper (extensions/mcp/oauth.js), not process.env.
+    "PI_CLIENT",
+    "PI_CLIENT_METADATA_DOCUMENTS",
 ];
 /**
  * Clears every `PI_*` variable in PI_ENV_RULES, then copies each bridged `EPI_*` variable that is

@@ -38,7 +38,7 @@ export declare class ToolEntry extends ToolExecutionComponent implements SpineMe
     /** With its call row outside the transcript's tip: drawn at the time it last showed inside it, so
      * the duration bar and the rotating marker hold still and a landing shake doesn't play, while the
      * rest redraws as usual (spine.ts ClockGated). */
-    render(width: number): string[];
+    render(width: number): readonly string[];
     updateResult(result: {
         content: Array<{
             type: string;

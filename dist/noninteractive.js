@@ -138,13 +138,14 @@ function reportStartup(runtime) {
     const { settingsManager } = runtime.services;
     // Extensions read the theme through Pi's process-wide one, also without a terminal.
     initTheme(settingsManager.getTheme(), false);
-    reportDiagnostics([...settingsDiagnostics(settingsManager), ...runtime.diagnostics]);
+    reportDiagnostics([...settingsDiagnostics(settingsManager), ...runtime.takeUnreportedDiagnostics()]);
     if (!runtime.session.model) {
         exitWithError(`No models available. ${PROVIDER_LOGIN_HELP}`);
     }
 }
-/** Pi's RPC runner binds the replacement session's UI before session_start, but does not report
- * runtime diagnostics. Startup is already reported on stderr; reload does not replace the runtime. */
+/** Pi's RPC runner binds the replacement session's UI before session_start, then dumps any
+ * remaining unreported diagnostics to stderr. Consuming takeUnreportedDiagnostics() here routes
+ * them to the RPC client via ctx.ui.notify without duplicate stderr noise. */
 function rpcReplacementDiagnostics(getRuntime) {
     return {
         name: "epi:rpc-diagnostics",
@@ -157,7 +158,7 @@ function rpcReplacementDiagnostics(getRuntime) {
                 reported = true;
                 const runtime = getRuntime();
                 const seen = new Set();
-                for (const { type, message } of [...settingsDiagnostics(runtime.services.settingsManager), ...runtime.diagnostics]) {
+                for (const { type, message } of [...settingsDiagnostics(runtime.services.settingsManager), ...runtime.takeUnreportedDiagnostics()]) {
                     const key = `${type}:${message}`;
                     if (seen.has(key))
                         continue;

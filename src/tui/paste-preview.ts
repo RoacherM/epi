@@ -91,7 +91,7 @@ function imagePopup(theme: Theme, chip: Extract<ChipInfo, { kind: "image" }>, wi
   const fittedTitle = fit(title, Math.max(1, boxWidth - 6));
   const capabilities = piTui.getCapabilities();
   if (!capabilities.images) return box(theme, boxWidth, [], fittedTitle, undefined);
-  return box(theme, boxWidth, pictureFor(theme, image, cache).render(inner), fittedTitle, undefined);
+  return box(theme, boxWidth, [...pictureFor(theme, image, cache).render(inner)], fittedTitle, undefined);
 }
 
 /** Empty when nothing is being previewed, so it costs zero rows in the layout otherwise. A left

@@ -113,7 +113,7 @@ test("isInteractivePiRun agrees with Pi's own resolveAppMode for every mode/prin
 test("Pi's main.js only builds its InteractiveMode when resolveAppMode said interactive", () => {
   assert.match(mainText, /let appMode = resolveAppMode\(parsed, process\.stdin\.isTTY, process\.stdout\.isTTY\);/);
   assert.equal(mainText.match(/new InteractiveMode\(/g)?.length, 1, "Pi builds its InteractiveMode in another place too");
-  assert.match(mainText, /else if \(appMode === "interactive"\) \{\n\s*const interactiveMode = new InteractiveMode\(/);
+  assert.match(mainText, /else if \(appMode === "interactive"\) \{\n\s*(?:announcePackageInstalls = false;\n\s*)?const interactiveMode = new InteractiveMode\(/);
   // The only later change to appMode is interactive -> print for piped stdin, which needs a
   // non-TTY stdin that resolveAppMode already treats as print.
   assert.deepEqual(mainText.match(/appMode = [^;]*;/g), ["appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);", 'appMode = "print";']);

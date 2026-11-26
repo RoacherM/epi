@@ -8,7 +8,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { getShellConfig, } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { BATCH_WINDOW_MS, DEFAULT_TIMEOUT_MS, formatDuration, killTree, LineBatcher, MAX_TIMEOUT_MS, MIN_TIMEOUT_MS, RateLimiter, spawnMonitor, TOKEN_REFILL_MS, validateMonitorParams, } from "../monitor-stream.js";
