@@ -36,6 +36,13 @@ Epi 是基于 Pi SDK 的可定制终端编程助手。自有 grok 风格 TUI，�
 
 ## 最近更新
 
+**0.2.8：无头模式 `isDaemon` 常驻服务跨退出保活、防断管 `SIGPIPE` 与启动对账豁免**
+
+[→ 特性展示](docs/showcase/0.2.8/README.md)
+
+- **无头模式 `bash({ isDaemon: true })` 跨退出保活（`#16`）**：根会话在 `epi -p`、`--mode json` 与 `pi -p -e` 正常退出时自动将运行中的守护进程解绑保留（`detached: true`，关闭父侧 `stdin` 并 `unref` 子进程句柄，零事件循环挂起），后续同 `EPI_HOME` 启动的 `reconcile()` 不再将其误判为崩溃孤儿清扫；`--continue` 恢复原会话后仍可用 `task_status` 查看退出后日志或用 `task_cancel` 显式停止。交互式 TUI、RPC、Worker 子代理退出与信号中断仍全量终止进程树。
+- **守护进程日志文件描述符直连防 `SIGPIPE`**：`isDaemon: true` 在启动时将 `stdout`/`stderr` 直接绑定至 `<stateDir>/bg/<id>.log`（`O_APPEND`，按偏移读取尾部 `64 KiB`），宿主退出后常驻 HTTP/gRPC 服务持续输出访问日志不会触发 `SIGPIPE` 或 `EPIPE`。
+
 **0.2.7：内置可移植异步调度与多代理协同引擎 `dispatch`（受管异步 `bash`、具名同伴共享看板、闹钟/收件箱与双页签视图）**
 
 [→ 特性展示](docs/showcase/0.2.7/README.md)
