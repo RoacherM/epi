@@ -23,13 +23,11 @@ export function createOutboxTool(
   host: DispatchHostAdapter,
   sessionId: () => string | undefined,
   notifyUi: (text: string) => void,
-  defaultActive = true,
 ): ToolDefinition<typeof OutboxParameters> {
   const recent: string[] = [];
   return {
     name: "outbox",
     label: "Outbox",
-    defaultActive,
     description: "Tell the user something (notify) or ask them a question (ask) from an unattended run. Stay silent when there is nothing worth reporting.",
     parameters: OutboxParameters,
     async execute(_toolCallId, params: Static<typeof OutboxParameters>) {

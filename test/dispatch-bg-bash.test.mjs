@@ -10,8 +10,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Value } from "typebox/value";
 
-import { BG_LOG_CAP_BYTES } from "../dist/extensions/dispatch/bg-bash.js";
+import { BashParameters, BG_LOG_CAP_BYTES } from "../dist/extensions/dispatch/bg-bash.js";
 import { isPidAlive } from "../dist/extensions/dispatch/reaper.js";
 import { waitFor } from "./helpers/dispatch-fake-pi.mjs";
 import { mountRuntime, resultText, tempDir } from "./helpers/dispatch-runtime.mjs";
@@ -37,9 +38,9 @@ test("a command that finishes inside its window returns Pi's own bash result and
   assert.deepEqual(readdirSync(join(stateDir, "bg")), [], "no log, meta or guard left behind");
 });
 
-test("a command outliving waitMsBeforeAsync becomes bg_<id>, notifies once on exit, and acks to notified: true", async (t) => {
-  const { call, runtime, stateDir, fake } = await mountRuntime(t);
-  const result = await call("bash", { command: "echo started; sleep 0.6; echo finished", waitMsBeforeAsync: 100 });
+test("a command outliving syncWindowMs becomes bg_<id>, notifies once on exit, and acks to notified: true", async (t) => {
+  const { call, runtime, stateDir, fake } = await mountRuntime(t, { host: { syncWindowMs: 100 } });
+  const result = await call("bash", { command: "echo started; sleep 0.6; echo finished" });
   const id = /Running in the background as (bg_[0-9a-f]+)/.exec(resultText(result))?.[1];
   assert.ok(id, resultText(result));
   assert.match(resultText(result), /started/);
@@ -69,7 +70,7 @@ test("abort and timeout in the foreground keep Pi's error wording", async (t) =>
 
 test("a daemon returns at once, keeps stdin for task_input, and its exit is reported", async (t) => {
   const { call, fake } = await mountRuntime(t);
-  const started = await call("bash", { command: "while read line; do echo got:$line; done", isDaemon: true });
+  const started = await call("bash", { command: "while read line; do echo got:$line; done", mode: "daemon" });
   const id = /as (bg_[0-9a-f]+) \(daemon\)/.exec(resultText(started))?.[1];
   assert.ok(id, resultText(started));
   assert.match(resultText(await call("task_input", { id, input: "hello\n" })), /6 bytes written/);
@@ -93,7 +94,7 @@ test("task_cancel stops a background command without a second notification; manu
 
 test("the 20 MiB log cap stops writing to disk but keeps draining, so the command exits 0", async (t) => {
   const { call, fake, stateDir } = await mountRuntime(t);
-  const result = await call("bash", { command: "head -c 23000000 /dev/zero | tr '\\0' x; echo; echo TAIL-OK", waitMsBeforeAsync: 0 });
+  const result = await call("bash", { command: "head -c 23000000 /dev/zero | tr '\\0' x; echo; echo TAIL-OK", mode: "background" });
   const id = /as (bg_[0-9a-f]+)/.exec(resultText(result))[1];
   await waitFor(() => fake.sent.length > 0, { timeoutMs: 20_000, label: "big command exit" });
   const report = resultText(await call("task_status", { id }));
@@ -222,7 +223,7 @@ function registerDaemonCleanup(t) {
   };
 }
 
-test("epi -p keeps isDaemon: true servers alive across exit, logging without SIGPIPE, and subsequent startup reconcile", async (t) => {
+test("epi -p keeps mode: 'daemon' servers alive across exit, logging without SIGPIPE, and subsequent startup reconcile", async (t) => {
   const cleanup = registerDaemonCleanup(t);
   const root = tempDir(t, "dispatch-epi-daemon-");
   const home = join(root, "home");
@@ -305,13 +306,13 @@ test("shutdown scope: print quit detaches only daemons, while TUI quit, signal k
     return cleanup.trackPid(Number(readFileSync(file, "utf8").trim()));
   };
 
-  // 1. Print mode clean quit: detaches daemon, kills finite !isDaemon job
+  // 1. Print mode clean quit: detaches daemon, kills finite background job
   const p = await mountRuntime(t, { mode: "print" });
   const printDaemonFile = pidFile(p.root, "print-daemon");
   const printFiniteFile = pidFile(p.root, "print-finite");
-  const printDaemonStarted = await p.call("bash", { command: sleeper(printDaemonFile), isDaemon: true });
+  const printDaemonStarted = await p.call("bash", { command: sleeper(printDaemonFile), mode: "daemon" });
   const printDaemonId = /as (bg_[0-9a-f]+) \(daemon\)/.exec(resultText(printDaemonStarted))[1];
-  await p.call("bash", { command: sleeper(printFiniteFile), waitMsBeforeAsync: 0 });
+  await p.call("bash", { command: sleeper(printFiniteFile), mode: "background" });
   const printDaemonPid = await waitPid(printDaemonFile);
   const printFinitePid = await waitPid(printFiniteFile);
   await p.fake.emit("session_shutdown", { reason: "quit" });
@@ -330,13 +331,13 @@ test("shutdown scope: print quit detaches only daemons, while TUI quit, signal k
   const tui = await mountRuntime(t, { mode: "tui" });
   const cancelFile = pidFile(tui.root, "cancel-daemon");
   const tuiQuitFile = pidFile(tui.root, "tui-daemon");
-  const started = await tui.call("bash", { command: sleeper(cancelFile), isDaemon: true });
+  const started = await tui.call("bash", { command: sleeper(cancelFile), mode: "daemon" });
   const cancelId = /as (bg_[0-9a-f]+) \(daemon\)/.exec(resultText(started))[1];
   const cancelPid = await waitPid(cancelFile);
   await tui.call("task_cancel", { id: cancelId });
   await waitFor(() => !isPidAlive(cancelPid), { label: "task_cancel kills daemon" });
 
-  await tui.call("bash", { command: sleeper(tuiQuitFile), isDaemon: true });
+  await tui.call("bash", { command: sleeper(tuiQuitFile), mode: "daemon" });
   const tuiQuitPid = await waitPid(tuiQuitFile);
   await tui.fake.emit("session_shutdown", { reason: "reload" });
   assert.equal(isPidAlive(tuiQuitPid), true, "/reload does not shut down running jobs");
@@ -346,7 +347,7 @@ test("shutdown scope: print quit detaches only daemons, while TUI quit, signal k
   // 3. Fatal signal (killAllSync) before print-mode shutdown kills daemons too
   const sig = await mountRuntime(t, { mode: "print" });
   const sigFile = pidFile(sig.root, "sig-daemon");
-  await sig.call("bash", { command: sleeper(sigFile), isDaemon: true });
+  await sig.call("bash", { command: sleeper(sigFile), mode: "daemon" });
   const sigPid = await waitPid(sigFile);
   sig.runtime.bg.killAllSync();
   await sig.fake.emit("session_shutdown", { reason: "quit" });
@@ -356,9 +357,9 @@ test("shutdown scope: print quit detaches only daemons, while TUI quit, signal k
   //    while json-mode root detaches and exited detached daemons settle as exited (not lost) on reconcile
   const worker = await mountRuntime(t, { role: "task-worker", mode: "print" });
   const workerFile = pidFile(worker.root, "worker-daemon");
-  const fastDaemon = await worker.call("bash", { command: "echo FAST-DAEMON-OUT", isDaemon: true, waitMsBeforeAsync: 2000 });
-  assert.match(resultText(fastDaemon), /FAST-DAEMON-OUT/);
-  await worker.call("bash", { command: sleeper(workerFile), isDaemon: true });
+  const fastDaemon = await worker.call("bash", { command: "echo FAST-DAEMON-OUT", mode: "daemon" });
+  assert.match(resultText(fastDaemon), /Running in the background as bg_[0-9a-f]+ \(daemon\)/);
+  await worker.call("bash", { command: sleeper(workerFile), mode: "daemon" });
   const workerDaemonPid = await waitPid(workerFile);
   await worker.fake.emit("session_shutdown", { reason: "quit" });
   await waitFor(() => !isPidAlive(workerDaemonPid), { label: "worker print quit kills daemon" });
@@ -366,7 +367,7 @@ test("shutdown scope: print quit detaches only daemons, while TUI quit, signal k
   const jsonRoot = tempDir(t, "dispatch-json-daemon-");
   const jsonHost = await mountRuntime(t, { mode: "json", stateDir: jsonRoot, sessionId: "sess-json" });
   const jsonFile = pidFile(jsonRoot, "json-daemon");
-  const jsonStarted = await jsonHost.call("bash", { command: sleeper(jsonFile), isDaemon: true });
+  const jsonStarted = await jsonHost.call("bash", { command: sleeper(jsonFile), mode: "daemon" });
   const jsonBgId = /as (bg_[0-9a-f]+) \(daemon\)/.exec(resultText(jsonStarted))[1];
   const jsonDaemonPid = await waitPid(jsonFile);
   await jsonHost.fake.emit("session_shutdown", { reason: "quit" });
@@ -378,4 +379,12 @@ test("shutdown scope: print quit detaches only daemons, while TUI quit, signal k
   assert.equal(resumedJson.fake.sent.length, 0, "exited detached daemon must not emit crash/lost notice");
   const settledStatus = await resumedJson.call("task_status", { id: jsonBgId });
   assert.match(resultText(settledStatus), new RegExp(`${jsonBgId} \\(daemon\\) exited after`));
+});
+
+test("dispatch bash rejects removed parameters via additionalProperties: false and hints milliseconds on timeout", async (t) => {
+  assert.equal(Value.Check(BashParameters, { command: "echo hi", isDaemon: true }), false);
+  assert.equal(Value.Check(BashParameters, { command: "echo hi", waitMsBeforeAsync: 500 }), false);
+  assert.equal(Value.Check(BashParameters, { command: "echo hi", mode: "daemon" }), true);
+  const { call } = await mountRuntime(t);
+  await assert.rejects(call("bash", { command: "echo hi", mode: "background", timeout: 120_000 }), /Did you mean 120\?/);
 });

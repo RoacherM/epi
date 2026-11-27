@@ -157,7 +157,7 @@ export function itemDetailView(theme, runtime, ref) {
 }
 export function boardLines(theme, messages) {
     if (messages.length === 0) {
-        return [theme.fg("muted", "No board messages yet — start named peers with task({ name: \"worker\", task: \"...\" }).")];
+        return [theme.fg("muted", "No board messages yet — start named peers with task({ role: \"peer\", name: \"worker\", task: \"...\" }).")];
     }
     const out = [];
     for (const msg of messages) {

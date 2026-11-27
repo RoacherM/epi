@@ -17,7 +17,7 @@ import { createEpiRuntimeExtensions } from "../dist/extensions/runtime.js";
 import { createEpiRuntimeIdentity } from "../dist/runtime-identity.js";
 import { EPI_PACKAGE_VERSION as EPI_VERSION } from "./fixtures/epi-package-version.mjs";
 
-function runtimeFixture(activeTools = ["bash", "read", "monitor"]) {
+function runtimeFixture(activeTools = ["bash", "read", "monitor"], allTools = []) {
   const assembly = {
     agentDir: "/fixture/epi/pi",
     globalManifest: "/fixture/epi/epi.json",
@@ -48,6 +48,9 @@ function runtimeFixture(activeTools = ["bash", "read", "monitor"]) {
     getActiveTools() {
       return activeTools;
     },
+    getAllTools() {
+      return allTools;
+    },
   });
   return handlers;
 }
@@ -75,20 +78,24 @@ test("normalizeBashTimeout injects 120s default and blocks invalid or >600s time
     assert.match(res.reason, /SECONDS/);
   }
 
-  const msTypo = normalizeBashTimeout(5000, true);
+  const piAltWithMonitor = "`monitor` or bounded steps (<=600s)";
+  const subagentAlt = "split into bounded steps (<=600s) or report back to the parent session";
+
+  const msTypo = normalizeBashTimeout(5000, piAltWithMonitor);
   assert.equal(msTypo.action, "block");
   assert.match(msTypo.reason, /looks like milliseconds/);
   assert.match(msTypo.reason, /Did you mean `timeout: 5`\?/);
   assert.match(msTypo.reason, /monitor/);
 
-  const overCapSubagent = normalizeBashTimeout(601, false);
+  const overCapSubagent = normalizeBashTimeout(601, subagentAlt);
   assert.equal(overCapSubagent.action, "block");
   assert.match(overCapSubagent.reason, /exceeds the 600s/);
   assert.doesNotMatch(overCapSubagent.reason, /`monitor`/);
 });
 
-test("analyzeBashCommand blocks unbounded stream-follow commands and smart-allows <=60s probes", () => {
-  const defaultedOpts = { effectiveTimeoutSec: 120, timeoutDefaulted: true, hasMonitorTool: true };
+test("analyzeBashCommand blocks unbounded stream-follow commands and smart-allows <=60s probes and detached mode", () => {
+  const attachedAlt = "`monitor` or bounded steps (<=600s)";
+  const attachedOpts = { placement: "attached", managedAlternative: attachedAlt };
   for (const cmd of [
     "tail -f app.log",
     "tail -n0 -F /tmp/out.log",
@@ -105,7 +112,7 @@ test("analyzeBashCommand blocks unbounded stream-follow commands and smart-allow
     "stdbuf -oL tail -f app.log",
     "FOO=1 sudo -u root env BAR=2 bash -lc 'tail -f /var/log/system.log'",
   ]) {
-    const res = analyzeBashCommand(cmd, defaultedOpts);
+    const res = analyzeBashCommand(cmd, attachedOpts);
     assert.equal(res.blocked, true, `expected ${cmd} to be blocked`);
     assert.equal(res.kind, "stream-follow");
   }
@@ -113,42 +120,78 @@ test("analyzeBashCommand blocks unbounded stream-follow commands and smart-allow
   // Exact issue #13 reproducer: outer timeout > 60s + explicit bash timeout 600s still blocks!
   const issue13 = analyzeBashCommand(
     "timeout 590 sh -c 'tail -n0 -f /tmp/build.log'",
-    { effectiveTimeoutSec: 600, timeoutDefaulted: false, hasMonitorTool: true },
+    { explicitTimeoutSec: 600, placement: "attached", managedAlternative: attachedAlt },
   );
   assert.equal(issue13.blocked, true);
   assert.equal(issue13.kind, "stream-follow");
 
   // Short probes <= 60s via `timeout N` or explicit `bash.timeout <= 60` are allowed:
   assert.deepEqual(
-    analyzeBashCommand("timeout 15 tail -f app.log", defaultedOpts),
+    analyzeBashCommand("timeout 15 tail -f app.log", attachedOpts),
     { blocked: false },
   );
   assert.deepEqual(
-    analyzeBashCommand("tail -f app.log", { effectiveTimeoutSec: 20, timeoutDefaulted: false, hasMonitorTool: true }),
+    analyzeBashCommand("tail -f app.log", { explicitTimeoutSec: 20, placement: "attached", managedAlternative: attachedAlt }),
     { blocked: false },
   );
-  assert.deepEqual(analyzeBashCommand("ping -c 3 127.0.0.1", defaultedOpts), { blocked: false });
-  assert.deepEqual(analyzeBashCommand("ping -qc 4 127.0.0.1", defaultedOpts), { blocked: false });
-  assert.deepEqual(analyzeBashCommand("docker logs --tail 100 my-container", defaultedOpts), { blocked: false });
-  assert.deepEqual(analyzeBashCommand("docker compose -f docker-compose.test.yml logs --tail 200", defaultedOpts), { blocked: false });
-  assert.deepEqual(analyzeBashCommand("dmesg -f kern", defaultedOpts), { blocked: false });
-  assert.deepEqual(analyzeBashCommand("journalctl -F _SYSTEMD_UNIT", defaultedOpts), { blocked: false });
+  // Managed detached placement (dispatch mode: "background" | "daemon") permits streaming follows:
+  assert.deepEqual(
+    analyzeBashCommand("tail -f app.log", {
+      placement: "detached",
+      managedAlternative: "`bash` with `mode: \"background\"` (finite) or `mode: \"daemon\"` (service), or `monitor`",
+    }),
+    { blocked: false },
+  );
+  assert.deepEqual(analyzeBashCommand("ping -c 3 127.0.0.1", attachedOpts), { blocked: false });
+  assert.deepEqual(analyzeBashCommand("ping -qc 4 127.0.0.1", attachedOpts), { blocked: false });
+  assert.deepEqual(analyzeBashCommand("docker logs --tail 100 my-container", attachedOpts), { blocked: false });
+  assert.deepEqual(analyzeBashCommand("docker compose -f docker-compose.test.yml logs --tail 200", attachedOpts), { blocked: false });
+  assert.deepEqual(analyzeBashCommand("dmesg -f kern", attachedOpts), { blocked: false });
+  assert.deepEqual(analyzeBashCommand("journalctl -F _SYSTEMD_UNIT", attachedOpts), { blocked: false });
 });
 
 test("analyzeBashCommand blocks headless interactive TUIs without false-blocking pagers or batch modes", () => {
-  const opts = { effectiveTimeoutSec: 120, timeoutDefaulted: true, hasMonitorTool: true };
-  for (const cmd of ["vim README.md", "nvim src/index.ts", "nano .env", "emacs -nw file.txt", "htop", "btop", "top", "script /tmp/out"]) {
+  const opts = { placement: "attached", managedAlternative: "`monitor` or bounded steps (<=600s)" };
+  for (const cmd of [
+    "vim README.md",
+    "vim -s keys.txt README.md",
+    "nvim src/index.ts",
+    "nano .env",
+    "emacs -nw file.txt",
+    "htop",
+    "btop",
+    "top",
+    "expect",
+    "expect -i",
+    "script /tmp/out",
+  ]) {
     const res = analyzeBashCommand(cmd, opts);
     assert.equal(res.blocked, true, `expected ${cmd} to be blocked`);
     assert.equal(res.kind, "interactive-tui");
   }
-  for (const safe of ["top -l 1", "top -b -n 1", "top -bn1", "less README.md", "git rebase -i HEAD~2", "command -v vim", "command -V fswatch", "command -pv nohup", "caffeinate -i echo vim", "caffeinate -t 30 echo watch"]) {
+  for (const safe of [
+    "top -l 1",
+    "top -b -n 1",
+    "top -bn1",
+    "less README.md",
+    "git rebase -i HEAD~2",
+    "command -v vim",
+    "command -V fswatch",
+    "command -pv nohup",
+    "caffeinate -i echo vim",
+    "caffeinate -t 30 echo watch",
+    "vim -es -S script.vim README.md",
+    "nvim --headless +q",
+    "vim --version",
+    "expect -c 'puts ok'",
+    "expect run.exp",
+  ]) {
     assert.deepEqual(analyzeBashCommand(safe, opts), { blocked: false }, `expected ${safe} to be allowed`);
   }
 });
 
 test("analyzeBashCommand blocks detached daemons and unwaited background jobs while allowing self-cleaning scripts", () => {
-  const opts = { effectiveTimeoutSec: 120, timeoutDefaulted: true, hasMonitorTool: true };
+  const opts = { placement: "attached", managedAlternative: "`monitor` or bounded steps (<=600s)" };
   for (const cmd of [
     "nohup node server.js >/tmp/out 2>&1 &",
     "caffeinate -i nohup node server.js",
@@ -176,7 +219,7 @@ test("analyzeBashCommand blocks detached daemons and unwaited background jobs wh
 });
 
 test("analyzeBashCommand ignores patterns inside quotes, comments, and heredocs and fails open on unclosed syntax", () => {
-  const opts = { effectiveTimeoutSec: 120, timeoutDefaulted: true, hasMonitorTool: true };
+  const opts = { placement: "attached", managedAlternative: "`monitor` or bounded steps (<=600s)" };
   for (const safe of [
     "git commit -m 'fix tail -f hang & vim prompt'",
     "grep -rn \"nohup\" src/ # tail -f in comment & background",
@@ -189,22 +232,22 @@ test("analyzeBashCommand ignores patterns inside quotes, comments, and heredocs 
   }
 });
 
-test("analyzeBashCommand tailors guidance to whether monitor is active in the host", () => {
+test("analyzeBashCommand tailors guidance to caller-supplied managedAlternative", () => {
+  const mainAlt = "`bash` with `mode: \"background\"` (finite) or `mode: \"daemon\"` (service), or `monitor`";
+  const subagentAlt = "split into bounded steps (<=600s) or report back to the parent session";
   const mainHit = analyzeBashCommand("tail -f app.log", {
-    effectiveTimeoutSec: 120,
-    timeoutDefaulted: true,
-    hasMonitorTool: true,
+    placement: "attached",
+    managedAlternative: mainAlt,
   });
   const subagentHit = analyzeBashCommand("tail -f app.log", {
-    effectiveTimeoutSec: 120,
-    timeoutDefaulted: true,
-    hasMonitorTool: false,
+    placement: "attached",
+    managedAlternative: subagentAlt,
   });
   assert.equal(mainHit.blocked, true);
   assert.equal(subagentHit.blocked, true);
-  assert.match(mainHit.reason, /task\(\{ background: true \}\)/);
-  assert.doesNotMatch(subagentHit.reason, /task\(\{ background: true \}\)/);
-  assert.match(subagentHit.reason, /parent session can arm `monitor`/);
+  assert.match(mainHit.reason, /mode: "background"/);
+  assert.doesNotMatch(subagentHit.reason, /mode: "background"/);
+  assert.match(subagentHit.reason, /report back to the parent session/);
 });
 
 test("epi:runtime injects default timeout, augments timeout errors with .git/index.lock hint, preserves structuredContent, and aborts on quit", async (t) => {
@@ -257,8 +300,9 @@ test("epi:runtime injects default timeout, augments timeout errors with .git/ind
 
   // Non-timeout errors are untouched
   const untouched = augmentBashTimeoutResult("Command exited with code 1", dir, {
+    contract: "pi",
     defaulted: true,
-    hasMonitorTool: true,
+    managedAlternative: "`monitor`",
   });
   assert.equal(untouched, undefined);
 
@@ -277,26 +321,23 @@ test("epi:runtime injects default timeout, augments timeout errors with .git/ind
   assert.equal(aborted, 1);
 });
 
-test("epi:runtime allows async bash (isDaemon / waitMsBeforeAsync) streams and <=4h timeouts while still blocking nohup/& and vim", async () => {
-  const handlers = runtimeFixture(["bash", "read", "task_input", "monitor"]);
+test("epi:runtime detects dispatch bash schema (mode) and allows detached streams/long runs while still blocking nohup/& and vim", async () => {
+  const allTools = [{ name: "bash", parameters: { properties: { command: {}, mode: {}, timeout: {} } } }];
+  const handlers = runtimeFixture(["bash", "read", "task_input", "monitor"], allTools);
   const toolCall = handlers.get("tool_call");
 
   // Daemon stream without timeout: allowed and timeout stays undefined so bg-bash keeps it unlimited
-  const daemonInput = { command: "tail -f app.log", isDaemon: true };
+  const daemonInput = { command: "tail -f app.log", mode: "daemon" };
   assert.equal(await toolCall({ type: "tool_call", toolName: "bash", toolCallId: "d1", input: daemonInput }), undefined);
   assert.equal(daemonInput.timeout, undefined);
 
-  // Async build with 3600s timeout: allowed
-  const asyncInput = { command: "npm run bench", waitMsBeforeAsync: 5000, timeout: 3600 };
+  // Background build with 3600s timeout: allowed
+  const asyncInput = { command: "npm run bench", mode: "background", timeout: 3600 };
   assert.equal(await toolCall({ type: "tool_call", toolName: "bash", toolCallId: "d2", input: asyncInput }), undefined);
 
-  // Over 4h (14400s) even in async mode: blocked
-  const over4h = await toolCall({ type: "tool_call", toolName: "bash", toolCallId: "d3", input: { command: "sleep 1", waitMsBeforeAsync: 1000, timeout: 14401 } });
-  assert.equal(over4h?.block, true);
-
-  // Unmanaged nohup / & or interactive vim STILL blocked even with isDaemon: true
-  const nohupHit = await toolCall({ type: "tool_call", toolName: "bash", toolCallId: "d4", input: { command: "nohup node app.js &", isDaemon: true } });
+  // Unmanaged nohup / & or interactive vim STILL blocked even with mode: "daemon"
+  const nohupHit = await toolCall({ type: "tool_call", toolName: "bash", toolCallId: "d4", input: { command: "nohup node app.js &", mode: "daemon" } });
   assert.equal(nohupHit?.block, true);
-  const vimHit = await toolCall({ type: "tool_call", toolName: "bash", toolCallId: "d5", input: { command: "vim foo.ts", isDaemon: true } });
+  const vimHit = await toolCall({ type: "tool_call", toolName: "bash", toolCallId: "d5", input: { command: "vim foo.ts", mode: "daemon" } });
   assert.equal(vimHit?.block, true);
 });

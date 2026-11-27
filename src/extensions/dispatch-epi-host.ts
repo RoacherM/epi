@@ -13,7 +13,7 @@ import { createEpiUiAdapter, createTodoTool, SessionTodoStore } from "./dispatch
 import { loadAgents } from "./dispatch/agents.js";
 import { DispatchRuntime } from "./dispatch/runtime.js";
 import type { DispatchHostAdapter, LifecycleDecision, TaskLifecycleEvent } from "./dispatch/types.js";
-import type { TaskMonitorBridge } from "./task-notify.js";
+import type { TaskMonitorBridge } from "./task-monitor-bridge.js";
 
 /** Terminal multiplexers this Epi user runs subagents inside; never reaped as orphans. */
 export const EPI_SHARED_DAEMON_NAMES: readonly string[] = ["hc", "herdr-core", "herdr-app"];
@@ -27,6 +27,7 @@ export interface EpiDispatchOptions {
   bridge?: TaskMonitorBridge | undefined;
   workerPath?: string | undefined;
   killGraceMs?: number | undefined;
+  syncWindowMs?: number | undefined;
   foregroundBudgetSeconds?: number | undefined;
 }
 
@@ -67,8 +68,10 @@ export function createEpiDispatchHost(
       return emitTaskHook(bus, event, ctx);
     },
     ui: createEpiUiAdapter(getRuntime ?? (() => undefined), options.bridge),
+    ...(options.bridge === undefined ? {} : { settleSources: () => options.bridge!.settleSources() }),
     ...(options.workerPath === undefined ? {} : { workerPath: options.workerPath }),
     ...(options.killGraceMs === undefined ? {} : { killGraceMs: options.killGraceMs }),
+    ...(options.syncWindowMs === undefined ? {} : { syncWindowMs: options.syncWindowMs }),
     ...(options.foregroundBudgetSeconds === undefined ? {} : { foregroundBudgetSeconds: options.foregroundBudgetSeconds }),
   };
 }

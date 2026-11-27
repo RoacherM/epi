@@ -49,8 +49,8 @@ function assertWorkerModelAvailable(session, notRunning) {
         throw new Error(`No model available${notRunning}`);
     }
 }
-function buildWorkerFactories(assembly, options, extensions) {
-    const identity = createEpiRuntimeIdentity({ epiVersion: EPI_VERSION, piVersion: "", epiHome: options.epiHome, assembly });
+function buildWorkerFactories(assembly, options, extensions, piVersion) {
+    const identity = createEpiRuntimeIdentity({ epiVersion: EPI_VERSION, piVersion, epiHome: options.epiHome, assembly });
     return [
         createMagpieInlineExtension(),
         ...extensions.map((factory, index) => ({ name: `dispatch:worker-${index}`, factory })),
@@ -64,7 +64,7 @@ export const createWorkerSession = async (capsule, extensions, sdk) => {
     const assembly = workerAssembly(capsule, options);
     const preloaded = Array.isArray(options.skills) ? readPreloadedSkills(assembly) : [];
     const settingsManager = sdk.SettingsManager.create(capsule.cwd, capsule.agentDir, { projectTrusted: false });
-    const factories = buildWorkerFactories(assembly, options, extensions);
+    const factories = buildWorkerFactories(assembly, options, extensions, sdk.VERSION);
     const { modelRuntime, resourceLoader, diagnostics } = await sdk.createAgentSessionServices({
         cwd: capsule.cwd, agentDir: capsule.agentDir, settingsManager,
         resourceLoaderOptions: {

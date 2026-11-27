@@ -3,12 +3,13 @@ export declare const DEFAULT_TASK_TIMEOUT_SECONDS = 600;
 /** Node's `setTimeout` clamps anything above 2^31-1 ms to 1 ms. */
 export declare const MAX_TASK_TIMEOUT_SECONDS: number;
 export type AgentSource = "global" | "project";
-/** Host-interpreted scope switches (Epi: Rules, skills, MCP, hooks, Manifest extensions). */
+/** Host-interpreted scope switches (Epi: Rules, skills, MCP, hooks, web, Manifest extensions). */
 export interface AgentScope {
     rules?: boolean | undefined;
     skills?: boolean | string[] | undefined;
     mcp?: boolean | string[] | undefined;
     hooks?: boolean | undefined;
+    web?: boolean | undefined;
     extensions?: boolean | string[] | undefined;
 }
 export interface AgentDefinition {

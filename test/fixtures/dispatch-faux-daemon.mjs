@@ -1,4 +1,4 @@
-// Faux model for Issue #16 daemon lifecycle tests: starts an HTTP server with `bash({ isDaemon: true })`,
+// Faux model for Issue #16 daemon lifecycle tests: starts an HTTP server with `bash({ mode: "daemon" })`,
 // probes it in-session, reads `task_status`, and exits so the caller can verify survival after shutdown.
 import { readFileSync } from "node:fs";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
@@ -17,7 +17,7 @@ function handleStartDaemon(afterUser, specPath) {
   const spec = JSON.parse(readFileSync(specPath, "utf8"));
   const results = afterUser.filter((m) => m.role === "toolResult");
   if (results.length === 0) {
-    return fauxAssistantMessage(fauxToolCall("bash", { command: spec.daemonCommand, isDaemon: true }), { stopReason: "toolUse" });
+    return fauxAssistantMessage(fauxToolCall("bash", { command: spec.daemonCommand, mode: "daemon" }), { stopReason: "toolUse" });
   }
   const id = /as (bg_[0-9a-f]+) \(daemon\)/.exec(textOf(results[0]))?.[1] ?? "missing";
   if (results.length === 1) {

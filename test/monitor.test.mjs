@@ -12,13 +12,13 @@ import {
   STOPPED_NOTICE,
 } from "../dist/extensions/monitor.js";
 import {
-  createTaskMonitorBridge,
   NotificationGate,
   NotificationLedger,
-  stripSystemNotificationFraming,
   SYSTEM_NOTIFICATION_TAG,
   withSystemNotificationFraming,
-} from "../dist/extensions/task-notify.js";
+} from "../dist/extensions/dispatch/notify-ledger.js";
+import { stripSystemFraming as stripSystemNotificationFraming } from "../dist/extensions/dispatch/tui-views.js";
+import { createTaskMonitorBridge } from "../dist/extensions/task-monitor-bridge.js";
 import {
   formatDuration,
   isValidProtocols,
@@ -620,12 +620,6 @@ test("steady post-burst stream delivers real 1/2s lines without tail-flush starv
     coalesceMs: 0,
     gate,
     onChange: () => { changeCount += 1; },
-    buildPayload: (entries) => ({
-      customType: EVENT_MESSAGE_TYPE,
-      content: entries.map((e) => e.data).join("\n"),
-      display: true,
-      details: { receipts: entries.map((e) => `${e.key}:${e.run}`) },
-    }),
   });
   const mkCtx = (id, branch = []) => ({
     isIdle: () => idle,
@@ -635,24 +629,24 @@ test("steady post-burst stream delivers real 1/2s lines without tail-flush starv
 
   ledger.onSessionStart(mkCtx("session-B"), "new");
   ledger.onAgentSettled(true); // Esc in session-B only
-  ledger.put("m1:1", "event-for-A", 0, true, "session-A");
+  ledger.put("m1:1", { text: "event-for-A" }, { run: 0, autoWake: true, originSessionId: "session-A" });
   ledger.onSessionStart(mkCtx("session-A", branchA), "resume");
   assert.equal(sent.length, 1, "resuming un-aborted session-A must auto-wake its pending notification");
-  ledger.deleteReceiptEntries(sent[0].details);
+  ledger.ackReceipts(sent[0].details);
 
   // Boundary draft persisted in branchA before /reload must NOT re-send on onSessionStart
   idle = false;
-  ledger.put("m1:2", "once-only", 0, true, "session-A");
+  ledger.put("m1:2", { text: "once-only" }, { run: 0, autoWake: true, originSessionId: "session-A" });
   const draft = ledger.takeUnsentPayload(false);
   branchA.push({ type: "custom_message", customType: EVENT_MESSAGE_TYPE, content: draft.content, details: draft.details });
   idle = true;
   ledger.onSessionStart(mkCtx("session-A", branchA), "reload");
   assert.equal(sent.length, 1, "persisted boundary draft in branch must be reconciled on session_start");
 
-  // deleteByPrefix notifies onChange
+  // discard by prefix notifies onChange
   idle = false;
-  ledger.put("job1:milestone:1", "step", 1, false, "session-A");
+  ledger.put("job1:milestone:1", { text: "step" }, { run: 1, autoWake: false, originSessionId: "session-A" });
   const beforeChanges = changeCount;
-  ledger.deleteByPrefix("job1:milestone:");
+  ledger.discard("job1:milestone:", true);
   assert.equal(changeCount, beforeChanges + 1);
 });

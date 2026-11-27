@@ -247,7 +247,7 @@ test("epi update <source> clears the whole cache and says so, instead of claimin
 
 function startRuntime(updateCheck, mode) {
   const handlers = new Map();
-  createEpiRuntimeExtensions({}, {}, undefined, updateCheck).runtime.factory({
+  createEpiRuntimeExtensions({}, {}, undefined, { updateCheck }).runtime.factory({
     on(event, handler) { handlers.set(event, handler); },
     registerCommand() {},
     sendMessage() {},

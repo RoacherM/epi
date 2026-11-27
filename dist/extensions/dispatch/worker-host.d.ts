@@ -5,9 +5,11 @@ import { type ExecutionGuard } from "./reaper.js";
 import { type DispatchItemProvider, type DispatchItemReport, type DispatchItemSummary, type JobStatus, type SteerStrategy, type TaskUsage, type WorkspaceMode } from "./types.js";
 import { type CreateWorkspaceRequest, type WorkspaceState } from "./worktree.js";
 export declare const NAME_PATTERN: RegExp;
+export type JobRole = "worker" | "peer";
 export interface JobRequest {
     task: string;
     cwd: string;
+    role?: JobRole | undefined;
     name?: string | undefined;
     agent?: string | undefined;
     model?: string | undefined;
@@ -25,6 +27,7 @@ export interface JobRequest {
 }
 export interface JobSnapshot {
     id: string;
+    role: JobRole;
     name?: string;
     agent?: string;
     status: JobStatus;

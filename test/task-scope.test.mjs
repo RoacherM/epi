@@ -60,7 +60,7 @@ function assembly(root) {
   };
 }
 
-test("a plain subagent gets no rules, no skills and no MCP -- only what it asks for is paid for", (t) => {
+test("a plain subagent gets no rules, no skills, no MCP and no epi:web -- only what it asks for is paid for", (t) => {
   const base = assembly(fixture(t));
   const scoped = scopeAssemblyForTask(base, {});
 
@@ -69,6 +69,7 @@ test("a plain subagent gets no rules, no skills and no MCP -- only what it asks 
   assert.deepEqual(scoped.skills, []);
   const names = scoped.inlineExtensions.map((extension) => extension.name);
   assert.ok(!names.includes("epi:mcp"), "MCP must not connect in a child that never asked for it");
+  assert.ok(!names.includes("epi:web"), "epi:web must stay off in a child unless requested");
   // Hooks and Manifest extensions stay on by default: one hooks.json guards every tool call.
   assert.ok(names.includes("epi:hooks"));
   assert.equal(scoped.externalExtensions.length, 2);
@@ -76,7 +77,7 @@ test("a plain subagent gets no rules, no skills and no MCP -- only what it asks 
 
 test("a subagent can never load epi:task, so subagents cannot spawn subagents", (t) => {
   const base = assembly(fixture(t));
-  for (const scope of [{}, { hooks: true, mcp: true, extensions: true }]) {
+  for (const scope of [{}, { hooks: true, mcp: true, web: true, extensions: true }]) {
     const names = scopeAssemblyForTask(base, scope).inlineExtensions.map((extension) => extension.name);
     assert.ok(!names.includes("epi:task"), `epi:task leaked into a child with scope ${JSON.stringify(scope)}`);
   }
@@ -87,6 +88,8 @@ test("each switch turns on exactly its own capability", (t) => {
 
   assert.equal(scopeAssemblyForTask(base, { rules: true }).rulesText, base.rulesText);
   assert.ok(scopeAssemblyForTask(base, { mcp: true }).inlineExtensions.some((e) => e.name === "epi:mcp"));
+  assert.ok(scopeAssemblyForTask(base, { web: true }).inlineExtensions.some((e) => e.name === "epi:web"));
+  assert.ok(!scopeAssemblyForTask(base, { web: false }).inlineExtensions.some((e) => e.name === "epi:web"));
   assert.ok(!scopeAssemblyForTask(base, { hooks: false }).inlineExtensions.some((e) => e.name === "epi:hooks"));
   assert.deepEqual(scopeAssemblyForTask(base, { extensions: false }).externalExtensions, []);
   assert.deepEqual(
@@ -183,6 +186,17 @@ test("an agents/*.md extensions entry accepts npm:, git: and path sources", (t) 
     "git:https://github.com/x/y.git",
     "/abs/path/my-ext/index.mjs",
   ]);
+});
+
+test("agents/*.md frontmatter parses web boolean onto AgentScope", (t) => {
+  const root = fixture(t);
+  const dir = join(root, "agents");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "researcher.md"), "---\nname: researcher\ndescription: Web lookup\nweb: true\n---\nSearch.");
+  writeFileSync(join(dir, "offline.md"), "---\nname: offline\ndescription: Local only\nweb: false\n---\nLocal.");
+  const byName = new Map(loadAgents({ global: dir, project: undefined }, (m) => new Error(m)).map((a) => [a.name, a]));
+  assert.equal(byName.get("researcher").scope.web, true);
+  assert.equal(byName.get("offline").scope.web, false);
 });
 
 test("an unknown skill, MCP server or extension name fails loudly instead of starting without it", (t) => {

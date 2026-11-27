@@ -88,6 +88,7 @@ export declare function normalizeLoadedSkills(skills: readonly LoadedSkillLike[]
 export declare function createEpiRuntimeReport(identity: EpiRuntimeIdentity, loadedSkills: readonly EpiLoadedSkill[]): EpiRuntimeIdentity & {
     loadedSkills: EpiLoadedSkill[];
 };
-export declare function renderEpiRuntimePrompt(identity: EpiRuntimeIdentity, loadedSkills: readonly EpiLoadedSkill[]): string;
+export type EpiPromptAudience = "interactive-root" | "headless-root" | "subagent";
+export declare function renderEpiRuntimePrompt(identity: EpiRuntimeIdentity, loadedSkills: readonly EpiLoadedSkill[], audience?: EpiPromptAudience): string;
 export {};
 //# sourceMappingURL=runtime-identity.d.ts.map

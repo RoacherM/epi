@@ -54,7 +54,7 @@ test("--exclude-tools bash,edit,write leaves only the tools not named", (t) => {
   const f = fixture(t);
   const result = runSdkPath(f, { args: ["--no-project", "--exclude-tools", "bash,edit,write"], dumpTools: true });
   assert.equal(result.status, 0, result.stderr);
-  // epi:task is on by default (decision H3/K4) and its tools are not named, so they stay.
+  // epi:task is on by default (decision H3/K4/DP2) and its static root tools stay enabled.
   assert.deepEqual(JSON.parse(result.stdout), [
     "read",
     "task_status",
@@ -63,6 +63,8 @@ test("--exclude-tools bash,edit,write leaves only the tools not named", (t) => {
     "task_input",
     "timer",
     "task",
+    "board_post",
+    "board_read",
     "todo",
     "monitor",
     "Monitor",

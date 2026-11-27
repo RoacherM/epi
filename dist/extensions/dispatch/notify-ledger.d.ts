@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type SettleSource } from "./types.js";
 export declare const SYSTEM_NOTIFICATION_TAG = "[SYSTEM NOTIFICATION - NOT USER INPUT]";
 export declare const NOTIFY_COALESCE_MS = 250;
 export declare const NOTIFY_BATCH_LIMIT_BYTES: number;
@@ -35,7 +36,7 @@ export interface NotificationPayload {
     customType: string;
     content: string;
     display: boolean;
-    details: {
+    details: Record<string, unknown> & {
         receipts: string[];
         keys: string[];
     };
@@ -43,6 +44,8 @@ export interface NotificationPayload {
 export interface NotifyData {
     /** The notification body; untrusted parts are neutralised by the ledger. */
     text: string;
+    /** Opaque host-supplied metadata preserved per entry for `payloadDetails`. */
+    details?: Record<string, unknown> | undefined;
 }
 export interface LedgerEntry {
     key: string;
@@ -61,6 +64,8 @@ export interface NotificationLedgerOptions {
     footer?: () => string | undefined;
     /** The one-line summary prepended to the first wake after a compaction. */
     activeSummary?: () => string | undefined;
+    /** Extra custom-message details merged ahead of `receipts` and `keys` (never overriding them). */
+    payloadDetails?: ((entries: readonly LedgerEntry[]) => Record<string, unknown>) | undefined;
     /** Called with every entry Pi confirmed persisted, or that a pull (`task_status`, `board_read`)
      * already delivered. */
     onAcked?: (entries: readonly LedgerEntry[]) => void;
@@ -76,6 +81,8 @@ export declare class NotificationLedger {
     readonly customType: string;
     private flushTimer;
     private compactedSinceWake;
+    private holdCount;
+    private settledWakePending;
     private readonly putListeners;
     constructor(options: NotificationLedgerOptions);
     get gate(): NotificationGate;
@@ -97,7 +104,9 @@ export declare class NotificationLedger {
     /** Greedy batch under the byte cap; whatever does not fit waits for the next wake. */
     private batch;
     buildPayload(entries: readonly LedgerEntry[]): NotificationPayload;
-    flush: () => void;
+    flush: () => boolean;
+    holdFlush(): () => void;
+    flushFromDrain(): boolean;
     scheduleFlush(): void;
     /** Flush now, skipping the coalesce window (the settle drain is already the batching point). */
     flushNow(): void;
@@ -130,28 +139,29 @@ export declare class PollGuard {
     check(key: string, fingerprint: string): string | undefined;
 }
 export interface DrainOptions {
-    /** Whether finite work (non-daemon bash, active jobs, pending follow-up timers) is in flight. */
-    hasFiniteWork: () => boolean;
-    /** How long this drain may hold the settle at most. */
-    maxMs: () => number;
+    /** Participants holding finite work and ledgers to drain on settle. */
+    sources: () => readonly SettleSource[];
+    /** Hard upper bound (ms) on how long one settle drain may wait. */
+    capMs: () => number;
+    /** Grace (ms) added past finite items' deadlines when bounding the drain. */
+    graceMs?: number;
     /** Extra exit condition, e.g. a worker that received a parent steer. */
     stopWhen?: () => boolean;
 }
 /**
- * The shared `agent_settled` drain (docs/dispatch-design.md §3.4). Held open while finite work is
- * in flight and nothing is ready to deliver; a ledger `put` or an explicit `wake()` re-checks.
- * On exit it flushes synchronously, so Pi queues the wake into its deferred settle actions and
- * `session.prompt()` keeps the process alive through the next run.
+ * The shared `agent_settled` drain (docs/dispatch-design.md §3.4). Holds flushes across all
+ * participating ledgers while waiting on finite work so zero-coalesce sources stay `unsent`
+ * until one clean deferred wake is emitted on exit.
  */
 export declare class DrainBarrier {
-    private readonly ledger;
     private readonly options;
     private waker;
     private active;
-    constructor(ledger: NotificationLedger, options: DrainOptions);
+    constructor(options: DrainOptions);
     get draining(): boolean;
     wake(): void;
     private shouldWait;
+    private nap;
     drain(): Promise<void>;
 }
 export {};

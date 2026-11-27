@@ -179,10 +179,26 @@ export function createEpiRuntimeReport(
   };
 }
 
+export type EpiPromptAudience = "interactive-root" | "headless-root" | "subagent";
+
+const BASH_CONTRACT_LINE =
+  "In `bash`, `timeout` is in seconds, never milliseconds. Unbounded streaming commands (`tail -f`, `watch`), interactive terminal programs, and self-detached processes (`nohup`, trailing `&`) are blocked; use bounded snapshots or the managed alternatives the `bash` and `monitor` tools describe.";
+
+const HEADLESS_AUTONOMY_PARAGRAPH =
+  "This run is non-interactive: nobody can answer questions or approve steps while it runs. Carry the request through to completion on your own judgment, state any assumption you made in the final message, and stop early only when the work is truly blocked.";
+
 export function renderEpiRuntimePrompt(
   identity: EpiRuntimeIdentity,
   loadedSkills: readonly EpiLoadedSkill[],
+  audience: EpiPromptAudience = "interactive-root",
 ): string {
+  if (audience === "subagent") {
+    return [
+      "# Epi Subagent Contract",
+      `You are a subagent run by Epi (a harness on Pi ${identity.runtime.engineVersion}) for a parent agent; no human reads your output. Finish the task on your own and end with a final report for the parent; do not ask questions or wait for confirmation.`,
+      BASH_CONTRACT_LINE,
+    ].join("\n\n");
+  }
   const report = createEpiRuntimeReport(identity, loadedSkills);
   return [
     "# Epi Runtime Contract",
@@ -194,7 +210,8 @@ export function renderEpiRuntimePrompt(
     "Manifest-relative resource paths resolve from the directory containing the declaring epi.json. The Epi agentDir stores Pi auth, settings, sessions, and model catalog state; it is not an ambient skills root.",
     "The Manifest input schema is exactly `{ \"version\": 1, \"rules\": [], \"skills\": [], \"extensions\": [], \"disable\": [] }`; the built-ins epi:task, epi:mcp, epi:hooks and epi:web are on unless listed in `disable`. Inventory fields such as `skillRoots` and `declaredResources` are report-only and must not be written to epi.json.",
     "After Manifest edits, `/reload` re-resolves Rules and Skills. Extension selection or configuration changes require restarting Epi.",
-    "In `bash`, `timeout` is measured in seconds (default 120s when omitted, maximum 600s; never pass milliseconds). Unbounded streaming commands (`tail -f`, `watch`), interactive terminal programs, and unmanaged detached daemons are blocked—use `monitor` or `task(..., background: true)` when available, or bounded snapshots.",
+    BASH_CONTRACT_LINE,
+    ...(audience === "headless-root" ? [HEADLESS_AUTONOMY_PARAGRAPH] : []),
     "<epi_runtime_inventory>",
     JSON.stringify(report, null, 2),
     "</epi_runtime_inventory>",

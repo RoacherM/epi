@@ -13,7 +13,7 @@ import { resolveEffectiveHooks } from "../hooks-config.js";
 import { createHooksInlineExtension, hooksForChild } from "./hooks.js";
 import { createEpiDispatchExtension } from "./dispatch-epi-host.js";
 import { createMonitorInlineExtension } from "./monitor.js";
-import { createTaskMonitorBridge } from "./task-notify.js";
+import { createTaskMonitorBridge } from "./task-monitor-bridge.js";
 import { createEpiRuntimeExtensions } from "./runtime.js";
 import type { EpiRuntimeIdentity } from "../runtime-identity.js";
 import { createEpiMcpExtension, filterMcpServers, loadNativeMcpConfig } from "./mcp.js";
@@ -90,7 +90,11 @@ export function buildInlineExtensions(
 ): InlineExtension[] {
   const [resolveAssembly = () => assembly, updateCheck, verbose = false, subagent] = optional;
   const { mcpServerFilter, child = false } = subagentOptions(subagent);
-  const epiRuntime = createEpiRuntimeExtensions(runtimeIdentity, assembly, resolveAssembly, updateCheck, verbose);
+  const epiRuntime = createEpiRuntimeExtensions(runtimeIdentity, assembly, resolveAssembly, {
+    updateCheck,
+    verbose,
+    role: child ? "subagent" : "root",
+  });
   const extensions: InlineExtension[] = [epiRuntime.runtime];
   for (const extension of assembly.inlineExtensions) {
     withDisableHint(extension, assembly, () => {

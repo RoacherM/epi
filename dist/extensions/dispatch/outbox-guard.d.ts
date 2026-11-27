@@ -7,7 +7,7 @@ export declare const OutboxParameters: Type.TObject<{
     details: Type.TOptional<Type.TString>;
     dedupKey: Type.TOptional<Type.TString>;
 }>;
-export declare function createOutboxTool(host: DispatchHostAdapter, sessionId: () => string | undefined, notifyUi: (text: string) => void, defaultActive?: boolean): ToolDefinition<typeof OutboxParameters>;
+export declare function createOutboxTool(host: DispatchHostAdapter, sessionId: () => string | undefined, notifyUi: (text: string) => void): ToolDefinition<typeof OutboxParameters>;
 /** `tool_call` gate + `/approve <id> [allow|deny]`; grants are single-use and expire after 30m. */
 export declare function installApprovalGuard(pi: ExtensionAPI, host: DispatchHostAdapter, role: DispatchRole): void;
 //# sourceMappingURL=outbox-guard.d.ts.map

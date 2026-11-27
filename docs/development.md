@@ -484,12 +484,13 @@ PI_CODING_AGENT_DIR=~/.epi/pi
 - 等待当前模式的 runtime 清理完成；非交互模式在 `runPrintMode` 返回后刷新输出再退出；
 - Pi SDK 初始化失败直接以非零状态失败，禁止 fallback 到全局 Pi。
 
-### 9.5 `bash` 与子代理进程执行守卫
+### 9.5 `bash`、死循环防护与子代理进程执行守卫
 
-`epi:runtime`（`src/extensions/runtime.ts`、`src/bash-guard.ts`）与 `dispatch`（`src/extensions/dispatch/bg-bash.ts`、`src/extensions/dispatch/reaper.ts`、`src/extensions/dispatch/worker-host.ts`）提供四层进程执行守卫：
+`epi:runtime`（`src/extensions/runtime.ts`、`src/bash-guard.ts`、`src/repeat-guard.ts`）与 `dispatch`（`src/extensions/dispatch/bg-bash.ts`、`src/extensions/dispatch/reaper.ts`、`src/extensions/dispatch/worker-host.ts`）提供进程执行与重复调用防护，系统提示词同时按 `interactive-root` / `headless-root` / `subagent` 三类受众分流（`subagent` 不带主控 `<epi_runtime_inventory>`，`headless-root` 追加无人值守自主执行段落）：
 
-- **超时边界**：同步 `timeout` 缺省时注入默认 `120` 秒；非有限数、`<= 0` 或同步 `> 600` 秒（带 `isDaemon` 或 `waitMsBeforeAsync` 的受管异步模式放宽至 `14400` 秒）在 `0ms` 直接阻断并说明 `bash.timeout` 单位为秒（`>= 1000` 时额外给出毫秒换算提示）；命令超时后在 `tool_result` 追加恢复建议与 `.git/index.lock` 检查提示，并保留 `structuredContent`。
-- **0ms 命令预检**：支持引号、转义、`#` 注释、`<<EOF` heredoc、`env`/`sudo`/`command`/`timeout` 包装（跳过 `command -v/-V` 探测）与最多 3 层 `sh|bash|zsh|dash -c` 展开（未闭合引号/替换做 fail-open，交给 shell 自身报错）。阻断无上界流式跟随（`tail -f`、`docker/podman/kubectl logs -f`、`journalctl -f`、`dmesg -w`、`watch`、`fswatch`、`ping` 无计数参数等，除非显式传 `isDaemon: true` 或 `timeout <= 60s`）、纯交互式 TUI/编辑器（`vim`/`nvim`/`nano`/`htop`/`top` 无快照参数等）以及脱离管控的裸后台命令（`nohup`/`setsid`/`disown`/`tmux new -d`/`screen -dm` 及同命令内无回收的顶层 `&`）。
+- **超时边界**：由 `getAllTools()` 上 `bash` schema 是否含 `mode` 区分 `dispatch`（受管异步，有限默认 1800s、上限 14400s，在 `bg-bash.ts` 校验毫秒换算提示）与纯 Pi `bash`（缺省注入 120s，非有限数、`<= 0` 或 `> 600s` 在 0ms 阻断并提示秒单位与替代方案）；命令超时后在 `tool_result` 追加恢复建议与 `.git/index.lock` 检查提示，并保留 `structuredContent`。
+- **0ms 命令预检**：支持引号、转义、`#` 注释、`<<EOF` heredoc、`env`/`sudo`/`command`/`timeout` 包装（跳过 `command -v/-V` 探测）与最多 3 层 `sh|bash|zsh|dash -c` 展开（未闭合引号/替换做 fail-open，交给 shell 自身报错）。阻断无上界流式跟随（`tail -f`、`docker/podman/kubectl logs -f`、`journalctl -f`、`dmesg -w`、`watch`、`fswatch`、`ping` 无计数参数等，除非处于 `mode: "background" | "daemon"` 分离放置或 `<= 60s` 显式探测）、纯交互式 TUI/编辑器（`vim`/`nvim`/`nano`/`htop`/`top`/`expect`/`script` 等，通过 `TERMINAL_PROGRAMS` 表显式放行 `vim -es` 静默 Ex、`nvim --headless`、`expect -c`/脚本及快照模式）以及脱离管控的裸后台命令（`nohup`/`setsid`/`disown`/`tmux new -d`/`screen -dm` 及同命令内无回收的顶层 `&`）。
+- **固定点重复调用守卫（`src/repeat-guard.ts`）**：`FixedPointGuard` 仅当连续两次工具调用的 `(toolName, canonicalInput, isError, rawContent)` 完全逐字节一致时，在 `tool_result` 末尾追加非阻塞提示建议换路或汇报阻塞（不改写 `isError`、保留 `structuredContent`），并在真实用户输入（`input` `source !== "extension"`）、`session_start`、`session_compact`、`session_tree` 时清零。
 - **孤儿进程组收割（`src/extensions/dispatch/reaper.ts`）**：每次子任务或受管后台 `bash` 在守卫目录生成兼容 Bash 3.2 的 `pgid-hook.sh`（通过 `BASH_ENV` 将顶层 `bash` 进程组写入本级 `pgids.log` 并同步镜像至父胶囊 `PI_DISPATCH_PARENT_PGID_LEDGER`，随即 `unset PI_DISPATCH_PGID_LEDGER` 并链式恢复用户原 `BASH_ENV`）与累积式 `PI_DISPATCH_COOKIE`；`terminate` 发信号前快照子孙 PGID，结束 `finally` 块合并账本、子孙快照与 `PI_DISPATCH_COOKIE` token 匹配扫描，经同 UID、非自身/父进程组、`lstart` 时间窗口与共享守护白名单过滤后执行 `SIGTERM -> 1.5s -> SIGKILL` 收割。退出主会话（`session_shutdown` `reason: "quit"` 且非空闲）立即调用 `context.abort()`。
 - **非交互环境加固**：默认注入 `GIT_TERMINAL_PROMPT=0`、`GCM_INTERACTIVE=never`、`GIT_PAGER=cat` 与快速失败 `GIT_EDITOR` / `GIT_SEQUENCE_EDITOR` 脚本（尊重调用方显式环境变量，不设 `CI=1`）。
 
@@ -612,29 +613,29 @@ const extensionFactories: InlineExtension[] = [
 ### 12.1 工具面与交互命令
 
 ```text
-bash (async: waitMsBeforeAsync / isDaemon / stdin)
-task (匿名子代理 / 批量 tasks / 具名看板同伴 name / jobId 纠偏或续跑)
+bash (mode: "auto" | "background" | "daemon" / stdin)
+task (匿名子代理 / 批量 tasks / role: "peer" 具名看板同伴 / jobId 纠偏或续跑)
 task_status / task_wait / task_cancel / task_input (统一路由 bg_* / job_* / <name> / tm_*)
-board_post / board_read / board_wait
+board_post / board_read（根与同伴共有）· board_wait（仅同伴）
 timer (follow_up / schedule)
-outbox
+outbox（配置 onOutbox / inboxTarget 时静态挂载）
 todo
 ```
 
 交互命令与热键：`/tasks [id]`、`/board`、`/bg`（及前台等待时的 `Alt+B` 放手转后台）、`/approve <id> [allow|deny]`。
 
-- **前台等待预算**（D96，[archive-subagents-design.md](notes/archive-subagents-design.md) §13）：`mode === "tui"` 下前台 `task` 与省略 `timeoutSeconds` 的 `task_wait` 默认最多占用主会话 300 秒（`foregroundBudgetSeconds`）；到期或按 `Alt+B` / `/bg` 不杀作业，只解除前台等待并保持 `autoWake = true`，落定后经 `NotificationLedger`（`customType: "dispatch:notify"`）唤醒；用户按 `Esc` 中断则置 `autoWake = false`。
+- **前台等待预算**（D96，[archive-subagents-design.md](notes/archive-subagents-design.md) §13）：`mode === "tui"` 下前台 `task` 与显式/省略 `timeoutSeconds` 的 `task_wait` 均以 `foregroundBudgetSeconds`（默认 300 秒）封顶并在 `details.waitEnd: "budget"` + 提示语中写明；到期或按 `Alt+B` / `/bg` 不杀作业，只解除前台等待并保持 `autoWake = true`，落定后经 `NotificationLedger`（`customType: "dispatch:notify"`）唤醒；用户按 `Esc` 中断则置 `autoWake = false`。
 - **会话用量与切换**：`DispatchRuntime` 建在 `createEpiDispatchExtension()` 作用域，跨 `/new`、`/resume`、`/fork`、`/reload` 保持运行中的 `bg_*` 与 `job_*`；子代理每轮结算向当前存活会话追加一条 `epi:task-usage`。
 - **隔离工作区**：`workspace: "inherit" | "branch" | "share"`；取消或退出时相对基线（`share`）或 `HEAD`（`branch`）有未合入改动的目录默认保留（除非传 `forceDirty: true`）。
 
 ### 12.2 可调能力（正交，默认全关）
 
-通用调度参数可在 `task(...)` 单次调用或 `agents/*.md` 预设中指定（显式参数优先）；Epi 宿主装配作用域（`rules` / `skills` / `mcp` / `hooks` / `extensions`）写在 `agents/*.md` 预设中并经 `workerBootstrapOptions` 传入 `src/dispatch-epi-worker.ts`，保住可移植 `task` 工具 schema 纯净。
+通用调度参数可在 `task(...)` 单次调用或 `agents/*.md` 预设中指定（显式参数优先）；Epi 宿主装配作用域（`rules` / `skills` / `mcp` / `web` / `hooks` / `extensions`）写在 `agents/*.md` 预设中并经 `workerBootstrapOptions` 传入 `src/dispatch-epi-worker.ts`，保住可移植 `task` 工具 schema 纯净。
 
 | 参数 | 位置 | 默认 | 语义 |
 |---|---|---|---|
 | `agent` | 调用 | 无 | 可选预设；不传就是无名子代理（开箱即用，不再要求先写 `agents/*.md`） |
-| `name` / `forkFrom` | 调用 | 无 | 具名看板同伴（`@<name>`，自动后台）及从同伴历史分支 |
+| `role` / `name` / `forkFrom` | 调用 | `worker` / 无 | `role: "peer"` 搭配 `name` 加入看板（`@<name>`，默认后台）；仅 `name` 仅作句柄、按普通前台工人执行；`forkFrom` 从同伴历史分支 |
 | `workspace` | 调用 / 预设 | `inherit` | `branch`（git worktree）或 `share`（CoW 克隆）工作区隔离 |
 | `context` | 调用 / 预设 | `fresh` | `fork` 复制父会话当前分支（裁剪规则见 §12.5） |
 | `model` | 调用 / 预设 | 继承 | `provider/id`、`provider/id:thinking` 或 `:thinking` |
@@ -644,6 +645,7 @@ todo
 | `rules` | `agents/*.md` | `false` | 注入本次运行的 `# Epi Rules` |
 | `skills` | `agents/*.md` | `false` | `true` 列出全部技能根；`["name"]` 把该 `SKILL.md` 正文预载进系统提示词 |
 | `mcp` | `agents/*.md` | `false` | `true` 连接全部；`["name"]` 只连指定服务（未配置的名字直接报错） |
+| `web` | `agents/*.md` | `false` | 为子代理开启 `epi:web`（默认关闭，不注入主控检索工具） |
 | `hooks` / `extensions` | `agents/*.md` | `true` | 子代理内的工具调用同受 `hooks.json` 约束；可传名字数组裁剪 Manifest 外部扩展 |
 
 ### 12.3 状态与会话切换

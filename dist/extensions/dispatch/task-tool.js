@@ -8,11 +8,15 @@ import { MAX_TASK_TIMEOUT_SECONDS } from "./agents.js";
 import { singleLine } from "./result.js";
 import { forkableBranch, inheritedModelReference, jobLabel, jobReport } from "./worker-host.js";
 const UPDATE_THROTTLE_MS = 250;
-const DEFAULT_FOREGROUND_BUDGET_SECONDS = 300;
+export const DEFAULT_FOREGROUND_BUDGET_SECONDS = 300;
 const Workspace = Type.Union([Type.Literal("inherit"), Type.Literal("branch"), Type.Literal("share")]);
+const Role = Type.Union([Type.Literal("worker"), Type.Literal("peer")], {
+    description: "worker (default): isolated, returns one final report. peer: long-lived background teammate on the session board (needs name)",
+});
 const BatchItem = Type.Object({
     task: Type.String(),
     name: Type.Optional(Type.String()),
+    role: Type.Optional(Role),
     agent: Type.Optional(Type.String()),
     cwd: Type.Optional(Type.String()),
     workspace: Type.Optional(Workspace),
@@ -22,7 +26,8 @@ const BatchItem = Type.Object({
 }, { additionalProperties: false });
 export const TaskParameters = Type.Object({
     task: Type.Optional(Type.String({ description: "Prompt (or steer/resume message with jobId)" })),
-    name: Type.Optional(Type.String({ description: "Board peer slug (@name, background)" })),
+    name: Type.Optional(Type.String({ description: "Optional handle usable as id in task_status / task_wait / task_cancel / jobId" })),
+    role: Type.Optional(Role),
     agent: Type.Optional(Type.String()),
     cwd: Type.Optional(Type.String()),
     tasks: Type.Optional(Type.Array(BatchItem, { minItems: 1 })),
@@ -39,8 +44,8 @@ export const TaskParameters = Type.Object({
     excludeTools: Type.Optional(Type.Array(Type.String())),
     systemPrompt: Type.Optional(Type.String()),
     verifyCommand: Type.Optional(Type.String({ description: "Shell command that must exit 0" })),
-    maxTurns: Type.Optional(Type.Integer({ minimum: 1 })),
-    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TASK_TIMEOUT_SECONDS })),
+    maxTurns: Type.Optional(Type.Integer({ minimum: 1, description: "Max agent turns; omit for the preset default" })),
+    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TASK_TIMEOUT_SECONDS, description: "Lifetime in seconds; omit for the preset default" })),
 }, { additionalProperties: false });
 function textResult(text, details) {
     return { content: [{ type: "text", text }], details };
@@ -66,9 +71,10 @@ async function startOne(deps, item, shared, ctx) {
     const rawCwd = item.cwd ?? shared.cwd;
     const cwd = rawCwd === undefined ? ctx.cwd : resolve(ctx.cwd, rawCwd);
     const agent = item.agent ?? shared.agent;
+    const role = item.role ?? shared.role ?? "worker";
     await gateStart(deps, ctx, { type: "task_start", task: item.task, cwd, ...(agent === undefined ? {} : { agent }) });
     const request = {
-        task: item.task, cwd, name: item.name, agent, model: item.model ?? shared.model, workspace: item.workspace ?? shared.workspace,
+        task: item.task, cwd, role, name: item.name, agent, model: item.model ?? shared.model, workspace: item.workspace ?? shared.workspace,
         tools: item.tools ?? shared.tools, excludeTools: item.excludeTools ?? shared.excludeTools, systemPrompt: shared.systemPrompt,
         inheritedModel: inheritedModelReference(ctx.model, ctx.thinkingLevel), context: shared.context,
         forkEntries: forkEntries(deps, { context: shared.context, forkFrom: shared.forkFrom, agent }, ctx),
@@ -76,7 +82,7 @@ async function startOne(deps, item, shared, ctx) {
         originSessionId: deps.gate.sessionId(),
     };
     const job = await deps.pool.startAsync(request);
-    if (job.name !== undefined) {
+    if (job.role === "peer") {
         const briefSeq = deps.postBrief?.(job);
         if (briefSeq !== undefined)
             deps.pool.setStartBoardSeq(job.id, briefSeq);
@@ -86,7 +92,7 @@ async function startOne(deps, item, shared, ctx) {
 function isBackground(deps, explicit, item) {
     if (explicit !== undefined)
         return explicit;
-    if (item.name !== undefined)
+    if (item.role === "peer")
         return true;
     return deps.agents().find((agent) => agent.name === item.agent)?.background ?? false;
 }
@@ -121,10 +127,10 @@ function watchProgress(deps, jobId, onUpdate) {
         clearTimeout(timer);
     };
 }
-function foregroundBudgetMs(host, ctx) {
-    if (ctx.mode !== "tui")
+export function foregroundBudgetMs(mode, budgetSeconds) {
+    if (mode !== "tui")
         return undefined;
-    const sec = host.foregroundBudgetSeconds ?? DEFAULT_FOREGROUND_BUDGET_SECONDS;
+    const sec = budgetSeconds ?? DEFAULT_FOREGROUND_BUDGET_SECONDS;
     return sec > 0 ? Math.ceil(sec * 1_000) : undefined;
 }
 function handedBackResult(deps, waited, detached, signal, budgetMs) {
@@ -175,7 +181,7 @@ async function continueJob(deps, params, signal, onUpdate, ctx) {
         return textResult(`Steered ${jobLabel(steered)} (${params.strategy ?? "steer"}); it picks the message up after its current step.`, { job: steered });
     }
     const resumed = deps.pool.resume(params.jobId, params.task);
-    return runJob(deps, resumed, { background: params.background ?? resumed.name !== undefined, signal, onUpdate, budgetMs: foregroundBudgetMs(deps.host, ctx) });
+    return runJob(deps, resumed, { background: params.background ?? resumed.role === "peer", signal, onUpdate, budgetMs: foregroundBudgetMs(ctx.mode, deps.host.foregroundBudgetSeconds) });
 }
 async function runBatch(deps, params, ctx, signal) {
     const started = [];
@@ -192,17 +198,17 @@ async function runBatch(deps, params, ctx, signal) {
             deps.notifyOnSettle.set(job.id, true);
         return textResult(started.map(receipt).join("\n"), { jobs: started });
     }
-    const budgetMs = foregroundBudgetMs(deps.host, ctx);
+    const budgetMs = foregroundBudgetMs(ctx.mode, deps.host.foregroundBudgetSeconds);
     const results = await Promise.all(started.map((job) => runJob(deps, job, {
-        background: isBackground(deps, undefined, { task: job.task, name: job.name, agent: job.agent }),
+        background: isBackground(deps, undefined, { task: job.task, name: job.name, role: job.role, agent: job.agent }),
         signal, onUpdate: undefined, budgetMs,
     })));
     return textResult(results.map((result) => result.content[0].text).join("\n\n"), { jobs: results.map((result) => result.details) });
 }
 function description(agents) {
     const presets = agents.length === 0 ? "" : ` Presets: ${agents.map((agent) => `${agent.name} (${singleLine(agent.description, 80)})`).join("; ")}.`;
-    return "Delegate a self-contained task to an isolated subagent. "
-        + "Named tasks (name) coordinate via board_post/board_read/board_wait (no task tool); keep workspace inherit for read-only work."
+    return "Run a self-contained task in a subagent with its own context window; you get back only its final report. "
+        + 'Good for read-heavy searches, long builds or test runs, and independent sub-problems. Set role "peer" (with a name) for a background teammate that coordinates over board_post/board_read; keep workspace inherit for read-only work.'
         + presets;
 }
 export function createTaskTool(deps) {
@@ -220,11 +226,11 @@ export function createTaskTool(deps) {
             if (params.task === undefined)
                 throw new Error("task needs task, tasks, or jobId");
             const item = {
-                task: params.task, name: params.name, agent: params.agent, cwd: params.cwd,
+                task: params.task, name: params.name, role: params.role ?? "worker", agent: params.agent, cwd: params.cwd,
                 workspace: params.workspace, model: params.model, tools: params.tools, excludeTools: params.excludeTools,
             };
             const job = await startOne(deps, item, params, ctx);
-            return runJob(deps, job, { background: isBackground(deps, params.background, item), signal, onUpdate, budgetMs: foregroundBudgetMs(deps.host, ctx) });
+            return runJob(deps, job, { background: isBackground(deps, params.background, item), signal, onUpdate, budgetMs: foregroundBudgetMs(ctx.mode, deps.host.foregroundBudgetSeconds) });
         },
     };
 }

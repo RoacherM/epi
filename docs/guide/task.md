@@ -5,9 +5,9 @@
 `epi:task` 默认开启（Manifest 里 `"disable": ["epi:task"]` 可关掉），由内置 `dispatch` 引擎提供统一异步调度与多代理协同能力，可用工具与命令：
 
 ```text
-bash (waitMsBeforeAsync / isDaemon / stdin)
+bash (mode: "auto" | "background" | "daemon" / stdin)
 task / task_status / task_wait / task_cancel / task_input
-board_post / board_read / board_wait
+board_post / board_read（同伴另有 board_wait）
 timer / outbox / todo
 /tasks [id] · /board · /bg (Alt+B)
 ```
@@ -37,6 +37,7 @@ task(task="读一遍 src/tui/，列出所有注册快捷键的地方，带文件
 | `rules` | `agents/*.md` | `false` | 注入本次运行的 Rules（`AGENTS.md`） |
 | `skills` | `agents/*.md` | `false` | `true` 列出全部技能；`["code-review"]` 把该技能正文直接预载 |
 | `mcp` | `agents/*.md` | `false` | `true` 连全部；`["lark"]` 只连指定服务 |
+| `web` | `agents/*.md` | `false` | 开启 `epi:web`（`web_search` / `web_fetch`），默认关闭省上下文 |
 | `hooks` / `extensions` | `agents/*.md` | `true` | 子代理的工具调用同样受 `hooks.json` 约束；裁剪 Manifest 外部扩展 |
 
 只读的审查子代理：
@@ -59,7 +60,7 @@ task(task="审查 git diff 里的安全问题，只报带文件:行号的实据"
 ## 查看、纠偏与续跑
 
 - **查看**：`task_status({ id })` 显示运行中子代理、后台命令（`bg_*`）或闹钟（`tm_*`）的状态与输出；`task_status({})` 列出全部后台项。交互界面里可点右下角状态计数或输入 `/tasks`、`/board` 查看双页签浮层，前台等待中按 `Alt+B` 或输入 `/bg` 可放手转后台。
-- **具名同伴与看板**：`task({ name: "parser", workspace: "branch", task: "..." })` 启动具名同伴并加入共享看板，同伴间用 `board_post("@peer ...")` + `board_wait` 直接交接，支持 `forkFrom: "<name>"` 复制同伴上下文。
+- **具名同伴与看板**：`task({ role: "peer", name: "parser", workspace: "branch", task: "..." })` 启动具名同伴并加入共享看板，同伴间用 `board_post("@peer ...")` + `board_wait` 直接交接，支持 `forkFrom: "<name>"` 复制同伴上下文（不传 `role: "peer"` 时，即使带 `name` 也只作普通前台工人运行）。
 - **纠偏**：对运行中的子代理调用 `task({ jobId, task: "新指令", strategy })`（`jobId` 可传 `job_<id>` 或具名 `name`），已有上下文不丢；纠偏文本同样先过 `task_start` hook。
 - **续跑**：对已结束（completed / partial / failed / cancelled）的子代理调用 `task({ jobId, task: "追问" })`，它在原来的会话上继续。
 - **自动唤醒**：后台项结束且未被主动拉取时，主会话收到一条 `dispatch:notify` 消息；`epi -p` 下 `agent_settled` 排空屏障会自动等待有限后台项汇报后再收尾退出。

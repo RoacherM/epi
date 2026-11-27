@@ -14,12 +14,13 @@ export const MAX_TASK_TIMEOUT_SECONDS = Math.floor((2 ** 31 - 1) / 1_000);
 
 export type AgentSource = "global" | "project";
 
-/** Host-interpreted scope switches (Epi: Rules, skills, MCP, hooks, Manifest extensions). */
+/** Host-interpreted scope switches (Epi: Rules, skills, MCP, hooks, web, Manifest extensions). */
 export interface AgentScope {
   rules?: boolean | undefined;
   skills?: boolean | string[] | undefined;
   mcp?: boolean | string[] | undefined;
   hooks?: boolean | undefined;
+  web?: boolean | undefined;
   extensions?: boolean | string[] | undefined;
 }
 
@@ -52,7 +53,7 @@ const AGENT_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 const AGENT_KEYS = new Set([
   "name", "description", "model", "tools", "excludeTools", "timeoutSeconds", "maxTurns", "context",
   "workspace", "isolation", "background", "async", "updateStrategy", "verifyCommand",
-  "rules", "skills", "mcp", "hooks", "extensions",
+  "rules", "skills", "mcp", "hooks", "web", "extensions",
 ]);
 
 class FieldParser {
@@ -140,6 +141,7 @@ function parseScope(fm: Record<string, unknown>, p: FieldParser): AgentScope {
     skills: p.switchList(fm.skills, "skills"),
     mcp: p.switchList(fm.mcp, "mcp"),
     hooks: p.bool(fm.hooks, "hooks"),
+    web: p.bool(fm.web, "web"),
     extensions: p.switchList(fm.extensions, "extensions"),
   };
 }

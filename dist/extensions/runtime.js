@@ -1,5 +1,6 @@
-import { analyzeBashCommand, augmentBashTimeoutResult, normalizeAsyncBashTimeout, normalizeBashTimeout, } from "../bash-guard.js";
+import { analyzeBashCommand, augmentBashTimeoutResult, normalizeBashTimeout, } from "../bash-guard.js";
 import { findNearestProjectManifest } from "../project.js";
+import { FixedPointGuard, rawResultKey, REPEAT_NOTE } from "../repeat-guard.js";
 import { createEpiRuntimeIdentity, createEpiRuntimeReport, normalizeLoadedSkills, renderEpiRuntimePrompt, } from "../runtime-identity.js";
 import { renderAnimatedEpiStartupPage, renderEpiStartupPage, welcomeMotionStrength } from "../startup-page.js";
 import { FrameTicker, motionTime } from "../tui/motion.js";
@@ -85,42 +86,87 @@ function combineBashResultText(firstText, augmented, bgWarning) {
 function hasActiveTool(pi, name) {
     return typeof pi.getActiveTools === "function" && pi.getActiveTools().includes(name);
 }
-function checkBashInput(pi, input) {
-    const hasMonitorTool = hasActiveTool(pi, "monitor");
-    const hasAsyncBash = hasActiveTool(pi, "task_input");
-    const asyncManaged = hasAsyncBash && (input.isDaemon === true || input.waitMsBeforeAsync !== undefined);
-    const timeoutCheck = asyncManaged ? normalizeAsyncBashTimeout(input.timeout) : normalizeBashTimeout(input.timeout, hasMonitorTool);
-    if (timeoutCheck.action === "block")
-        return { block: { block: true, reason: timeoutCheck.reason }, defaulted: false };
-    if (typeof input.command === "string") {
-        const cmdCheck = analyzeBashCommand(input.command, {
-            effectiveTimeoutSec: timeoutCheck.timeoutSeconds,
-            timeoutDefaulted: timeoutCheck.defaulted,
-            hasMonitorTool,
-            asyncManaged,
-        });
-        if (cmdCheck.blocked)
-            return { block: { block: true, reason: cmdCheck.reason }, defaulted: false };
+/** Detect the active bash contract from the mounted `bash` schema itself: presence of `mode`
+ * marks dispatch bash, independent of what other tools (e.g. `task_input`) a worker exposes. */
+function bashContract(pi) {
+    const bash = typeof pi.getAllTools === "function" ? pi.getAllTools().find((tool) => tool.name === "bash") : undefined;
+    const properties = bash?.parameters?.properties;
+    return properties !== undefined && "mode" in properties ? "dispatch" : "pi";
+}
+function managedBashAlternative(contract, hasMonitorTool) {
+    if (contract === "dispatch") {
+        const bg = "`bash` with `mode: \"background\"` (finite) or `mode: \"daemon\"` (service)";
+        return hasMonitorTool ? `${bg}, or \`monitor\`` : bg;
     }
-    if (timeoutCheck.defaulted && !hasAsyncBash)
-        input.timeout = timeoutCheck.timeoutSeconds;
-    return { defaulted: timeoutCheck.defaulted };
+    return hasMonitorTool ? "`monitor` or bounded steps (<=600s)" : "split into bounded steps (<=600s) or report back to the parent session";
+}
+function bashGuardContext(contract, input, timeoutCheck) {
+    const isDetached = input.mode === "background" || input.mode === "daemon";
+    const placement = contract === "dispatch" && isDetached ? "detached" : "attached";
+    if (contract === "dispatch") {
+        return { placement, explicitTimeoutSec: typeof input.timeout === "number" ? input.timeout : undefined };
+    }
+    const explicitTimeoutSec = timeoutCheck?.defaulted === false ? timeoutCheck.timeoutSeconds : undefined;
+    return { placement, explicitTimeoutSec };
+}
+function checkBashInput(pi, input) {
+    const contract = bashContract(pi);
+    const managedAlternative = managedBashAlternative(contract, hasActiveTool(pi, "monitor"));
+    const timeoutCheck = contract === "pi" ? normalizeBashTimeout(input.timeout, managedAlternative) : undefined;
+    if (timeoutCheck?.action === "block")
+        return { action: "block", reason: timeoutCheck.reason };
+    if (typeof input.command === "string") {
+        const context = bashGuardContext(contract, input, timeoutCheck);
+        const cmdCheck = analyzeBashCommand(input.command, { ...context, managedAlternative });
+        if (cmdCheck.blocked)
+            return { action: "block", reason: cmdCheck.reason };
+    }
+    const defaulted = timeoutCheck?.defaulted ?? false;
+    return {
+        action: "allow",
+        contract,
+        defaulted,
+        managedAlternative,
+        ...(defaulted && timeoutCheck !== undefined ? { defaultTimeoutSec: timeoutCheck.timeoutSeconds } : {}),
+    };
+}
+function installRepeatGuard(pi) {
+    const guard = new FixedPointGuard();
+    const reset = () => guard.reset();
+    pi.on("input", (event) => {
+        if (event?.source !== "extension")
+            guard.reset();
+    });
+    pi.on("session_compact", reset);
+    pi.on("session_tree", reset);
+    pi.on("tool_result", (event) => {
+        const rawContent = (event.content ?? []);
+        if (!guard.observe(event.toolName, event.input, event.isError, rawResultKey(rawContent)))
+            return undefined;
+        const firstText = rawContent.find((item) => item.type === "text" && typeof item.text === "string")?.text ?? "";
+        const nextText = firstText.length > 0 ? `${firstText}\n${REPEAT_NOTE}` : REPEAT_NOTE;
+        return {
+            content: appendTextContent(rawContent, nextText),
+            ...(event.structuredContent === undefined ? {} : { structuredContent: event.structuredContent }),
+        };
+    });
+    return reset;
 }
 function installBashExecutionGuard(pi) {
-    const defaultedCalls = new Map();
+    const calls = new Map();
     const activeCallIds = new Set();
     const ledgerPath = process.env.PI_DISPATCH_PGID_LEDGER ?? process.env.EPI_PGID_LEDGER;
     const warnedPgids = new Set();
     let ledgerOffset = initialLedgerOffset(ledgerPath);
     const resetInFlight = () => {
-        defaultedCalls.clear();
+        calls.clear();
         activeCallIds.clear();
         ledgerOffset = initialLedgerOffset(ledgerPath);
     };
-    pi.on("turn_end", () => { defaultedCalls.clear(); activeCallIds.clear(); });
+    pi.on("turn_end", () => { calls.clear(); activeCallIds.clear(); });
     pi.on("tool_execution_end", (event) => {
         if (event?.toolName === "bash") {
-            defaultedCalls.delete(event.toolCallId);
+            calls.delete(event.toolCallId);
             activeCallIds.delete(event.toolCallId);
         }
     });
@@ -128,17 +174,28 @@ function installBashExecutionGuard(pi) {
         if (event?.toolName !== "bash" || typeof event.input !== "object" || event.input === null)
             return undefined;
         const verdict = checkBashInput(pi, event.input);
-        if (verdict.block !== undefined)
-            return verdict.block;
-        defaultedCalls.set(event.toolCallId, verdict.defaulted);
+        if (verdict.action === "block")
+            return { block: true, reason: verdict.reason };
+        if (verdict.defaultTimeoutSec !== undefined) {
+            event.input.timeout = verdict.defaultTimeoutSec;
+        }
+        calls.set(event.toolCallId, {
+            contract: verdict.contract,
+            defaulted: verdict.defaulted,
+            managedAlternative: verdict.managedAlternative,
+        });
         activeCallIds.add(event.toolCallId);
         return undefined;
     });
     pi.on("tool_result", (event, context) => {
         if (event?.toolName !== "bash")
             return undefined;
-        const defaulted = defaultedCalls.get(event.toolCallId) ?? false;
-        defaultedCalls.delete(event.toolCallId);
+        const callInfo = calls.get(event.toolCallId) ?? {
+            contract: bashContract(pi),
+            defaulted: false,
+            managedAlternative: managedBashAlternative(bashContract(pi), hasActiveTool(pi, "monitor")),
+        };
+        calls.delete(event.toolCallId);
         activeCallIds.delete(event.toolCallId);
         let bgWarning;
         if (ledgerPath && activeCallIds.size === 0) {
@@ -149,7 +206,7 @@ function installBashExecutionGuard(pi) {
         const rawContent = event.content;
         const firstText = rawContent.find((item) => item.type === "text" && typeof item.text === "string")?.text ?? "";
         const augmented = event.isError
-            ? augmentBashTimeoutResult(firstText, context?.cwd ?? process.cwd(), { defaulted, hasMonitorTool: hasActiveTool(pi, "monitor") })
+            ? augmentBashTimeoutResult(firstText, context?.cwd ?? process.cwd(), callInfo)
             : undefined;
         const finalText = combineBashResultText(firstText, augmented, bgWarning);
         if (finalText === firstText)
@@ -161,20 +218,23 @@ function installBashExecutionGuard(pi) {
     });
     return resetInFlight;
 }
-function createSystemPromptExtension(getState) {
+function createSystemPromptExtension(getState, role) {
     // Returning `systemPrompt` makes Pi force the prompt text (core/extensions/runner.js
     // emitBeforeAgentStart), so `sections` edits by any later before_agent_start handler -- Pi's MCP
     // `mcp_servers` list among them -- never reach the model. Hence a separate extension placed last.
     return {
         name: "epi:system-prompt",
         factory(pi) {
-            pi.on("before_agent_start", (event) => {
+            pi.on("before_agent_start", (event, ctx) => {
                 const { assembly, identity } = getState();
                 const loadedSkills = normalizeLoadedSkills(event.systemPromptOptions.skills);
+                const audience = role === "subagent"
+                    ? "subagent"
+                    : ctx?.mode === "print" || ctx?.mode === "json" ? "headless-root" : "interactive-root";
                 const promptParts = [event.systemPrompt];
                 if (assembly.rulesText.length > 0)
                     promptParts.push(assembly.rulesText);
-                promptParts.push(renderEpiRuntimePrompt(identity, loadedSkills));
+                promptParts.push(renderEpiRuntimePrompt(identity, loadedSkills, audience));
                 return { systemPrompt: promptParts.join("\n\n") };
             });
         },
@@ -214,7 +274,8 @@ function reloadAssemblyState(initialIdentity, initialAssembly, resolveAssembly, 
         return undefined;
     }
 }
-export function createEpiRuntimeExtensions(initialIdentity, initialAssembly, resolveAssembly = () => initialAssembly, updateCheck, verbose = false) {
+export function createEpiRuntimeExtensions(initialIdentity, initialAssembly, resolveAssembly = () => initialAssembly, options = {}) {
+    const { updateCheck, verbose = false, role = "root" } = options;
     // The last valid assembly: replaced only by a successful Manifest refresh, read by the runtime
     // and system-prompt extensions. It lives outside the factories on purpose: Pi re-runs them on
     // /reload, /new, session switch and fork, and a refresh that then fails must keep the last valid
@@ -230,6 +291,7 @@ export function createEpiRuntimeExtensions(initialIdentity, initialAssembly, res
         factory(pi) {
             let sessionActive = false;
             let headerTicker;
+            const resetRepeatGuard = installRepeatGuard(pi);
             const resetBashGuard = installBashExecutionGuard(pi);
             // Dogfood D67: rpc's switch_session (and any other caller of Pi's switchSession) must refuse a
             // session from another project, like the TUI's /resume does.
@@ -247,6 +309,7 @@ export function createEpiRuntimeExtensions(initialIdentity, initialAssembly, res
                 return { cancel: true };
             });
             pi.on("session_start", (event, context) => {
+                resetRepeatGuard();
                 resetBashGuard();
                 if (event.reason !== "startup") {
                     const next = reloadAssemblyState(initialIdentity, initialAssembly, resolveAssembly, context, event.reason === "reload");
@@ -285,7 +348,7 @@ export function createEpiRuntimeExtensions(initialIdentity, initialAssembly, res
             });
         },
     };
-    const systemPrompt = createSystemPromptExtension(() => ({ assembly: activeAssembly, identity: activeIdentity }));
+    const systemPrompt = createSystemPromptExtension(() => ({ assembly: activeAssembly, identity: activeIdentity }), role);
     return { runtime, systemPrompt };
 }
 //# sourceMappingURL=runtime.js.map

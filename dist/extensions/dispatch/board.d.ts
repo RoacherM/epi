@@ -62,10 +62,10 @@ export declare class PeerBoard {
 }
 export interface BoardBackend {
     self: string;
-    defaultActive?: boolean | undefined;
     post(text: string, channel: string | undefined): Promise<BoardMessage | undefined> | BoardMessage | undefined;
     read(options: ReadOptions): BoardMessage[];
-    wait(since: number, mentionsOnly: boolean, signal: AbortSignal | undefined): Promise<WaitOutcome>;
+    /** Peer workers park on `board_wait`; the root coordinator receives `@coordinator` posts via ledger push. */
+    wait?: ((since: number, mentionsOnly: boolean, signal: AbortSignal | undefined) => Promise<WaitOutcome>) | undefined;
     /** Root only: the messages were read, so their notifications are delivered. */
     collect?(messages: readonly BoardMessage[]): void;
     /** Peer only: the idle cap ended the wait; the run settles as partial and is revived on @mention. */

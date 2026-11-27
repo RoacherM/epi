@@ -17,7 +17,7 @@ import type { DispatchRuntime } from "./dispatch/runtime.js";
 import { itemDetailView, stripSystemFraming } from "./dispatch/tui-views.js";
 import type { DispatchExtraItem, DispatchUiAdapter } from "./dispatch/types.js";
 import type { JobSnapshot } from "./dispatch/worker-host.js";
-import type { MonitorBridgeSummary, TaskMonitorBridge } from "./task-notify.js";
+import type { MonitorBridgeSummary, TaskMonitorBridge } from "./task-monitor-bridge.js";
 
 type Tone = "accent" | "success" | "warning" | "error" | "muted";
 const MAX_DETAIL_LINES = 10;
@@ -222,7 +222,7 @@ function renderTaskCall(
         theme,
         `${theme.fg("toolOutput", "task")} ${typeof args.name === "string" ? `${theme.fg("accent", `@${args.name}`)} ` : typeof args.agent === "string" ? `${theme.fg("accent", args.agent)} ` : ""}${theme.fg("toolOutput", quoteShort(taskText))}`,
         context,
-        args.background === true || typeof args.name === "string" ? theme.fg("dim", "bg") : "",
+        args.background === true || args.role === "peer" ? theme.fg("dim", "bg") : "",
       );
   line.inspect = () => {
     const ref = taskCallRef(args, context);

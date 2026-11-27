@@ -44,8 +44,10 @@ export function createEpiDispatchHost(options, events, getRuntime) {
             return emitTaskHook(bus, event, ctx);
         },
         ui: createEpiUiAdapter(getRuntime ?? (() => undefined), options.bridge),
+        ...(options.bridge === undefined ? {} : { settleSources: () => options.bridge.settleSources() }),
         ...(options.workerPath === undefined ? {} : { workerPath: options.workerPath }),
         ...(options.killGraceMs === undefined ? {} : { killGraceMs: options.killGraceMs }),
+        ...(options.syncWindowMs === undefined ? {} : { syncWindowMs: options.syncWindowMs }),
         ...(options.foregroundBudgetSeconds === undefined ? {} : { foregroundBudgetSeconds: options.foregroundBudgetSeconds }),
     };
 }

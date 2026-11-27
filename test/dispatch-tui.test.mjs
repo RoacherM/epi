@@ -147,8 +147,8 @@ test("Alt+B passes through when idle (preserving editor word-left) and detaches 
   await h.commands.get("bg").handler("", h.ctx);
   assert.match(h.notices.at(-1).msg, /Nothing running in the foreground/);
 
-  // Start a slow foreground bash command (sync window 60s), then press Alt+B to detach it!
-  const bashExec = h.tools.get("bash").execute("tc-1", { command: "sleep 30", waitMsBeforeAsync: 60_000 }, undefined, undefined, h.ctx);
+  // Start a slow foreground bash command (within default sync window), then press Alt+B to detach it!
+  const bashExec = h.tools.get("bash").execute("tc-1", { command: "sleep 30" }, undefined, undefined, h.ctx);
   await delay(80);
   assert.equal(h.runtime.hasDetachableForeground(), true);
 
@@ -190,7 +190,7 @@ test("/tasks and /board open the dual-tab 88% overlay, support Tab/Enter/Esc and
 
   // Post a message to the board and start a daemon bash job so both tabs have live content.
   await h.tools.get("board_post").execute("b1", { text: "@parser check edge cases" }, undefined, undefined, h.ctx);
-  const daemonRes = await h.tools.get("bash").execute("d1", { command: "echo boot-ok && sleep 30", isDaemon: true }, undefined, undefined, h.ctx);
+  const daemonRes = await h.tools.get("bash").execute("d1", { command: "echo boot-ok && sleep 30", mode: "daemon" }, undefined, undefined, h.ctx);
   const daemonId = daemonRes.details.dispatch.id;
   await delay(60);
 
@@ -273,7 +273,7 @@ test("OSC 52, CSI, CR, C1, and bidi terminal escape sequences are stripped acros
   const h = makeHarness(t);
   const res = await h.tools.get("bash").execute(
     "esc-1",
-    { command: "printf 'safe-start \\033]52;c;SGVsbG8=\\007 \\033[2J \\rSPOOF \\23331m safe-end\\n'", waitMsBeforeAsync: 500 },
+    { command: "printf 'safe-start \\033]52;c;SGVsbG8=\\007 \\033[2J \\rSPOOF \\23331m safe-end\\n'" },
     undefined,
     undefined,
     h.ctx,
@@ -283,7 +283,7 @@ test("OSC 52, CSI, CR, C1, and bidi terminal escape sequences are stripped acros
   writeFileSync(escScript, "printf 'log-head \\033]52;c;c2VjcmV0\\007 \\033[2J \\rOVER \\23331m log-tail\\n'\n", { mode: 0o700 });
   const bgRes = await h.tools.get("bash").execute(
     "esc-2",
-    { command: `/bin/sh ${JSON.stringify(escScript)}`, isDaemon: true },
+    { command: `/bin/sh ${JSON.stringify(escScript)}`, mode: "daemon" },
     undefined,
     undefined,
     h.ctx,

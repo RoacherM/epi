@@ -193,7 +193,7 @@ function renderTaskCall(args, theme, context, getRuntime) {
     const taskText = typeof args.task === "string" ? args.task : Array.isArray(args.tasks) ? `${args.tasks.length} tasks` : "";
     const line = typeof args.jobId === "string"
         ? new CallLine("◆", theme, `${theme.fg("toolOutput", args.background === true ? "resume" : String(args.strategy ?? "steer"))} ${theme.fg("muted", shortId(args.jobId))} ${theme.fg("toolOutput", quoteShort(taskText))}`, context)
-        : new CallLine("◆", theme, `${theme.fg("toolOutput", "task")} ${typeof args.name === "string" ? `${theme.fg("accent", `@${args.name}`)} ` : typeof args.agent === "string" ? `${theme.fg("accent", args.agent)} ` : ""}${theme.fg("toolOutput", quoteShort(taskText))}`, context, args.background === true || typeof args.name === "string" ? theme.fg("dim", "bg") : "");
+        : new CallLine("◆", theme, `${theme.fg("toolOutput", "task")} ${typeof args.name === "string" ? `${theme.fg("accent", `@${args.name}`)} ` : typeof args.agent === "string" ? `${theme.fg("accent", args.agent)} ` : ""}${theme.fg("toolOutput", quoteShort(taskText))}`, context, args.background === true || args.role === "peer" ? theme.fg("dim", "bg") : "");
     line.inspect = () => {
         const ref = taskCallRef(args, context);
         const rt = getRuntime();

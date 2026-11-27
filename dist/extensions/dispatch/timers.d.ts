@@ -65,7 +65,6 @@ export declare class TimerRuntime {
     stop(): void;
     summary(timer: TimerItem): DispatchItemSummary;
     report(id: string): DispatchItemReport;
-    hasActiveSchedules(): boolean;
     provider(): DispatchItemProvider;
 }
 /** The notification a fired timer puts into the ledger. */

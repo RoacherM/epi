@@ -159,7 +159,7 @@ export function itemDetailView(theme: Theme, runtime: DispatchRuntime, ref: stri
 
 export function boardLines(theme: Theme, messages: readonly BoardMessage[]): string[] {
   if (messages.length === 0) {
-    return [theme.fg("muted", "No board messages yet — start named peers with task({ name: \"worker\", task: \"...\" }).")];
+    return [theme.fg("muted", "No board messages yet — start named peers with task({ role: \"peer\", name: \"worker\", task: \"...\" }).")];
   }
   const out: string[] = [];
   for (const msg of messages) {

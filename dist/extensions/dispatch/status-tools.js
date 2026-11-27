@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { foregroundBudgetMs } from "./task-tool.js";
 function text(value, details) {
     return { content: [{ type: "text", text: value }], details: details ?? {} };
 }
@@ -61,10 +62,25 @@ function statusTool(deps) {
         },
     };
 }
-function effectiveWaitMs(timeoutSeconds, mode, budgetSec) {
-    const defaultSec = mode === "tui" ? (budgetSec ?? 300) : 0;
-    const sec = timeoutSeconds ?? (defaultSec > 0 ? defaultSec : undefined);
-    return sec === undefined ? undefined : sec * 1_000;
+function waitLimit(timeoutSeconds, budgetMs) {
+    const askedMs = timeoutSeconds === undefined ? undefined : timeoutSeconds * 1_000;
+    if (budgetMs === undefined)
+        return askedMs === undefined ? undefined : { ms: askedMs, end: "timeout" };
+    return askedMs !== undefined && askedMs < budgetMs ? { ms: askedMs, end: "timeout" } : { ms: budgetMs, end: "budget" };
+}
+function waitNote(end, reports) {
+    if (!reports.some((report) => report.summary.active))
+        return "";
+    switch (end) {
+        case "detached":
+            return "\n\nStopped waiting (/bg); active items keep running in the background and will notify you when settled.";
+        case "budget":
+            return "\n\nForeground wait budget reached; active items keep running and will notify you when settled. End your turn or do other work instead of waiting again.";
+        case "timeout":
+            return "\n\nWait timeout reached; active items keep running and will notify you when settled.";
+        default:
+            return "";
+    }
 }
 function waitTool(deps) {
     return {
@@ -77,14 +93,16 @@ function waitTool(deps) {
             const tm = targets.find((target) => target.provider.kind === "tm");
             if (tm !== undefined)
                 throw new Error(`${tm.id} is a timer; it notifies you when it fires`);
-            let detached = false;
+            let end = "settled";
             const controller = new AbortController();
-            const onAbort = () => controller.abort();
-            const detach = () => { detached = true; controller.abort(); };
+            const onAbort = () => { end = "aborted"; controller.abort(); };
+            const detach = () => { end = "detached"; controller.abort(); };
             signal?.addEventListener("abort", onAbort, { once: true });
+            if (signal?.aborted === true)
+                onAbort();
             deps.foregroundWaits?.add(detach);
-            const waitMs = effectiveWaitMs(params.timeoutSeconds, ctx?.mode, deps.foregroundBudgetSeconds);
-            const timer = waitMs === undefined ? undefined : setTimeout(onAbort, waitMs);
+            const limit = waitLimit(params.timeoutSeconds, foregroundBudgetMs(ctx?.mode, deps.foregroundBudgetSeconds));
+            const timer = limit === undefined ? undefined : setTimeout(() => { end = limit.end; controller.abort(); }, limit.ms);
             try {
                 const waits = targets.map((target) => target.provider.wait(target.id, controller.signal));
                 await ((params.mode ?? "all") === "any" ? Promise.race(waits) : Promise.all(waits));
@@ -97,8 +115,7 @@ function waitTool(deps) {
             const reports = targets.map((target) => target.provider.report(target.id));
             for (const report of reports)
                 collectIfSettled(deps.ledger, report);
-            const note = detached && reports.some((r) => r.summary.active) ? "\n\nStopped waiting (/bg); active items keep running in the background and will notify you when settled." : "";
-            return text(`${reports.map((report) => report.text).join("\n\n")}${note}`, { items: reports.map((report) => report.details) });
+            return text(`${reports.map((report) => report.text).join("\n\n")}${waitNote(end, reports)}`, { items: reports.map((report) => report.details), waitEnd: end });
         },
     };
 }

@@ -23,7 +23,6 @@ import { DISPATCH_DEPTH_ENV, type BgStatus, type DispatchItemProvider, type Disp
 
 export const BG_LOG_CAP_BYTES = 20 * 1024 * 1024;
 export const DEFAULT_SYNC_WINDOW_MS = 120_000;
-export const MAX_SYNC_WINDOW_MS = 600_000;
 export const DEFAULT_BG_LIFETIME_SECONDS = 1_800;
 export const MAX_BG_LIFETIME_SECONDS = 4 * 3_600;
 const TAIL_BYTES = 64 * 1024;
@@ -422,7 +421,7 @@ export class BgProcessRuntime {
     const job = this.jobs.get(id);
     if (job === undefined || job.status !== "running") throw new Error(`${id} is not running`);
     const stdin = job.child.stdin;
-    if (stdin === null || !stdin.writable) throw new Error(`${id} has no open stdin; start it with stdin: true or isDaemon: true`);
+    if (stdin === null || !stdin.writable) throw new Error(`${id} has no open stdin; start it with stdin: true or mode: "daemon"`);
     if (input !== undefined && input.length > 0) stdin.write(input);
     if (end) stdin.end();
     return `${input === undefined ? 0 : Buffer.byteLength(input)} bytes written to ${id}${end ? "; stdin closed" : ""}`;
@@ -656,31 +655,44 @@ export function exitNotice(report: DispatchItemReport): string {
   return `${report.text.split("\n").slice(0, 16).join("\n")}\ntask_status({ id: "${report.summary.id}" }) for more output.`;
 }
 
+const BashMode = Type.Union([Type.Literal("auto"), Type.Literal("background"), Type.Literal("daemon")], {
+  description: "auto (default): return the result; a slow command continues as bg_<id> and notifies on exit. background: return at once as bg_<id>. daemon: long-lived service with writable stdin",
+});
+export type BashMode = Static<typeof BashMode>;
+
 export const BashParameters = Type.Object({
   command: Type.String({ description: "Shell command" }),
-  timeout: Type.Optional(Type.Number({ description: "Lifetime in seconds (max 14400)" })),
-  waitMsBeforeAsync: Type.Optional(Type.Integer({ minimum: 0, description: "Ms before detaching as bg_<id> (default 120000)" })),
-  isDaemon: Type.Optional(Type.Boolean({ description: "Background service: detach at once, writable stdin" })),
+  timeout: Type.Optional(Type.Number({ description: "Kill after this many seconds (max 14400); omit for the default" })),
+  mode: Type.Optional(BashMode),
   stdin: Type.Optional(Type.Boolean({ description: "Keep stdin open for task_input" })),
-});
+}, { additionalProperties: false });
 export type BashParams = Static<typeof BashParameters>;
 
-interface BashSettings {
-  syncMs: number;
+interface BashPlan {
+  mode: BashMode;
   lifetimeSeconds: number | undefined;
   isDaemon: boolean;
   stdin: boolean;
 }
 
-function bashSettings(params: BashParams): BashSettings {
-  const isDaemon = params.isDaemon === true;
-  if (params.timeout !== undefined && (!(params.timeout > 0) || params.timeout > MAX_BG_LIFETIME_SECONDS)) {
+function validateBgTimeout(timeout: number): void {
+  if (!Number.isFinite(timeout) || timeout <= 0) {
     throw new Error(`timeout must be between 1 and ${MAX_BG_LIFETIME_SECONDS} seconds`);
   }
-  const syncMs = params.waitMsBeforeAsync ?? (isDaemon ? 0 : DEFAULT_SYNC_WINDOW_MS);
-  if (syncMs > MAX_SYNC_WINDOW_MS) throw new Error(`waitMsBeforeAsync must be at most ${MAX_SYNC_WINDOW_MS}`);
+  if (timeout <= MAX_BG_LIFETIME_SECONDS) return;
+  const asSeconds = Math.round(timeout / 1_000);
+  if (asSeconds >= 1 && asSeconds <= MAX_BG_LIFETIME_SECONDS) {
+    throw new Error(`timeout must be between 1 and ${MAX_BG_LIFETIME_SECONDS} seconds (got ${timeout}); it is in seconds, not milliseconds. Did you mean ${asSeconds}?`);
+  }
+  throw new Error(`timeout must be between 1 and ${MAX_BG_LIFETIME_SECONDS} seconds`);
+}
+
+function bashPlan(params: BashParams): BashPlan {
+  const mode: BashMode = params.mode ?? "auto";
+  const isDaemon = mode === "daemon";
+  if (params.timeout !== undefined) validateBgTimeout(params.timeout);
   return {
-    syncMs,
+    mode,
     lifetimeSeconds: params.timeout ?? (isDaemon ? undefined : DEFAULT_BG_LIFETIME_SECONDS),
     isDaemon,
     stdin: isDaemon || params.stdin === true,
@@ -695,10 +707,15 @@ class DetachedRun extends Error {
 
 type ExecOptions = Parameters<BashOperations["exec"]>[2];
 
-function foregroundExec(runtime: BgProcessRuntime, settings: BashSettings, sessionId: string | undefined): BashOperations["exec"] {
+function foregroundExec(
+  runtime: BgProcessRuntime,
+  plan: BashPlan,
+  sessionId: string | undefined,
+  syncWindowMs: number,
+): BashOperations["exec"] {
   return (command: string, cwd: string, options: ExecOptions) => new Promise((resolve, reject) => {
     const { onData, signal, env } = options;
-    const job = runtime.spawn({ command, cwd, env: env ?? process.env, stdin: settings.stdin, isDaemon: settings.isDaemon, lifetimeSeconds: settings.lifetimeSeconds, sessionId });
+    const job = runtime.spawn({ command, cwd, env: env ?? process.env, stdin: plan.stdin, isDaemon: plan.isDaemon, lifetimeSeconds: plan.lifetimeSeconds, sessionId });
     job.onForeground = onData;
     let windowTimer: NodeJS.Timeout | undefined;
     let settled = false;
@@ -718,12 +735,12 @@ function foregroundExec(runtime: BgProcessRuntime, settings: BashSettings, sessi
     });
     void job.exit.then(() => settle(() => {
       if (job.termination === "aborted") reject(new Error("aborted"));
-      else if (job.termination === "timeout") reject(new Error(`timeout:${settings.lifetimeSeconds}`));
+      else if (job.termination === "timeout") reject(new Error(`timeout:${plan.lifetimeSeconds}`));
       else resolve({ exitCode: job.exitCode ?? null });
     }));
     runtime.foreground.add(detach);
-    if (settings.syncMs <= 0) setImmediate(detach);
-    else windowTimer = setTimeout(detach, settings.syncMs);
+    if (plan.mode === "auto") windowTimer = setTimeout(detach, syncWindowMs);
+    else setImmediate(detach);
     if (signal?.aborted === true) onAbort();
     else signal?.addEventListener("abort", onAbort, { once: true });
   });
@@ -745,15 +762,19 @@ function runningResult(runtime: BgProcessRuntime, job: BgJob): AgentToolResult<u
 /** Pi's bash tool, with the dispatch parameters and a background-capable execution backend.
  * Omit Pi's built-in renderers so both Pi (`withBuiltInRenderers`) and Epi (`builtInToolRenderers`)
  * attach their own native bash presentation automatically. */
-export function createDispatchBashTool(runtime: BgProcessRuntime, sessionId: () => string | undefined): ToolDefinition<typeof BashParameters> {
+export function createDispatchBashTool(
+  runtime: BgProcessRuntime,
+  sessionId: () => string | undefined,
+  syncWindowMs = DEFAULT_SYNC_WINDOW_MS,
+): ToolDefinition<typeof BashParameters> {
   const { renderCall: _rc, renderResult: _rr, ...base } = createBashToolDefinition(process.cwd());
   return {
     ...(base as unknown as ToolDefinition<typeof BashParameters>),
     parameters: BashParameters,
     description: `${base.description} Slow commands detach as bg_<id> and notify on exit; never use nohup, setsid, or trailing &.`,
     async execute(toolCallId: string, params: BashParams, signal: AbortSignal | undefined, onUpdate: AgentToolUpdateCallback<unknown> | undefined, ctx: ExtensionContext) {
-      const settings = bashSettings(params);
-      const definition = createBashToolDefinition(ctx?.cwd ?? process.cwd(), { operations: { exec: foregroundExec(runtime, settings, sessionId()) } });
+      const plan = bashPlan(params);
+      const definition = createBashToolDefinition(ctx?.cwd ?? process.cwd(), { operations: { exec: foregroundExec(runtime, plan, sessionId(), syncWindowMs) } });
       try {
         return await definition.execute(toolCallId, { command: params.command }, signal, onUpdate, ctx as never);
       } catch (error) {

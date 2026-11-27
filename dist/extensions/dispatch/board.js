@@ -228,11 +228,9 @@ function waitText(backend, outcome) {
     }
 }
 export function createBoardTools(backend) {
-    const defaultActive = backend.defaultActive ?? true;
     const post = {
         name: "board_post",
         label: "Board Post",
-        defaultActive,
         description: `Post to the session board as @${backend.self}. Hand work to a peer with @name; it is woken directly, without the coordinator relaying.`,
         parameters: PostParameters,
         async execute(_id, params) {
@@ -243,8 +241,9 @@ export function createBoardTools(backend) {
     const read = {
         name: "board_read",
         label: "Board Read",
-        defaultActive,
-        description: "Read board messages (by since, seqs, channel); returns the latest seq to pass to board_wait.",
+        description: backend.wait === undefined
+            ? "Read board messages (by since, seqs, channel); returns the latest seq."
+            : "Read board messages (by since, seqs, channel); returns the latest seq to pass to board_wait.",
         parameters: ReadParameters,
         async execute(_id, params) {
             const messages = backend.read(params);
@@ -253,14 +252,16 @@ export function createBoardTools(backend) {
             return text(messages.length === 0 ? `No messages (latest seq ${latest}).` : `${formatMessages(messages)}\n(latest seq ${latest})`, { latest });
         },
     };
+    if (backend.wait === undefined)
+        return [post, read];
+    const waitFn = backend.wait;
     const wait = {
         name: "board_wait",
         label: "Board Wait",
-        defaultActive,
         description: "Wait for the next board message addressed to you after `since` (also ends on a parent steer, Esc, or the idle cap).",
         parameters: WaitParameters,
         async execute(_id, params, signal) {
-            const outcome = await backend.wait(params.since, params.mentions_only ?? true, signal);
+            const outcome = await waitFn(params.since, params.mentions_only ?? true, signal);
             if (outcome.reason === "message")
                 backend.collect?.(outcome.messages);
             if (outcome.reason === "idle")
