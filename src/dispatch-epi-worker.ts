@@ -71,8 +71,9 @@ function buildWorkerFactories(
   assembly: ResolvedAssembly,
   options: EpiWorkerOptions,
   extensions: Parameters<CreateWorkerSession>[1],
+  piVersion: string,
 ): InlineExtension[] {
-  const identity = createEpiRuntimeIdentity({ epiVersion: EPI_VERSION, piVersion: "", epiHome: options.epiHome, assembly });
+  const identity = createEpiRuntimeIdentity({ epiVersion: EPI_VERSION, piVersion, epiHome: options.epiHome, assembly });
   return [
     createMagpieInlineExtension(),
     ...extensions.map((factory, index) => ({ name: `dispatch:worker-${index}`, factory })),
@@ -87,7 +88,7 @@ export const createWorkerSession: CreateWorkerSession = async (capsule, extensio
   const assembly = workerAssembly(capsule, options);
   const preloaded = Array.isArray(options.skills) ? readPreloadedSkills(assembly) : [];
   const settingsManager = sdk.SettingsManager.create(capsule.cwd, capsule.agentDir, { projectTrusted: false });
-  const factories = buildWorkerFactories(assembly, options, extensions);
+  const factories = buildWorkerFactories(assembly, options, extensions, sdk.VERSION);
   const { modelRuntime, resourceLoader, diagnostics } = await sdk.createAgentSessionServices({
     cwd: capsule.cwd, agentDir: capsule.agentDir, settingsManager,
     resourceLoaderOptions: {

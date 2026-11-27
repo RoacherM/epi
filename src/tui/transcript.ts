@@ -329,7 +329,7 @@ export class Transcript {
   }
 
   private entryAppended(entry: Extract<AgentSessionEvent, { type: "entry_appended" }>["entry"]): void {
-    // Boundary drafts committed at turn_end / agent_before_settle (task-notify.ts, dispatch
+    // Boundary drafts committed at turn_end / agent_before_settle (dispatch
     // notifications) emit entry_appended rather than message_start/message_end (agent-session.js
     // _commitBoundaryDrafts). Mirror Pi's interactive-mode.js so mid-run wakeups render live.
     if (entry.type !== "custom_message" || !entry.display) return;

@@ -81,7 +81,7 @@ test("board_wait wakes on a parent steer, on abort, and on the idle cap (which e
 async function rootFixture(t, host = {}) {
   const fixture = await mountRuntime(t, { host: { workerExtensionPaths: [faux], ...host } });
   const startPeer = async (name, task, extra = {}) => {
-    const result = await fixture.call("task", { name, task, model: MODEL, ...extra });
+    const result = await fixture.call("task", { role: "peer", name, task, model: MODEL, ...extra });
     assert.match(resultText(result), /started in the background/, resultText(result));
     return fixture.runtime.pool.resolve(name);
   };
@@ -188,13 +188,13 @@ test("PeerBoard rejects >16 KiB whitespace before emitting, dirty named workspac
   git(repo, "commit", "-q", "-m", "init");
 
   // Start peer @writer in branch workspace, wait for settle, dirty its workspace, then try starting @writer again:
-  await call("task", { name: "writer", task: "child-simple first", cwd: repo, workspace: "branch", model: MODEL });
+  await call("task", { role: "peer", name: "writer", task: "child-simple first", cwd: repo, workspace: "branch", model: MODEL });
   const firstId = runtime.pool.resolve("writer");
   const firstDone = await runtime.pool.wait(firstId);
   writeFileSync(join(firstDone.workspace.path, "dirty.txt"), "uncommitted\n");
 
   await assert.rejects(
-    call("task", { name: "writer", task: "child-simple second", cwd: repo, workspace: "branch", model: MODEL }),
+    call("task", { role: "peer", name: "writer", task: "child-simple second", cwd: repo, workspace: "branch", model: MODEL }),
     /prior @writer .* still holds uncommitted work/,
   );
 
@@ -230,8 +230,8 @@ test("peer board_post awaits parent seq receipt for read-your-own-writes, and sh
   const t0 = Date.now();
   await call("task", {
     tasks: [
-      { name: "scanner", task: "peer-post-then-read check", cwd: repo, workspace: "share", model: MODEL },
-      { name: "helper", task: "child-simple quick", cwd: repo, workspace: "share", model: MODEL },
+      { role: "peer", name: "scanner", task: "peer-post-then-read check", cwd: repo, workspace: "share", model: MODEL },
+      { role: "peer", name: "helper", task: "child-simple quick", cwd: repo, workspace: "share", model: MODEL },
     ],
   });
   const startElapsed = Date.now() - t0;
@@ -247,17 +247,26 @@ test("peer board_post awaits parent seq receipt for read-your-own-writes, and sh
 
   // P1-1: concurrent startAsync with the same peer name rejects the duplicate instead of admitting two active peers:
   const dupResults = await Promise.allSettled([
-    runtime.pool.startAsync({ name: "dup", task: "child-simple 1", cwd: repo, workspace: "share", inheritedModel: MODEL }),
-    runtime.pool.startAsync({ name: "dup", task: "child-simple 2", cwd: repo, workspace: "share", inheritedModel: MODEL }),
+    runtime.pool.startAsync({ role: "peer", name: "dup", task: "child-simple 1", cwd: repo, workspace: "share", inheritedModel: MODEL }),
+    runtime.pool.startAsync({ role: "peer", name: "dup", task: "child-simple 2", cwd: repo, workspace: "share", inheritedModel: MODEL }),
   ]);
   assert.equal(dupResults.filter((r) => r.status === "fulfilled").length, 1, "exactly one concurrent same-name startAsync succeeds");
   assert.equal(dupResults.filter((r) => r.status === "rejected").length, 1, "second concurrent same-name startAsync is rejected");
   await runtime.pool.wait(runtime.pool.resolve("dup"));
 
-  // P1-2: an @mention posted immediately after task(share) returns is NOT skipped by lazy boardSince():
-  await call("task", { name: "beta", task: "peer-beta wait for alpha", cwd: repo, workspace: "share", model: MODEL });
+  // P1-2: an @mention posted immediately after task(role: "peer") returns is NOT skipped by lazy boardSince():
+  await call("task", { role: "peer", name: "beta", task: "peer-beta wait for alpha", cwd: repo, workspace: "share", model: MODEL });
   await call("board_post", { text: "@beta HANDOFF-FROM-ALPHA payload" });
   const betaDone = await runtime.pool.wait(runtime.pool.resolve("beta"));
   assert.equal(betaDone.status, "completed", betaDone.error);
   assert.match(betaDone.result, /BETA-GOT-HANDOFF/);
+
+  // Root exposes board_post + board_read from turn 1 (never board_wait); named worker without role="peer" stays foreground inline:
+  const { fake } = await rootFixture(t);
+  assert.equal(fake.tools.has("board_post"), true);
+  assert.equal(fake.tools.has("board_read"), true);
+  assert.equal(fake.tools.has("board_wait"), false);
+  const inlineWorker = await call("task", { name: "solo", task: "child-list-tools check", cwd: repo, model: MODEL });
+  assert.doesNotMatch(resultText(inlineWorker), /started in the background/);
+  assert.doesNotMatch(resultText(inlineWorker), /board_wait/);
 });

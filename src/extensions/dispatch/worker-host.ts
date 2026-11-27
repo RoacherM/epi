@@ -24,10 +24,16 @@ const RECENT_EVENTS_LIMIT = 10;
 const STDERR_TAIL_BYTES = 16 * 1024;
 const CHANNEL_DRAIN_MS = 500;
 export const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
+export type JobRole = "worker" | "peer";
+
+function jobRole(request: Pick<JobRequest, "role">): JobRole {
+  return request.role ?? "worker";
+}
 
 export interface JobRequest {
   task: string;
   cwd: string;
+  role?: JobRole | undefined;
   name?: string | undefined;
   agent?: string | undefined;
   model?: string | undefined;
@@ -46,6 +52,7 @@ export interface JobRequest {
 
 export interface JobSnapshot {
   id: string;
+  role: JobRole;
   name?: string;
   agent?: string;
   status: JobStatus;
@@ -280,6 +287,7 @@ export class WorkerPool {
   private validate(request: JobRequest): { agent: AgentDefinition | undefined; cwd: string; timeoutSeconds: number } {
     if (this.shuttingDown) throw new Error("dispatch worker pool is shutting down");
     if (request.task.trim().length === 0) throw new Error("task must be a non-empty string");
+    if (request.role === "peer" && request.name === undefined) throw new Error('role "peer" requires a task name');
     if (request.name !== undefined) this.validateName(request.name);
     const agent = this.agent(request.agent);
     let cwd: string;
@@ -341,7 +349,7 @@ export class WorkerPool {
     const workspaceSpec = mode === "inherit"
       ? undefined
       : { mode, stateDir: this.options.stateDir(), sessionShort: this.options.sessionShort(), slug, cwd };
-    const startBoardSeq = request.name === undefined ? undefined : this.options.boardSince(request.originSessionId);
+    const startBoardSeq = jobRole(request) === "peer" ? this.options.boardSince(request.originSessionId) : undefined;
     const { promise, resolve } = Promise.withResolvers<void>();
     const job: Job = {
       id, request, agent, task: request.task, status: "queued", cwd, originCwd: cwd,
@@ -439,7 +447,7 @@ export class WorkerPool {
     if (!existsSync(job.sessionPath)) throw new Error(`${job.id} has no session file at ${job.sessionPath}; nothing to resume`);
     if (job.workspaceRemoved) throw new Error(`${job.id}'s workspace was removed; start a new task`);
     const { promise, resolve } = Promise.withResolvers<void>();
-    const startBoardSeq = job.request.name === undefined ? undefined : this.options.boardSince(job.request.originSessionId);
+    const startBoardSeq = jobRole(job.request) === "peer" ? this.options.boardSince(job.request.originSessionId) : undefined;
     Object.assign(job, {
       isResume: true, startBoardSeq, task, status: "queued" as const, startedAt: undefined, deadlineAt: undefined, result: undefined, error: undefined, finishedAt: undefined, stoppedBy: undefined,
       workerResult: undefined, termination: undefined, currentActivity: undefined, progressTurns: 0, stepsBase: job.steps,
@@ -504,7 +512,7 @@ export class WorkerPool {
   pushBoard(message: BoardMessage, originSessionId?: string): void {
     for (const job of this.jobs.values()) {
       const name = job.request.name;
-      if (job.status !== "running" || name === undefined) continue;
+      if (job.status !== "running" || jobRole(job.request) !== "peer" || name === undefined) continue;
       if (originSessionId !== undefined && job.request.originSessionId !== originSessionId) continue;
       if (job.parked && addressedTo(message, name)) job.parked = false;
       job.channel?.send({ type: "board", message });
@@ -534,7 +542,7 @@ export class WorkerPool {
   }
 
   private capsule(job: Job): WorkerCapsule {
-    const peer = job.request.name !== undefined;
+    const peer = jobRole(job.request) === "peer";
     const sessionId = job.request.originSessionId;
     const basePrompt = job.request.systemPrompt ?? job.agent?.systemPrompt ?? "";
     return {
@@ -743,7 +751,7 @@ export class WorkerPool {
     const live = job.status === "queued" || job.status === "running";
     const turns = live && job.progressTurns > 0 ? (job.turns ?? 0) + job.progressTurns : job.turns;
     return {
-      id: job.id, status: job.status, task: job.task, cwd: job.cwd, sessionPath: job.sessionPath, createdAt: job.createdAt,
+      id: job.id, role: jobRole(job.request), status: job.status, task: job.task, cwd: job.cwd, sessionPath: job.sessionPath, createdAt: job.createdAt,
       steps: job.steps, recentEvents: [...job.recentEvents], run: job.run, parked: job.parked, finite: job.finite,
       ...definedFields({
         name: job.request.name, agent: job.agent?.name, startedAt: job.startedAt, finishedAt: job.finishedAt,

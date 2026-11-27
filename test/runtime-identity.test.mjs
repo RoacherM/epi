@@ -316,3 +316,38 @@ test("Epi runtime identity states explicitly when no skills are loaded", async (
 
   assert.match(result.systemPrompt, /"loadedSkills": \[\]/);
 });
+
+test("runtime prompt tailors content to interactive-root, headless-root, and subagent audiences", async () => {
+  const { assembly, identity } = fixture();
+  const capture = async (options, ctx) => {
+    let beforeAgentStart;
+    startEpiRuntime(createEpiRuntimeExtensions(identity, assembly, undefined, options), {
+      on(event, handler) {
+        if (event === "before_agent_start") beforeAgentStart = handler;
+      },
+      registerCommand() {},
+    });
+    return beforeAgentStart(
+      {
+        type: "before_agent_start",
+        prompt: "hi",
+        systemPrompt: "PI BASE PROMPT",
+        systemPromptOptions: { cwd: "/fixture/work", skills: [] },
+      },
+      ctx,
+    );
+  };
+
+  const interactive = await capture(undefined, { hasUI: true });
+  assert.match(interactive.systemPrompt, /<epi_runtime_inventory>/);
+  assert.doesNotMatch(interactive.systemPrompt, /autonomous|non-interactive/);
+
+  const headless = await capture(undefined, { mode: "print" });
+  assert.match(headless.systemPrompt, /<epi_runtime_inventory>/);
+  assert.match(headless.systemPrompt, /non-interactive/);
+
+  const subagent = await capture({ role: "subagent" }, { hasUI: false });
+  assert.match(subagent.systemPrompt, /^PI BASE PROMPT\n\n# Epi Subagent Contract/);
+  assert.doesNotMatch(subagent.systemPrompt, /<epi_runtime_inventory>/);
+  assert.doesNotMatch(subagent.systemPrompt, /Manifest edits|\/reload/);
+});

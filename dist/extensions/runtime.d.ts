@@ -12,5 +12,10 @@ export interface EpiRuntimeExtensions {
     /** Appends Rules and the runtime contract in before_agent_start; must be last in the inline list. */
     systemPrompt: InlineExtension;
 }
-export declare function createEpiRuntimeExtensions(initialIdentity: EpiRuntimeIdentity, initialAssembly: ResolvedAssembly, resolveAssembly?: () => ResolvedAssembly, updateCheck?: UpdateCheckOptions, verbose?: boolean): EpiRuntimeExtensions;
+export interface EpiRuntimeExtensionOptions {
+    updateCheck?: UpdateCheckOptions | undefined;
+    verbose?: boolean | undefined;
+    role?: "root" | "subagent" | undefined;
+}
+export declare function createEpiRuntimeExtensions(initialIdentity: EpiRuntimeIdentity, initialAssembly: ResolvedAssembly, resolveAssembly?: () => ResolvedAssembly, options?: EpiRuntimeExtensionOptions): EpiRuntimeExtensions;
 //# sourceMappingURL=runtime.d.ts.map

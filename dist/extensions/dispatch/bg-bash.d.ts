@@ -5,7 +5,6 @@ import { type ExecutionGuard } from "./reaper.js";
 import { type BgStatus, type DispatchItemProvider, type DispatchItemReport, type DispatchItemSummary, type DispatchRole } from "./types.js";
 export declare const BG_LOG_CAP_BYTES: number;
 export declare const DEFAULT_SYNC_WINDOW_MS = 120000;
-export declare const MAX_SYNC_WINDOW_MS = 600000;
 export declare const DEFAULT_BG_LIFETIME_SECONDS = 1800;
 export declare const MAX_BG_LIFETIME_SECONDS: number;
 export interface BgMeta {
@@ -123,16 +122,18 @@ export declare class BgProcessRuntime {
 export declare function raceAbort(promise: Promise<unknown>, signal: AbortSignal | undefined): Promise<void>;
 /** The text a backgrounded command's exit notification carries. */
 export declare function exitNotice(report: DispatchItemReport): string;
+declare const BashMode: Type.TUnion<[Type.TLiteral<"auto">, Type.TLiteral<"background">, Type.TLiteral<"daemon">]>;
+export type BashMode = Static<typeof BashMode>;
 export declare const BashParameters: Type.TObject<{
     command: Type.TString;
     timeout: Type.TOptional<Type.TNumber>;
-    waitMsBeforeAsync: Type.TOptional<Type.TInteger>;
-    isDaemon: Type.TOptional<Type.TBoolean>;
+    mode: Type.TOptional<Type.TUnion<[Type.TLiteral<"auto">, Type.TLiteral<"background">, Type.TLiteral<"daemon">]>>;
     stdin: Type.TOptional<Type.TBoolean>;
 }>;
 export type BashParams = Static<typeof BashParameters>;
 /** Pi's bash tool, with the dispatch parameters and a background-capable execution backend.
  * Omit Pi's built-in renderers so both Pi (`withBuiltInRenderers`) and Epi (`builtInToolRenderers`)
  * attach their own native bash presentation automatically. */
-export declare function createDispatchBashTool(runtime: BgProcessRuntime, sessionId: () => string | undefined): ToolDefinition<typeof BashParameters>;
+export declare function createDispatchBashTool(runtime: BgProcessRuntime, sessionId: () => string | undefined, syncWindowMs?: number): ToolDefinition<typeof BashParameters>;
+export {};
 //# sourceMappingURL=bg-bash.d.ts.map

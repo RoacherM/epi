@@ -15,7 +15,7 @@ const AGENT_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 const AGENT_KEYS = new Set([
     "name", "description", "model", "tools", "excludeTools", "timeoutSeconds", "maxTurns", "context",
     "workspace", "isolation", "background", "async", "updateStrategy", "verifyCommand",
-    "rules", "skills", "mcp", "hooks", "extensions",
+    "rules", "skills", "mcp", "hooks", "web", "extensions",
 ]);
 class FieldParser {
     filePath;
@@ -112,6 +112,7 @@ function parseScope(fm, p) {
         skills: p.switchList(fm.skills, "skills"),
         mcp: p.switchList(fm.mcp, "mcp"),
         hooks: p.bool(fm.hooks, "hooks"),
+        web: p.bool(fm.web, "web"),
         extensions: p.switchList(fm.extensions, "extensions"),
     };
 }

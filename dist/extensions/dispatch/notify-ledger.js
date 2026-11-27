@@ -204,7 +204,11 @@ export class NotificationLedger {
             customType: this.customType,
             content: withSystemNotificationFraming(body),
             display: true,
-            details: { receipts: entries.map((entry) => `${entry.key}:${entry.run}`), keys: entries.map((entry) => entry.key) },
+            details: {
+                ...this.options.payloadDetails?.(entries),
+                receipts: entries.map((entry) => `${entry.key}:${entry.run}`),
+                keys: entries.map((entry) => entry.key),
+            },
         };
     }
     flush = () => {
@@ -399,21 +403,36 @@ export class PollGuard {
         return `No change since your last check ${ago}s ago. You will be notified automatically when it settles; use task_wait to block on it instead of polling.`;
     }
 }
+const DEFAULT_DRAIN_GRACE_MS = 5_000;
+function maxSourceRemainingMs(sources, now) {
+    let max;
+    for (const source of sources) {
+        for (const work of source.finiteWork()) {
+            if (work.deadlineAt === undefined)
+                continue;
+            const remaining = Math.max(0, work.deadlineAt - now);
+            max = max === undefined ? remaining : Math.max(max, remaining);
+        }
+    }
+    return max;
+}
+function drainDurationMs(sources, options, now) {
+    const cap = Math.max(0, options.capMs());
+    const remaining = maxSourceRemainingMs(sources, now);
+    return remaining === undefined ? cap : Math.max(0, Math.min(cap, remaining + (options.graceMs ?? DEFAULT_DRAIN_GRACE_MS)));
+}
 /**
- * The shared `agent_settled` drain (docs/dispatch-design.md §3.4). Held open while finite work is
- * in flight and nothing is ready to deliver; a ledger `put` or an explicit `wake()` re-checks.
- * On exit it flushes synchronously, so Pi queues the wake into its deferred settle actions and
- * `session.prompt()` keeps the process alive through the next run.
+ * The shared `agent_settled` drain (docs/dispatch-design.md §3.4). Held open while any source has
+ * finite work in flight and no wake has been queued; a ledger `put` or an explicit `wake()`
+ * re-checks. Zero-coalesce sources flush inside `put`, so a ready `put` latches `wakeQueued`
+ * synchronously before flush turns `state` into `sent`.
  */
 export class DrainBarrier {
-    ledger;
     options;
     waker;
     active = false;
-    constructor(ledger, options) {
-        this.ledger = ledger;
+    constructor(options) {
         this.options = options;
-        ledger.onPut(() => this.wake());
     }
     get draining() {
         return this.active;
@@ -423,31 +442,51 @@ export class DrainBarrier {
         this.waker = undefined;
         waker?.();
     }
-    shouldWait(deadline) {
-        if (this.options.stopWhen?.() === true || this.ledger.hasReady())
+    shouldWait(sources, deadline) {
+        if (this.options.stopWhen?.() === true)
             return false;
-        return this.options.hasFiniteWork() && Date.now() < deadline;
+        if (sources.some((source) => source.ledger.hasReady()))
+            return false;
+        return Date.now() < deadline && sources.some((source) => source.finiteWork().length > 0);
+    }
+    nap(deadline) {
+        return new Promise((resolve) => {
+            const timer = setTimeout(resolve, Math.min(1_000, Math.max(1, deadline - Date.now())));
+            this.waker = () => {
+                clearTimeout(timer);
+                resolve();
+            };
+        });
     }
     async drain() {
-        const deadline = Date.now() + Math.max(0, this.options.maxMs());
+        const sources = this.options.sources();
+        // put() invokes listeners after inserting "unsent" and before scheduleFlush() synchronously marks
+        // zero-coalesce entries "sent", so hasReady() observed here accurately captures deferred settle wakes.
+        let wakeQueued = false;
+        const unsubscribes = sources.map((source) => source.ledger.onPut(() => {
+            if (source.ledger.hasReady())
+                wakeQueued = true;
+            this.wake();
+        }));
+        const now = Date.now();
+        const deadline = now + drainDurationMs(sources, this.options, now);
         this.active = true;
         try {
-            while (this.shouldWait(deadline)) {
-                await new Promise((resolve) => {
-                    const timer = setTimeout(resolve, Math.min(1_000, Math.max(1, deadline - Date.now())));
-                    this.waker = () => {
-                        clearTimeout(timer);
-                        resolve();
-                    };
-                });
+            while (!wakeQueued && this.shouldWait(sources, deadline)) {
+                await this.nap(deadline);
                 this.waker = undefined;
             }
         }
         finally {
+            this.waker = undefined;
             this.active = false;
+            for (const off of unsubscribes)
+                off();
         }
-        if (this.options.stopWhen?.() !== true)
-            this.ledger.flushNow();
+        if (this.options.stopWhen?.() !== true) {
+            for (const source of sources)
+                source.ledger.flushNow();
+        }
     }
 }
 //# sourceMappingURL=notify-ledger.js.map

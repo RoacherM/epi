@@ -4,14 +4,17 @@ import { type AgentDefinition } from "./agents.js";
 import type { NotificationGate, NotificationLedger } from "./notify-ledger.js";
 import type { DispatchHostAdapter } from "./types.js";
 import { type JobSnapshot, type WorkerPool } from "./worker-host.js";
+export declare const DEFAULT_FOREGROUND_BUDGET_SECONDS = 300;
 export declare const TaskParameters: Type.TObject<{
     task: Type.TOptional<Type.TString>;
     name: Type.TOptional<Type.TString>;
+    role: Type.TOptional<Type.TUnion<[Type.TLiteral<"worker">, Type.TLiteral<"peer">]>>;
     agent: Type.TOptional<Type.TString>;
     cwd: Type.TOptional<Type.TString>;
     tasks: Type.TOptional<Type.TArray<Type.TObject<{
         task: Type.TString;
         name: Type.TOptional<Type.TString>;
+        role: Type.TOptional<Type.TUnion<[Type.TLiteral<"worker">, Type.TLiteral<"peer">]>>;
         agent: Type.TOptional<Type.TString>;
         cwd: Type.TOptional<Type.TString>;
         workspace: Type.TOptional<Type.TUnion<[Type.TLiteral<"inherit">, Type.TLiteral<"branch">, Type.TLiteral<"share">]>>;
@@ -52,6 +55,7 @@ export interface TaskToolDeps {
     peerForkEntries?: (name: string) => unknown[];
     postBrief?: (job: JobSnapshot) => number | undefined;
 }
+export declare function foregroundBudgetMs(mode: string | undefined, budgetSeconds: number | undefined): number | undefined;
 export declare function createTaskTool(deps: TaskToolDeps): ToolDefinition<typeof TaskParameters>;
 /** The settle notice a background (or handed-back) job puts into the ledger. */
 export declare function jobNotice(job: JobSnapshot): string;

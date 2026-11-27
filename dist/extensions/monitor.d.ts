@@ -9,7 +9,7 @@
 import type { ChildProcess } from "node:child_process";
 import { type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { LineBatcher, RateLimiter } from "../monitor-stream.js";
-import { type TaskMonitorBridge } from "./task-notify.js";
+import { type TaskMonitorBridge } from "./task-monitor-bridge.js";
 export declare const EVENT_MESSAGE_TYPE = "Monitor";
 export declare const LOOP_STOPPED_CHANNEL = "loop:stopped";
 export declare const STOPPED_NOTICE = "[Monitor stopped]";

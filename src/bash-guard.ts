@@ -3,7 +3,6 @@ import { basename, join } from "node:path";
 
 export const DEFAULT_BASH_TIMEOUT_SECONDS = 120;
 export const MAX_BASH_TIMEOUT_SECONDS = 600;
-export const MAX_ASYNC_BASH_TIMEOUT_SECONDS = 14_400;
 const MAX_STREAM_PROBE_SECONDS = 60;
 const MAX_SHELL_UNWRAP_DEPTH = 3;
 
@@ -12,10 +11,9 @@ export type BashTimeoutCheck =
   | { action: "block"; reason: string };
 
 export interface BashGuardOptions {
-  effectiveTimeoutSec: number;
-  timeoutDefaulted: boolean;
-  hasMonitorTool: boolean;
-  asyncManaged?: boolean | undefined;
+  explicitTimeoutSec?: number | undefined;
+  placement: "attached" | "detached";
+  managedAlternative: string;
 }
 
 export type BashCommandCheck =
@@ -37,9 +35,30 @@ interface SegmentContext {
   depth: number;
   inheritedBoundSec: number | undefined;
 }
+interface TerminalProgramRule {
+  info?: readonly string[];
+  headless?: (args: readonly string[]) => boolean;
+  alternative: string;
+}
 
+const READ_EDIT_WRITE = "the `read` / `edit` / `write` tools or non-interactive CLI flags";
+const SNAPSHOT_ALTERNATIVE = "`top -l 1` (macOS) or `top -b -n 1` (Linux)";
+const UNIVERSAL_INFO_FLAGS = new Set(["--version", "--help", "-h"]);
 const DETACHED_BINS = new Set(["nohup", "setsid", "disown", "daemonize"]);
-const INTERACTIVE_BINS = new Set(["vim", "vi", "nvim", "nano", "pico", "htop", "btop", "script", "expect", "unbuffer"]);
+const TERMINAL_PROGRAMS = new Map<string, TerminalProgramRule>([
+  ["vim", { headless: isSilentEx, alternative: "`vim -es -S script.vim file` (silent Ex mode)" }],
+  ["vi", { headless: isSilentEx, alternative: "`vi -es ...` (silent Ex mode)" }],
+  ["nvim", { info: ["-v"], headless: (a) => a.includes("--headless") || a.includes("-l") || isSilentEx(a), alternative: "`nvim --headless ...` or `nvim -es ...`" }],
+  ["nano", { info: ["-V"], alternative: READ_EDIT_WRITE }],
+  ["pico", { alternative: READ_EDIT_WRITE }],
+  ["htop", { info: ["-V"], alternative: SNAPSHOT_ALTERNATIVE }],
+  ["btop", { info: ["-v"], alternative: SNAPSHOT_ALTERNATIVE }],
+  ["top", { headless: (a) => hasShortFlag(a, /^-[A-Za-z]*[lbn]\d*$/), alternative: SNAPSHOT_ALTERNATIVE }],
+  ["expect", { info: ["-v"], headless: isScriptedExpect, alternative: "`expect script.exp` or `expect -c '...'`" }],
+  ["emacs", { headless: (a) => !a.includes("-nw") && !a.includes("--no-window-system"), alternative: "`emacs --batch ...`" }],
+  ["script", { alternative: READ_EDIT_WRITE }],
+  ["unbuffer", { alternative: READ_EDIT_WRITE }],
+]);
 const SHELL_BINS = new Set(["sh", "bash", "zsh", "dash"]);
 const ENV_VALUE_FLAGS = new Set(["-u"]);
 const SUDO_VALUE_FLAGS = new Set(["-u", "-g", "-C"]);
@@ -52,13 +71,36 @@ const WRAPPER_FLAGS_BY_BIN = new Map<string, Set<string>>([
   ["time", EMPTY_FLAGS],
 ]);
 
-function longRunningGuidance(hasMonitorTool: boolean, snapshotHint: string): string {
-  return hasMonitorTool
-    ? `Use ${snapshotHint} for a bounded check, \`timeout 15 ...\` for a short probe (<=60s), or \`monitor\` / \`task({ background: true })\` for managed background streams and daemons.`
-    : `Use ${snapshotHint} for a bounded check, a bounded poll loop, or return the log path and wake condition so the parent session can arm \`monitor\`.`;
+function hasShortFlag(args: readonly string[], pattern: RegExp): boolean {
+  return args.some((a) => !a.startsWith("--") && pattern.test(a));
 }
 
-export function normalizeBashTimeout(rawTimeout: unknown, hasMonitorTool = true): BashTimeoutCheck {
+function isSilentEx(args: readonly string[]): boolean {
+  let ex = false;
+  for (const arg of args) {
+    if (arg === "--") break;
+    if (!/^-[A-Za-z]+$/.test(arg)) continue;
+    for (const flag of arg.slice(1)) {
+      if (flag === "e" || flag === "E") ex = true;
+      else if (flag === "s" && ex) return true;
+    }
+  }
+  return false;
+}
+
+function isScriptedExpect(args: readonly string[]): boolean {
+  if (args.includes("-i") || args.includes("-D")) return false;
+  return args.includes("-c") || args.includes("-f") || args.includes("-b") || args.some((arg) => !arg.startsWith("-"));
+}
+
+function longRunningGuidance(managedAlternative: string, snapshotHint: string): string {
+  return `Use ${snapshotHint} for a bounded check, \`timeout 15 ...\` for a short probe (<=60s), or ${managedAlternative} for managed background streams and daemons.`;
+}
+
+export function normalizeBashTimeout(
+  rawTimeout: unknown,
+  managedAlternative = "split into bounded steps (<=600s) or report back to the parent session",
+): BashTimeoutCheck {
   if (rawTimeout === undefined) return { action: "allow", timeoutSeconds: DEFAULT_BASH_TIMEOUT_SECONDS, defaulted: true };
   if (typeof rawTimeout !== "number" || !Number.isFinite(rawTimeout) || rawTimeout <= 0) {
     return {
@@ -66,29 +108,17 @@ export function normalizeBashTimeout(rawTimeout: unknown, hasMonitorTool = true)
       reason: `Invalid bash timeout (${String(rawTimeout)}): \`bash.timeout\` must be a positive number in SECONDS (default: ${DEFAULT_BASH_TIMEOUT_SECONDS}s, max: ${MAX_BASH_TIMEOUT_SECONDS}s).`,
     };
   }
-  const delegate = hasMonitorTool ? "use `task({ background: true })` or `monitor`" : "split into bounded steps (<=600s) or report back to the parent session";
   if (rawTimeout >= 1000) {
     const suggested = Math.min(MAX_BASH_TIMEOUT_SECONDS, Math.max(1, Math.round(rawTimeout / 1000)));
     return {
       action: "block",
-      reason: `Invalid bash timeout: ${rawTimeout} exceeds the ${MAX_BASH_TIMEOUT_SECONDS}s maximum and looks like milliseconds. \`bash.timeout\` is measured in SECONDS (default: ${DEFAULT_BASH_TIMEOUT_SECONDS}s, max: ${MAX_BASH_TIMEOUT_SECONDS}s), not milliseconds. Did you mean \`timeout: ${suggested}\`? For commands needing >${MAX_BASH_TIMEOUT_SECONDS}s, ${delegate}.`,
+      reason: `Invalid bash timeout: ${rawTimeout} exceeds the ${MAX_BASH_TIMEOUT_SECONDS}s maximum and looks like milliseconds. \`bash.timeout\` is measured in SECONDS (default: ${DEFAULT_BASH_TIMEOUT_SECONDS}s, max: ${MAX_BASH_TIMEOUT_SECONDS}s), not milliseconds. Did you mean \`timeout: ${suggested}\`? For commands needing >${MAX_BASH_TIMEOUT_SECONDS}s, ${managedAlternative}.`,
     };
   }
   if (rawTimeout > MAX_BASH_TIMEOUT_SECONDS) {
     return {
       action: "block",
-      reason: `Invalid bash timeout: ${rawTimeout}s exceeds the ${MAX_BASH_TIMEOUT_SECONDS}s (10m) maximum (\`bash.timeout\` is in SECONDS, default: ${DEFAULT_BASH_TIMEOUT_SECONDS}s). Pass \`timeout <= ${MAX_BASH_TIMEOUT_SECONDS}\`, or ${delegate}.`,
-    };
-  }
-  return { action: "allow", timeoutSeconds: rawTimeout, defaulted: false };
-}
-
-export function normalizeAsyncBashTimeout(rawTimeout: unknown): BashTimeoutCheck {
-  if (rawTimeout === undefined) return { action: "allow", timeoutSeconds: 0, defaulted: false };
-  if (typeof rawTimeout !== "number" || !Number.isFinite(rawTimeout) || rawTimeout <= 0 || rawTimeout > MAX_ASYNC_BASH_TIMEOUT_SECONDS) {
-    return {
-      action: "block",
-      reason: `Invalid async bash timeout (${String(rawTimeout)}): \`bash.timeout\` must be between 1 and ${MAX_ASYNC_BASH_TIMEOUT_SECONDS}s (4h) in SECONDS.`,
+      reason: `Invalid bash timeout: ${rawTimeout}s exceeds the ${MAX_BASH_TIMEOUT_SECONDS}s (10m) maximum (\`bash.timeout\` is in SECONDS, default: ${DEFAULT_BASH_TIMEOUT_SECONDS}s). Pass \`timeout <= ${MAX_BASH_TIMEOUT_SECONDS}\`, or ${managedAlternative}.`,
     };
   }
   return { action: "allow", timeoutSeconds: rawTimeout, defaulted: false };
@@ -268,19 +298,19 @@ function hasSelfCleanup(segments: Array<{ argv: string[] }>): boolean {
   });
 }
 
-function checkDetachedDaemon(rawBin: string, bin: string, args: string[], segText: string, hasMonitorTool: boolean): BashCommandCheck | undefined {
+function checkDetachedDaemon(rawBin: string, bin: string, args: string[], segText: string, managedAlternative: string): BashCommandCheck | undefined {
   if (DETACHED_BINS.has(rawBin) || DETACHED_BINS.has(bin)) {
     const name = DETACHED_BINS.has(rawBin) ? rawBin : bin;
     return {
       blocked: true,
       kind: "detached-daemon",
-      reason: `Blocked detached background daemon in one-shot bash: \`${segText}\`.\n\`${name}\` escapes bash process tracking and leaks orphan processes. ${longRunningGuidance(hasMonitorTool, "a self-terminating script with `wait`")}`,
+      reason: `Blocked detached background daemon in one-shot bash: \`${segText}\`.\n\`${name}\` escapes bash process tracking and leaks orphan processes. ${longRunningGuidance(managedAlternative, "a self-terminating script with `wait`")}`,
     };
   }
   const tmuxDetached = bin === "tmux" && (args[0] === "new-session" || args[0] === "new") && args.some((a) => a === "-d" || (/^-[A-Za-z]+$/.test(a) && a.includes("d")));
   const screenDetached = bin === "screen" && args.some((a) => /^-[A-Za-z]*(?:dm|md)[A-Za-z]*$/.test(a) || a === "-dm");
   return tmuxDetached || screenDetached
-    ? { blocked: true, kind: "detached-daemon", reason: `Blocked detached multiplexer daemon (\`${bin}\`) in one-shot bash: \`${segText}\`.\n${longRunningGuidance(hasMonitorTool, "a bounded foreground command")}` }
+    ? { blocked: true, kind: "detached-daemon", reason: `Blocked detached multiplexer daemon (\`${bin}\`) in one-shot bash: \`${segText}\`.\n${longRunningGuidance(managedAlternative, "a bounded foreground command")}` }
     : undefined;
 }
 
@@ -301,11 +331,11 @@ function streamFollowSnapshotAlt(bin: string, args: string[]): string | undefine
   return undefined;
 }
 
-function checkStreamFollow(bin: string, args: string[], segText: string, probeBoundSec: number | undefined, hasMonitorTool: boolean): BashCommandCheck | undefined {
+function checkStreamFollow(bin: string, args: string[], segText: string, probeBoundSec: number | undefined, managedAlternative: string): BashCommandCheck | undefined {
   if (probeBoundSec !== undefined && probeBoundSec <= MAX_STREAM_PROBE_SECONDS) return undefined;
   const alt = streamFollowSnapshotAlt(bin, args);
   if (alt !== undefined) {
-    return { blocked: true, kind: "stream-follow", reason: `Blocked unbounded streaming command: \`${segText}\`.\n${longRunningGuidance(hasMonitorTool, alt)}` };
+    return { blocked: true, kind: "stream-follow", reason: `Blocked unbounded streaming command: \`${segText}\`.\n${longRunningGuidance(managedAlternative, alt)}` };
   }
   return bin === "ping" && !args.some((a) => (!a.startsWith("--") && /^-[A-Za-z]*(?:c|w|t|o)\d*$/.test(a)) || /^--(?:count|deadline|timeout)(?:=|$)/.test(a))
     ? { blocked: true, kind: "stream-follow", reason: `Blocked unbounded \`ping\` without packet/time limit: \`${segText}\`. Pass \`ping -c 4 ...\` so it terminates.` }
@@ -313,16 +343,15 @@ function checkStreamFollow(bin: string, args: string[], segText: string, probeBo
 }
 
 function checkInteractiveTui(bin: string, args: string[], segText: string): BashCommandCheck | undefined {
-  if (INTERACTIVE_BINS.has(bin) || (bin === "emacs" && (args.includes("-nw") || args.includes("--no-window-system")))) {
-    return {
-      blocked: true,
-      kind: "interactive-tui",
-      reason: `Blocked interactive terminal/PTY program \`${bin}\`: \`${segText}\`.\n\`bash\` runs headless without an interactive TTY; use \`read\` / \`edit\` / \`write\` or non-interactive CLI flags instead.`,
-    };
-  }
-  return bin === "top" && !args.some((a) => !a.startsWith("--") && /^-[A-Za-z]*[lbn]\d*$/.test(a))
-    ? { blocked: true, kind: "interactive-tui", reason: `Blocked interactive \`top\`: \`${segText}\`. Pass \`top -l 1\` (macOS) or \`top -b -n 1\` (Linux) for a single snapshot.` }
-    : undefined;
+  const rule = TERMINAL_PROGRAMS.get(bin);
+  if (rule === undefined) return undefined;
+  if (args.some((arg) => UNIVERSAL_INFO_FLAGS.has(arg) || rule.info?.includes(arg) === true)) return undefined;
+  if (rule.headless?.(args) === true) return undefined;
+  return {
+    blocked: true,
+    kind: "interactive-tui",
+    reason: `Blocked interactive terminal/PTY program \`${bin}\`: \`${segText}\`.\n\`bash\` runs headless without an interactive TTY; use ${rule.alternative} instead.`,
+  };
 }
 
 function minDefined(a: number | undefined, b: number | undefined): number | undefined {
@@ -347,10 +376,9 @@ function inspectSegment(seg: ShellSegment & { argv: string[] }, ctx: SegmentCont
   if (unwrapped.argv.length === 0) return undefined;
   const bin = basename(unwrapped.argv[0]!);
   const args = unwrapped.argv.slice(1);
-  const explicitBound = ctx.options.timeoutDefaulted ? undefined : ctx.options.effectiveTimeoutSec;
-  const probeBound = minDefined(minDefined(ctx.inheritedBoundSec, explicitBound), unwrapped.wrapperTimeoutSec);
+  const probeBound = minDefined(minDefined(ctx.inheritedBoundSec, ctx.options.explicitTimeoutSec), unwrapped.wrapperTimeoutSec);
 
-  const daemonHit = checkDetachedDaemon(rawBin, bin, args, seg.text, ctx.options.hasMonitorTool);
+  const daemonHit = checkDetachedDaemon(rawBin, bin, args, seg.text, ctx.options.managedAlternative);
   if (daemonHit !== undefined) return daemonHit;
 
   const nested = ctx.depth < MAX_SHELL_UNWRAP_DEPTH ? extractNestedShellScript(bin, args) : undefined;
@@ -359,14 +387,14 @@ function inspectSegment(seg: ShellSegment & { argv: string[] }, ctx: SegmentCont
     if (innerHit.blocked) return innerHit;
   }
 
-  const streamHit = ctx.options.asyncManaged === true
+  const streamHit = ctx.options.placement === "detached"
     ? undefined
-    : checkStreamFollow(bin, args, seg.text, probeBound, ctx.options.hasMonitorTool);
+    : checkStreamFollow(bin, args, seg.text, probeBound, ctx.options.managedAlternative);
   const directHit = streamHit ?? checkInteractiveTui(bin, args, seg.text);
   if (directHit !== undefined) return directHit;
 
   return seg.sep === "&" && !ctx.cleanedUp
-    ? { blocked: true, kind: "unwaited-background", reason: `Blocked unmanaged background process (\`&\` without \`wait\`/\`kill\`): \`${seg.text} &\`. ${longRunningGuidance(ctx.options.hasMonitorTool, "`kill` + `wait` inside the same script")}` }
+    ? { blocked: true, kind: "unwaited-background", reason: `Blocked unmanaged background process (\`&\` without \`wait\`/\`kill\`): \`${seg.text} &\`. ${longRunningGuidance(ctx.options.managedAlternative, "`kill` + `wait` inside the same script")}` }
     : undefined;
 }
 
@@ -393,14 +421,14 @@ export function analyzeBashCommand(command: string, options: BashGuardOptions): 
 export function augmentBashTimeoutResult(
   text: string,
   cwd: string,
-  options: { defaulted: boolean; hasMonitorTool: boolean },
+  options: { contract: "dispatch" | "pi"; defaulted: boolean; managedAlternative: string },
 ): string | undefined {
   const match = /Command timed out after (\d+(?:\.\d+)?) seconds/.exec(text);
   if (!match) return undefined;
   const prefix = options.defaulted ? `default ${DEFAULT_BASH_TIMEOUT_SECONDS}s bash timeout reached` : `bash timeout (${match[1]}s) reached`;
-  const nextStep = options.hasMonitorTool
-    ? `retry with an explicit \`timeout\` in seconds (up to ${MAX_BASH_TIMEOUT_SECONDS}s), or use \`task({ background: true })\` / \`monitor\` for long-running work.`
-    : `retry with an explicit \`timeout\` in seconds (up to ${MAX_BASH_TIMEOUT_SECONDS}s), split into smaller steps, or report back to the parent session.`;
+  const nextStep = options.contract === "dispatch"
+    ? `retry with an explicit \`timeout\` in seconds (up to 14400s), or use ${options.managedAlternative}.`
+    : `retry with an explicit \`timeout\` in seconds (up to ${MAX_BASH_TIMEOUT_SECONDS}s), or use ${options.managedAlternative}.`;
   const lockHint = existsSync(join(cwd, ".git", "index.lock"))
     ? ` Note: \`.git/index.lock\` exists in ${cwd}; verify no git process is still running before removing stale lock files.`
     : "";

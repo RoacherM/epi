@@ -66,7 +66,8 @@ export declare class DispatchRuntime {
     inboxTarget(): string | undefined;
     agents(): readonly AgentDefinition[];
     sessionShort(): string;
-    private drainMaxMs;
+    private settleSource;
+    private drainCapMs;
     private createPool;
     private createPeerBoard;
     private reportLifecycleFailure;
@@ -76,13 +77,12 @@ export declare class DispatchRuntime {
     /** A settled peer that is @mentioned again is resumed in place from its session file. */
     private revivePeers;
     private scheduleStallCheck;
-    /** One `[board stall]` per `stall:<epoch>:<maxSeq>`: every live named peer is parked, none has
+    /** One `[board stall]` per `stall:<epoch>:<maxSeq>`: every live peer is parked, none has
      * finite work of its own, the root has none either, and nothing is waiting to be delivered. */
     checkStall(): void;
     /** `forkFrom: "<name>"`: the peer's closed history, ready to seed a sibling peer. */
     private peerForkEntries;
     private postBrief;
-    activateTools(names: readonly string[]): void;
     private boardTools;
     private inFlightFooter;
     private onAcked;

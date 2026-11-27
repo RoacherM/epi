@@ -7,6 +7,7 @@ import { Type, type Static } from "typebox";
 import type { BgProcessRuntime } from "./bg-bash.js";
 import type { NotificationLedger, PollGuard } from "./notify-ledger.js";
 import type { DispatchRegistry } from "./registry.js";
+import { foregroundBudgetMs } from "./task-tool.js";
 import type { DispatchItemReport, DispatchItemSummary } from "./types.js";
 
 export interface StatusToolDeps {
@@ -90,10 +91,26 @@ function statusTool(deps: StatusToolDeps): ToolDefinition<typeof StatusParameter
   };
 }
 
-function effectiveWaitMs(timeoutSeconds: number | undefined, mode: string | undefined, budgetSec: number | undefined): number | undefined {
-  const defaultSec = mode === "tui" ? (budgetSec ?? 300) : 0;
-  const sec = timeoutSeconds ?? (defaultSec > 0 ? defaultSec : undefined);
-  return sec === undefined ? undefined : sec * 1_000;
+type WaitEnd = "settled" | "timeout" | "budget" | "detached" | "aborted";
+
+function waitLimit(timeoutSeconds: number | undefined, budgetMs: number | undefined): { ms: number; end: "timeout" | "budget" } | undefined {
+  const askedMs = timeoutSeconds === undefined ? undefined : timeoutSeconds * 1_000;
+  if (budgetMs === undefined) return askedMs === undefined ? undefined : { ms: askedMs, end: "timeout" };
+  return askedMs !== undefined && askedMs < budgetMs ? { ms: askedMs, end: "timeout" } : { ms: budgetMs, end: "budget" };
+}
+
+function waitNote(end: WaitEnd, reports: readonly DispatchItemReport[]): string {
+  if (!reports.some((report) => report.summary.active)) return "";
+  switch (end) {
+    case "detached":
+      return "\n\nStopped waiting (/bg); active items keep running in the background and will notify you when settled.";
+    case "budget":
+      return "\n\nForeground wait budget reached; active items keep running and will notify you when settled. End your turn or do other work instead of waiting again.";
+    case "timeout":
+      return "\n\nWait timeout reached; active items keep running and will notify you when settled.";
+    default:
+      return "";
+  }
 }
 
 function waitTool(deps: StatusToolDeps): ToolDefinition<typeof WaitParameters> {
@@ -106,14 +123,14 @@ function waitTool(deps: StatusToolDeps): ToolDefinition<typeof WaitParameters> {
       const targets = params.ids.map((ref) => deps.registry.resolve(ref));
       const tm = targets.find((target) => target.provider.kind === "tm");
       if (tm !== undefined) throw new Error(`${tm.id} is a timer; it notifies you when it fires`);
-      let detached = false;
+      let end: WaitEnd = "settled";
       const controller = new AbortController();
-      const onAbort = (): void => controller.abort();
-      const detach = (): void => { detached = true; controller.abort(); };
+      const onAbort = (): void => { end = "aborted"; controller.abort(); };
+      const detach = (): void => { end = "detached"; controller.abort(); };
       signal?.addEventListener("abort", onAbort, { once: true });
       deps.foregroundWaits?.add(detach);
-      const waitMs = effectiveWaitMs(params.timeoutSeconds, ctx?.mode, deps.foregroundBudgetSeconds);
-      const timer = waitMs === undefined ? undefined : setTimeout(onAbort, waitMs);
+      const limit = waitLimit(params.timeoutSeconds, foregroundBudgetMs(ctx?.mode, deps.foregroundBudgetSeconds));
+      const timer = limit === undefined ? undefined : setTimeout(() => { end = limit.end; controller.abort(); }, limit.ms);
       try {
         const waits = targets.map((target) => target.provider.wait(target.id, controller.signal));
         await ((params.mode ?? "all") === "any" ? Promise.race(waits) : Promise.all(waits));
@@ -124,8 +141,7 @@ function waitTool(deps: StatusToolDeps): ToolDefinition<typeof WaitParameters> {
       }
       const reports = targets.map((target) => target.provider.report(target.id));
       for (const report of reports) collectIfSettled(deps.ledger, report);
-      const note = detached && reports.some((r) => r.summary.active) ? "\n\nStopped waiting (/bg); active items keep running in the background and will notify you when settled." : "";
-      return text(`${reports.map((report) => report.text).join("\n\n")}${note}`, { items: reports.map((report) => report.details) });
+      return text(`${reports.map((report) => report.text).join("\n\n")}${waitNote(end, reports)}`, { items: reports.map((report) => report.details), waitEnd: end });
     },
   };
 }

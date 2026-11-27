@@ -253,10 +253,10 @@ export class PeerBoard {
 
 export interface BoardBackend {
   self: string;
-  defaultActive?: boolean | undefined;
   post(text: string, channel: string | undefined): Promise<BoardMessage | undefined> | BoardMessage | undefined;
   read(options: ReadOptions): BoardMessage[];
-  wait(since: number, mentionsOnly: boolean, signal: AbortSignal | undefined): Promise<WaitOutcome>;
+  /** Peer workers park on `board_wait`; the root coordinator receives `@coordinator` posts via ledger push. */
+  wait?: ((since: number, mentionsOnly: boolean, signal: AbortSignal | undefined) => Promise<WaitOutcome>) | undefined;
   /** Root only: the messages were read, so their notifications are delivered. */
   collect?(messages: readonly BoardMessage[]): void;
   /** Peer only: the idle cap ended the wait; the run settles as partial and is revived on @mention. */
@@ -294,11 +294,9 @@ function waitText(backend: BoardBackend, outcome: WaitOutcome): string {
 }
 
 export function createBoardTools(backend: BoardBackend): ToolDefinition[] {
-  const defaultActive = backend.defaultActive ?? true;
   const post: ToolDefinition<typeof PostParameters> = {
     name: "board_post",
     label: "Board Post",
-    defaultActive,
     description: `Post to the session board as @${backend.self}. Hand work to a peer with @name; it is woken directly, without the coordinator relaying.`,
     parameters: PostParameters,
     async execute(_id, params: Static<typeof PostParameters>) {
@@ -309,8 +307,9 @@ export function createBoardTools(backend: BoardBackend): ToolDefinition[] {
   const read: ToolDefinition<typeof ReadParameters> = {
     name: "board_read",
     label: "Board Read",
-    defaultActive,
-    description: "Read board messages (by since, seqs, channel); returns the latest seq to pass to board_wait.",
+    description: backend.wait === undefined
+      ? "Read board messages (by since, seqs, channel); returns the latest seq."
+      : "Read board messages (by since, seqs, channel); returns the latest seq to pass to board_wait.",
     parameters: ReadParameters,
     async execute(_id, params: Static<typeof ReadParameters>) {
       const messages = backend.read(params);
@@ -319,14 +318,15 @@ export function createBoardTools(backend: BoardBackend): ToolDefinition[] {
       return text(messages.length === 0 ? `No messages (latest seq ${latest}).` : `${formatMessages(messages)}\n(latest seq ${latest})`, { latest });
     },
   };
+  if (backend.wait === undefined) return [post, read] as unknown as ToolDefinition[];
+  const waitFn = backend.wait;
   const wait: ToolDefinition<typeof WaitParameters> = {
     name: "board_wait",
     label: "Board Wait",
-    defaultActive,
     description: "Wait for the next board message addressed to you after `since` (also ends on a parent steer, Esc, or the idle cap).",
     parameters: WaitParameters,
     async execute(_id, params: Static<typeof WaitParameters>, signal) {
-      const outcome = await backend.wait(params.since, params.mentions_only ?? true, signal);
+      const outcome = await waitFn(params.since, params.mentions_only ?? true, signal);
       if (outcome.reason === "message") backend.collect?.(outcome.messages);
       if (outcome.reason === "idle") backend.onIdle?.();
       return text(waitText(backend, outcome), { reason: outcome.reason, seqs: outcome.messages.map((m) => m.seq) });

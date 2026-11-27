@@ -13,7 +13,9 @@ import { getShellConfig, } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { BATCH_WINDOW_MS, DEFAULT_TIMEOUT_MS, formatDuration, killTree, LineBatcher, MAX_TIMEOUT_MS, MIN_TIMEOUT_MS, RateLimiter, spawnMonitor, TOKEN_REFILL_MS, validateMonitorParams, } from "../monitor-stream.js";
 import { resolveHomeDir } from "../paths.js";
-import { createTaskMonitorBridge, NotificationGate, NotificationLedger, stripSystemNotificationFraming, withSystemNotificationFraming, } from "./task-notify.js";
+import { NotificationGate, NotificationLedger, } from "./dispatch/notify-ledger.js";
+import { stripSystemFraming as stripSystemNotificationFraming } from "./dispatch/tui-views.js";
+import { createTaskMonitorBridge, } from "./task-monitor-bridge.js";
 export const EVENT_MESSAGE_TYPE = "Monitor";
 export const LOOP_STOPPED_CHANNEL = "loop:stopped";
 export const STOPPED_NOTICE = "[Monitor stopped]";
@@ -186,22 +188,14 @@ function renderMonitorMessage(message, expanded, outputPad, theme) {
         appendMonitorMeta(container, details, indent, theme);
     return container;
 }
-function buildMonitorPayload(entries) {
-    const latest = entries[entries.length - 1].data.details;
-    const ids = new Set(entries.map((e) => e.data.details.monitorId));
-    const mergedLines = entries.flatMap((e) => e.data.details.lines ?? []);
-    const baseDetails = ids.size === 1
+function monitorPayloadDetails(entries) {
+    const detailsList = entries.map((e) => (e.data.details ?? {}));
+    const latest = detailsList[detailsList.length - 1] ?? {};
+    const ids = new Set(detailsList.map((d) => d.monitorId));
+    const mergedLines = detailsList.flatMap((d) => d.lines ?? []);
+    return ids.size === 1
         ? { ...latest, lines: mergedLines }
         : { cause: latest.cause, lines: mergedLines };
-    return {
-        customType: EVENT_MESSAGE_TYPE,
-        content: withSystemNotificationFraming(entries.map((e) => e.data.body).join("\n\n")),
-        display: true,
-        details: {
-            ...baseDetails,
-            receipts: entries.map((e) => `${e.key}:${e.run}`),
-        },
-    };
 }
 class MonitorController {
     options;
@@ -225,18 +219,24 @@ class MonitorController {
         this.options = options;
         this.logDir = path.join(options.epiHome, "runtime", "monitors");
         this.bridge = options.bridge ?? createTaskMonitorBridge();
+        this.ledger = new NotificationLedger({
+            customType: EVENT_MESSAGE_TYPE,
+            coalesceMs: 0,
+            gate: this.gate,
+            payloadDetails: monitorPayloadDetails,
+        });
         this.bridge.registerMonitorProvider({
             list: () => [...this.monitors.values()].map(bridgeSummaryOf),
             get: (id) => {
                 const rec = this.monitors.get(id);
                 return rec ? bridgeSummaryOf(rec) : undefined;
             },
-        });
-        this.ledger = new NotificationLedger({
-            customType: EVENT_MESSAGE_TYPE,
-            coalesceMs: 0,
-            gate: this.gate,
-            buildPayload: buildMonitorPayload,
+            settle: {
+                finiteWork: () => [...this.monitors.values()]
+                    .filter((record) => record.status === "running" && !record.persistent)
+                    .map((record) => ({ deadlineAt: record.createdAt + record.timeoutMs })),
+                ledger: this.ledger,
+            },
         });
     }
     bindSession(pi) {
@@ -414,7 +414,7 @@ class MonitorController {
             return;
         const key = `${record.id}:${++this.noticeSeq}`;
         this.ledger.put(key, {
-            body: `monitor ${record.id} · ${record.description}\n${lines.join("\n")}`,
+            text: `monitor ${record.id} · ${record.description}\n${lines.join("\n")}`,
             details: {
                 monitorId: record.id,
                 description: record.description,
@@ -426,7 +426,7 @@ class MonitorController {
                 stderrPath: record.stderrPath,
                 ...(record.loopPrompt ? { loopPrompt: record.loopPrompt } : {}),
             },
-        }, 0, true, record.originSessionId);
+        }, { originSessionId: record.originSessionId });
     }
     clearSuppressionTimer(record) {
         if (!record.suppressionTimer)
@@ -617,7 +617,7 @@ async function executeMonitorArm(controller, params, ctx) {
     const validated = validateMonitorParams(params);
     const record = controller.arm(validated, ctx);
     const lifetime = record.persistent
-        ? "runs until you stop it or the session ends"
+        ? "runs until you stop it or the session ends (does not keep a non-interactive run alive)"
         : `expires in ${lifetimeText(record.timeoutMs)} unless the source ends first; you get one notice at expiry — re-arm if you still need the watch`;
     const value = {
         taskId: record.id,

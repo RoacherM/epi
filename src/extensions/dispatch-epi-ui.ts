@@ -17,7 +17,7 @@ import type { DispatchRuntime } from "./dispatch/runtime.js";
 import { itemDetailView, stripSystemFraming } from "./dispatch/tui-views.js";
 import type { DispatchExtraItem, DispatchUiAdapter } from "./dispatch/types.js";
 import type { JobSnapshot } from "./dispatch/worker-host.js";
-import type { MonitorBridgeSummary, TaskMonitorBridge } from "./task-notify.js";
+import type { MonitorBridgeSummary, TaskMonitorBridge } from "./task-monitor-bridge.js";
 
 type Tone = "accent" | "success" | "warning" | "error" | "muted";
 const MAX_DETAIL_LINES = 10;

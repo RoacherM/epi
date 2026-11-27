@@ -26,7 +26,7 @@ const scenarios = {
   },
   // Child: starts its own async bash and only finishes once that command's exit wakes it.
   "child-bgbash": (msgs) => {
-    if (results(msgs).length === 0) return fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 1; echo CHILD-BG-OUT", waitMsBeforeAsync: 50 }), { stopReason: "toolUse" });
+    if (results(msgs).length === 0) return fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 1; echo CHILD-BG-OUT", mode: "background" }), { stopReason: "toolUse" });
     return all(msgs).includes("CHILD-BG-OUT") ? fauxAssistantMessage(fauxText("CHILD-SAW-ITS-BG")) : fauxAssistantMessage(fauxText("CHILD-WAITING"));
   },
   // Child: a slow first turn, so a steer arrives mid-run.
@@ -67,7 +67,7 @@ const scenarios = {
   }),
   // Child: spawns a 30s background bash, then hits maxTurns immediately (DrainBarrier must not block).
   "child-maxturns-bg": (msgs) => results(msgs).length === 0
-    ? call("bash", { command: "sleep 30", waitMsBeforeAsync: 50 })
+    ? call("bash", { command: "sleep 30", mode: "background" })
     : call("report_progress", { summary: "turn-2" }),
   // Child: lists active tool names and system prompt check.
   "child-list-tools": (_msgs, _signal, context) => {

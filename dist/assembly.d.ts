@@ -45,6 +45,8 @@ export interface TaskAssemblyScope {
     mcp?: boolean | string[] | undefined;
     /** `false` drops `epi:hooks` from the child. Default on: one hooks.json guards every tool call. */
     hooks?: boolean | undefined;
+    /** `true` includes `epi:web`. Default off: a subagent does not load unneeded web search/fetch tools. */
+    web?: boolean | undefined;
     /** `false` drops every Manifest extension; a name array keeps the named ones. Default on. */
     extensions?: boolean | string[] | undefined;
 }

@@ -4,7 +4,7 @@ import type { InspectTarget } from "../tui/buffer/inspector.js";
 import type { ToolRenderContext } from "../tui/tools/types.js";
 import type { DispatchRuntime } from "./dispatch/runtime.js";
 import type { DispatchUiAdapter } from "./dispatch/types.js";
-import type { MonitorBridgeSummary, TaskMonitorBridge } from "./task-notify.js";
+import type { MonitorBridgeSummary, TaskMonitorBridge } from "./task-monitor-bridge.js";
 export declare function renderEpiDispatchResult(result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme, context: ToolRenderContext): Component;
 export declare function monitorRow(theme: Theme, mon: MonitorBridgeSummary): string;
 export declare function monitorViewTarget(theme: Theme, mon: MonitorBridgeSummary): InspectTarget;

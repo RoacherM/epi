@@ -1,6 +1,5 @@
 export declare const DEFAULT_BASH_TIMEOUT_SECONDS = 120;
 export declare const MAX_BASH_TIMEOUT_SECONDS = 600;
-export declare const MAX_ASYNC_BASH_TIMEOUT_SECONDS = 14400;
 export type BashTimeoutCheck = {
     action: "allow";
     timeoutSeconds: number;
@@ -10,10 +9,9 @@ export type BashTimeoutCheck = {
     reason: string;
 };
 export interface BashGuardOptions {
-    effectiveTimeoutSec: number;
-    timeoutDefaulted: boolean;
-    hasMonitorTool: boolean;
-    asyncManaged?: boolean | undefined;
+    explicitTimeoutSec?: number | undefined;
+    placement: "attached" | "detached";
+    managedAlternative: string;
 }
 export type BashCommandCheck = {
     blocked: false;
@@ -22,11 +20,11 @@ export type BashCommandCheck = {
     kind: "detached-daemon" | "stream-follow" | "interactive-tui" | "unwaited-background";
     reason: string;
 };
-export declare function normalizeBashTimeout(rawTimeout: unknown, hasMonitorTool?: boolean): BashTimeoutCheck;
-export declare function normalizeAsyncBashTimeout(rawTimeout: unknown): BashTimeoutCheck;
+export declare function normalizeBashTimeout(rawTimeout: unknown, managedAlternative?: string): BashTimeoutCheck;
 export declare function analyzeBashCommand(command: string, options: BashGuardOptions): BashCommandCheck;
 export declare function augmentBashTimeoutResult(text: string, cwd: string, options: {
+    contract: "dispatch" | "pi";
     defaulted: boolean;
-    hasMonitorTool: boolean;
+    managedAlternative: string;
 }): string | undefined;
 //# sourceMappingURL=bash-guard.d.ts.map

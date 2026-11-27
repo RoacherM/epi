@@ -95,6 +95,17 @@ export interface DispatchUiAdapter {
     /** Optional hint appended when `task_cancel` / `task_status` fails to resolve an ID owned by another host tool. */
     unknownRefHint?: (ref: string) => string | undefined;
 }
+/** One participant in the settle drain: in-flight finite work and its wake ledger. */
+export interface SettleSource {
+    finiteWork(): readonly {
+        deadlineAt?: number | undefined;
+    }[];
+    ledger: {
+        hasReady(): boolean;
+        flushNow(): void;
+        onPut(listener: () => void): () => void;
+    };
+}
 /** Everything a host may inject. Every field is optional: `pi -e dist/extensions/dispatch/index.js`
  * runs with none of them. */
 export interface DispatchHostAdapter {
@@ -137,6 +148,10 @@ export interface DispatchHostAdapter {
     inboxTarget?: string;
     /** Upper bound of the print-mode / worker settle drain. */
     drainMaxMs?: number;
+    /** Sync window before `bash` in `"auto"` mode detaches as `bg_<id>` (default 120000 ms). */
+    syncWindowMs?: number;
+    /** Additional host-owned finite work participants (e.g. non-persistent monitors) included in the settle drain. */
+    settleSources?: () => readonly SettleSource[];
     /** How long a foreground `task` or `task_wait` call may hold an interactive TUI turn before
      * handing back a receipt and moving to push wake (default 300s; 0 disables). */
     foregroundBudgetSeconds?: number;

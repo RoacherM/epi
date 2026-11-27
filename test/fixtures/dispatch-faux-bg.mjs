@@ -10,7 +10,7 @@ function reply(context) {
   const notified = msgs.some((m) => m.role === "custom" || (m.role === "user" && text(m).includes("SYSTEM NOTIFICATION")));
   const toolResults = msgs.filter((m) => m.role === "toolResult").length;
   if (toolResults === 0) {
-    return fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 1; echo BG-DONE-MARKER", waitMsBeforeAsync: 100 }), { stopReason: "toolUse" });
+    return fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 1; echo BG-DONE-MARKER", mode: "background" }), { stopReason: "toolUse" });
   }
   if (!notified) return fauxAssistantMessage(fauxText("WAITING-FOR-BG"));
   const all = msgs.map((m) => (typeof m.content === "string" || Array.isArray(m.content) ? text(m) : "")).join("\n");

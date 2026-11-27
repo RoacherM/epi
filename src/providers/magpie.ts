@@ -35,6 +35,10 @@ const catalogModelSchema = z.object({
   reasoning: z.boolean().optional(),
   supported_reasoning_levels: z.array(z.object({ effort: z.string() })).optional(),
   native_endpoints: z.array(z.string()).optional(),
+  magpie_compat: z.object({
+    thinking_format: z.string().optional(),
+    requires_reasoning_content: z.boolean().optional(),
+  }).optional(),
   // Optional; the live gateway sends it for most models and omits it for the rest.
   pricing: z.object({
     prompt: priceSchema.optional(),
@@ -135,11 +139,43 @@ function modelPromptCache(model: CatalogModel, protocol: MagpieProtocol): { shor
   return protocol === "anthropic" || model.pricing?.input_cache_write !== undefined ? { short: 300 } : undefined;
 }
 
+const THINKING_FORMATS = [
+  "ant-ling",
+  "baseten",
+  "chat-template",
+  "deepseek",
+  "openai",
+  "openrouter",
+  "qwen",
+  "qwen-chat-template",
+  "string-thinking",
+  "together",
+  "zai",
+] as const;
+
+type PiThinkingFormat = (typeof THINKING_FORMATS)[number];
+
+function catalogCompat(model: CatalogModel, protocol: MagpieProtocol, reasoning: boolean, map: ThinkingLevelMap | undefined): Model<Api>["compat"] | undefined {
+  const affinity = protocol === "openai" || protocol === "anthropic" ? { sendSessionAffinityHeaders: true } : {};
+  const adaptive = protocol === "anthropic" && reasoning && map ? { forceAdaptiveThinking: true } : {};
+  const fmt = model.magpie_compat?.thinking_format;
+  const thinkingFormat = fmt !== undefined && (THINKING_FORMATS as readonly string[]).includes(fmt)
+    ? (fmt as PiThinkingFormat)
+    : undefined;
+  const declared = protocol === "openai" && model.magpie_compat ? {
+    ...(thinkingFormat ? { thinkingFormat } : {}),
+    ...(model.magpie_compat.requires_reasoning_content !== undefined ? { requiresReasoningContentOnAssistantMessages: model.magpie_compat.requires_reasoning_content } : {}),
+  } : {};
+  const merged = { ...affinity, ...adaptive, ...declared };
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
 function toModel(model: CatalogModel, baseUrl: string): Model<Api> {
   const protocol = protocolFor(model);
   const reasoning = model.reasoning === true;
   const map = thinkingMap(model, protocol);
   const promptCache = modelPromptCache(model, protocol);
+  const compat = catalogCompat(model, protocol, reasoning, map);
   return {
     id: model.id,
     provider: "magpie",
@@ -149,8 +185,7 @@ function toModel(model: CatalogModel, baseUrl: string): Model<Api> {
     input: modelInputModalities(model),
     reasoning,
     ...(map ? { thinkingLevelMap: map } : {}),
-    // Advertised effort levels distinguish adaptive thinking from older token-budget models.
-    ...(protocol === "anthropic" && reasoning && map ? { compat: { forceAdaptiveThinking: true } } : {}),
+    ...(compat ? { compat } : {}),
     ...(promptCache ? { promptCache } : {}),
     contextWindow: modelContextWindow(model),
     maxTokens: model.max_output_tokens ?? 8192,
@@ -237,9 +272,13 @@ export function resolveMagpieModel(model: Model<Api>, catalog: readonly Model<Ap
   const protocol = current === undefined || (current === "openai" && inferred !== "openai") ? inferred : current;
   const api = protocolApis[protocol];
   const resolvedBaseUrl = protocolBaseUrl(baseUrl, protocol);
-  return model.api === api && model.baseUrl === resolvedBaseUrl
+  const existingCompat = model.compat as { sendSessionAffinityHeaders?: boolean } | undefined;
+  const needsAffinity =
+    (protocol === "openai" || protocol === "anthropic") && existingCompat?.sendSessionAffinityHeaders === undefined;
+  const compat = needsAffinity ? { ...existingCompat, sendSessionAffinityHeaders: true } : model.compat;
+  return model.api === api && model.baseUrl === resolvedBaseUrl && compat === model.compat
     ? model
-    : { ...model, api, baseUrl: resolvedBaseUrl };
+    : { ...model, api, baseUrl: resolvedBaseUrl, ...(compat ? { compat } : {}) };
 }
 
 type AnthropicBlock = {

@@ -23,7 +23,7 @@ import { createStatusTools } from "./status-tools.js";
 import { createTaskTool, jobNotice } from "./task-tool.js";
 import { createTimerTool, TimerRuntime, timerNotice, type TimerItem } from "./timers.js";
 import { bindDispatchViews, defaultToolRenderers } from "./tui-views.js";
-import { DISPATCH_DEPTH_ENV, DISPATCH_INBOX_ENV, DISPATCH_TIMER_ENTRY, DispatchConfigError, type DispatchHostAdapter, type DispatchRole, type TaskLifecycleEvent } from "./types.js";
+import { DISPATCH_DEPTH_ENV, DISPATCH_INBOX_ENV, DISPATCH_TIMER_ENTRY, DispatchConfigError, type DispatchHostAdapter, type DispatchRole, type SettleSource, type TaskLifecycleEvent } from "./types.js";
 import { forkableBranch, inheritedModelReference, jobLabel, WorkerPool, type JobSnapshot } from "./worker-host.js";
 
 const DEFAULT_DRAIN_MAX_MS = 4 * 3_600_000 + 5_000;
@@ -102,9 +102,10 @@ export class DispatchRuntime {
     this.peerBoard = role === "peer-worker" && worker !== undefined ? this.createPeerBoard(worker) : undefined;
     this.pool = this.canDelegate ? this.createPool(sharedDaemonNames) : undefined;
     for (const provider of [this.bg.provider(), this.timers.provider(), this.pool?.provider()]) if (provider !== undefined) this.registry.register(provider);
-    this.barrier = new DrainBarrier(this.ledger, {
-      hasFiniteWork: () => this.registry.hasFiniteWork(),
-      maxMs: () => this.drainMaxMs(),
+    this.barrier = new DrainBarrier({
+      sources: () => [this.settleSource(), ...(this.host.settleSources?.() ?? [])],
+      capMs: () => this.drainCapMs(),
+      graceMs: DRAIN_GRACE_MS,
       stopWhen: () => worker?.steerPending() === true,
     });
     this.ledger.onPut(() => this.peerBoard?.wake("notification"));
@@ -149,7 +150,6 @@ export class DispatchRuntime {
         try { this.gate.pi?.appendEntry(DISPATCH_TIMER_ENTRY, data); } catch { /* stale pi across reload/switch */ }
       } : undefined,
       onChange: () => {
-        if (this.timers.hasActiveSchedules()) this.activateTools(["outbox"]);
         this.emitUiChange();
       },
       onFire: (timer) => this.onTimerFired(timer),
@@ -203,11 +203,17 @@ export class DispatchRuntime {
     return (this.gate.sessionId() ?? "nosession").replace(/[^A-Za-z0-9]/g, "").slice(0, 8) || "session";
   }
 
-  private drainMaxMs(): number {
+  private settleSource(): SettleSource {
+    return {
+      finiteWork: () => this.registry.list().filter((item) => item.active && item.finite),
+      ledger: this.ledger,
+    };
+  }
+
+  private drainCapMs(): number {
     const cap = this.host.drainMaxMs ?? DEFAULT_DRAIN_MAX_MS;
-    const remaining = this.registry.maxRemainingMs();
-    const workerLeft = this.worker === undefined ? Infinity : this.worker.capsule.deadlineAt - Date.now();
-    return Math.max(0, Math.min(cap, workerLeft, remaining === undefined ? cap : remaining + DRAIN_GRACE_MS));
+    const workerLeft = this.worker === undefined ? cap : this.worker.capsule.deadlineAt - Date.now();
+    return Math.max(0, Math.min(cap, workerLeft));
   }
 
   private createPool(sharedDaemonNames: readonly string[]): WorkerPool {
@@ -292,7 +298,7 @@ export class DispatchRuntime {
     if (pool === undefined) return;
     for (const name of message.mentions) {
       if (name === "all" || name === COORDINATOR || name === message.sender) continue;
-      const candidate = [...pool.list()].reverse().find((j) => j.name === name && j.originSessionId === originSessionId);
+      const candidate = [...pool.list()].reverse().find((j) => j.role === "peer" && j.name === name && j.originSessionId === originSessionId);
       if (candidate === undefined || (candidate.status !== "completed" && candidate.status !== "partial") || candidate.workspace?.removed === true) continue;
       const prompt = `Board message #${message.seq} from @${message.sender}: ${message.text}`;
       const allowed = await this.allowBackgroundTaskStart({
@@ -317,13 +323,13 @@ export class DispatchRuntime {
     this.stallTimer.unref();
   }
 
-  /** One `[board stall]` per `stall:<epoch>:<maxSeq>`: every live named peer is parked, none has
+  /** One `[board stall]` per `stall:<epoch>:<maxSeq>`: every live peer is parked, none has
    * finite work of its own, the root has none either, and nothing is waiting to be delivered. */
   checkStall(): void {
     const { pool, board } = this;
     if (pool === undefined || board === undefined) return;
     const sessionId = this.gate.sessionId();
-    const live = pool.list().filter((job) => job.name !== undefined && job.originSessionId === sessionId && (job.status === "queued" || job.status === "running"));
+    const live = pool.list().filter((job) => job.role === "peer" && job.originSessionId === sessionId && (job.status === "queued" || job.status === "running"));
     if (live.length === 0 || live.some((job) => !job.parked || job.finite > 0)) return;
     if (this.registry.list().some((item) => item.kind !== "job" && item.active && item.finite) || this.ledger.hasUnsent(sessionId)) return;
     const key = `stall:${board.epoch}:${board.maxSeq()}`;
@@ -337,7 +343,7 @@ export class DispatchRuntime {
   private peerForkEntries(name: string): unknown[] {
     const pool = this.pool!;
     const id = pool.resolve(name);
-    if (id === undefined || pool.status(id).name === undefined) throw new Error(`forkFrom ${JSON.stringify(name)} is not a named peer`);
+    if (id === undefined || pool.status(id).role !== "peer") throw new Error(`forkFrom ${JSON.stringify(name)} is not a named peer`);
     const entries = readJsonl(pool.sessionPathOf(id)).filter((entry) => (entry as { type?: unknown }).type !== "session");
     if (entries.length === 0) throw new Error(`${name} has no conversation to fork from yet`);
     return forkableBranch(entries);
@@ -345,30 +351,17 @@ export class DispatchRuntime {
 
   private postBrief(job: JobSnapshot): number | undefined {
     const board = this.boardFor(job.originSessionId);
-    if (board === undefined || job.name === undefined) return undefined;
-    this.activateTools(["board_post", "board_read", "board_wait"]);
+    if (board === undefined || job.role !== "peer" || job.name === undefined) return undefined;
     board.epoch += 1;
     return board.post(COORDINATOR, `@${job.name} ${job.task}`).seq;
-  }
-
-  activateTools(names: readonly string[]): void {
-    const pi = this.gate.pi;
-    if (pi === undefined || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return;
-    try {
-      const current = pi.getActiveTools();
-      if (names.every((name) => current.includes(name))) return;
-      pi.setActiveTools([...new Set([...current, ...names])]);
-    } catch { /* stale pi or --no-tools */ }
   }
 
   private boardTools(): ToolDefinition[] {
     if (this.canDelegate) {
       return createBoardTools({
         self: COORDINATOR,
-        defaultActive: false,
         post: (text, channel) => this.board!.post(COORDINATOR, text, channel),
         read: (options) => this.board!.read(options),
-        wait: (since, mentionsOnly, signal) => this.board!.wait(COORDINATOR, since, mentionsOnly, signal),
         collect: (messages) => {
           const sid = this.gate.sessionId() ?? "nosession";
           for (const message of messages) {
@@ -477,16 +470,12 @@ export class DispatchRuntime {
       if (!this.ledger.has(meta.id)) this.ledger.put(meta.id, { text: exitNotice(this.bg.report(meta.id)) }, { originSessionId: sessionId });
     }
     if (!this.canDelegate) return;
-    const board = this.boardFor(sessionId);
-    if ((board?.maxSeq() ?? 0) > 0) this.activateTools(["board_post", "board_read", "board_wait"]);
+    this.boardFor(sessionId);
     if (reason === "reload") this.agentsCache = undefined;
     else this.timers.dropOtherSessions(sessionId);
     this.timers.fold(ctx.sessionManager.getEntries(), sessionId);
     this.timers.loadSchedules();
     this.openInbox();
-    if (this.inbox !== undefined || this.host.onOutbox !== undefined || this.timers.hasActiveSchedules()) {
-      this.activateTools(["outbox"]);
-    }
   }
 
   private openInbox(): void {
@@ -535,7 +524,7 @@ export class DispatchRuntime {
     const sessionId = (): string | undefined => this.gate.sessionId();
     const renderers = { ...defaultToolRenderers(), ...(this.host.ui?.toolRenderers ?? {}) };
     const withRenderer = (tool: ToolDefinition): ToolDefinition => ({ ...tool, ...renderers[tool.name] });
-    const bashTool = withRenderer(createDispatchBashTool(this.bg, sessionId) as unknown as ToolDefinition);
+    const bashTool = withRenderer(createDispatchBashTool(this.bg, sessionId, this.host.syncWindowMs) as unknown as ToolDefinition);
     const others: ToolDefinition[] = [
       ...createStatusTools({
         registry: this.registry, ledger: this.ledger, pollGuard: this.pollGuard, bg: this.bg,
@@ -553,8 +542,9 @@ export class DispatchRuntime {
         awaitSettledHooks: async (jobId) => { await this.settledHooks.get(jobId); },
         peerForkEntries: (name) => this.peerForkEntries(name), postBrief: (job) => this.postBrief(job),
       }) as unknown as ToolDefinition);
-      const outboxDefaultActive = this.host.onOutbox !== undefined || this.inboxTarget() !== undefined;
-      others.push(createOutboxTool(this.host, sessionId, (text) => this.gate.ctx?.ui.notify(text, "info"), outboxDefaultActive) as unknown as ToolDefinition);
+      if (this.host.onOutbox !== undefined || this.inboxTarget() !== undefined) {
+        others.push(createOutboxTool(this.host, sessionId, (text) => this.gate.ctx?.ui.notify(text, "info")) as unknown as ToolDefinition);
+      }
     }
     others.push(...this.boardTools());
     return { bashTool, others: others.map(withRenderer) };

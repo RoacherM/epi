@@ -1,12 +1,11 @@
-// One in-memory notification ledger per dispatch runtime (docs/dispatch-design.md §3.1), ported
-// from src/extensions/task-notify.ts: `unsent -> sent -> acked`, where an entry is only dropped once
-// Pi proves it persisted (an `entry_appended` / `message_end` receipt, or the receipt found on the
-// session branch). Adds a `PollGuard`, a one-line in-flight summary after compaction and the shared
-// settle drain that keeps a print-mode root or a worker alive until its finite work reports back.
+// One in-memory notification ledger per source (docs/dispatch-design.md §3.1): `unsent -> sent -> acked`,
+// where an entry is only dropped once Pi proves it persisted (an `entry_appended` / `message_end` receipt,
+// or the receipt found on the session branch). Adds a `PollGuard`, a one-line in-flight summary after compaction
+// and the shared settle drain that keeps a print-mode root or a worker alive until its finite work reports back.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { neutralizeRoleTags } from "./result.js";
-import { DISPATCH_NOTIFY_TYPE } from "./types.js";
+import { DISPATCH_NOTIFY_TYPE, type SettleSource } from "./types.js";
 
 export const SYSTEM_NOTIFICATION_TAG = "[SYSTEM NOTIFICATION - NOT USER INPUT]";
 const SYSTEM_NOTIFICATION_PREAMBLE =
@@ -122,12 +121,14 @@ export interface NotificationPayload {
   customType: string;
   content: string;
   display: boolean;
-  details: { receipts: string[]; keys: string[] };
+  details: Record<string, unknown> & { receipts: string[]; keys: string[] };
 }
 
 export interface NotifyData {
   /** The notification body; untrusted parts are neutralised by the ledger. */
   text: string;
+  /** Opaque host-supplied metadata preserved per entry for `payloadDetails`. */
+  details?: Record<string, unknown> | undefined;
 }
 
 export interface LedgerEntry {
@@ -148,6 +149,8 @@ export interface NotificationLedgerOptions {
   footer?: () => string | undefined;
   /** The one-line summary prepended to the first wake after a compaction. */
   activeSummary?: () => string | undefined;
+  /** Extra custom-message details merged ahead of `receipts` and `keys` (never overriding them). */
+  payloadDetails?: ((entries: readonly LedgerEntry[]) => Record<string, unknown>) | undefined;
   /** Called with every entry Pi confirmed persisted, or that a pull (`task_status`, `board_read`)
    * already delivered. */
   onAcked?: (entries: readonly LedgerEntry[]) => void;
@@ -260,7 +263,11 @@ export class NotificationLedger {
       customType: this.customType,
       content: withSystemNotificationFraming(body),
       display: true,
-      details: { receipts: entries.map((entry) => `${entry.key}:${entry.run}`), keys: entries.map((entry) => entry.key) },
+      details: {
+        ...this.options.payloadDetails?.(entries),
+        receipts: entries.map((entry) => `${entry.key}:${entry.run}`),
+        keys: entries.map((entry) => entry.key),
+      },
     };
   }
 
@@ -443,28 +450,48 @@ export class PollGuard {
   }
 }
 
+const DEFAULT_DRAIN_GRACE_MS = 5_000;
+
 export interface DrainOptions {
-  /** Whether finite work (non-daemon bash, active jobs, pending follow-up timers) is in flight. */
-  hasFiniteWork: () => boolean;
-  /** How long this drain may hold the settle at most. */
-  maxMs: () => number;
+  /** Participants holding finite work and ledgers to drain on settle. */
+  sources: () => readonly SettleSource[];
+  /** Hard upper bound (ms) on how long one settle drain may wait. */
+  capMs: () => number;
+  /** Grace (ms) added past finite items' deadlines when bounding the drain. */
+  graceMs?: number;
   /** Extra exit condition, e.g. a worker that received a parent steer. */
   stopWhen?: () => boolean;
 }
 
+function maxSourceRemainingMs(sources: readonly SettleSource[], now: number): number | undefined {
+  let max: number | undefined;
+  for (const source of sources) {
+    for (const work of source.finiteWork()) {
+      if (work.deadlineAt === undefined) continue;
+      const remaining = Math.max(0, work.deadlineAt - now);
+      max = max === undefined ? remaining : Math.max(max, remaining);
+    }
+  }
+  return max;
+}
+
+function drainDurationMs(sources: readonly SettleSource[], options: DrainOptions, now: number): number {
+  const cap = Math.max(0, options.capMs());
+  const remaining = maxSourceRemainingMs(sources, now);
+  return remaining === undefined ? cap : Math.max(0, Math.min(cap, remaining + (options.graceMs ?? DEFAULT_DRAIN_GRACE_MS)));
+}
+
 /**
- * The shared `agent_settled` drain (docs/dispatch-design.md §3.4). Held open while finite work is
- * in flight and nothing is ready to deliver; a ledger `put` or an explicit `wake()` re-checks.
- * On exit it flushes synchronously, so Pi queues the wake into its deferred settle actions and
- * `session.prompt()` keeps the process alive through the next run.
+ * The shared `agent_settled` drain (docs/dispatch-design.md §3.4). Held open while any source has
+ * finite work in flight and no wake has been queued; a ledger `put` or an explicit `wake()`
+ * re-checks. Zero-coalesce sources flush inside `put`, so a ready `put` latches `wakeQueued`
+ * synchronously before flush turns `state` into `sent`.
  */
 export class DrainBarrier {
   private waker: (() => void) | undefined;
   private active = false;
 
-  constructor(private readonly ledger: NotificationLedger, private readonly options: DrainOptions) {
-    ledger.onPut(() => this.wake());
-  }
+  constructor(private readonly options: DrainOptions) {}
 
   get draining(): boolean {
     return this.active;
@@ -476,28 +503,46 @@ export class DrainBarrier {
     waker?.();
   }
 
-  private shouldWait(deadline: number): boolean {
-    if (this.options.stopWhen?.() === true || this.ledger.hasReady()) return false;
-    return this.options.hasFiniteWork() && Date.now() < deadline;
+  private shouldWait(sources: readonly SettleSource[], deadline: number): boolean {
+    if (this.options.stopWhen?.() === true) return false;
+    if (sources.some((source) => source.ledger.hasReady())) return false;
+    return Date.now() < deadline && sources.some((source) => source.finiteWork().length > 0);
+  }
+
+  private nap(deadline: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, Math.min(1_000, Math.max(1, deadline - Date.now())));
+      this.waker = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    });
   }
 
   async drain(): Promise<void> {
-    const deadline = Date.now() + Math.max(0, this.options.maxMs());
+    const sources = this.options.sources();
+    // put() invokes listeners after inserting "unsent" and before scheduleFlush() synchronously marks
+    // zero-coalesce entries "sent", so hasReady() observed here accurately captures deferred settle wakes.
+    let wakeQueued = false;
+    const unsubscribes = sources.map((source) => source.ledger.onPut(() => {
+      if (source.ledger.hasReady()) wakeQueued = true;
+      this.wake();
+    }));
+    const now = Date.now();
+    const deadline = now + drainDurationMs(sources, this.options, now);
     this.active = true;
     try {
-      while (this.shouldWait(deadline)) {
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, Math.min(1_000, Math.max(1, deadline - Date.now())));
-          this.waker = () => {
-            clearTimeout(timer);
-            resolve();
-          };
-        });
+      while (!wakeQueued && this.shouldWait(sources, deadline)) {
+        await this.nap(deadline);
         this.waker = undefined;
       }
     } finally {
+      this.waker = undefined;
       this.active = false;
+      for (const off of unsubscribes) off();
     }
-    if (this.options.stopWhen?.() !== true) this.ledger.flushNow();
+    if (this.options.stopWhen?.() !== true) {
+      for (const source of sources) source.ledger.flushNow();
+    }
   }
 }

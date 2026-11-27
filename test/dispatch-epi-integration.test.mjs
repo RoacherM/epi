@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { createEpiDispatchExtension } from "../dist/extensions/dispatch-epi-host.js";
 import { childModelReference } from "../dist/extensions/dispatch/worker-host.js";
 import { createMonitorInlineExtension } from "../dist/extensions/monitor.js";
-import { createTaskMonitorBridge } from "../dist/extensions/task-notify.js";
+import { createTaskMonitorBridge } from "../dist/extensions/task-monitor-bridge.js";
 import { PROVIDER_LOGIN_HELP } from "../dist/pi-output.js";
 
 const fakeWorker = fileURLToPath(new URL("./fixtures/fake-task-worker.mjs", import.meta.url));
@@ -262,6 +262,15 @@ test("TUI foreground budget (D96) hands back running jobs with autoWake, and Tas
     /monitor_stop/,
   );
   assert.equal(statuses.get("tasks"), "◐ 2 tasks");
+  assert.equal(bridge.settleSources().length, 1);
+  assert.equal(bridge.settleSources()[0].finiteWork().length, 1, "running non-persistent monitor counts as finite work");
+
+  // TUI task_wait clamps timeoutSeconds to foregroundBudgetSeconds (0.25s) and returns waitEnd="budget":
+  const waitBegan = Date.now();
+  const waited = await h.tools.get("task_wait").execute("tw-1", { ids: [jobId], timeoutSeconds: 600 }, undefined, undefined, ctx);
+  assert.ok(Date.now() - waitBegan < 2_000, "TUI task_wait must clamp timeoutSeconds=600 to foreground budget");
+  assert.equal(waited.details.waitEnd, "budget");
+  assert.match(waited.content[0].text, /Foreground wait budget reached/);
 
   // Steer the handed-back job so it settles -> push wake arrives as dispatch:notify!
   await h.tools.get("task").execute("t2", { jobId, task: "done-now" }, undefined, undefined, ctx);
@@ -269,6 +278,12 @@ test("TUI foreground budget (D96) hands back running jobs with autoWake, and Tas
   assert.match(h.messages[0].message.content, /steered:done-now/);
 
   await h.tools.get("monitor_stop").execute("m3", { id: monId }, undefined, undefined, ctx);
+  assert.equal(bridge.settleSources()[0].finiteWork().length, 0);
+
+  // Persistent monitors do NOT block finiteWork / headless settle drain:
+  const persistent = await h.tools.get("monitor").execute("m4", { command: "sleep 10", description: "bg svc", persistent: true }, undefined, undefined, ctx);
+  assert.equal(bridge.settleSources()[0].finiteWork().length, 0, "persistent monitor must not hold finite settle");
+  await h.tools.get("monitor_stop").execute("m5", { id: persistent.details.taskId }, undefined, undefined, ctx);
 });
 
 test("trusted project workspace: share preserves .epi/hooks.json tool_call guard, noSkills blocks ambient pi/skills, and task_stop failure surfaces visibly", async (t) => {

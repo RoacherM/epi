@@ -16,7 +16,6 @@ import { singleLine, tailLines } from "./result.js";
 import { DISPATCH_DEPTH_ENV } from "./types.js";
 export const BG_LOG_CAP_BYTES = 20 * 1024 * 1024;
 export const DEFAULT_SYNC_WINDOW_MS = 120_000;
-export const MAX_SYNC_WINDOW_MS = 600_000;
 export const DEFAULT_BG_LIFETIME_SECONDS = 1_800;
 export const MAX_BG_LIFETIME_SECONDS = 4 * 3_600;
 const TAIL_BYTES = 64 * 1024;
@@ -362,7 +361,7 @@ export class BgProcessRuntime {
             throw new Error(`${id} is not running`);
         const stdin = job.child.stdin;
         if (stdin === null || !stdin.writable)
-            throw new Error(`${id} has no open stdin; start it with stdin: true or isDaemon: true`);
+            throw new Error(`${id} has no open stdin; start it with stdin: true or mode: "daemon"`);
         if (input !== undefined && input.length > 0)
             stdin.write(input);
         if (end)
@@ -610,23 +609,34 @@ export function raceAbort(promise, signal) {
 export function exitNotice(report) {
     return `${report.text.split("\n").slice(0, 16).join("\n")}\ntask_status({ id: "${report.summary.id}" }) for more output.`;
 }
+const BashMode = Type.Union([Type.Literal("auto"), Type.Literal("background"), Type.Literal("daemon")], {
+    description: "auto (default): return the result; a slow command continues as bg_<id> and notifies on exit. background: return at once as bg_<id>. daemon: long-lived service with writable stdin",
+});
 export const BashParameters = Type.Object({
     command: Type.String({ description: "Shell command" }),
-    timeout: Type.Optional(Type.Number({ description: "Lifetime in seconds (max 14400)" })),
-    waitMsBeforeAsync: Type.Optional(Type.Integer({ minimum: 0, description: "Ms before detaching as bg_<id> (default 120000)" })),
-    isDaemon: Type.Optional(Type.Boolean({ description: "Background service: detach at once, writable stdin" })),
+    timeout: Type.Optional(Type.Number({ description: "Kill after this many seconds (max 14400); omit for the default" })),
+    mode: Type.Optional(BashMode),
     stdin: Type.Optional(Type.Boolean({ description: "Keep stdin open for task_input" })),
-});
-function bashSettings(params) {
-    const isDaemon = params.isDaemon === true;
-    if (params.timeout !== undefined && (!(params.timeout > 0) || params.timeout > MAX_BG_LIFETIME_SECONDS)) {
+}, { additionalProperties: false });
+function validateBgTimeout(timeout) {
+    if (!Number.isFinite(timeout) || timeout <= 0) {
         throw new Error(`timeout must be between 1 and ${MAX_BG_LIFETIME_SECONDS} seconds`);
     }
-    const syncMs = params.waitMsBeforeAsync ?? (isDaemon ? 0 : DEFAULT_SYNC_WINDOW_MS);
-    if (syncMs > MAX_SYNC_WINDOW_MS)
-        throw new Error(`waitMsBeforeAsync must be at most ${MAX_SYNC_WINDOW_MS}`);
+    if (timeout <= MAX_BG_LIFETIME_SECONDS)
+        return;
+    const asSeconds = Math.round(timeout / 1_000);
+    if (asSeconds >= 1 && asSeconds <= MAX_BG_LIFETIME_SECONDS) {
+        throw new Error(`timeout must be between 1 and ${MAX_BG_LIFETIME_SECONDS} seconds (got ${timeout}); it is in seconds, not milliseconds. Did you mean ${asSeconds}?`);
+    }
+    throw new Error(`timeout must be between 1 and ${MAX_BG_LIFETIME_SECONDS} seconds`);
+}
+function bashPlan(params) {
+    const mode = params.mode ?? "auto";
+    const isDaemon = mode === "daemon";
+    if (params.timeout !== undefined)
+        validateBgTimeout(params.timeout);
     return {
-        syncMs,
+        mode,
         lifetimeSeconds: params.timeout ?? (isDaemon ? undefined : DEFAULT_BG_LIFETIME_SECONDS),
         isDaemon,
         stdin: isDaemon || params.stdin === true,
@@ -639,10 +649,10 @@ class DetachedRun extends Error {
         this.job = job;
     }
 }
-function foregroundExec(runtime, settings, sessionId) {
+function foregroundExec(runtime, plan, sessionId, syncWindowMs) {
     return (command, cwd, options) => new Promise((resolve, reject) => {
         const { onData, signal, env } = options;
-        const job = runtime.spawn({ command, cwd, env: env ?? process.env, stdin: settings.stdin, isDaemon: settings.isDaemon, lifetimeSeconds: settings.lifetimeSeconds, sessionId });
+        const job = runtime.spawn({ command, cwd, env: env ?? process.env, stdin: plan.stdin, isDaemon: plan.isDaemon, lifetimeSeconds: plan.lifetimeSeconds, sessionId });
         job.onForeground = onData;
         let windowTimer;
         let settled = false;
@@ -665,15 +675,15 @@ function foregroundExec(runtime, settings, sessionId) {
             if (job.termination === "aborted")
                 reject(new Error("aborted"));
             else if (job.termination === "timeout")
-                reject(new Error(`timeout:${settings.lifetimeSeconds}`));
+                reject(new Error(`timeout:${plan.lifetimeSeconds}`));
             else
                 resolve({ exitCode: job.exitCode ?? null });
         }));
         runtime.foreground.add(detach);
-        if (settings.syncMs <= 0)
-            setImmediate(detach);
+        if (plan.mode === "auto")
+            windowTimer = setTimeout(detach, syncWindowMs);
         else
-            windowTimer = setTimeout(detach, settings.syncMs);
+            setImmediate(detach);
         if (signal?.aborted === true)
             onAbort();
         else
@@ -695,15 +705,15 @@ function runningResult(runtime, job) {
 /** Pi's bash tool, with the dispatch parameters and a background-capable execution backend.
  * Omit Pi's built-in renderers so both Pi (`withBuiltInRenderers`) and Epi (`builtInToolRenderers`)
  * attach their own native bash presentation automatically. */
-export function createDispatchBashTool(runtime, sessionId) {
+export function createDispatchBashTool(runtime, sessionId, syncWindowMs = DEFAULT_SYNC_WINDOW_MS) {
     const { renderCall: _rc, renderResult: _rr, ...base } = createBashToolDefinition(process.cwd());
     return {
         ...base,
         parameters: BashParameters,
         description: `${base.description} Slow commands detach as bg_<id> and notify on exit; never use nohup, setsid, or trailing &.`,
         async execute(toolCallId, params, signal, onUpdate, ctx) {
-            const settings = bashSettings(params);
-            const definition = createBashToolDefinition(ctx?.cwd ?? process.cwd(), { operations: { exec: foregroundExec(runtime, settings, sessionId()) } });
+            const plan = bashPlan(params);
+            const definition = createBashToolDefinition(ctx?.cwd ?? process.cwd(), { operations: { exec: foregroundExec(runtime, plan, sessionId(), syncWindowMs) } });
             try {
                 return await definition.execute(toolCallId, { command: params.command }, signal, onUpdate, ctx);
             }

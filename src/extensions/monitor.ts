@@ -37,16 +37,16 @@ import {
 } from "../monitor-stream.js";
 import { resolveHomeDir } from "../paths.js";
 import {
-  createTaskMonitorBridge,
   NotificationGate,
   NotificationLedger,
-  stripSystemNotificationFraming,
-  withSystemNotificationFraming,
   type LedgerEntry,
+} from "./dispatch/notify-ledger.js";
+import { stripSystemFraming as stripSystemNotificationFraming } from "./dispatch/tui-views.js";
+import {
+  createTaskMonitorBridge,
   type MonitorBridgeSummary,
-  type NotificationPayload,
   type TaskMonitorBridge,
-} from "./task-notify.js";
+} from "./task-monitor-bridge.js";
 
 export const EVENT_MESSAGE_TYPE = "Monitor";
 export const LOOP_STOPPED_CHANNEL = "loop:stopped";
@@ -99,11 +99,6 @@ export interface MonitorExtensionOptions {
   epiHome: string;
   agentDir: string;
   bridge?: TaskMonitorBridge;
-}
-
-interface MonitorNoticeData {
-  body: string;
-  details: Record<string, unknown>;
 }
 
 function generateId(): string {
@@ -277,22 +272,14 @@ function renderMonitorMessage(
   return container;
 }
 
-function buildMonitorPayload(entries: Array<LedgerEntry<MonitorNoticeData>>): NotificationPayload {
-  const latest = entries[entries.length - 1]!.data.details;
-  const ids = new Set(entries.map((e) => e.data.details.monitorId));
-  const mergedLines = entries.flatMap((e) => (e.data.details.lines as string[] | undefined) ?? []);
-  const baseDetails = ids.size === 1
+function monitorPayloadDetails(entries: readonly LedgerEntry[]): Record<string, unknown> {
+  const detailsList = entries.map((e) => (e.data.details ?? {}) as Record<string, unknown>);
+  const latest = detailsList[detailsList.length - 1] ?? {};
+  const ids = new Set(detailsList.map((d) => d.monitorId));
+  const mergedLines = detailsList.flatMap((d) => (d.lines as string[] | undefined) ?? []);
+  return ids.size === 1
     ? { ...latest, lines: mergedLines }
     : { cause: latest.cause, lines: mergedLines };
-  return {
-    customType: EVENT_MESSAGE_TYPE,
-    content: withSystemNotificationFraming(entries.map((e) => e.data.body).join("\n\n")),
-    display: true,
-    details: {
-      ...baseDetails,
-      receipts: entries.map((e) => `${e.key}:${e.run}`),
-    },
-  };
 }
 
 interface EndingSpec {
@@ -307,7 +294,7 @@ class MonitorController {
   readonly monitors = new Map<string, MonitorRecord>();
   readonly gate = new NotificationGate();
   readonly bridge: TaskMonitorBridge;
-  readonly ledger: NotificationLedger<MonitorNoticeData>;
+  readonly ledger: NotificationLedger;
   private readonly logDir: string;
   private noticeSeq = 0;
   private disposed = false;
@@ -323,18 +310,24 @@ class MonitorController {
   constructor(private readonly options: MonitorExtensionOptions) {
     this.logDir = path.join(options.epiHome, "runtime", "monitors");
     this.bridge = options.bridge ?? createTaskMonitorBridge();
+    this.ledger = new NotificationLedger({
+      customType: EVENT_MESSAGE_TYPE,
+      coalesceMs: 0,
+      gate: this.gate,
+      payloadDetails: monitorPayloadDetails,
+    });
     this.bridge.registerMonitorProvider({
       list: () => [...this.monitors.values()].map(bridgeSummaryOf),
       get: (id) => {
         const rec = this.monitors.get(id);
         return rec ? bridgeSummaryOf(rec) : undefined;
       },
-    });
-    this.ledger = new NotificationLedger<MonitorNoticeData>({
-      customType: EVENT_MESSAGE_TYPE,
-      coalesceMs: 0,
-      gate: this.gate,
-      buildPayload: buildMonitorPayload,
+      settle: {
+        finiteWork: () => [...this.monitors.values()]
+          .filter((record) => record.status === "running" && !record.persistent)
+          .map((record) => ({ deadlineAt: record.createdAt + record.timeoutMs })),
+        ledger: this.ledger,
+      },
     });
   }
 
@@ -515,7 +508,7 @@ class MonitorController {
     this.ledger.put(
       key,
       {
-        body: `monitor ${record.id} · ${record.description}\n${lines.join("\n")}`,
+        text: `monitor ${record.id} · ${record.description}\n${lines.join("\n")}`,
         details: {
           monitorId: record.id,
           description: record.description,
@@ -528,9 +521,7 @@ class MonitorController {
           ...(record.loopPrompt ? { loopPrompt: record.loopPrompt } : {}),
         },
       },
-      0,
-      true,
-      record.originSessionId,
+      { originSessionId: record.originSessionId },
     );
   }
 
@@ -737,7 +728,7 @@ async function executeMonitorArm(
   const validated = validateMonitorParams(params);
   const record = controller.arm(validated, ctx);
   const lifetime = record.persistent
-    ? "runs until you stop it or the session ends"
+    ? "runs until you stop it or the session ends (does not keep a non-interactive run alive)"
     : `expires in ${lifetimeText(record.timeoutMs)} unless the source ends first; you get one notice at expiry — re-arm if you still need the watch`;
   const value = {
     taskId: record.id,

@@ -50,6 +50,7 @@ test("every dispatch module imports only Node, the public Pi SDK, pi-tui, typebo
     for (const specifier of specifiers) {
       if (!ALLOWED.some((pattern) => pattern.test(specifier))) offenders.push(`${file}: ${specifier}`);
     }
+    assert.doesNotMatch(source, /\bsetActiveTools\b/, `${file} must not toggle active tools mid-session`);
   }
   assert.deepEqual(offenders, []);
   assert.equal(DISPATCH_EXT_VERSION, "0.1.0");
@@ -139,7 +140,8 @@ test("DrainBarrier holds the settle while finite work runs and flushes the momen
   const { fake, ledger } = ledgerFixture({ ledger: { coalesceMs: 60_000 } });
   await fake.emit("session_start", { reason: "startup" });
   let finite = true;
-  const barrier = new DrainBarrier(ledger, { hasFiniteWork: () => finite, maxMs: () => 5_000 });
+  const src = (hasFinite, l) => () => [{ finiteWork: () => (hasFinite() ? [{}] : []), ledger: l }];
+  const barrier = new DrainBarrier({ sources: src(() => finite, ledger), capMs: () => 5_000 });
   const started = Date.now();
   setTimeout(() => { ledger.put("bg_2", { text: "bg_2 exited 0" }); finite = false; }, 150);
   await barrier.drain();
@@ -149,16 +151,33 @@ test("DrainBarrier holds the settle while finite work runs and flushes the momen
   await barrier.drain();
   assert.ok(Date.now() - quick < 100, "no finite work: no wait");
   finite = true;
-  const capped = new DrainBarrier(ledger, { hasFiniteWork: () => true, maxMs: () => 120 });
+  const capped = new DrainBarrier({ sources: src(() => true, ledger), capMs: () => 120 });
   const t0 = Date.now();
   await capped.drain();
   assert.ok(Date.now() - t0 < 1_000, "drainMaxMs bounds the wait");
   let steered = false;
-  const worker = new DrainBarrier(ledger, { hasFiniteWork: () => true, maxMs: () => 5_000, stopWhen: () => steered });
+  const worker = new DrainBarrier({ sources: src(() => true, ledger), capMs: () => 5_000, stopWhen: () => steered });
   setTimeout(() => { steered = true; worker.wake(); }, 50);
   const t1 = Date.now();
   await worker.drain();
   assert.ok(Date.now() - t1 < 1_000, "a steer wakes the drain");
+
+  // Multi-source + coalesceMs: 0 latch exits immediately once the secondary ledger queues a wake mid-drain:
+  const extra = ledgerFixture({ ledger: { coalesceMs: 0 } });
+  await extra.fake.emit("session_start", { reason: "startup" });
+  let monitorRunning = true;
+  const latchBarrier = new DrainBarrier({
+    sources: () => [
+      { finiteWork: () => [], ledger },
+      { finiteWork: () => (monitorRunning ? [{}] : []), ledger: extra.ledger },
+    ],
+    capMs: () => 5_000,
+  });
+  setTimeout(() => { extra.ledger.put("mon_1:1", { text: "line" }); monitorRunning = false; }, 40);
+  const t2 = Date.now();
+  await latchBarrier.drain();
+  assert.ok(Date.now() - t2 < 1_000, "coalesceMs=0 secondary settle source latches and exits drain early");
+  assert.equal(extra.fake.sent.length, 1);
 });
 
 function git(cwd, ...args) {
@@ -220,7 +239,7 @@ test("ledger: throwing sendMessage with coalesceMs=0 does not recurse infinitely
   assert.ok(attempts <= 2, `throwing sendMessage must not recurse unboundedly (attempts=${attempts})`);
 
   // DrainBarrier with stopWhen() === true immediately skips flushNow and returns right away:
-  const barrier = new DrainBarrier(ledger, { hasFiniteWork: () => true, maxMs: () => 5_000, stopWhen: () => true });
+  const barrier = new DrainBarrier({ sources: () => [{ finiteWork: () => [{}], ledger }], capMs: () => 5_000, stopWhen: () => true });
   const before = attempts;
   await barrier.drain();
   assert.equal(attempts, before, "stopped DrainBarrier does not flush into a dying runner");

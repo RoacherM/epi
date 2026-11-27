@@ -108,9 +108,19 @@ export interface TaskAssemblyScope {
   mcp?: boolean | string[] | undefined;
   /** `false` drops `epi:hooks` from the child. Default on: one hooks.json guards every tool call. */
   hooks?: boolean | undefined;
+  /** `true` includes `epi:web`. Default off: a subagent does not load unneeded web search/fetch tools. */
+  web?: boolean | undefined;
   /** `false` drops every Manifest extension; a name array keeps the named ones. Default on. */
   extensions?: boolean | string[] | undefined;
 }
+
+/** Built-in extensions allowed in a child session and their defaults when omitted in preset scope.
+ * `epi:task` is excluded: subagents may not spawn subagents (docs/development.md §12.3). */
+const CHILD_BUILTINS: Record<string, { scopeKey: "mcp" | "hooks" | "web"; defaultOn: boolean }> = {
+  "epi:mcp": { scopeKey: "mcp", defaultOn: false },
+  "epi:hooks": { scopeKey: "hooks", defaultOn: true },
+  "epi:web": { scopeKey: "web", defaultOn: false },
+};
 
 /**
  * The skills reachable from the parent's roots, by the name the model sees. A root is either a
@@ -169,13 +179,10 @@ export function scopeAssemblyForTask(
     : keepExtensions === true
       ? base.externalExtensions
       : pickExtensions(base.externalExtensions, keepExtensions);
-  const wantsMcp = (scope.mcp ?? false) !== false;
-  const wantsHooks = scope.hooks ?? true;
   const inlineExtensions = base.inlineExtensions.filter((extension) => {
-    if (extension.name === "epi:mcp") return wantsMcp;
-    if (extension.name === "epi:hooks") return wantsHooks;
-    // epi:task never loads in a child: a subagent may not spawn subagents (development.md §12.3).
-    return extension.name !== "epi:task";
+    const policy = Object.hasOwn(CHILD_BUILTINS, extension.name) ? CHILD_BUILTINS[extension.name] : undefined;
+    if (policy === undefined) return extension.name !== "epi:task";
+    return (scope[policy.scopeKey] ?? policy.defaultOn) !== false;
   });
 
   return {

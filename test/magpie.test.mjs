@@ -157,6 +157,30 @@ test("catalog maps metadata, native endpoints and four gateway protocols", () =>
   assert.equal(claude.thinkingLevelMap.medium, null);
   assert.equal(claude.thinkingLevelMap.max, "max");
   assert.equal(claude.compat.forceAdaptiveThinking, true);
+  assert.equal(claude.compat.sendSessionAffinityHeaders, true);
+  const qwen = parseMagpieModels(
+    {
+      data: [{
+        id: "openrouter/qwen-coder",
+        magpie_compat: { thinking_format: "qwen", requires_reasoning_content: true },
+      }],
+    },
+    baseUrl,
+  )[0];
+  assert.equal(qwen.compat.thinkingFormat, "qwen");
+  assert.equal(qwen.compat.requiresReasoningContentOnAssistantMessages, true);
+  assert.equal(qwen.compat.sendSessionAffinityHeaders, true);
+  const unknownFmt = parseMagpieModels(
+    {
+      data: [{
+        id: "openrouter/future",
+        magpie_compat: { thinking_format: "unknown-v9" },
+      }],
+    },
+    baseUrl,
+  )[0];
+  assert.equal(unknownFmt.compat.thinkingFormat, undefined);
+  assert.equal(unknownFmt.compat.sendSessionAffinityHeaders, true);
   assert.deepEqual(claude.cost, { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 });
   const native = parseMagpieModels({ data: [{ id: "claude/native", native_endpoints: ["/v1/responses"] }] }, baseUrl);
   assert.equal(native[0].api, "openai-responses");
@@ -1272,5 +1296,30 @@ test("legacy static providers.magpie in models.json does not break per-protocol 
   );
   assert.equal(uncatalogedGemini.api, "google-generative-ai");
   assert.equal(uncatalogedGemini.baseUrl, `${server.baseUrl}/v1beta`);
+
+  // Uncataloged OpenAI/Anthropic models still get client-side session affinity headers enabled:
+  const uncatalogedClaude = resolveMagpieModel(
+    {
+      id: "claude/custom-sonnet",
+      provider: "magpie",
+      name: "Custom Sonnet",
+      api: "openai-completions",
+      baseUrl: `${server.baseUrl}/v1`,
+      input: ["text"],
+      reasoning: true,
+      contextWindow: 128000,
+      maxTokens: 8192,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
+    [],
+    `${server.baseUrl}/v1`,
+  );
+  assert.equal(uncatalogedClaude.api, "anthropic-messages");
+  assert.equal(uncatalogedClaude.compat?.sendSessionAffinityHeaders, true);
+
+  const byId = new Map(parseMagpieModels({ data: magpieCatalog }, server.baseUrl).map((m) => [m.id, m]));
+  assert.equal(byId.get("other/chat")?.compat?.sendSessionAffinityHeaders, true);
+  assert.equal(byId.get("codex/gpt-test")?.compat?.sendSessionAffinityHeaders, undefined);
+  assert.equal(byId.get("antigravity/gemini-3-flash")?.compat?.sendSessionAffinityHeaders, undefined);
 });
 
