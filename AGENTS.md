@@ -14,7 +14,7 @@ Epi 是建在锁定版本 Pi SDK 之上的定制编码终端 Harness：拥有 CL
 
 ## 2. 按任务读取文档（改到对应内容时才读，避免开工全量扫 `docs/`）
 
-- 改分支合入、子代理分工、Orca 验收或发版：读 [开发流程](docs/dev-workflow.md) 与 [端到端验收](docs/e2e-acceptance.md)
+- 改分支合入、子代理分工、Herdr 验收或发版：读 [开发流程](docs/dev-workflow.md) 与 [端到端验收](docs/e2e-acceptance.md)
 - 改 TypeScript 规范、复杂度上限或测试隔离：读 [代码规范与质量检查](docs/code-quality.md)
 - 改 CLI 参数、Manifest、Hooks、MCP 或用到 Pi 内部接口：读 [实现与契约](docs/development.md) 与 [Pi 内部接口登记](docs/pi-internals.md)
 - 查历史拍板边界或登记非阻塞问题：读 [已定决策](docs/decisions.md) 或 [dogfood-issues.md](docs/dogfood-issues.md)
@@ -33,8 +33,8 @@ scripts/review.sh precheck <id> main HEAD                          # 机器预�
 ## 4. 开发规范
 
 1. **外部检查判定结果**：用 `npm test`、`npm run typecheck` 与 `model-snapshot.mjs --diff` 验收，避免凭主观印象判断完成。修 bug 先写出在旧代码上失败、新代码上通过的测试；改完代码对改动文件跑 `ub-mode`（复杂度、重复度、变异测试），提前拦住低阶缺陷。
-2. **目标环境验证**：改完 `src/` 用 `npm run build` 同步 `dist/`，不手改 `dist/` 或 `~/.epi` 安装态副本，以免下次构建或升级被覆盖。界面改动在 Orca 隔离终端（`orca terminal create --worktree active --title epi-smoke --json`）跑 `node dist/cli.js` 核对 [e2e-acceptance.md](docs/e2e-acceptance.md)；未跑 Orca 或真实模型时写明「尚未在目标环境验证」。调付费真实模型前先问用户。
-3. **本窗口隔离测试**：测试使用临时 `HOME`/`EPI_HOME`，不联网、不碰真实凭证或系统剪贴板，避免污染本机环境。在当前会话终端和新端口跑验证，除非用户要求不开新窗口或抢占键鼠焦点；Orca 冒烟测完只关自建的 `handle`，以免关掉用户的终端。
+2. **目标环境验证**：改完 `src/` 用 `npm run build` 同步 `dist/`，不手改 `dist/` 或 `~/.epi` 安装态副本，以免下次构建或升级被覆盖。界面改动在 Herdr 同 Tab 分屏终端（按 `herdr` Skill 用 `herdr-app do pane.split` + `hc`）跑 `node dist/cli.js` 核对 [e2e-acceptance.md](docs/e2e-acceptance.md)；未跑真实终端或真实模型时写明「尚未在目标环境验证」。调付费真实模型前先问用户。
+3. **本窗口隔离测试**：测试使用临时 `HOME`/`EPI_HOME`，不联网、不碰真实凭证或系统剪贴板，避免污染本机环境。在当前会话终端或同 Tab 分屏和新端口跑验证，除非用户要求不开新窗口或抢占键鼠焦点；Herdr 冒烟测完只关自建的分屏/终端（`herdr-app do pane.close`），以免关掉用户的终端。
 4. **设计先出可交互 HTML 原型**：界面、交互或流程设计先交 `scripts/probes/<名字>-prototype.html`，等用户亲自试过并同意后才改 `src/`、才合并（决策 WF6），避免方向未定造成返工。无界面和接口取舍的明确改动直接做完闭环。
 5. **分支、构建与原子提交**：不在 `main` 分支直接提交 `src/` 改动，切 `dev/<id>` 分支开发，保证合入前经过预检或评审门禁。`dist/` 与 `src/` 同步提交，并用 `git commit --only -- <本次改动路径>` 提交，防止把并行会话未完成的改动卷入提交。
 6. **活文档与决策同步**：改 CLI、Manifest、Hooks、MCP 或开发流程时，同步更新 `docs/{development,dev-workflow,code-quality,pi-internals}.md`（改协议或持久化格式前先写清兼容行为），避免旧文档误导后续会话。定下会约束后续工作的决定时，当轮写进 [docs/decisions.md](docs/decisions.md)，写明原因和被否掉的选项。写文档引用代码前重读源文件核实，探针结论标明依赖版本与日期。

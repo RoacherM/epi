@@ -8,7 +8,7 @@
 
 | 角色 | 用什么 | 职责 |
 |---|---|---|
-| 主控 | epi / agy 主会话 | 计划、预检、功能完成时启动一次全量评审、合并、Orca 实测、汇报 |
+| 主控 | epi / agy 主会话 | 计划、预检、功能完成时启动一次全量评审、合并、Herdr 实测、汇报 |
 | worker | epi + magpie `claude-opus-5-5`（thinking `high`），独立 `dev/<id>` worktree | 实现、写测试、提交、交 `report.md` |
 | 阅读子代理 | 内置 `task` 工具 + `reader`（`factory/deepseek-v4.1-flash`，只读） | 读不打算改的源码或长文档，结论带 `文件:行号` |
 | 执行子代理 | 内置 `task` 工具 + `runner`（flash，只跑 `bash` 不改文件） | 跑全套测试、构建、基准，只回报结果与失败项 |
@@ -24,7 +24,7 @@
    - 功能或重构：`scripts/review.sh precheck <id> main HEAD`。
    - 带复现测试的 bug 修复：`scripts/review.sh precheck --fix <id> main HEAD`（脚本校验含 `test/**` 改动且未碰高风险路径后写 `fix.sha`；碰高风险路径或缺测试改动时拒绝 `--fix`）。
 3. **一次全量评审**：带 `fix.sha` 的非高风险修复、纯文档或测试改动直接进合并；功能、重构及高风险改动跑 `scripts/review.sh start <id> HEAD` → `scripts/review.sh wait <id>` → `scripts/review.sh verify <id> HEAD` 签发 `verified.sha`（可按需先写自定义 `.dev/reviews/<id>/pack.md`，未写时由统一脚本自动生成）。
-4. **合并与实测**：`git merge --no-ff dev/<id>` 合入 `main`；界面改动在 Orca 跑 [e2e-acceptance.md](e2e-acceptance.md) ★ 条目。
+4. **合并与实测**：`git merge --no-ff dev/<id>` 合入 `main`；界面改动在 Herdr 跑 [e2e-acceptance.md](e2e-acceptance.md) ★ 条目。
 
 ## 3. 本仓评审参数（遵循 `vibe-coding` 统一评审规则）
 
@@ -48,11 +48,11 @@
 - **扩展位置**：不做自动发现，只认 Manifest 声明（用户 `~/.epi/extensions/<名>/`、受信项目 `.epi/extensions/<名>/`）；不读取 Pi 自己的扩展目录（由 `test/ambient-isolation.test.mjs` 守卫）。
 - **Issue 账本（`docs/dogfood-issues.md`）**：编号 `D1…`，含级别、现象、复现、状态。P0 立刻修；P1 插到下一任务；P2 攒几条修；P3 空闲批量修。
 
-## 6. Orca 实测
+## 6. Herdr 实测
 
-- 开/关终端：`orca terminal create --worktree active --title epi-smoke --json`（记下 `handle`，不碰用户正在用的终端），测完 `orca terminal close --terminal <handle> --json`。
-- 启动与按键：确认前台是 shell 后发 `node dist/cli.js`（`--enter`）；按键不加 `--enter`（`$'\x0f'` Ctrl+O，`$'\x1b'` Esc，`$'\x04'` Ctrl+D 退出并等清理 >2s）；鼠标发 SGR 序列。
-- 读屏与剪贴板：`orca terminal read --terminal <handle> --json` 看 `result.terminal.tail`；测粘贴前 `pbpaste` 备份、测完恢复。
+- 开/关分屏：按 `herdr` Skill 先用 `$HC_TERMINAL_ID` 从 `herdr-app ls` 反查自身 `pane`，调 `herdr-app do pane.split --direction right --pane <my-pane>` 开同 Tab 测试分屏（记下返回的 `pane` 与 `terminal`，不开新窗口/新 Tab、不碰用户正在用的终端），测完 `herdr-app do pane.close --pane <test-pane>` 关闭。
+- 启动与按键：对纯 shell 分屏加 `env -u HC_TERMINAL_ID hc send <term> "node dist/cli.js"` 启动；交互按键走 `hc keys <term> ctrl+o`、`hc keys <term> esc`、`hc keys <term> ctrl+d`（退出后等清理完成）。
+- 读屏与剪贴板：`hc read --lines 80 <term>` 读当前画面与回滚；粘贴图片用 `EPI_TEST_CLIPBOARD_FILE=<png>` 启动，不碰真实剪贴板（必须测系统剪贴板时先 `pbpaste` 备份、测完恢复）。
 
 ## 7. 发版清单
 

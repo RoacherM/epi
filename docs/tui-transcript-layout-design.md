@@ -101,7 +101,7 @@
 ## 6. 验证方式
 
 - ✅ 离线原型：`scripts/probes/transcript-layout-prototype.mjs` 生成 `reports/transcript-layout-prototype.html`（现状 = dist 真实组件，提案 = §4 规则的可执行实现，数据源是同一段真实会话）；`--print=release-next` 等可在终端直接看任意一帧。
-- 实现时：40/80/120/230 列下每行 `visibleWidth ≤ width`；`model-snapshot` 无差异；快照测试按新排版更新；Orca 真实终端、真实模型走一遍。
+- 实现时：40/80/120/230 列下每行 `visibleWidth ≤ width`；`model-snapshot` 无差异；快照测试按新排版更新；Herdr 真实终端、真实模型走一遍。
 
 ## 7. 评审记录
 

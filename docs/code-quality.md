@@ -30,7 +30,7 @@
 | 模型可见快照 | `model-snapshot.mjs --diff` 无非预期变化（有变化需在报告说明） |
 | 改动文件复杂度 | 改动 `src/**/*.ts` 过 ESLint + `sonarjs`（规则级别为 `error`，符合第 1 节上限；依赖装在 `EPI_ESLINT_DIR`，默认 `~/.cache/epi-eslint`，每次自动同步 `scripts/dev/eslint.config.mjs`） |
 | 禁网全量测试与耗时告警 | 副本禁网沙箱跑全套测试全过，写入 `precheck.sha`（`--fix` 另写 `fix.sha`）与 `=== precheck passed ===`；总耗时 > 240s 打 `WARNING` |
-| 修复前失败与实测 | 新增回归测试在 `before/` 下失败、在 `repo/` 下通过；重构命令前后输出一致；TUI 改动在 Orca 实测通过 |
+| 修复前失败与实测 | 新增回归测试在 `before/` 下失败、在 `repo/` 下通过；重构命令前后输出一致；TUI 改动在 Herdr 实测通过 |
 
 ## 3. 定期的 code smell 扫描（非每次功能评审项）
 

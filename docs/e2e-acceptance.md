@@ -2,21 +2,21 @@
 
 状态：2026-09-30 第一版（用户要求："沉淀一套端到端的测试文档和预期结果"）。
 
-自动测试（`npm test`）用的是假模型和模拟终端，查不出真实终端里的问题。今天的两个 P1 都是这样漏掉的：Ghostty 的按键松开事件（D7），点击图片标签后快捷键失效（D8）。本清单是人（或主控通过 Orca）用真实终端、真实模型逐条走的验收步骤，每条写明预期结果。
+自动测试（`npm test`）用的是假模型和模拟终端，查不出真实终端里的问题。今天的两个 P1 都是这样漏掉的：Ghostty 的按键松开事件（D7），点击图片标签后快捷键失效（D8）。本清单是人（或主控通过 Herdr）用真实终端、真实模型逐条走的验收步骤，每条写明预期结果。
 
 ## 1. 什么时候跑
 
 | 时机 | 跑哪些 |
 |---|---|
-| 每次任务合并后（[dev-workflow.md](dev-workflow.md) 第 3.1 节 N5、第 5 节） | 标 ★ 的冒烟条目 |
+| 每次任务合并后（[dev-workflow.md](dev-workflow.md) 第 2 节、第 6 节） | 标 ★ 的冒烟条目 |
 | 大节点审查前（打审查包时附上结果） | 全部 |
 | Pi 内核升级后 | 全部 |
 | 修了某一块的 bug | 那一块的全部条目 |
 
 ## 2. 怎么跑
 
-- **Orca 路线**（主控可以自动走，2026-10-21 起启用，操作见 [dev-workflow.md](dev-workflow.md) 第 5 节）：用 `orca terminal create / send / read / close` 在独立测试终端里启动 `node dist/cli.js` 并发送按键、鼠标序列和读取画面；粘贴图片时用 `EPI_TEST_CLIPBOARD_FILE=<png>` 启动，不碰真实剪贴板。
-- **Ghostty 路线**（标 🖐 的条目必须在这里跑）：直接在 Ghostty 窗口运行 `node dist/cli.js`。Ghostty 会发送 kitty 键盘协议的按下 + 松开事件，会渲染图片预览，还会读写真实剪贴板。主控在 Orca 终端里用 `orca terminal send --text $'\x1b[118;5u\x1b[118;5:3u'`（按下 + 松开）可以近似，但最终以 Ghostty 为准。
+- **Herdr 路线**（主控按 `herdr` Skill 自动走，操作见 [dev-workflow.md](dev-workflow.md) 第 6 节）：在 Herdr 同 Tab 分屏终端（`herdr-app do pane.split` + `hc send / keys / read` + `pane.close`）启动 `node dist/cli.js` 发送输入、按键并读取画面；粘贴图片时用 `EPI_TEST_CLIPBOARD_FILE=<png>` 启动，不碰真实剪贴板。
+- **手工 GUI 路线**（标 🖐 的条目在真实终端窗口手测）：直接在 Herdr.app 或 Ghostty 窗口运行 `node dist/cli.js`，核对 kitty 键盘协议按下+松开事件、图片预览和系统剪贴板拖选复制。
 - **测试项目**：`scratchpad` 下建一个目录，放 `.epi/epi.json`（声明 `epi:mcp`）和 `.epi/mcp.json`（两个测试服务：`test/fixtures/mcp-server.mjs`，一个默认曝光，一个 `"exposure": "direct"`）。
 - **模型**：`--provider magpie --model devin/claude-sonnet-5-5 --thinking high`（或按 `epi --list-models` 的 `magpie` 段选可用的 sonnet/opus 模型）。
 - **记录**：每次跑完写 `.dev/e2e/<日期>-<版本>.md`，每条一行：编号、通过/失败、失败时的现象和画面。失败的条目记进 [dogfood-issues.md](dogfood-issues.md)。
