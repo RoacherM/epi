@@ -4,6 +4,7 @@
 
 | 版本 | 内容 |
 |---|---|
+| [0.2.10](0.2.10/README.md) | 异步调度路由与 KV-Cache 稳定化（DP2：`bash` `mode` 三态契约、根会话静态看板零 `setActiveTools` 抖动、`task` `role: "worker" \| "peer"` 与子代理精简）、`FixedPointGuard` 死循环提醒与 TUI `task_wait` 300s 预算钳制、无头 `Monitor` 收尾排空防重，以及 Magpie 会话亲和头与前向兼容。无界面变化 |
 | [0.2.9](0.2.9/README.md) | 免 Node.js 一键安装与 Bun 预打包通用归档发行（`install.sh` 自动托管校验版 Bun、零 registry 原子切换与 `N-1` 保留、`epi update` 原地升级、Bun `fd 3` 子代理协议修复），Pi SDK 升级至 `1.6.1`。无界面变化 |
 | [0.2.8](0.2.8/README.md) | 修复 `epi -p` / `--mode json` 正常退出时误杀 `bash({ isDaemon: true })` 常驻服务（`#16`）：日志文件描述符直连防断管 `SIGPIPE`、无头根会话 `detachDaemons()` 零挂起退出、跨次启动 `reconcile` 孤儿收割豁免与 `--continue` 恢复查看/取消。无界面变化 |
 | [0.2.7](0.2.7/README.md) | 内置可移植异步调度与多代理协同引擎 `dispatch`（DP1）：`fd 3` 独立协议 Worker、受管异步 `bash` 与 `Alt+B`/`/bg` 前台放手、具名同伴共享看板（`board_post`/`board_read`/`board_wait` + `forkFrom`）、会话闹钟与收件箱、非阻塞异步 `branch`/`share` 工作区隔离，以及 `/tasks`、`/board` 双页签实时浮层 |

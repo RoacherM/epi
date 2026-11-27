@@ -2,6 +2,14 @@
 
 记录 Epi 各版本的主要变更与特性展示链接。四模型综合评测数据见 [README · Benchmark（FrontierHarness Eval v1.1）](README.md#benchmarkfrontierharness-eval-v11)。
 
+**0.2.10：异步调度路由与 KV-Cache 稳定化（DP2）、定点死循环提醒与 Magpie 会话亲和**
+
+[→ 特性展示](docs/showcase/0.2.10/README.md)
+
+- **异步调度与 KV-Cache 零工具抖动（决策 DP2）**：`bash` 参数收口为 `mode?: "auto" | "background" | "daemon"`（`additionalProperties: false`，删除 `waitMsBeforeAsync` / `isDaemon`）；删去运行期 `activateTools()` 与一切 `setActiveTools` 变更，根会话首轮即静态固定注册 `board_post` 与 `board_read`（去掉 `board_wait`），稳定 KV Cache 前缀；`task` 新增 `role?: "worker" | "peer"`（普通 `worker` 不因传 `name` 被拉上看板或强转后台），子代理预设作用域（`AgentScope.web`）默认关闭 `epi:web`，系统提示词按 `interactive-root`、`headless-root` 与 `subagent` 三路裁剪。
+- **死循环护栏、`task_wait` 预算钳制与无头排空统一**：新增 `FixedPointGuard`（`src/repeat-guard.ts`）对连续逐字节相同 `(tool, input, isError, rawText)` 工具往返追加非阻塞退出提醒；交互式 TUI 下 `task_wait` 同样受 `foregroundBudgetSeconds`（默认 `300s`，`waitEnd: "budget"`）约束；`DrainBarrier` 聚合 `SettleSource`（接入 `TaskMonitorBridge.settleSources()`，配合 `NotificationLedger.holdFlush()` / `flushFromDrain()`）保证无头模式下非持久 `monitor` 可靠排空且不重不乱序，移除旧 `task-notify.ts`。
+- **Magpie 会话亲和头、前向兼容与文档迁移**：Magpie 对 OpenAI/Anthropic 协议自动开启 `sendSessionAffinityHeaders: true` 并支持 `pi-ai` 全量 11 种 `THINKING_FORMATS` 的 `magpie_compat` 前向兼容转发；`README.md` 补充 FrontierHarness Eval v1.1 四模型对比表与帕累托图，工程与终端验收文档全面迁至 Herdr（`herdr-app` + `hc`）。
+
 **0.2.9：免 Node.js 一键安装与 Bun 预打包发行、Pi SDK 升级至 1.6.1**
 
 [→ 特性展示](docs/showcase/0.2.9/README.md)
