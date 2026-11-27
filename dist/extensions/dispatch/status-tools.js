@@ -98,6 +98,8 @@ function waitTool(deps) {
             const onAbort = () => { end = "aborted"; controller.abort(); };
             const detach = () => { end = "detached"; controller.abort(); };
             signal?.addEventListener("abort", onAbort, { once: true });
+            if (signal?.aborted === true)
+                onAbort();
             deps.foregroundWaits?.add(detach);
             const limit = waitLimit(params.timeoutSeconds, foregroundBudgetMs(ctx?.mode, deps.foregroundBudgetSeconds));
             const timer = limit === undefined ? undefined : setTimeout(() => { end = limit.end; controller.abort(); }, limit.ms);

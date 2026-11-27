@@ -15,11 +15,21 @@ import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
+import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import {
+  createAgentSession,
+  createAgentSessionServices,
+  resolveCliModel,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
+
 import { createEpiDispatchExtension } from "../dist/extensions/dispatch-epi-host.js";
 import { childModelReference } from "../dist/extensions/dispatch/worker-host.js";
 import { createMonitorInlineExtension } from "../dist/extensions/monitor.js";
 import { createTaskMonitorBridge } from "../dist/extensions/task-monitor-bridge.js";
 import { PROVIDER_LOGIN_HELP } from "../dist/pi-output.js";
+import { registerFaux } from "./fixtures/faux-register.mjs";
 
 const fakeWorker = fileURLToPath(new URL("./fixtures/fake-task-worker.mjs", import.meta.url));
 const fauxTask = fileURLToPath(new URL("./fixtures/dispatch-faux-task.mjs", import.meta.url));
@@ -375,4 +385,63 @@ test("trusted project workspace: share preserves .epi/hooks.json tool_call guard
   );
   assert.match(skillRes.content[0].text, /LEAKED_SKILL=false/, "noSkills: true blocks ambient pi/skills discovery");
   assert.equal(notices.some((n) => /invalid-stop-decision/.test(n.m) && n.lv === "error"), true, "task_stop failure surfaced visibly");
+});
+
+test("headless print mode drains non-persistent monitor without duplicate or out-of-order notifications", async (t) => {
+  const root = makeRoot(t);
+  const epiHome = join(root, ".epi");
+  const agentDir = join(epiHome, "pi");
+  mkdirSync(agentDir, { recursive: true });
+  const bridge = createTaskMonitorBridge();
+  const fauxExt = (pi) => registerFaux(pi, {
+    models: ["tools"],
+    responses: Array.from({ length: 12 }, (_, i) => () => i === 0
+      ? fauxAssistantMessage(fauxToolCall("monitor", { command: "sleep 0.15; echo STEP_1; sleep 0.25; echo STEP_2", description: "steps" }), { stopReason: "toolUse" })
+      : fauxAssistantMessage(fauxText(`ok-${i}`))),
+  });
+  const settingsManager = SettingsManager.create(root, agentDir, { projectTrusted: false });
+  const { modelRuntime, resourceLoader } = await createAgentSessionServices({
+    cwd: root,
+    agentDir,
+    settingsManager,
+    resourceLoaderOptions: {
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+      extensionFactories: [
+        fauxExt,
+        createEpiDispatchExtension({ epiHome, projectTrusted: false, bridge }),
+        createMonitorInlineExtension({ epiHome, agentDir, bridge }),
+      ],
+    },
+  });
+  const { model } = resolveCliModel({ cliModel: "epi-faux/tools", modelRuntime });
+  const { session } = await createAgentSession({
+    cwd: root,
+    agentDir,
+    modelRuntime,
+    resourceLoader,
+    settingsManager,
+    sessionManager: SessionManager.inMemory(root),
+    model,
+  });
+  try {
+    await session.bindExtensions({ mode: "print" });
+    await session.prompt("go");
+    const monitorEntries = session.sessionManager.getEntries()
+      .filter((entry) => entry.type === "custom_message" && entry.customType === "Monitor");
+    const receipts = monitorEntries.map((entry) => entry.details?.receipts ?? []);
+    const flat = receipts.flat();
+    assert.deepEqual(flat, [...new Set(flat)], `duplicate Monitor receipts delivered: ${JSON.stringify(receipts)}`);
+    const combined = monitorEntries.map((entry) => String(entry.content ?? "")).join("\n");
+    const step1 = combined.indexOf("STEP_1");
+    const step2 = combined.indexOf("STEP_2");
+    const ended = combined.indexOf("[Monitor ended");
+    assert.ok(step1 >= 0 && step2 > step1 && ended > step2, `expected ordered STEP_1 -> STEP_2 -> [Monitor ended], got:\n${combined}`);
+  } finally {
+    await session._extensionRunner?.emit({ type: "session_shutdown", reason: "quit" });
+    session.dispose();
+  }
 });

@@ -165,6 +165,8 @@ export class NotificationLedger {
   readonly customType: string;
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
   private compactedSinceWake = false;
+  private holdCount = 0;
+  private settledWakePending = false;
   private readonly putListeners = new Set<() => void>();
 
   constructor(private readonly options: NotificationLedgerOptions) {
@@ -218,6 +220,7 @@ export class NotificationLedger {
   clear(): void {
     if (this.flushTimer !== undefined) clearTimeout(this.flushTimer);
     this.flushTimer = undefined;
+    this.settledWakePending = false;
     this.entries.clear();
   }
 
@@ -271,11 +274,11 @@ export class NotificationLedger {
     };
   }
 
-  flush = (): void => {
+  flush = (): boolean => {
     this.flushTimer = undefined;
     const pi = this.gate.pi;
     const ready = this.batch(this.readyEntries(true));
-    if (ready.length === 0 || pi === undefined) return;
+    if (ready.length === 0 || pi === undefined) return false;
     let sent = false;
     try {
       pi.sendMessage(this.buildPayload(ready), { deliverAs: "followUp", triggerTurn: true });
@@ -285,10 +288,42 @@ export class NotificationLedger {
       this.options.onSendError?.(error);
     }
     this.options.onChange?.();
-    if (sent && this.readyEntries(true).length > 0) this.scheduleFlush();
+    if (sent && this.holdCount === 0 && !this.settledWakePending && this.readyEntries(true).length > 0) {
+      this.scheduleFlush();
+    }
+    return sent;
   };
 
+  holdFlush(): () => void {
+    this.holdCount += 1;
+    if (this.flushTimer !== undefined) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        this.holdCount = Math.max(0, this.holdCount - 1);
+      }
+    };
+  }
+
+  flushFromDrain(): boolean {
+    if (this.flushTimer !== undefined) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+    const sent = this.flush();
+    if (sent) {
+      this.settledWakePending = true;
+      setImmediate(() => { this.settledWakePending = false; });
+    }
+    return sent;
+  }
+
   scheduleFlush(): void {
+    if (this.holdCount > 0 || this.settledWakePending) return;
     const coalesceMs = this.options.coalesceMs ?? NOTIFY_COALESCE_MS;
     if (coalesceMs <= 0) {
       this.flush();
@@ -308,6 +343,7 @@ export class NotificationLedger {
   /** Pi emits `session_compact(_failed)` / `session_tree` before `isCompacting` clears, so a zero
    * coalesce window retries on the next macrotask once `isIdle()` flips. */
   private unlockFlush(): void {
+    if (this.holdCount > 0 || this.settledWakePending) return;
     this.scheduleFlush();
     const pending = [...this.entries.values()].some((entry) => entry.state === "unsent" && entry.autoWake);
     if ((this.options.coalesceMs ?? NOTIFY_COALESCE_MS) <= 0 && this.flushTimer === undefined && pending) {
@@ -359,6 +395,7 @@ export class NotificationLedger {
   }
 
   onSessionStart(ctx: ExtensionContext, reason?: string): void {
+    this.settledWakePending = false;
     this.gate.onSessionStart(ctx, reason);
     this.reconcileFromBranch();
     this.resetSent();
@@ -372,7 +409,7 @@ export class NotificationLedger {
     const suppress = aborted === true && !gate.compacting;
     const activeId = gate.sessionId();
     for (const entry of this.entries.values()) {
-      if (entry.state === "sent") entry.state = "unsent";
+      if (entry.state === "sent" && !this.settledWakePending) entry.state = "unsent";
       if (suppress && entry.originSessionId === activeId) entry.autoWake = false;
     }
     gate.onAgentSettled(aborted);
@@ -410,7 +447,10 @@ export class NotificationLedger {
       const msg = event.message as { role?: unknown; customType?: unknown; details?: ReceiptDetails };
       if (msg.role === "custom" && msg.customType === this.customType) this.ackReceipts(msg.details);
     });
-    pi.on("turn_start", () => this.reconcileFromBranch());
+    pi.on("turn_start", () => {
+      this.settledWakePending = false;
+      this.reconcileFromBranch();
+    });
     pi.on("turn_end", (event) => {
       if (!gate.canInjectMidRun(event) || event.toolResults.length === 0) return undefined;
       const entries = this.boundaryDraft(event.entries, this.takeUnsentPayload(false));
@@ -423,6 +463,7 @@ export class NotificationLedger {
     });
     pi.on("agent_settled", (event) => this.onAgentSettled(event.aborted));
     pi.on("before_agent_start", (event) => {
+      this.settledWakePending = false;
       if (event.messageType === "custom" && event.message.customType === this.customType) return undefined;
       if (event.messageType === "user") gate.onUserPromptStart();
       const payload = this.takeUnsentPayload(false);
@@ -482,10 +523,9 @@ function drainDurationMs(sources: readonly SettleSource[], options: DrainOptions
 }
 
 /**
- * The shared `agent_settled` drain (docs/dispatch-design.md §3.4). Held open while any source has
- * finite work in flight and no wake has been queued; a ledger `put` or an explicit `wake()`
- * re-checks. Zero-coalesce sources flush inside `put`, so a ready `put` latches `wakeQueued`
- * synchronously before flush turns `state` into `sent`.
+ * The shared `agent_settled` drain (docs/dispatch-design.md §3.4). Holds flushes across all
+ * participating ledgers while waiting on finite work so zero-coalesce sources stay `unsent`
+ * until one clean deferred wake is emitted on exit.
  */
 export class DrainBarrier {
   private waker: (() => void) | undefined;
@@ -521,18 +561,13 @@ export class DrainBarrier {
 
   async drain(): Promise<void> {
     const sources = this.options.sources();
-    // put() invokes listeners after inserting "unsent" and before scheduleFlush() synchronously marks
-    // zero-coalesce entries "sent", so hasReady() observed here accurately captures deferred settle wakes.
-    let wakeQueued = false;
-    const unsubscribes = sources.map((source) => source.ledger.onPut(() => {
-      if (source.ledger.hasReady()) wakeQueued = true;
-      this.wake();
-    }));
+    const releases = sources.map((source) => source.ledger.holdFlush());
+    const unsubscribes = sources.map((source) => source.ledger.onPut(() => this.wake()));
     const now = Date.now();
     const deadline = now + drainDurationMs(sources, this.options, now);
     this.active = true;
     try {
-      while (!wakeQueued && this.shouldWait(sources, deadline)) {
+      while (this.shouldWait(sources, deadline)) {
         await this.nap(deadline);
         this.waker = undefined;
       }
@@ -540,9 +575,12 @@ export class DrainBarrier {
       this.waker = undefined;
       this.active = false;
       for (const off of unsubscribes) off();
+      for (const release of releases) release();
     }
     if (this.options.stopWhen?.() !== true) {
-      for (const source of sources) source.ledger.flushNow();
+      for (const source of sources) {
+        if (source.ledger.flushFromDrain()) break;
+      }
     }
   }
 }

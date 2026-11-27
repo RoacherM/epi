@@ -222,7 +222,7 @@ function renderTaskCall(
         theme,
         `${theme.fg("toolOutput", "task")} ${typeof args.name === "string" ? `${theme.fg("accent", `@${args.name}`)} ` : typeof args.agent === "string" ? `${theme.fg("accent", args.agent)} ` : ""}${theme.fg("toolOutput", quoteShort(taskText))}`,
         context,
-        args.background === true || typeof args.name === "string" ? theme.fg("dim", "bg") : "",
+        args.background === true || args.role === "peer" ? theme.fg("dim", "bg") : "",
       );
   line.inspect = () => {
     const ref = taskCallRef(args, context);

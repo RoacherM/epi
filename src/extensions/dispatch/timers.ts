@@ -237,13 +237,6 @@ export class TimerRuntime {
     return { summary: this.summary(timer), text: `${timer.id} ${kind} ${due}: ${timer.prompt}`, details: { id: timer.id, status: timer.status, dueAt: timer.dueAt } };
   }
 
-  hasActiveSchedules(): boolean {
-    for (const timer of this.timers.values()) {
-      if (timer.kind === "schedule" && timer.status === "pending") return true;
-    }
-    return false;
-  }
-
   provider(): DispatchItemProvider {
     return {
       kind: "tm",

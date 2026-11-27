@@ -81,6 +81,8 @@ export declare class NotificationLedger {
     readonly customType: string;
     private flushTimer;
     private compactedSinceWake;
+    private holdCount;
+    private settledWakePending;
     private readonly putListeners;
     constructor(options: NotificationLedgerOptions);
     get gate(): NotificationGate;
@@ -102,7 +104,9 @@ export declare class NotificationLedger {
     /** Greedy batch under the byte cap; whatever does not fit waits for the next wake. */
     private batch;
     buildPayload(entries: readonly LedgerEntry[]): NotificationPayload;
-    flush: () => void;
+    flush: () => boolean;
+    holdFlush(): () => void;
+    flushFromDrain(): boolean;
     scheduleFlush(): void;
     /** Flush now, skipping the coalesce window (the settle drain is already the batching point). */
     flushNow(): void;
@@ -145,10 +149,9 @@ export interface DrainOptions {
     stopWhen?: () => boolean;
 }
 /**
- * The shared `agent_settled` drain (docs/dispatch-design.md §3.4). Held open while any source has
- * finite work in flight and no wake has been queued; a ledger `put` or an explicit `wake()`
- * re-checks. Zero-coalesce sources flush inside `put`, so a ready `put` latches `wakeQueued`
- * synchronously before flush turns `state` into `sent`.
+ * The shared `agent_settled` drain (docs/dispatch-design.md §3.4). Holds flushes across all
+ * participating ledgers while waiting on finite work so zero-coalesce sources stay `unsent`
+ * until one clean deferred wake is emitted on exit.
  */
 export declare class DrainBarrier {
     private readonly options;

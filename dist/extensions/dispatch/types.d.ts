@@ -103,6 +103,8 @@ export interface SettleSource {
     ledger: {
         hasReady(): boolean;
         flushNow(): void;
+        holdFlush(): () => void;
+        flushFromDrain(): boolean;
         onPut(listener: () => void): () => void;
     };
 }

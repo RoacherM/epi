@@ -201,13 +201,6 @@ export class TimerRuntime {
         const kind = timer.kind === "schedule" ? `schedule ${timer.cadence} (${timer.sessionMode ?? "resume"})` : "follow_up";
         return { summary: this.summary(timer), text: `${timer.id} ${kind} ${due}: ${timer.prompt}`, details: { id: timer.id, status: timer.status, dueAt: timer.dueAt } };
     }
-    hasActiveSchedules() {
-        for (const timer of this.timers.values()) {
-            if (timer.kind === "schedule" && timer.status === "pending")
-                return true;
-        }
-        return false;
-    }
     provider() {
         return {
             kind: "tm",

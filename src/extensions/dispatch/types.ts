@@ -110,7 +110,13 @@ export interface DispatchUiAdapter {
 /** One participant in the settle drain: in-flight finite work and its wake ledger. */
 export interface SettleSource {
   finiteWork(): readonly { deadlineAt?: number | undefined }[];
-  ledger: { hasReady(): boolean; flushNow(): void; onPut(listener: () => void): () => void };
+  ledger: {
+    hasReady(): boolean;
+    flushNow(): void;
+    holdFlush(): () => void;
+    flushFromDrain(): boolean;
+    onPut(listener: () => void): () => void;
+  };
 }
 
 /** Everything a host may inject. Every field is optional: `pi -e dist/extensions/dispatch/index.js`
