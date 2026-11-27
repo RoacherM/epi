@@ -1,0 +1,177 @@
+# 更新记录
+
+记录 Epi 各版本的主要变更与特性展示链接。四模型综合评测数据见 [README · Benchmark（FrontierHarness Eval v1.1）](README.md#benchmarkfrontierharness-eval-v11)。
+
+**0.2.9：免 Node.js 一键安装与 Bun 预打包发行、Pi SDK 升级至 1.6.1**
+
+[→ 特性展示](docs/showcase/0.2.9/README.md)
+
+- **免 Node.js 一键安装与 Bun 预打包发行（决策 IN1）**：`curl -fsSL https://github.com/RoacherM/epi/releases/latest/download/install.sh | bash` 零前置依赖安装，自动复用或下载经 SHA-256 校验的私有 Bun 运行时（`~/.epi/runtime/bun`），下载通用预打包归档 `epi-<version>-bundle.tar.gz` 原子切换至 `~/.epi/current`（保留 `N-1` 版本保护并发会话），`epi update` 保留自定义 `--dir` / `EPI_INSTALL_DIR` 原地升级；修复 Bun 下 `dispatch` `fd 3` 协议双关与丢读问题，CI/Release 全面接入 Bun 加速。
+- **Pi SDK 升级（`1.4.0 → 1.6.1`）**：同步锁定全部 `@earendil-works/*` 包（含新增 `@earendil-works/pi-schema`），适配 `pi-tui` `readonly string[]` 渲染签名与 Pi 1.6 新增 `PI_*` 环境变量隔离。
+
+**0.2.8：无头模式 `isDaemon` 常驻服务跨退出保活、防断管 `SIGPIPE` 与启动对账豁免**
+
+[→ 特性展示](docs/showcase/0.2.8/README.md)
+
+- **无头模式 `bash({ isDaemon: true })` 跨退出保活（`#16`）**：根会话在 `epi -p`、`--mode json` 与 `pi -p -e` 正常退出时自动将运行中的守护进程解绑保留（`detached: true`，关闭父侧 `stdin` 并 `unref` 子进程句柄，零事件循环挂起），后续同 `EPI_HOME` 启动的 `reconcile()` 不再将其误判为崩溃孤儿清扫；`--continue` 恢复原会话后仍可用 `task_status` 查看退出后日志或用 `task_cancel` 显式停止。交互式 TUI、RPC、Worker 子代理退出与信号中断仍全量终止进程树。
+- **守护进程日志文件描述符直连防 `SIGPIPE`**：`isDaemon: true` 在启动时将 `stdout`/`stderr` 直接绑定至 `<stateDir>/bg/<id>.log`（`O_APPEND`，按偏移读取尾部 `64 KiB`），宿主退出后常驻 HTTP/gRPC 服务持续输出访问日志不会触发 `SIGPIPE` 或 `EPIPE`。
+- **FrontierHarness Eval v1.1 四模型评测验证**：基于 `0.2.8`（Pi SDK `1.4.0`）在 4 个开源模型（DeepSeek-V4.1-Flash-1017 `69.4%`、GLM-5.3-Flash `67.7%`、GLM-5.3 `64.5%`、Muse-Spark-1.2 `54.8%`）上完成 `62 × 1 × 4 = 248` 题全量自测（`infra = 0`），四模型均分 **64.1%（159/248）**，全模型跑赢底层原生 Pi `1.4.0`（均分 57.6%，**+6.6pp**），详见 [README Benchmark 表格](README.md#benchmarkfrontierharness-eval-v11)。
+
+**0.2.7：内置可移植异步调度与多代理协同引擎 `dispatch`（受管异步 `bash`、具名同伴共享看板、闹钟/收件箱与双页签视图）**
+
+[→ 特性展示](docs/showcase/0.2.7/README.md)
+
+- **统一异步调度与多代理协同引擎 `dispatch`（决策 DP1）**：内置 `epi:task` 升级为 100% 遵循公开 Pi `ExtensionAPI` 的可移植 `src/extensions/dispatch/` 引擎（子进程走独立 `fd 3` 双向 JSONL 管道，零私有内部依赖，外部可直接 `pi -e dist/extensions/dispatch/index.js` 加载）：统一收编受管异步 `bash`（`waitMsBeforeAsync` 同步窗口、`isDaemon`、`task_input`，前台按 `Alt+B` 或 `/bg` 一键放手转后台）、会话闹钟与定时任务（`timer` `follow_up`/`schedule`）、`link()` 原子去重外部收件箱与纯内存 `/approve` 护栏，以及 `epi -p` 与 Worker 共用的 `agent_settled` 完结排空屏障。
+- **具名同伴与共享看板（`board_post` / `board_read` / `board_wait`）**：不引入平行 Swarm 管理工具，传 `task({ name, task, workspace })` 即启动单层拓扑（`PI_DISPATCH_DEPTH=1`）下的具名看板同伴，支持 `@name` 横向直接交接、父进程序号写盘回执强一致、`forkFrom` 同伴上下文分支、空闲停泊后 `@name` 原地复活与去重停滞检测。
+- **非阻塞工作区隔离与双页签交互浮层**：`workspace: "branch" | "share"` 的创建、脏改动检查与清理全量异步化，`share` 模式直接软链 `node_modules` 并跳过 `.dev` 缓存目录，消除大仓库克隆阻塞 TUI 输入与管道；新增 `/tasks` 与 `/board` 88% 宽 `Items` / `Board` 双页签浮层，实时下钻查看子代理会话与 `bg_*` 日志并统一净化终端控制序列。
+
+**0.2.6：四层 `bash` 与子代理防挂死守卫、统一后台通知账本与 CLI/Magpie 加固**
+
+[→ 特性展示](docs/showcase/0.2.6/README.md)
+
+- **四层 `bash` 与子代理执行守卫（`#13`）**：缺省 `timeout` 自动注入 `120s`，`> 600s` 在 `0ms` 即时拦截并对毫秒误传（`>= 1000`）给出秒单位换算提示，超时报错附带 `.git/index.lock` 检查提示；引号/注释/heredoc 感知的 0ms Shell 预检拦截无界流式跟随（`tail -f`、`docker/kubectl logs -f` 等，放行 `<= 60s` 短探针）、无头交互式全屏程序（`vim`/`htop`/`top` 等）与脱管后台守护（`nohup`/`setsid`/`tmux new -d` 及无 `wait`/`kill`/`trap` 的顶层 `&`）；`TaskRuntime` 子代理通过 `BASH_ENV` 进程组账本与 `EPI_WORKER_COOKIE` 在收尾时收割残存孤儿进程组（兼容 macOS `sandbox-exec` 沙盒），默认注入非交互 Git/Editor 环境；主会话退出时立即触发 `context.abort()`。
+- **统一后台通知门禁与批量 `task` / `Monitor` 加固**：`epi:task` 与 `epi:monitor` 共用 `NotificationGate` 与 `NotificationLedger`，跨 `/compact`、`Esc` 与 `/tree` 可靠投递且不串会话；批量 `task({ tasks })` 部分失败自动原子回滚并透传 `context: "fork"`；`/tasks` 净化监控输出控制序列，`Monitor` 渐进切分无换行长流并保证 WebSocket 关闭幂等。
+- **CLI、Magpie 与剪贴板图片修复**：`epi mcp` 未知子命令明确报错退出；Magpie 清理跨渠道残留签名且不留空回合；macOS 剪贴板图片落盘隔离临时文件名消除并发粘贴竞态。
+
+**0.2.5：异步子代理即时消费与 Worktree 隔离、内置 Monitor 流式监控、微信图片粘贴修复与 Magpie Gemini 轨迹规范化**
+
+[→ 特性展示](docs/showcase/0.2.5/README.md)
+
+- **异步子代理（`epi:task`）升级**：主会话忙碌时可在 `turn_end` / `agent_before_settle` 即时收取后台子代理完成与里程碑通知（按 `${jobId}:${run}` 精确去重）；新增 `"steer"` / `"enqueue"` / `"interrupt"` 三种运行中纠偏策略、子代理内置 `report_progress` 工具、`isolation: "worktree"` 独立 Git 工作树隔离、以及 `task({ tasks })` / `task_wait({ jobIds, mode })` / `task_cancel({ jobIds, all })` 批量并行控制。
+- **内置流式后台监控（`Monitor` / `monitor_stop` / `monitor_list`）**：随 `epi:task` 提供后台命令 `stdout` 行流与 WebSocket 帧流监控，支持 200ms 窗口批量聚合、令牌桶限流（突发 10、每 2s 恢复 1、连续抑制 30s 自动熔断）、独立进程组树清理（`killTree`）与 `<EPI_HOME>/runtime/monitors` 日志落盘。
+- **微信复制图片粘贴 `EPERM` 修复**：粘贴沙盒不可读路径（如 macOS 微信临时目录 `EPERM`/`EACCES`）不再导致 TUI 崩溃，自动回退读取系统剪贴板中的图片位图并插入 `[Image #N]` chip。
+- **Magpie Antigravity Gemini 轨迹规范化**：保留 Antigravity 自有 `thoughtSignature`、将空白文本分片上的有效签名转移给同轮 `functionCall`、剔除空回合并合并连续同角色回合（`functionResponse` 置前）。
+
+**0.2.4：Magpie 跨渠道签名清理、Gemini 签名兜底与旧 `models.json` 兼容**
+
+[→ 特性展示](docs/showcase/0.2.4/README.md)
+
+- **Antigravity 与 `auto/*` 跨渠道清理与脱敏**：同一会话从其他渠道切到 `antigravity/*` 或 `auto/*` 时，自动剥离工具调用与结果 ID（含 `callId|itemId` 双段）末尾的 `__ts*__` 后缀、清理四种协议中不兼容的异源思维块与签名，并对系统提示词与会话/工具输出里的 harness 标识词及压缩摘要模板句做幂等零宽空格（`U+200B`）脱敏。
+- **Gemini 跨模型工具调用签名兜底**：在 `/v1beta`（`google-generative-ai`）协议下，自动为缺失签名的跨模型历史 `functionCall`（以及 `antigravity/*` / `auto/*` 下的所有 `functionCall`）补齐 `"skip_thought_signature_validator"`，消除 Gemini 3/4 工具续轮 400。
+- **忽略旧 `models.json` 静态 `providers.magpie` 覆盖**：即使 `<EPI_HOME>/pi/models.json` 残留早期静态 `providers.magpie`（如顶层 `/v1`、`openai-completions` 或缺失 `reasoning` 的模型项），仍按 Magpie 实时目录还原每个模型的协议、端点与完整推理/缓存元数据。
+
+**0.2.3：子代理不再卡住主会话**
+
+[→ 特性展示](docs/showcase/0.2.3/README.md)
+
+- **前台等待有预算**：`task` 在前台最多占主会话 5 分钟。到期不杀子代理，作业转到后台，模型收到一张回执，答案落定时自己送回来并开一轮。
+- **`task_wait` 用同一个预算**：到点返回进度而不是无限等；「还在跑」的结果从原始快照 JSON 换成几行进度，不再把会话路径、工作目录和事件环塞进上下文。
+- **唤醒只进空闲会话**：会话正在跑时，通知不再排进 follow-up 队列等着和 `task_wait` 的结果撞车，改为这一轮结束后再送。
+- **只在这个模式下放手**：`-p`、`--mode json`、`rpc` 仍然等到落定——它们的进程可能先结束，放手等于丢结果。
+
+**0.2.2：长文和子代理都能点开看全**
+
+![子任务进度：单击底栏 ◐ 1 task → 列表 → 任务页实时刷新](docs/showcase/0.2.2/tasks.gif)
+
+[→ 特性展示](docs/showcase/0.2.2/README.md)
+
+- **长文折成标签**：一次粘贴 ≥4 行或超过 1000 个字符就折成 `[Pasted: …]`（以前要到 10 KB）。单击预览浮窗在查看器里看全文，按 `e` 编辑后放回原位，一次撤销恢复。
+- **发出的长消息**：显示 `… +N lines (click to view)`，单击看全文。
+- **子代理任务页**：单击 `task` 行、右下角的 `◐ 1 task`，或输入 `/tasks`，看子代理的完整对话，跑的时候实时刷新；多个任务时先看列表。
+- **设计先出原型**：界面改动先交可交互 HTML 原型，试过同意后才实现（决策 WF6）。
+
+**0.2.1：子代理的可靠交付**
+
+[→ 特性展示](docs/showcase/0.2.1/README.md)
+
+- **进程内可靠信箱**：后台子代理落定的结果先进 `unsent` 账，`canWake()`（同一会话、非压缩中）满足才发 `epi:task-notify` 标为 `sent`，收到 `message_end` 回执才销账；被 Esc/`Alt+Up` 清掉、`/compact` 期间到达或切走会话的通知不会丢，下一次用户提问由 `before_agent_start` 捎带送达。
+- **底栏 `epi-task` 微提示**：右下角常驻 `◐ 2 tasks` / `◐ 2+1 tasks` / `✓ 1 done` / `✗ 1 failed`，纯事件驱动、零定时器，`/new`、`/reload` 之后自动重刷。
+- **实时任务行**：`task`/`task_status`/`task_wait`/`task_cancel` 四个工具都有单行 `renderCall`；前台 `task`/`task_wait` 等待期间每 250ms 同行刷新 `turn N · <tool>: <arg>`，成功折叠占 0 行，失败一行 `✗`；`epi:task-notify` 渲染为每任务一行。
+
+**0.1.25：内置子代理**
+
+![一轮对话：两个 reader 子代理并发](docs/showcase/0.1.25/turn.gif)
+
+- **内置子代理 `epi:task` 2.0**：`task` 在独立进程、独立上下文里跑一个子代理，只把结论交回主会话；同一轮发出多个 `task` 就并发运行。取代外部的 `npm:pi-subagents`，装配走主会话同一条管线（Hooks、外部插件、Web 默认继承；Rules、Skills、MCP 按需打开）。
+- **查看、纠偏、续跑**：`task_status` 显示运行中子代理的轮次、步数、正在做什么和最近 10 步，不带参数列出全部；`task({ jobId, task })` 对运行中的子代理纠偏，对已结束的在同一会话上续跑；后台子代理结束时自动唤醒主会话。
+- **子代理自己压缩**：上下文快满时自动压缩继续干活；压缩也救不回来时以 `partial` 结束，保留已做的工作并写明原因。
+- **不受主会话打扰**：`/compact`、Esc、`/new`、`/resume` 不会再杀掉正在跑的子代理；只有退出和 `task_cancel` 会。父进程被强杀时子进程自动退出。
+- **预设**：`~/.epi/agents/*.md` 可写 `model`、`tools`、`skills`、`mcp`、`rules` 等默认值，例如用便宜模型跑的只读 `reader`。用量（含压缩）计入会话。
+- **Magpie 缓存预热**：Magpie 模型带上目录里的真实价格和缓存时长，Pi 的 prompt cache 预热终于生效，会话费用也不再显示 $0。
+
+**0.1.24：混合网页检索、旋转的 x、终端全宽**
+
+![一轮对话：旋转的 x、混合检索、全宽排版](docs/showcase/0.1.24/turn.gif)
+
+- **混合网页检索 `epi:web`**：模型多了 `web_search`、`web_fetch` 两个工具，同时查 DeepSeek 和 Exa（也可以登记 `mcp.json` 里的 MCP 检索工具），合并重复结果，标明每条是哪些源找到的；模型可以用 `sources` 只查其中几个。检索源的 key 和模型服务商分开存（`~/.epi/web-auth.json`），`/web` 里配置和测试；没配 key 时模型看不到这两个工具。一个源失败时其余照常返回，并写明哪个源为什么失败。
+- **日期优先**：每条结果最前面是发布日期和距今多久，结果开头写明今天的日期和时区。支持 `after`、`before`、`recency`、`sort: newest`，翻译成各家的写法后，Epi 在本地再按日期复核：范围外的去掉并计数，日期未知的排在后面，晚于明天的日期不采信。
+- **图标统一、旋转的 x**：对话区和 `/trace` 用同一套图标（`❯` 你、`◇` 模型、`$` shell、`◆` 工具、`◈` 合并）。运行中的调用和思考是匀速旋转的 x，结束时抖两下定格；失败停在红色 `×`；底部状态行也换成旋转的 x。动画只在最新几行内播放，不会让整屏重绘。
+- **终端全宽**：正文、调用行、你的消息条都铺满终端宽度，耗时条落在终端右边界，和表格、输入框同一条右边界。不到 10ms 的耗时显示 `····`。
+- 修复：多行的排队消息不再把第二行单独露在状态行下面。
+- 模型看到的内容：没配检索 key 时只有内建能力列表多了 `epi:web`；配了 key 后多两个工具。用法见 [网页检索](docs/guide/web.md)；录屏见 [0.1.24 特性展示](docs/showcase/0.1.24/README.md)。
+
+**0.1.23：Mermaid 图表、一列排版与耗时条**
+
+![一轮对话：对齐的耗时条，回复里的 Mermaid 流程图](docs/showcase/0.1.23/turn.gif)
+
+- **Mermaid 图表**：回复里的 ```` ```mermaid ```` 代码块直接画成框线图，支持 flowchart、sequence、state、class、ER、pie、mindmap、timeline、gitGraph。代码块闭合后才画；流程图横着放不下时自动竖排；画不出来时显示源码，标签写明原因（`mermaid · gantt is not supported: showing source`）。只改显示，模型看到的、复制出来的仍是源码。渲染引擎是 lovely-mermaid。
+- **一列排版**：工具调用行、失败行和你的消息条都和回复正文在同一个右边界结束，宽终端里不再一半窄一半宽；代码块、表格和图表仍用全宽。长命令在这一列内截断，完整命令可以 `Ctrl+O` 展开或单击打开全文悬浮窗。
+- **耗时条**：工具耗时不再是紧跟命令、位置乱跳的数字，而是右边界上一个 4 格的小条，每格一个数量级（10ms、100ms、1s、10s 起），上下对齐，哪一步慢一眼就看得出。运行中条随时间变长；100 秒以上满格后补上时间；`Ctrl+O` 展开时显示确切耗时。时间只用 h、m、s（`1h5m12s`），`Worked for` 超过一小时不再显示成 `61m40s`。
+- 模型看到的内容没有变化（`model-snapshot` 无差异）。用法见 [命令行 · 工具耗时](docs/guide/cli.md#工具耗时)、[Mermaid 图表](docs/guide/cli.md#mermaid-图表)；录屏见 [0.1.23 特性展示](docs/showcase/0.1.23/README.md)。
+
+**0.1.22：对话区重新排版：回合脊柱、单行工具调用、限宽正文**
+
+- **回合脊柱**：一轮对话左侧是一条连续的暗线：正文和思考在主干 `│` 上，每次工具调用是一条 `├─` 分支（失败为红色），`╰─ Worked for` 收尾。运行中只有脊柱末端几行有一道颜色脉冲往下走，工具或思考完成时对应那一段淡出闪烁。`/resume` 回放的历史也是同样的版式。
+- **工具调用一行**：bash 用琥珀色 `$` 打头，去掉与当前目录相同的 `cd … &&`，家目录写成 `~`，heredoc 只显示首行加 `· +N lines`；读文件、搜索、编辑把行数、匹配数、`+3 −1` 写在调用行尾，后面是耗时。成功不再占一行 `exit 0`；失败才单独一行红色 `✗ exit 1 · 最后一行输出`。连续的工具调用之间不再空行。
+- **思考**：折叠后是一行暗色的 `∴ 2.1s`（回放为 `∴ thought`），只在引出正文时显示，紧接工具调用的思考不再单独占行（耗时算进 `Worked for`）；`Ctrl+T` 仍然展开全部。回复右侧的时钟去掉了，时间只留在你的消息和 `Worked for` 上。
+- **正文限宽**：回复正文每行最多 76 列，宽终端里更好读；代码块和表格仍按全宽显示。代码块不再露出 ```` ``` ```` 围栏行，改为左侧一条暗线加暗色语言标签（`text`/无语言不显示）；列表符号改为 `•`，行内代码和无高亮代码块的颜色调淡。
+- 修复：底部 token 数超过百万时显示 `156M`、`1.2B`，不再是 `156186k`。
+- 模型看到的内容没有变化（`model-snapshot` 无差异）。设计与实现记录见 [tui-transcript-layout-design.md](docs/tui-transcript-layout-design.md)、[tui-transcript-layout-implementation.md](docs/tui-transcript-layout-implementation.md)。
+- 录屏与截图见 [0.1.22 特性展示](docs/showcase/0.1.22/README.md)。
+
+**0.1.21：工具块全文悬浮窗，统一的 Vim 移动键，克制的动效**
+
+- **看工具块的完整输出**：`Ctrl+O` 展开后，单击 `read`、`bash`、`grep`/`find`/`ls`、`write`、`edit` 和 `!cmd` 块里的 `… N more lines`，在屏幕中间打开悬浮窗看全部内容：行号、`/` 搜索、`:120` 跳行、`w` 换行、`y` 复制，`q` / Esc 关闭。Pi 的 `read` 截断提示不再当成文件的一行，改写在标题里（`lines 1–955 of 1098 · 50.0KB limit`）。用法见 [命令行 · 看工具块的完整输出](docs/guide/cli.md#看工具块的完整输出)。
+- **移动键统一（行为变化）**：悬浮窗、`/preview`、`/review`、`/trace` 用同一套键：`j`/`k` 可带数字（`10j`），**`gg` 到顶**（单个 `g` 不再到顶），`G` 到底，`120G` 跳到第 120 行，`b` / PageUp 上翻。例外：`/trace` 详情里数字仍是切栏目，`/preview` 文件列表里空格仍是标记。
+- **动效**：启动页的 logo 流光和分割线脉冲只播约 4 秒开场就静止；运行中的工具、思考和 `!cmd` 块左侧竖轨有一道颜色脉冲往下走；完成时的绿色/红色闪烁改为 400ms 内淡出。状态行仍是原来的盲文 spinner。扩展可以用 `ctx.ui.setWorkingIndicator` 换掉它（以前会提示不支持）。
+- 窄到 12 列时启动页的标题不再超出边框。
+- 模型看到的内容没有变化（`model-snapshot` 无差异）。开发者：只读查看组件拆成了可复用的模块，组合方式见 [tui-buffer-components.md](docs/tui-buffer-components.md)。
+
+**0.1.20：修复安装（0.1.19 装不上）**
+
+0.1.19 全局安装后启动会报 `@earendil-works/pi-codemode` 缺少 `MCP_TYPESCRIPT_PREAMBLE`：npm 11 在全局安装 tarball 时忽略了包里的 `npm-shrinkwrap.json`，把 Pi 的传递依赖从 1.1.0 升到了不兼容的 1.3.0。0.1.20 把 Pi 的**全部传递依赖也在 `package.json` 里精确钉到 1.1.0**，并加了一个测试防再发。用 `epi update` 升到 0.1.20 即可；已装坏的 0.1.19 请重装或升级。
+
+**0.1.19：执行轨迹（`/trace`）与连续代码审查（`/review`）**
+
+- `/trace` 全屏看一次会话执行了什么：顶部是固定高度的点阵小地图，每个可见步骤一行、按时间定位、模型/工具/用户/事件各一色，选中的那一步反显高亮，大段空闲折成一个 `··`；下面是步骤列表和 Summary / Payload / Result / Schema / Timing 五个栏目。耗时区分「SDK 记录的响应/执行耗时」和「观察到的工具生命周期区间」，缺起止时只显示已记录的耗时，不伪造跨度；工具 Schema 按调用当时的声明回放。
+- `/review` 全屏连续审查：多个文件的 diff 排在一页，gap 原地展开，`]c`/`[c` 跨文件跳改动，`.`/`,` 跳文件，`c` 给某一行写批注（绑定文件版本与旧/新侧，刷新后只在引用唯一匹配时移动，否则标 stale），`B` 把批注打包成草稿放回输入框，`s` 在「agent 变更账 / Index→Working Tree / HEAD→Index」之间切换。
+- 两者都只在交互界面里加载，模型看不到（`model-snapshot` 无变化）。详细用法见 [Trace](docs/guide/trace.md) 与 [Review](docs/guide/review.md)。
+
+**0.1.12：在 Epi 里看 agent 改了什么**
+
+agent 改完文件后输入 `/preview`，直接看到改了哪些文件和每个文件的 diff，不用切到编辑器或 `git diff`。
+
+```text
+/preview          打开"改动"：agent 改过的文件，M 修改 / A 新建，右边是增删行数
+回车              看这个文件的 diff；]c [c 跳到下一段、上一段改动
+/needle  :120     在 diff 里搜索；跳到第 120 行
+t                 只看上一轮的改动
+d                 看完整文件
+Tab               切到文件浏览
+```
+
+整页打开，最下面一行显示 agent 是否还在运行。只看不改：这一版没有编辑功能。完整说明见 [Preview](docs/guide/preview.md)。
+
+**0.1.11：预览的小修正，以及命令不能重名**
+
+- `/preview` 0.1.1：正在看的文件或目录被删后显示 `xxx not found`；读不了的目录说明原因，不再显示成空目录；名字里有换行的文件不插入引用，会提示。
+- 两个扩展注册同名命令时（包括和内置的 `/preview`、`/mcp` 同名），Epi 启动就报错并说明是哪两个，而不是悄悄把它们改名成 `/xxx:1`、`/xxx:2`。
+
+**0.1.10：在 Epi 里看文件（`/preview`）**
+
+改完代码不用再切到编辑器去看结果。`/preview` 打开一个三栏的文件浏览器和查看器，能看带语法高亮的代码、渲染后的 Markdown、图片和视频。
+
+```text
+/preview                      在当前目录打开浏览器
+/preview src/tui              在某个目录打开
+/preview docs/architecture.md 直接打开一个文件（Markdown 会渲染，按 r 看源码）
+/preview demo/clip.mp4        直接播放一个视频（需要本机有 ffmpeg）
+```
+
+在浏览器里用 `j`/`k` 移动、回车打开、`h` 回上级、`/` 过滤；按 `i` 把选中文件的 `@路径` 插进输入框，交给 agent 继续处理。图片和视频画面需要终端支持图形协议（Ghostty、kitty、iTerm2 等）。完整说明见 [Preview](docs/guide/preview.md)。
+
+**0.1.9：`-p`、json、rpc 更稳**
+
+- 机器忙时 `epi -p` 偶尔报 "No API key found for the selected model" 的问题修掉了。
+- 项目里的 `.pi/settings.json` 不再能改会话的保存位置。
+- 内置的 Magpie 网关每次启动都会同步模型列表，不管这次用的是哪个 provider。

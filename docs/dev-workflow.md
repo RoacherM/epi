@@ -59,6 +59,6 @@
 `release: <版本> …` 推送前完成（由 `test/showcase.test.mjs` 和 `test/naming.test.mjs` 守卫）：
 
 1. **核对评审记录（不重审已审功能）**：核对上一版本 tag 以来合入 `main` 的每个功能分支都有对应的 `.dev/reviews/*/verified.sha`（非高风险修复有 `fix.sha`）；只有缺少记录的部分才补审，已审过的功能不重审。
-2. **`README.md` 与展示**：更新「最近更新」，生成 `docs/showcase/<版本>/` 并更新索引；界面变化时跑 `node scripts/docs/capture-ui.mjs`。
+2. **`CHANGELOG.md` 与展示**：在 `CHANGELOG.md` 顶部补充本版本变更，生成 `docs/showcase/<版本>/` 并更新索引；界面变化时跑 `node scripts/docs/capture-ui.mjs`。
 3. **全套测试与本地 CI**：先 `git add`/提交确保新媒体入库，再跑 `npm test` 和 `scripts/dev/local-ci.sh`。
 4. **先问用户确认后发布**：执行 `scripts/dev/local-ci.sh --release`（推 `main` 并跑 `scripts/release.mjs` 打 tag、发 `epi-<版本>-bundle.tar.gz` 和 `install.sh`）。
