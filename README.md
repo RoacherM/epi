@@ -38,6 +38,13 @@ Epi 是基于 Pi SDK 的可定制终端编程助手。自有 grok 风格 TUI，�
 
 在 [FrontierHarness Eval v1.1](https://frontierharness.org)（62 题：TB2.1 45 题 + TB4 17 题）上，对 `epi 0.2.8`（锁定 Pi SDK `1.4.0`、默认内建扩展全开）在 4 个主流开源模型上各跑了全量 62 题单次评测（`62 × 1 × 4 = 248` 次有效计分，`infra = 0`）。**四模型均分 64.1%（159/248）**，在全部 4 个模型上均超过底层原生 Pi `1.4.0`（均分 57.6%，提升 **+6.6pp**）。
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/benchmark-frontier-light.png">
+    <img src="docs/assets/benchmark-frontier-dark.png" alt="FrontierHarness Eval v1.1 四模型综合帕累托前沿图（通过率 vs 单题均成本）：Epi 0.2.8 位于 64.1% · $0.515" width="100%">
+  </picture>
+</p>
+
 ### 四模型综合对比
 
 | Harness | 来源 / 样本 | 四模型均分 | DS-V4.1-Flash | GLM-5.3-Flash | GLM-5.3 | Muse-Spark | 均成本 / 题 | 每通过成本 |
